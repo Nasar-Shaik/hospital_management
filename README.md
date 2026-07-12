@@ -30,6 +30,8 @@ infra/docker/   dev compose (mongo RS, redis, minio, mailhog)
 
 Node ≥ 22 · pnpm 10 (`npm i -g pnpm@10`) · Docker
 
+> **New here, or unsure which port to hit?** Read **[TESTING.md](./TESTING.md)** — it covers what runs where, how to create a hospital, and a copy-paste script for the whole auth flow. Note that `pnpm docker:dev` starts only the _infrastructure_; `pnpm dev` starts the apps.
+
 ## Quick start
 
 ```bash
