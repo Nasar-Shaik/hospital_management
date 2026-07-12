@@ -2,7 +2,9 @@
 
 PaperlessTech Hospital Management SaaS. **Sprint 0 bootstrap** — platform foundation only; business modules arrive per the phase plan.
 
-> **Before writing any code**, read (in order): `../AI_Workflow/PROJECT_MEMORY.md` → `../AI_Workflow/PROJECT_CONSTITUTION.md` → `../AI_Workflow/PlanofActionforHMS/00-PROGRESS-TRACKER.md`. Architecture: `../AI_Workflow/PlanofActionforHMS/04-ARCHITECTURE.md`. Standards: `../AI_Workflow/PlanofActionforHMS/09-ENGINEERING-STANDARDS.md`.
+> **Before writing any code**, read (in order): [AI_Workflow/PROJECT_MEMORY.md](./AI_Workflow/PROJECT_MEMORY.md) → [AI_Workflow/PROJECT_CONSTITUTION.md](./AI_Workflow/PROJECT_CONSTITUTION.md) → [AI_Workflow/PlanofActionforHMS/00-PROGRESS-TRACKER.md](./AI_Workflow/PlanofActionforHMS/00-PROGRESS-TRACKER.md). Architecture: [04-ARCHITECTURE.md](./AI_Workflow/PlanofActionforHMS/04-ARCHITECTURE.md). Standards: [09-ENGINEERING-STANDARDS.md](./AI_Workflow/PlanofActionforHMS/09-ENGINEERING-STANDARDS.md). Governance docs and ADRs live in [AI_Workflow/docs/](./AI_Workflow/docs/).
+>
+> All project artifacts — code, architecture, governance, ADRs — live in **this single repository**, which is the sole source of truth.
 
 ## Layout (Doc 04 §1)
 

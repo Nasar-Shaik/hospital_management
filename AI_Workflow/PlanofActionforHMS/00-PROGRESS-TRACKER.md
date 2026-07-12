@@ -11,7 +11,8 @@
 | | |
 |---|---|
 | **Project** | MediCore HMS — multi-tenant Hospital Management SaaS (brand/platform domain: `paperlesstech.in`); foundation of the PaperlessTech Platform (docs/PLATFORM_STRATEGY.md) |
-| **Current stage** | 🏗️ **Phase 0 (Sprint 0) complete — monorepo bootstrapped at `medicore-hms/`; no business modules yet** |
+| **Current stage** | 🏗️ **Phase 0 (Sprint 0) complete & runtime-verified — single-repo baseline (`medicore-hms/`, `AI_Workflow/` inside it); no business modules yet** |
+| **Baseline** | History reset to one commit: `chore(repo): initialize Medicore HMS platform foundation`. This repo is the **sole source of truth**; prior Sprint-0 commits are discarded and must not be recreated. |
 | **Last updated** | 2026-07-12 (Sprint 0 bootstrap session) |
 | **Session protocol** | Read `PROJECT_MEMORY.md` → `PROJECT_CONSTITUTION.md` → this file before any work (Constitution mandate) |
 | **Next action** | Phase 1 start: master DB + tenant registry + provisioning + **Connection Manager with tenant-isolation tests built alongside** (Doc 01 P1 order), then auth/RBAC |
@@ -40,7 +41,7 @@
 
 | Phase | Scope | Status | % | Notes |
 |-------|-------|--------|---|-------|
-| P0 | Monorepo, CI, Docker Compose, design tokens, OpenAPI baseline | ✅ Done | 95% | Bootstrapped 2026-07-12 in `medicore-hms/` (9 commits): pnpm+turbo, Express API (health/ready, envelope errors, graceful shutdown), BullMQ worker (heartbeat queue), Next.js 15 web+admin (standalone), 8 shared packages, Dockerfiles+compose (host ports mongo 27018 / redis 6380), CI, husky/commitlint, boundary lint. Remaining 5%: OpenAPI generation baseline (deferred to P1 with first business routes). |
+| P0 | Monorepo, CI, Docker Compose, design tokens, OpenAPI baseline | ✅ Done | 95% | Verified 2026-07-12 on the single-commit baseline: pnpm+turbo, Express API (health/ready, envelope errors, graceful shutdown), BullMQ worker (heartbeat queue, `queueActive: true`), Next.js 15 web+admin (standalone), 8 shared packages, 4 Dockerfiles + compose (host ports mongo 27018 / redis 6380 — do not "fix" to defaults), CI, husky/commitlint, boundary lint (0 violations). All 8 containers healthy; `/ready` → mongo up, redis up. Remaining 5%: OpenAPI generation baseline (deferred to P1 with the first business routes). |
 | P1 | Foundation: master DB + tenant provisioning + Connection Manager, auth/JWT/MFA, RBAC, audit, notifications, files, feature flags, admin console, app shell | ⬜ Not started | 0% | Build order: Doc 01 P1 §Estimated Development Order |
 | P2 | Core ops: masters, patients/MPI, doctors/schedules, appointments/queue, beds, facilities | ⬜ Not started | 0% | Unlocks **Clinic Edition** beta |
 | P3 | Clinical: EMR, consultation, nursing, LIS, RIS, OT, blood bank + flag-gated wave (ED/triage, ICU/NICU/PICU, dialysis, physio, dietetics, CSSD, mortuary, MRD, specialty templates) | ⬜ Not started | 0% | |

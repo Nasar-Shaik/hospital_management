@@ -8,7 +8,7 @@
 
 ## 1. Current Status & Next Priorities
 
-- **Status (2026-07-12, later session):** **Sprint 0 / Phase 0 complete.** Code lives in `medicore-hms/` (sibling of `AI_Workflow/`), 9 conventional commits, all gates green (typecheck 14/14, lint, tests, build incl. Next standalone, dependency-cruiser boundaries). No business modules, no auth — by design.
+- **Status (2026-07-12, baseline reset):** **Sprint 0 / Phase 0 complete and runtime-verified.** History was intentionally reset to a **single foundation commit** (`chore(repo): initialize Medicore HMS platform foundation`); `AI_Workflow/` now lives **inside** the `medicore-hms/` repo — **one repository is the sole source of truth**. Earlier Sprint-0 commit history is discarded and must never be recreated. All gates green on the baseline (typecheck 14/14, lint 14/14, 9 tests, boundaries 0 violations) and all 8 containers healthy (`/ready` → mongo up, redis up; workers heartbeat processing). No business modules, no auth — by design.
 - **Next priorities:** ① Phase 1 starting with master DB + tenant provisioning + Connection Manager **with the tenant-isolation test suite built alongside it** — everything inherits its correctness. ② Auth/RBAC. ③ OpenAPI generation baseline (deferred from P0; wire zod-to-openapi with the first business routes).
 - Detailed status: `PlanofActionforHMS/00-PROGRESS-TRACKER.md` (single source of truth for build state).
 
@@ -80,10 +80,11 @@ Kiosk self-check-in · bedside patient tablet app · RTLS asset tracking · What
 - Build state: `PlanofActionforHMS/00-PROGRESS-TRACKER.md`
 - Vocabulary: `DOMAIN_GLOSSARY.md` · Behavior: `docs/STATE_MACHINE_CATALOG.md`, `docs/BUSINESS_WORKFLOWS.md`, `docs/EVENT_CATALOG.md` · Ops: `docs/DISASTER_RECOVERY_RUNBOOK.md`, `docs/OBSERVABILITY_GUIDE.md`
 
-## 9b. Session Handoff (2026-07-12, Sprint 0 session end)
+## 9b. Baseline Reset (2026-07-12) — RESOLVED, do not re-litigate
 
-- `medicore-hms/` has **9 commits + 11 modified/added files uncommitted** (verification fixes: utils sleep typing, Express traceId augmentation, BullMQ connection options, compose port remap 27018/6380, pnpm onlyBuiltDependencies). All gates verified green AFTER these fixes. **First action next session:** `git add -A && git commit` with message "fix(bootstrap): type fixes, bullmq connection options, dev port remap" — couldn't commit due to a temporary harness outage for state-changing shell commands at session end.
-- **Runtime verification pending:** `docker compose -f infra/docker/docker-compose.yml up -d` (same outage). Static verification (typecheck/lint/test/build/boundaries) all passed; the compose file's earlier failure mode (host ports 27017/6379 occupied by an unrelated `school_*` stack on this machine) is already fixed via the 27018/6380 remap.
+- Git history was **intentionally reset**. The nine Sprint-0 commits (`chore(repo)`, `chore(config)`, `chore(quality)`, `feat(packages)`, `feat(api)`, `feat(workers)`, `feat(web,admin)`, `chore(docker)`, `ci(github)`) **no longer exist and must never be recreated** — their functionality is fully present in the single foundation commit. The prior session's pending fixes (utils sleep typing, Express `traceId` augmentation, BullMQ connection options, compose port remap, pnpm `onlyBuiltDependencies`) are all **already in the baseline** — verified.
+- Repo layout changed: **`AI_Workflow/` moved inside `medicore-hms/`**. One repository, one source of truth. Any doc that references a sibling `../AI_Workflow` path is stale — fix it in place.
+- Runtime verification (blocked previously by a tooling outage) is now **complete**: all 8 containers healthy; API `/ready` reports mongo `up` + redis `up`; workers report `queueActive: true` with a live heartbeat timestamp.
 
 ## 10. Open Questions (owner answers pending)
 
