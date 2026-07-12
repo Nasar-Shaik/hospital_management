@@ -4,14 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/main.js",
+    "start": "node --env-file-if-exists=.env dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run --exclude **/*.int.test.ts --exclude **/node_modules/** --exclude **/dist/**",
     "test:int": "vitest run int.test",
-    "provision": "tsx src/scripts/provisionTenant.ts"
+    "provision": "tsx --env-file-if-exists=.env src/scripts/provisionTenant.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",

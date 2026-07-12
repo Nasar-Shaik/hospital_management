@@ -53,14 +53,38 @@ pnpm dev                     # all apps with hot reload (turbo)
 | Mailhog UI             | http://localhost:8025                                      |
 | MinIO console          | http://localhost:9001 (minioadmin/minioadmin)              |
 
+## Multi-tenancy (Phase 1A — live)
+
+Master DB `paperlesstech_master` + **one dedicated database per hospital** (`hms_<slug>`), resolved per request from the `Host` header (ADR-0005, Doc 03 §1).
+
+Provision a hospital (operator action — there is deliberately no unauthenticated provisioning route):
+
+```bash
+pnpm --filter @medicore/api provision -- --name "Apollo Hospital" --slug apollo --plan PLAN_CLINIC
+# → creates database hms_apollo, runs migrations, activates the tenant
+```
+
+Every `/api/v1/*` request is resolved to exactly one hospital database before any handler runs:
+
+```bash
+curl -H "Host: apollo.paperlesstech.in" localhost:4000/api/v1/...   # → tenant resolved
+curl -H "Host: ghost.paperlesstech.in" localhost:4000/api/v1/...   # → HMS-TEN-001 Organization not found
+curl localhost:4000/health                                          # → health needs no tenant
+```
+
+Custom domains work the same way once verified in the registry. `/health` and `/ready` sit **before** tenant resolution — probes must never depend on the registry.
+
 ## Verification
 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build   # full quality gate
 pnpm boundaries                                          # module boundary lint
+pnpm --filter @medicore/api test:int                     # TENANT ISOLATION suite (needs pnpm docker:dev)
 curl -s localhost:4000/health | jq                       # liveness
 curl -s localhost:4000/ready | jq                        # readiness (deps)
 ```
+
+The isolation suite runs against a real MongoDB and **fails rather than skips** if the database is unreachable: a silently skipped isolation suite is indistinguishable from a passing one.
 
 Fully containerized run (builds all four app images):
 
@@ -70,8 +94,8 @@ docker compose -f infra/docker/docker-compose.yml --profile apps up --build
 
 ## Rules that CI enforces
 
-Conventional commits (commitlint) · Prettier + ESLint (strict TS, no `any`, no `console`) · typecheck · unit tests · dependency-cruiser boundaries (acyclic graph; modules only via `index.ts`; frontends never import backend; packages never import apps).
+Conventional commits (commitlint) · Prettier + ESLint (strict TS, no `any`, no `console`) · typecheck · unit tests · **tenant-isolation integration suite** · dependency-cruiser boundaries (acyclic graph; modules only via `index.ts`; frontends never import backend; packages never import apps).
 
-## What Sprint 0 deliberately does NOT contain
+## What the codebase deliberately does NOT contain yet
 
-Authentication, tenancy/Connection Manager, business modules, database models — these are **Phase 1** (Doc 01). Do not add them without following the module spec and updating the progress tracker.
+Authentication (Phase 1B), RBAC (1C), and all business modules (P2+). Do not add them without following the module spec (Doc 02) and updating [00-PROGRESS-TRACKER.md](./AI_Workflow/PlanofActionforHMS/00-PROGRESS-TRACKER.md).
