@@ -71,13 +71,15 @@ apps/api/src/
 ├── config/                       # env (zod-validated), constants
 ├── core/
 │   ├── context/                  # AsyncLocalStorage tenant/user context
-│   ├── db/                       # masterDb client, ConnectionManager (per-tenant DB), reference DB
-│   ├── redis/                    # redis client, pub/sub
+│   ├── db/                       # masterDb client, ConnectionManager (per-tenant DB), migrations, plugins
+│   ├── crypto/                   # password (argon2id), jwt, opaque tokens, field encryption (AES-256-GCM)
+│   ├── redis/                    # redis client, governed cache keyspace, pub/sub
 │   ├── errors/                   # AppError hierarchy, error codes
+│   ├── http/                     # requestId, asyncHandler, error middleware
 │   ├── logger/                   # pino/OTel logger
 │   ├── events/                   # outbox, event bus, domain events
 │   └── plugins/                  # tenantScopePlugin, auditPlugin, softDeletePlugin
-├── middleware/                   # auth, authorize, validate, rateLimit, idempotency
+├── middleware/                   # resolveTenant, authenticate, authorize, validate, rateLimit, idempotency
 ├── modules/                      # one folder per module (feature-sliced)
 │   ├── auth/
 │   │   ├── auth.routes.ts
@@ -86,7 +88,7 @@ apps/api/src/
 │   │   ├── auth.repository.ts
 │   │   ├── auth.schema.ts        # zod
 │   │   └── auth.model.ts         # mongoose
-│   ├── tenants/  subscriptions/  rbac/  users/
+│   ├── tenants/  subscriptions/  rbac/  users/    # identity: users ← auth, users ← rbac (acyclic by design)
 │   ├── patients/  appointments/  doctors/  beds/
 │   ├── emr/  nursing/  lab/  radiology/  ot/  bloodbank/  pharmacy/
 │   ├── billing/  insurance/  inventory/  finance/  hr/

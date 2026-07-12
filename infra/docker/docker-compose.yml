@@ -69,6 +69,10 @@ services:
       MONGO_URI: mongodb://mongo:27017/?directConnection=true
       REDIS_URL: redis://redis:6379
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+      # Local-compose secrets only. Real environments inject these from the secret
+      # store — never from a committed file (Doc 09 §20).
+      API_JWT_SECRET: ${API_JWT_SECRET:-local-compose-jwt-secret-not-for-any-real-environment}
+      API_ENCRYPTION_KEY: ${API_ENCRYPTION_KEY:-bG9jYWwtY29tcG9zZS1lbmMta2V5LTMyLWJ5dGVzISE=}
     ports:
       - "4000:4000"
     depends_on:

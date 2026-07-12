@@ -33,6 +33,36 @@ const envSchema = z.object({
   TENANT_MAX_CONNECTIONS: z.coerce.number().int().default(200),
   TENANT_CONNECTION_IDLE_MS: z.coerce.number().int().default(600_000),
 
+  /* ── Identity & Authentication (ADR-0009) ──────────────────────────────── */
+
+  /**
+   * Access-token signing secret (HS256). Required — there is deliberately no
+   * default: a fallback secret is the classic way a dev key reaches production.
+   * Generate with `openssl rand -base64 48`.
+   */
+  API_JWT_SECRET: z.string().min(32, "API_JWT_SECRET must be at least 32 characters"),
+  API_JWT_ISSUER: z.string().default("paperlesstech"),
+  /** Access-token life. Short by design: revocation latency is bounded by it (ADR-0009). */
+  ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().max(3600).default(900),
+  /** Refresh-token family life (rotating, reuse-detected). */
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().default(30),
+  /** Life of the interim token issued between password success and MFA success. */
+  MFA_CHALLENGE_TTL_SECONDS: z.coerce.number().int().default(300),
+
+  /**
+   * Field-encryption key for secrets at rest (TOTP seeds today; per-tenant
+   * integration credentials later — Constitution §11). 32 bytes, base64 or hex.
+   * Generate with `openssl rand -base64 32`.
+   */
+  API_ENCRYPTION_KEY: z.string().min(32, "API_ENCRYPTION_KEY must be a 32-byte base64/hex key"),
+
+  /** Password policy (Doc 09 §20; NABH/HIPAA account-security controls). */
+  PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(12),
+  PASSWORD_HISTORY_SIZE: z.coerce.number().int().default(5),
+  /** Brute-force lockout. */
+  LOGIN_MAX_ATTEMPTS: z.coerce.number().int().default(5),
+  LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().default(15),
+
   CORS_ORIGINS: z.string().default("http://localhost:3000,http://localhost:3001"),
 });
 

@@ -31,6 +31,19 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Real Redis for the auth suite's access-token blocklist. Without it the
+      # blocklist assertions would pass vacuously — cache helpers fail soft, so a
+      # missing Redis makes "revoked" and "never revoked" look identical.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -58,13 +71,15 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      # Release-gating (Doc 05 §4.2, RISK_REGISTER T1). Runs against a real MongoDB —
-      # it fails, never skips, if the database is unreachable: a silently skipped
-      # tenant-isolation suite is indistinguishable from a passing one.
-      - name: Integration tests (tenant isolation)
+      # Release-gating (Doc 05 §4.2, RISK_REGISTER T1). Runs against a real MongoDB
+      # and a real Redis — these suites fail, never skip, if the infrastructure is
+      # unreachable: a silently skipped isolation suite is indistinguishable from a
+      # passing one.
+      - name: Integration tests (tenant isolation + authentication)
         run: pnpm --filter @medicore/api test:int
         env:
           MONGO_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          REDIS_TEST_URL: redis://127.0.0.1:6379
 
       - name: Build
         run: pnpm build

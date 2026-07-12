@@ -1,16 +1,22 @@
 /**
  * Tenant provisioning CLI (BUSINESS_WORKFLOWS §13).
  *
- * Provisioning is an operator action, not a public endpoint. The super-admin HTTP
- * surface arrives with authentication in Phase 1B; until then this script is the
- * only way to create a hospital, which keeps an unauthenticated provisioning
- * route from ever existing.
+ * Provisioning is an operator action, not a public endpoint — there is
+ * deliberately no unauthenticated route that can create a hospital. The
+ * super-admin HTTP surface (behind operator auth) lands with the master-realm
+ * work; this script stays the ground truth for what provisioning does.
  *
- *   pnpm --filter @medicore/api provision -- --name "Apollo Hospital" --slug apollo
+ * This is the COMPOSITION ROOT for provisioning: it sequences the tenant module
+ * (registry + database + migrations) and the seed (system roles + first admin),
+ * so neither has to know about the other.
+ *
+ *   pnpm --filter @medicore/api provision -- --name "Apollo Hospital" --slug apollo \
+ *        --admin-email admin@apollo.com
  */
 import { createLogger } from "@medicore/logger";
 import { provisionTenant } from "../modules/tenants/index.js";
-import { closeAllTenantConnections } from "../core/db/connectionManager.js";
+import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
+import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
 
@@ -26,11 +32,17 @@ async function main(): Promise<void> {
   const slug = arg("--slug");
   const customDomain = arg("--domain");
   const planCode = arg("--plan");
+  const adminEmail = arg("--admin-email");
+  const adminName = arg("--admin-name");
+  const adminPassword = arg("--admin-password");
   const trial = process.argv.includes("--trial");
 
   if (!hospitalName || !slug) {
     console.error(
-      'Usage: provision --name "Apollo Hospital" --slug apollo [--domain hms.apollo.com] [--plan PLAN_CLINIC] [--trial]',
+      'Usage: provision --name "Apollo Hospital" --slug apollo [--domain hms.apollo.com]\n' +
+        "                 [--plan PLAN_CLINIC] [--trial] [--admin-email admin@apollo.com]\n" +
+        "                 [--admin-name \"Dr Rao\"] [--admin-password '…']\n\n" +
+        "Omit --admin-password and a strong one is generated and printed ONCE.",
     );
     process.exit(1);
   }
@@ -53,6 +65,39 @@ async function main(): Promise<void> {
     },
     "tenant provisioned",
   );
+
+  // Seed system roles + the first administrator, so the hospital can actually be
+  // logged into. Without this a provisioned tenant is a database nobody can enter.
+  const connection = await getTenantConnection({
+    id: result.tenant.id,
+    databaseName: result.tenant.databaseName,
+    ...(result.tenant.dbUri ? { dbUri: result.tenant.dbUri } : {}),
+  });
+
+  const admin = await seedTenantAdmin({
+    tenantId: result.tenant.id,
+    tenantSlug: result.tenant.slug,
+    connection,
+    email: adminEmail ?? `admin@${slug}.example.com`,
+    ...(adminName ? { name: adminName } : {}),
+    ...(adminPassword ? { password: adminPassword } : {}),
+  });
+
+  logger.info({ userId: admin.userId, email: admin.email, created: admin.created }, "admin seeded");
+
+  if (admin.generatedPassword) {
+    // Deliberately on stdout, not through the logger: logs are shipped, indexed
+    // and retained. A one-time credential must not become a log record.
+    process.stdout.write(
+      "\n" +
+        "  ┌─ First-login credentials (shown once — not recoverable) ─┐\n" +
+        `     URL       https://${slug}.${process.env.TENANT_BASE_DOMAIN ?? "paperlesstech.in"}\n` +
+        `     Email     ${admin.email}\n` +
+        `     Password  ${admin.generatedPassword}\n` +
+        "     The administrator must change this at first login.\n" +
+        "  └───────────────────────────────────────────────────────────┘\n\n",
+    );
+  }
 }
 
 main()

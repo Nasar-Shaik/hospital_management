@@ -76,4 +76,93 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0005-identity-auth",
+    description:
+      "Identity & auth (ADR-0009/0010): users, credentials, roles, sessions, refresh tokens, MFA",
+    up: async (db) => {
+      for (const name of [
+        "users",
+        "credentials",
+        "passwordHistory",
+        "roles",
+        "userRoles",
+        "sessions",
+        "refreshTokens",
+        "mfaSecrets",
+        "loginAttempts",
+      ]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      // Email is the login identifier — uniqueness is enforced by the database,
+      // not by a read-then-write race in the service (Doc 03 §4).
+      await db
+        .collection("users")
+        .createIndex({ tenantId: 1, email: 1 }, { unique: true, background: true });
+
+      await db
+        .collection("credentials")
+        .createIndex({ tenantId: 1, userId: 1 }, { unique: true, background: true });
+      await db
+        .collection("passwordHistory")
+        .createIndex({ tenantId: 1, userId: 1, createdAt: -1 }, { background: true });
+
+      await db
+        .collection("roles")
+        .createIndex({ tenantId: 1, code: 1 }, { unique: true, background: true });
+      await db
+        .collection("userRoles")
+        .createIndex({ tenantId: 1, userId: 1, roleId: 1 }, { unique: true, background: true });
+
+      // Refresh lookups are by digest and must be a single indexed hit.
+      await db
+        .collection("refreshTokens")
+        .createIndex({ tenantId: 1, tokenHash: 1 }, { unique: true, background: true });
+      // Reuse detection revokes a whole family at once.
+      await db
+        .collection("refreshTokens")
+        .createIndex({ tenantId: 1, family: 1 }, { background: true });
+      await db.collection("sessions").createIndex({ tenantId: 1, userId: 1 }, { background: true });
+      await db
+        .collection("sessions")
+        .createIndex({ tenantId: 1, family: 1 }, { unique: true, background: true });
+
+      await db
+        .collection("mfaSecrets")
+        .createIndex({ tenantId: 1, userId: 1 }, { unique: true, background: true });
+
+      // Lockout counts recent failures for an email.
+      await db
+        .collection("loginAttempts")
+        .createIndex({ tenantId: 1, email: 1, at: -1 }, { background: true });
+
+      // TTL: expired sessions, spent refresh tokens and the attempt ledger are
+      // reaped by Mongo. Without this, `refreshTokens` grows without bound —
+      // every rotation writes a row (DATA_RETENTION_POLICY).
+      for (const name of ["sessions", "refreshTokens", "loginAttempts"]) {
+        await db
+          .collection(name)
+          .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, background: true });
+      }
+    },
+    down: async (db) => {
+      for (const name of [
+        "users",
+        "credentials",
+        "passwordHistory",
+        "roles",
+        "userRoles",
+        "sessions",
+        "refreshTokens",
+        "mfaSecrets",
+        "loginAttempts",
+      ]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];

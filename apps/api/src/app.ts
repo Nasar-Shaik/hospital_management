@@ -7,11 +7,13 @@
 import express, { type Express, Router } from "express";
 import helmet from "helmet";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import type { Logger } from "@medicore/logger";
 import { requestId } from "./core/http/requestId.js";
 import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { authRouter } from "./modules/auth/index.js";
 import { env } from "./config/env.js";
 
 export function createApp(logger: Logger): Express {
@@ -29,6 +31,9 @@ export function createApp(logger: Logger): Express {
     }),
   );
   app.use(express.json({ limit: "1mb" }));
+  // Browsers carry the refresh token in an httpOnly cookie (ADR-0009); native
+  // clients send it in the body. Both paths need this parsed.
+  app.use(cookieParser());
 
   // Health/readiness run BEFORE tenant resolution — probes have no tenant host
   // and liveness must never depend on the registry (Doc 04 §8).
@@ -36,12 +41,19 @@ export function createApp(logger: Logger): Express {
 
   /**
    * Tenant-scoped API surface (Doc 04 §2.1 chain, §5.1).
+   *
    * Every request under /api/v1 is resolved to exactly one hospital database
-   * before any handler runs. Phase 1B inserts authenticate → authorize →
-   * validate → idempotency after resolveTenant; business module routers mount
-   * on v1Router from Phase 2.
+   * before any handler runs — including /auth/login, which is why you cannot log
+   * in without naming a hospital.
+   *
+   * `authenticate` is applied per-route rather than to the whole router, because
+   * /auth/login and /auth/refresh must stay reachable without a token. Business
+   * routers (Phase 2) mount as:
+   *     v1Router.use("/patients", authenticate(), authorize(PERMS.…), patientsRouter())
+   * Remaining chain slots: authorize (1C) → idempotency (P2).
    */
   const v1Router = Router();
+  v1Router.use("/auth", authRouter());
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

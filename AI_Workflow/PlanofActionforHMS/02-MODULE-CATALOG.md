@@ -46,7 +46,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Purpose:** Secure authentication with JWT access + rotating refresh, MFA, SSO, password policy and session management.
 **Pages:** Login, Register Tenant, Forgot/Reset Password, MFA Setup/Challenge, SSO Callback, Accept Invitation, Active Sessions.
 **Collections:** `users`, `credentials`, `sessions`, `refreshTokens`, `mfaSecrets`, `passwordHistory`, `loginAttempts`.
-**REST APIs:** `POST /auth/login|refresh|logout`, `POST /auth/mfa/setup|verify`, `POST /auth/forgot-password|reset-password`, `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`.
+**REST APIs:** `POST /auth/login|refresh|logout`, `POST /auth/change-password`, `POST /auth/mfa/setup|activate|verify|disable`, `POST /auth/forgot-password|reset-password`, `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`.
+**Implementation note (Phase 1B):** identity is split across three code modules to keep the graph acyclic — `users` (the `users` collection; depends on nothing), `auth` (every secret: credentials, sessions, refresh tokens, MFA), and `rbac` (A4). Both `auth` and `rbac` depend on `users`; nothing depends on `auth`. `forgot/reset-password` is the one endpoint above not yet built: it needs an email channel, so it lands with A6 (Notifications) rather than shipping a password-reset flow that cannot deliver a reset.
 **Permissions:** public (auth), `session:revoke`, `user:read`.
 **Dependencies:** A1.
 **Reports:** Login audit, failed-login/anomaly, active sessions.

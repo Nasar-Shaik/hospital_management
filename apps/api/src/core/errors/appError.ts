@@ -27,6 +27,52 @@ export class ValidationError extends AppError {
   }
 }
 
+/* ── Identity & Authentication (ADR-0009, ERROR_CODES: HMS-AUTH-*) ───────── */
+
+/**
+ * HMS-AUTH-001 — bad email/password, unknown user, disabled account, or a
+ * locked account. All four collapse into ONE response on purpose: distinguishing
+ * them would turn the login form into a user-enumeration oracle. `details` may
+ * carry `lockedUntil` because that is already known to a legitimate owner.
+ */
+export class InvalidCredentialsError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-AUTH-001", 401, "Invalid credentials", details);
+  }
+}
+
+/** HMS-AUTH-002 — access/refresh token missing, malformed, expired or revoked. */
+export class SessionExpiredError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-AUTH-002", 401, "Session expired", details);
+  }
+}
+
+/**
+ * HMS-AUTH-003 — an already-rotated refresh token was presented again. Either
+ * the token was stolen or the client is broken; both mean the whole family is
+ * untrustworthy, so it is revoked before this is thrown.
+ */
+export class TokenReuseDetectedError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-AUTH-003", 401, "Refresh token reuse detected", details);
+  }
+}
+
+/** HMS-AUTH-004 — password verified, but the account requires an MFA challenge. */
+export class MfaRequiredError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-AUTH-004", 403, "MFA required", details);
+  }
+}
+
+/** HMS-AUTH-005 — authenticated, but lacking the required permission (Phase 1C). */
+export class InsufficientPermissionError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-AUTH-005", 403, "Insufficient permission", details);
+  }
+}
+
 /* ── Tenancy (Doc 03 §1.2, ERROR_CODES: HMS-TEN-*) ───────────────────────── */
 
 /** HMS-TEN-001 — host did not resolve to any tenant in the registry. */

@@ -119,6 +119,16 @@ trial → expired → active|terminated
 
 Guards: `suspended` blocks logins but preserves data; `purged` only after retention window + export offered + owner approval (Constitution §3.9). Terminal: **purged**.
 
+## 12. User Account (tenant DB)
+
+```
+invited → active → disabled ⇄ active
+active|invited → locked → active        (unlock: admin, or lockout window elapses)
+active|disabled|invited → archived
+```
+
+Guards: `invited` has no credential yet — only accepting the invitation sets one. `locked` is entered automatically after `LOGIN_MAX_ATTEMPTS` failures inside `LOGIN_LOCKOUT_MINUTES` and leaves automatically when that window elapses; an admin may unlock early. `disabled` is an explicit human act (offboarding) and blocks login until reversed. Only `active` may authenticate — every other state fails as `HMS-AUTH-001` (indistinguishable to the caller, so login is never a user-enumeration oracle). Deleting a clinician who has signed records is forbidden — clinical attribution must survive offboarding — so `archived` is soft and terminal. Terminal: **archived**.
+
 ---
 
 ## Adding an entity lifecycle

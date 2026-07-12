@@ -37,6 +37,12 @@ export const cacheKeys = {
   tenantBySlug: (slug: string) => `tenant:${slug}`,
   /** Registry lookup by custom domain host (CACHE_STRATEGY: TTL 5 min). */
   tenantByDomain: (host: string) => `tenant:domain:${host}`,
+  /**
+   * Access-token blocklist (CACHE_STRATEGY: `revoked:{jti}`, TTL = the token's
+   * own remaining life, so entries expire exactly when they stop mattering).
+   * Written on logout; read by `authenticate`.
+   */
+  revokedToken: (jti: string) => `revoked:${jti}`,
 } as const;
 
 /** Read-through cache get. Returns undefined on miss OR on any Redis failure (fail soft). */
