@@ -5,7 +5,8 @@
 import { createLogger } from "@medicore/logger";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
-import { closeMongo } from "./core/db/mongo.js";
+import { closeMaster } from "./core/db/masterDb.js";
+import { closeAllTenantConnections } from "./core/db/connectionManager.js";
 import { closeRedis } from "./core/redis/redis.js";
 
 const logger = createLogger({ service: "api", level: env.LOG_LEVEL });
@@ -27,7 +28,7 @@ async function shutdown(signal: string): Promise<void> {
   }, 30_000);
 
   server.close(async () => {
-    await Promise.allSettled([closeMongo(), closeRedis()]);
+    await Promise.allSettled([closeAllTenantConnections(), closeMaster(), closeRedis()]);
     clearTimeout(forceExit);
     logger.info("shutdown complete");
     process.exit(0);

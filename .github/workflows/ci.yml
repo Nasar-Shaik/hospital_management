@@ -16,6 +16,21 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    services:
+      # Real MongoDB for the tenant-isolation suite. `mongodb-replica-set` style
+      # single-node RS gives us transactions; the isolation tests connect with
+      # directConnection=true so no topology discovery is involved.
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +57,14 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
+
+      # Release-gating (Doc 05 §4.2, RISK_REGISTER T1). Runs against a real MongoDB —
+      # it fails, never skips, if the database is unreachable: a silently skipped
+      # tenant-isolation suite is indistinguishable from a passing one.
+      - name: Integration tests (tenant isolation)
+        run: pnpm --filter @medicore/api test:int
+        env:
+          MONGO_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
 
       - name: Build
         run: pnpm build

@@ -8,18 +8,18 @@ Roadmap, sprint plan, priority matrix, testing strategy, production checklist an
 
 > Assumes a squad model: **Platform**, **Clinical**, **Financial**, **Mobile**, **Data/AI**, plus shared **QA** and **DevOps**. Timeline is indicative; adjust to team size. Sprints = 2 weeks.
 
-| Phase | Focus | Indicative duration | Milestone / Sellable increment | Edition unlocked (Doc 07) |
-|-------|-------|---------------------|-------------------------------|---------------------------|
-| P0 | Setup & scaffolding | 2–3 weeks | CI green, skeleton deploys | — |
-| P1 | Foundation (tenancy, auth, RBAC, audit, notifications, files, shell) | 6–8 weeks | **MVP platform** — can onboard a tenant & users | — (internal alpha) |
-| P2 | Core ops (patients, doctors, appointments, beds, masters) | 8–10 weeks | **Clinic-ready** — OP flow sellable to small clinics | **Clinic Edition** (beta with 3 design-partner clinics) |
-| P3 | Clinical (EMR, nursing, lab, radiology, OT, blood bank + triage/ICU/dialysis/physio/dietetics flags) | 14–18 weeks | **Hospital-ready HIS** | **Clinic Plus, Diagnostic, Day Care** (lab/radiology subset ships mid-phase) |
-| P4 | Financial (billing, pharmacy, inventory, finance, HR) | 10–14 weeks | **Full revenue cycle** — sellable to hospitals | **Nursing Home, Hospital Edition** (1 NABH design partner) |
-| P5 | Mobile & communication (+ home healthcare, occupational health flags) | 8–10 weeks | **Patient/Doctor/Staff apps** live | Patient-engagement add-on across editions |
-| P6 | Analytics & reporting | 6–8 weeks | **Management dashboards & reports** | **Multi-Specialty Edition** |
-| P7 | Integrations | 8–12 weeks | **Deployable in regulated institutions** | **Government, Medical College Editions** |
-| P8 | AI features | 8–12 weeks | **Premium AI tier** | AI add-on tier |
-| P9 | Production hardening & GA | ongoing, 6–8 weeks concentrated | **Enterprise GA** | **Enterprise Edition** |
+| Phase | Focus                                                                                                | Indicative duration             | Milestone / Sellable increment                       | Edition unlocked (Doc 07)                                                    |
+| ----- | ---------------------------------------------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------- |
+| P0    | Setup & scaffolding                                                                                  | 2–3 weeks                       | CI green, skeleton deploys                           | —                                                                            |
+| P1    | Foundation (tenancy, auth, RBAC, audit, notifications, files, shell)                                 | 6–8 weeks                       | **MVP platform** — can onboard a tenant & users      | — (internal alpha)                                                           |
+| P2    | Core ops (patients, doctors, appointments, beds, masters)                                            | 8–10 weeks                      | **Clinic-ready** — OP flow sellable to small clinics | **Clinic Edition** (beta with 3 design-partner clinics)                      |
+| P3    | Clinical (EMR, nursing, lab, radiology, OT, blood bank + triage/ICU/dialysis/physio/dietetics flags) | 14–18 weeks                     | **Hospital-ready HIS**                               | **Clinic Plus, Diagnostic, Day Care** (lab/radiology subset ships mid-phase) |
+| P4    | Financial (billing, pharmacy, inventory, finance, HR)                                                | 10–14 weeks                     | **Full revenue cycle** — sellable to hospitals       | **Nursing Home, Hospital Edition** (1 NABH design partner)                   |
+| P5    | Mobile & communication (+ home healthcare, occupational health flags)                                | 8–10 weeks                      | **Patient/Doctor/Staff apps** live                   | Patient-engagement add-on across editions                                    |
+| P6    | Analytics & reporting                                                                                | 6–8 weeks                       | **Management dashboards & reports**                  | **Multi-Specialty Edition**                                                  |
+| P7    | Integrations                                                                                         | 8–12 weeks                      | **Deployable in regulated institutions**             | **Government, Medical College Editions**                                     |
+| P8    | AI features                                                                                          | 8–12 weeks                      | **Premium AI tier**                                  | AI add-on tier                                                               |
+| P9    | Production hardening & GA                                                                            | ongoing, 6–8 weeks concentrated | **Enterprise GA**                                    | **Enterprise Edition**                                                       |
 
 Phases 5–7 partially parallelize once P4 stabilizes. Total ~14–20 months to full enterprise GA; **first revenue at end of P2**, credible hospital sales at end of P4.
 
@@ -50,36 +50,39 @@ Ceremonies: sprint planning, daily standup, backlog refinement, review/demo, ret
 
 ## 3. Priority Matrix (MoSCoW × Value/Effort)
 
-| Priority | Modules | Rationale |
-|----------|---------|-----------|
-| **Must (P1–P2)** | Tenancy, Auth, RBAC, Audit, Patients, Appointments, Billing (OP), Doctor mgmt | No product without these; fastest path to revenue |
-| **Should (P3–P4)** | EMR, Nursing, Lab, Pharmacy, IP billing, Inventory, Insurance | Required to sell to hospitals |
-| **Could (P5–P6)** | Mobile apps, Radiology, OT, Blood bank, Analytics, HR/Finance depth | Strong differentiators & stickiness |
-| **Won't-yet / Later (P7–P8)** | Deep integrations, AI suite | Premium tiers; sequence after core is stable |
+| Priority                      | Modules                                                                       | Rationale                                         |
+| ----------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Must (P1–P2)**              | Tenancy, Auth, RBAC, Audit, Patients, Appointments, Billing (OP), Doctor mgmt | No product without these; fastest path to revenue |
+| **Should (P3–P4)**            | EMR, Nursing, Lab, Pharmacy, IP billing, Inventory, Insurance                 | Required to sell to hospitals                     |
+| **Could (P5–P6)**             | Mobile apps, Radiology, OT, Blood bank, Analytics, HR/Finance depth           | Strong differentiators & stickiness               |
+| **Won't-yet / Later (P7–P8)** | Deep integrations, AI suite                                                   | Premium tiers; sequence after core is stable      |
 
 **Value/Effort quadrants**
-- *Quick wins (high value/low effort):* appointment reminders, patient portal records view, daily collection report, bed board.
-- *Big bets (high value/high effort):* EMR, LIS, revenue cycle, AI scribe, HL7/FHIR.
-- *Fill-ins (low/low):* feedback, cafeteria, parking, visitor logs.
-- *Avoid over-investing early (low value/high effort):* full PACS, full double-entry accounting — integrate/partner first, build later.
+
+- _Quick wins (high value/low effort):_ appointment reminders, patient portal records view, daily collection report, bed board.
+- _Big bets (high value/high effort):_ EMR, LIS, revenue cycle, AI scribe, HL7/FHIR.
+- _Fill-ins (low/low):_ feedback, cafeteria, parking, visitor logs.
+- _Avoid over-investing early (low value/high effort):_ full PACS, full double-entry accounting — integrate/partner first, build later.
 
 ---
 
 ## 4. Testing Strategy
 
 ### 4.1 Test pyramid
-| Layer | Tooling | Coverage target | What |
-|-------|---------|-----------------|------|
-| Unit | Vitest/Jest | 80%+ services/utils | Business logic, validators, calculators (billing, payroll, ranges) |
-| Integration | Jest + Testcontainers (Mongo/Redis) | Critical paths | Repositories, transactions, tenant isolation, RBAC enforcement |
-| Contract | Zod/OpenAPI + Pact | All public APIs | Request/response schemas, backward compat |
-| E2E (web) | Playwright | Core journeys | Register→appoint→consult→bill; multi-role, multi-tenant isolation |
-| E2E (mobile) | Detox / Maestro | Smoke + key flows | Login, book, records, pay, offline sync |
-| Load/perf | k6 / Artillery | NFR gates | p95 latency, throughput, soak, spike |
-| Security | OWASP ZAP, Semgrep, Trivy, gitleaks | Every pipeline | SAST/DAST/deps/secrets |
-| Accessibility | axe-core, Playwright a11y | WCAG 2.1 AA | Web + patient app |
+
+| Layer         | Tooling                             | Coverage target     | What                                                               |
+| ------------- | ----------------------------------- | ------------------- | ------------------------------------------------------------------ |
+| Unit          | Vitest/Jest                         | 80%+ services/utils | Business logic, validators, calculators (billing, payroll, ranges) |
+| Integration   | Jest + Testcontainers (Mongo/Redis) | Critical paths      | Repositories, transactions, tenant isolation, RBAC enforcement     |
+| Contract      | Zod/OpenAPI + Pact                  | All public APIs     | Request/response schemas, backward compat                          |
+| E2E (web)     | Playwright                          | Core journeys       | Register→appoint→consult→bill; multi-role, multi-tenant isolation  |
+| E2E (mobile)  | Detox / Maestro                     | Smoke + key flows   | Login, book, records, pay, offline sync                            |
+| Load/perf     | k6 / Artillery                      | NFR gates           | p95 latency, throughput, soak, spike                               |
+| Security      | OWASP ZAP, Semgrep, Trivy, gitleaks | Every pipeline      | SAST/DAST/deps/secrets                                             |
+| Accessibility | axe-core, Playwright a11y           | WCAG 2.1 AA         | Web + patient app                                                  |
 
 ### 4.2 Special HMS test concerns (must-have suites)
+
 - **Tenant isolation tests:** attempt cross-tenant reads/writes for every endpoint → must 403/empty. Automated for all routes.
 - **RBAC matrix tests:** each permission × role × scope combination.
 - **Clinical safety:** allergy/interaction warnings fire; MAR schedule correctness; result reference-range flagging; unit conversions.
@@ -89,6 +92,7 @@ Ceremonies: sprint planning, daily standup, backlog refinement, review/demo, ret
 - **Migration tests:** up/down reversibility on seeded data.
 
 ### 4.3 Environments & data
+
 Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per specialty. Chaos testing (kill pods, drop Redis) before GA.
 
 ---
@@ -96,6 +100,7 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 ## 5. Production Readiness Checklist
 
 **Security**
+
 - [ ] TLS 1.3 everywhere; HSTS; secure cookies; CSP
 - [ ] Field-level encryption for PHI; KMS-managed keys; encryption at rest
 - [ ] JWT short-lived + rotating refresh with reuse detection; MFA for privileged roles
@@ -106,6 +111,7 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 - [ ] Audit logging on all PHI/financial mutations; immutable
 
 **Reliability**
+
 - [ ] Health/readiness/liveness probes; graceful shutdown
 - [ ] Automated backups + tested PITR restore; documented RPO/RTO met
 - [ ] DR runbook + at least one successful DR drill
@@ -114,12 +120,14 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 - [ ] Zero-downtime deploy (blue-green/canary) + rollback tested
 
 **Observability**
+
 - [ ] Metrics, tracing, logs with `traceId`/`tenantId` correlation
 - [ ] Dashboards + SLOs + alerting + on-call rotation + runbooks
 - [ ] Error tracking (Sentry) wired FE/BE/mobile
 - [ ] Synthetic monitors + public status page
 
 **Compliance**
+
 - [ ] HIPAA/GDPR/DPDP controls mapped; DPAs & BAAs templated
 - [ ] Consent management + data-subject-request (export/erasure) workflow
 - [ ] Retention policies configured per jurisdiction; legal hold supported
@@ -127,6 +135,7 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 - [ ] ABDM/NABH/JCI operational alignment where applicable
 
 **Product/Ops**
+
 - [ ] Feature flags gate every incomplete feature
 - [ ] Tenant onboarding + data import/migration tooling
 - [ ] Billing/dunning + usage metering working
@@ -140,13 +149,15 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 ## 6. Scaling Strategy
 
 ### 6.1 Application
+
 - **Stateless API** → horizontal autoscale (HPA) behind LB; sessions/state in Redis, not memory.
 - **Workers** scale independently per queue depth.
 - **Socket.IO** with Redis adapter; sticky sessions or use WebSocket-aware LB.
 - **CDN** for web static + cached patient-facing content; edge for assets.
 
 ### 6.2 Data
-- **Database-per-tenant placement tiers:** small hospitals co-located on a shared cluster → heavy hospital's DB moved to a dedicated server/cluster by flipping `dbUri` in the master registry (no code change). A single huge hospital shards *within* its own DB (`{branchId, _id}` keys). Master DB stays small and cache-fronted.
+
+- **Database-per-tenant placement tiers:** small hospitals co-located on a shared cluster → heavy hospital's DB moved to a dedicated server/cluster by flipping `dbUri` in the master registry (no code change). A single huge hospital shards _within_ its own DB (`{branchId, _id}` keys). Master DB stays small and cache-fronted.
 - **Read replicas** for reporting/analytics; route heavy aggregations to read models.
 - **Change streams → materialized read models** (dashboards/analytics) to keep OLTP fast.
 - **Redis cluster** for cache/queues; **TTL + eviction** policies tuned.
@@ -154,12 +165,14 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 - **Archival tier** for cold audit/clinical/financial history (query-on-demand).
 
 ### 6.3 Tenant scaling patterns
+
 - **Noisy-neighbor control:** per-tenant rate limits, queue quotas, connection-manager caps; DB-level isolation already prevents query-level contention across tenants on dedicated tiers.
 - **Tiered isolation:** shared cluster (own DB) → dedicated server → dedicated cluster as the hospital grows — a registry change, not a migration project.
 - **Per-tenant backup/restore:** each `hms_<slug>` DB is backed up and restorable independently — a tenant-level incident never requires a platform-wide restore.
 - **Regional sharding:** deploy per region for residency & latency; global control plane, regional data planes.
 
 ### 6.4 Performance guardrails
+
 - Enforce indexes (leading `tenantId`); ban unindexed queries in review.
 - Pagination mandatory on lists; cap page size.
 - Cache hot reference data (tariffs, flags, ICD).
@@ -167,6 +180,7 @@ Synthetic/anonymized datasets; **no real PHI in non-prod**. Golden datasets per 
 - Load test each release against NFR gates; profile slow queries via APM.
 
 ### 6.5 Cost & capacity
+
 Capacity model per tenant tier (beds/OP volume → API RPS, storage, DB IOPS). Autoscale floors/ceilings per environment; budget alerts; right-size on usage telemetry.
 
 ---
@@ -176,9 +190,9 @@ Capacity model per tenant tier (beds/OP volume → API RPS, storage, DB IOPS). A
 - **Squads:** Platform, Clinical, Financial, Mobile, Data/AI + QA/DevOps guilds.
 - **Governance:** ADRs for architecture decisions, API design review, security review gate, change advisory for prod.
 - **Top risks & mitigations:**
-  - *Tenant data leakage* → enforced at DB plugin + automated isolation tests.
-  - *Clinical safety defects* → dedicated safety test suites, human-in-loop AI, clinical SME review.
-  - *Scope creep* → phase gates, MoSCoW, feature flags.
-  - *Integration fragility* → resilient integration layer, sandboxes, contract tests.
-  - *Compliance gaps* → compliance mapped from P1, DSR tooling, audits.
-  - *Performance regressions* → load-test gates, query review, read models.
+  - _Tenant data leakage_ → enforced at DB plugin + automated isolation tests.
+  - _Clinical safety defects_ → dedicated safety test suites, human-in-loop AI, clinical SME review.
+  - _Scope creep_ → phase gates, MoSCoW, feature flags.
+  - _Integration fragility_ → resilient integration layer, sandboxes, contract tests.
+  - _Compliance gaps_ → compliance mapped from P1, DSR tooling, audits.
+  - _Performance regressions_ → load-test gates, query review, read models.

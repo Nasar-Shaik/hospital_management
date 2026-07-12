@@ -44,6 +44,7 @@ medicore-hms/
 ## 2. Backend Architecture (Express + TypeScript)
 
 ### 2.1 Layered design
+
 ```
 Request → Gateway (Nginx) → Express
   → Middleware chain:
@@ -62,6 +63,7 @@ Request → Gateway (Nginx) → Express
 ```
 
 ### 2.2 `apps/api` structure
+
 ```
 apps/api/src/
 ├── main.ts                       # bootstrap, server, socket, graceful shutdown
@@ -108,8 +110,11 @@ class ConnectionManager {
 
   async forTenant(tenant: TenantRegistry): Promise<Connection> {
     const hit = this.pool.get(tenant.id);
-    if (hit) { hit.lastUsed = Date.now(); return hit.conn; }
-    const base = tenant.dbUri ?? config.SHARED_CLUSTER_URI;   // dedicated cluster override
+    if (hit) {
+      hit.lastUsed = Date.now();
+      return hit.conn;
+    }
+    const base = tenant.dbUri ?? config.SHARED_CLUSTER_URI; // dedicated cluster override
     const conn = mongoose.createConnection(base).useDb(tenant.databaseName, { useCache: true });
     this.pool.set(tenant.id, { conn, lastUsed: Date.now() });
     return conn;
@@ -120,6 +125,7 @@ class ConnectionManager {
 ```
 
 **Resolution flow (per request):**
+
 1. `Host` header → slug (`apollo.paperlesstech.in`) or custom-domain lookup (`hms.apollohospital.com`).
 2. Tenant registry fetched from Redis (`tenant:{slug}` / `tenant:domain:{host}`, TTL 5 min) → miss falls through to `paperlesstech_master.tenants`.
 3. Status gate (active/trial only) → Connection Manager → connection placed in AsyncLocalStorage.
@@ -128,6 +134,7 @@ class ConnectionManager {
 Master DB access is confined to `core/db/masterDb.ts` + the platform modules (tenants, subscriptions, feature flags, licensing, SaaS billing, support); business modules can only see the tenant connection.
 
 ### 2.3 Cross-cutting conventions
+
 - **Response envelope:** `{ success, data, meta?, error? }`; errors carry `code`, `message`, `details`, `traceId`.
 - **Validation:** Zod schemas shared with frontend via `packages/validation`.
 - **Pagination:** cursor or page/limit; list metadata in `meta`.
@@ -136,6 +143,7 @@ Master DB access is confined to `core/db/masterDb.ts` + the platform modules (te
 - **Graceful shutdown:** drain HTTP, close sockets, finish in-flight jobs, close DB/Redis.
 
 ### 2.4 Module Boundary Rules (10-year maintainability)
+
 The backend is a **modular monolith**; the boundary discipline is what keeps it maintainable and extractable:
 
 1. A module may depend on another module **only** via (a) that module's exported **service interface** (`modules/<name>/index.ts` re-exports service + types only) or (b) **domain events** through the outbox. Direct imports of another module's repository, model, or internal files are **forbidden**.
@@ -145,11 +153,13 @@ The backend is a **modular monolith**; the boundary discipline is what keeps it 
 5. Every module declares its feature-flag key (`module.<domain>.<name>`); route registration is skipped when the flag is off, so disabled modules cost nothing at runtime.
 
 ### 2.5 Realtime (Socket.IO)
+
 - Namespaces: `/notifications`, `/queue`, `/chat`, `/monitoring`, `/beds`.
 - Rooms are tenant/branch/user scoped: `t:{tenantId}:b:{branchId}:...`.
 - Redis adapter for horizontal scaling; JWT auth on connection; same RBAC checks as REST.
 
 ### 2.6 Background processing (`apps/workers`, BullMQ)
+
 Queues: `notifications`, `reports`, `exports`, `ocr`, `voice`, `billing`, `imports`, `webhooks`, `ai`, `reminders`, `integrations-outbound`. Each with retry/backoff, dead-letter queue, concurrency limits, and idempotent handlers.
 
 ---
@@ -158,20 +168,22 @@ Queues: `notifications`, `reports`, `exports`, `ocr`, `voice`, `billing`, `impor
 
 ### 3.0 Architectural boundaries (normative)
 
-| Tier | Technology | Owns | Never does |
-|------|-----------|------|-----------|
+| Tier         | Technology                                             | Owns                                                                               | Never does                                                                    |
+| ------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | **Frontend** | Next.js (App Router) + React 19 + Tailwind + Shadcn UI | Rendering, routing, layouts, route guarding (middleware), white-label theming, SEO | Business logic, DB/Redis access, business API routes, authorization decisions |
-| **Backend** | Node.js + Express (modular monolith) | All APIs, authN/Z authority, tenancy resolution, business rules, data | Rendering HTML |
-| **Workers** | BullMQ | Async jobs, events, scheduled work | Serving requests |
-| **Realtime** | Socket.IO (+ Redis adapter) | Server push (boards, chat, notifications) | Being a source of truth |
-| **Mobile** | React Native (Expo) | Patient/doctor/staff native apps, offline | — |
+| **Backend**  | Node.js + Express (modular monolith)                   | All APIs, authN/Z authority, tenancy resolution, business rules, data              | Rendering HTML                                                                |
+| **Workers**  | BullMQ                                                 | Async jobs, events, scheduled work                                                 | Serving requests                                                              |
+| **Realtime** | Socket.IO (+ Redis adapter)                            | Server push (boards, chat, notifications)                                          | Being a source of truth                                                       |
+| **Mobile**   | React Native (Expo)                                    | Patient/doctor/staff native apps, offline                                          | —                                                                             |
 
 Next.js is **presentation-tier only**. Its server side may render, guard, and handle the auth-cookie exchange — nothing else. `app/api/*` business routes are forbidden (boundary-linted); all data flows through `packages/api-client` → Express.
 
 ### 3.1 Stack
+
 Next.js (App Router) + React 19 + TypeScript + Tailwind + Shadcn UI + TanStack Query (client server-state) + Zustand (client/UI state) + React Hook Form + Zod + `packages/api-client` (isomorphic: server components and client components both call Express through it).
 
 ### 3.2 `apps/web` structure (route groups × feature slices)
+
 ```
 apps/web/
 ├── middleware.ts            # Host → tenant branding resolution (white-label), auth route guards
@@ -199,6 +211,7 @@ apps/web/
 ```
 
 ### 3.3 Rendering & data rules
+
 - **Server components (default):** public pages, portal read views, layout shells — fetch via `api-client` server-side (faster first paint, smaller bundles). Public tenant sites use **ISR** keyed by host (hundreds of white-label sites from one deployment).
 - **Client components (`"use client"`):** everything interactive — the operator dashboard works exactly like the previous SPA (TanStack Query, optimistic updates for queue/MAR/vitals, sockets).
 - **Middleware:** resolves `Host` → tenant branding/theme (edge-cached via API) and guards route groups by auth cookie presence. **Authorization remains Express's job** — middleware redirects, it never decides.
@@ -206,9 +219,11 @@ apps/web/
 - **PermissionGate / FeatureGate**, **DataTable**, RHF+Zod forms, CSS-variable theming, entitlement-aligned code splitting — all unchanged from the SPA design.
 
 ### 3.4 Admin console (`apps/admin`)
+
 Smaller Next.js app, super-admin only (tenant provisioning, plans, flags, monitoring, impersonation, SaaS billing). No public route group; all client-component dashboard patterns.
 
 ### 3.5 Where Vite remains
+
 Vite is no longer an application framework here. It survives only as tooling: **Vitest** (unit test runner, Vite-powered) and the **`packages/ui` component playground/Storybook builder**. Do not scaffold app features with Vite.
 
 ---
@@ -234,6 +249,7 @@ apps/patient-app/  (doctor-app, staff-app analogous)
 ```
 
 **Key mobile concerns**
+
 - **Offline-first** (staff/doctor): local cache (MMKV/SQLite) + mutation queue with conflict resolution; sync on reconnect.
 - **Push**: Expo Notifications → FCM/APNS; deep links to screens.
 - **Realtime**: Socket.IO client for queue/chat/monitoring.
@@ -246,6 +262,7 @@ apps/patient-app/  (doctor-app, staff-app analogous)
 ## 5. API Design
 
 ### 5.1 Conventions
+
 - Base: `/api/v1`; versioned; OpenAPI 3.1 generated from Zod (`zod-to-openapi`).
 - **Tenant resolution first, auth second:** subdomain (`<slug>.paperlesstech.in`) or custom domain (`hms.apollohospital.com`) → master-registry lookup (Redis-cached) → tenant DB connection via Connection Manager (§2.2.1). The JWT `tenantId` claim must match the host-resolved tenant or the request is rejected (403) — the host header selects the database but is never the authorization authority.
 - Branch via `X-Branch-Id` header (validated against user scope).
@@ -259,6 +276,7 @@ apps/patient-app/  (doctor-app, staff-app analogous)
 - Webhooks: signed (HMAC), retried, with delivery log.
 
 ### 5.2 Resource map (top-level)
+
 ```
 /auth  /tenants  /plans  /subscriptions  /feature-flags  /usage
 /roles  /permissions  /users  /invitations  /api-keys  /audit-logs
@@ -290,9 +308,11 @@ apps/patient-app/  (doctor-app, staff-app analogous)
 ## 6. Docker Structure
 
 ### 6.1 Dev — `infra/docker/docker-compose.yml`
+
 Services: `api`, `workers`, `web`, `admin`, `mongo` (replica set for transactions/change streams), `redis`, `minio` (S3), `mailhog`, `mongo-express`, optional `orthanc` (DICOM). Hot-reload via bind mounts.
 
 ### 6.2 Production images
+
 - Multi-stage Dockerfiles (builder → slim runtime, non-root user, distroless/alpine).
 - Separate images: `api`, `workers`, `web` (**Next.js `output: 'standalone'` → Node runtime**), `admin` (same).
 - `web`/`admin` containers run `node server.js` (standalone output), expose `/api/health` for probes, sit behind the gateway/CDN; static assets (`.next/static`, images) served via CDN with immutable cache headers.
@@ -305,7 +325,7 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY pnpm-lock.yaml package.json ./
 RUN corepack enable && pnpm install --frozen-lockfile
-COPY . . 
+COPY . .
 RUN pnpm --filter api build
 FROM node:22-alpine AS runner
 WORKDIR /app
@@ -318,6 +338,7 @@ CMD ["node", "dist/main.js"]
 ```
 
 ### 6.3 Deployment targets
+
 - **Small tenants / single-VM:** Docker Compose + **PM2** (cluster mode for API, separate PM2 apps for workers **and the Next.js standalone servers**) behind Nginx. The frontend is a Node process now (ADR-0012 trade-off) — the same runtime the API already requires, so on-prem stays a one-runtime box.
 - **Scale / Enterprise:** **Kubernetes** (Helm), HPA autoscaling on API, workers **and web/admin deployments**, managed MongoDB (Atlas) + Redis, object storage, CDN (Next static assets + ISR cache), WAF.
 - **White-label domains:** wildcard + custom-domain TLS terminates at the gateway; both Express (API) and Next.js middleware (rendering/theming) resolve tenant from `Host` against the same master registry — one resolution model, two consumers.
@@ -354,6 +375,7 @@ PR opened / push
 ---
 
 ## 8. Observability & SRE Hooks
+
 - **Tracing:** OpenTelemetry SDK → collector → Tempo/Jaeger; `traceId` propagated to responses & logs.
 - **Metrics:** Prometheus (RED/USE: request rate, errors, duration; queue depth; DB pool; cache hit).
 - **Logs:** structured JSON (pino) → Loki; correlation by `traceId`/`tenantId`.
@@ -364,4 +386,5 @@ PR opened / push
 ---
 
 ## 9. Environment & Secrets
+
 `.env` per app, Zod-validated. Secrets from cloud secret manager / Vault, injected at runtime. Never commit secrets; rotate DB/JWT/integration keys on schedule. Per-tenant integration credentials encrypted at field level (KMS-backed data keys).

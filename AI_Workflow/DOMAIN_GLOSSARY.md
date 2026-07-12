@@ -1,36 +1,36 @@
 # DOMAIN GLOSSARY
 
-The **single vocabulary** of this project. Code, docs, UI copy, and AI output use these terms exactly; synonyms listed are **forbidden** in identifiers. New terms are added here *before* first use in code. (Constitution §9; Guidelines Never-rule 13.)
+The **single vocabulary** of this project. Code, docs, UI copy, and AI output use these terms exactly; synonyms listed are **forbidden** in identifiers. New terms are added here _before_ first use in code. (Constitution §9; Guidelines Never-rule 13.)
 
-Format: **Term** — definition. *(Use, not: forbidden synonyms)* `code identifier`
+Format: **Term** — definition. _(Use, not: forbidden synonyms)_ `code identifier`
 
 ---
 
 ## Identity & Registration
 
-- **Tenant** — one customer organization (a hospital/clinic/group) with its own dedicated database `hms_<slug>`. *(not: client, account, org)* `tenant`
-- **Branch** — a physical location of a tenant. *(not: site, facility, center)* `branch`
+- **Tenant** — one customer organization (a hospital/clinic/group) with its own dedicated database `hms_<slug>`. _(not: client, account, org)_ `tenant`
+- **Branch** — a physical location of a tenant. _(not: site, facility, center)_ `branch`
 - **UHID** — Unique Hospital Identifier: the tenant-scoped permanent patient number issued at first registration; stable across visits and branches. `uhid`
 - **MPI** — Master Patient Index: the dedup/search layer that guarantees one patient = one UHID. `mpi`
 - **ABHA** — Ayushman Bharat Health Account: India's national health ID, linkable to a patient via ABDM. `abha`
 - **MRN** — Medical Record Number: legacy/external record identifier mapped in `patientIdentifiers`. `mrn`
-- **Patient** — a person receiving care. *(not: customer, client)* `patient`
+- **Patient** — a person receiving care. _(not: customer, client)_ `patient`
 - **Dependent** — a family member linked to a patient-app account. `dependent`
 
 ## Encounters & Care Settings
 
-- **Visit** — one patient–provider interaction episode; typed `OP | IP | ER | TELE | HOME`. The umbrella unit clinical activity hangs on. *(not: encounter — FHIR mapping note: a Visit maps to FHIR `Encounter`)* `visit`
+- **Visit** — one patient–provider interaction episode; typed `OP | IP | ER | TELE | HOME`. The umbrella unit clinical activity hangs on. _(not: encounter — FHIR mapping note: a Visit maps to FHIR `Encounter`)_ `visit`
 - **OPD / OP** — Outpatient Department / outpatient context: care without admission. `op`
 - **IPD / IP** — Inpatient Department / inpatient context: care under admission. `ip`
-- **Admission** — the act+record of taking a patient inpatient (bed, admitting doctor, deposit) until **Discharge**. *(not: hospitalization)* `admission`
+- **Admission** — the act+record of taking a patient inpatient (bed, admitting doctor, deposit) until **Discharge**. _(not: hospitalization)_ `admission`
 - **Discharge** — formal end of an admission, producing a **Discharge Summary**. `discharge`
 - **LAMA** — Left Against Medical Advice: a discharge disposition. `lama`
 - **Triage** — ED severity classification (ESI/CTAS level) performed before treatment. `triage`
-- **Appointment** — a scheduled future visit slot with a doctor/resource. *(not: booking — except public "online booking" flows)* `appointment`
+- **Appointment** — a scheduled future visit slot with a doctor/resource. _(not: booking — except public "online booking" flows)_ `appointment`
 - **Token** — the queue sequence number issued for a same-day consultation. `token`
 - **Referral** — directing a patient to another doctor/department/facility. `referral`
 - **Transfer** — moving an admitted patient between beds/wards/branches. `transfer`
-- **Teleconsultation** — remote video/voice consultation. *(not: telemedicine session)* `teleconsult`
+- **Teleconsultation** — remote video/voice consultation. _(not: telemedicine session)_ `teleconsult`
 
 ## Clinical Documentation
 
@@ -40,8 +40,8 @@ Format: **Term** — definition. *(Use, not: forbidden synonyms)* `code identifi
 - **Problem List** — the patient's active/resolved long-term conditions. `problemList`
 - **Vitals** — physiological measurements (BP, HR, SpO₂, temp…). `vitals`
 - **Allergy** — recorded hypersensitivity with severity; drives safety checks. `allergy`
-- **Prescription** — a doctor's signed medication order set. *(not: script, Rx in identifiers)* `prescription`
-- **Order** — a doctor's request for a service (lab/radiology/procedure). *(not: request, requisition)* `order`
+- **Prescription** — a doctor's signed medication order set. _(not: script, Rx in identifiers)_ `prescription`
+- **Order** — a doctor's request for a service (lab/radiology/procedure). _(not: request, requisition)_ `order`
 - **Consent** — recorded patient permission (procedure, data, teleconsult), signed. `consent`
 - **Clinical Template** — specialty-specific structured charting form (dental chart, refraction…). `clinicalTemplate`
 - **e-Sign / Digital Signature** — cryptographic sign-off making a document immutable. `documentSignature`
@@ -52,7 +52,7 @@ Format: **Term** — definition. *(Use, not: forbidden synonyms)* `code identifi
 - **Bed Board** — realtime bed status/allocation view. `bedBoard`
 - **MAR** — Medication Administration Record: scheduled vs administered doses per patient. `mar` / `medicationAdministration`
 - **Care Plan** — nursing plan of care for an admission. `carePlan`
-- **Handover** — shift-to-shift transfer of patient responsibility. *(not: handoff)* `shiftHandover`
+- **Handover** — shift-to-shift transfer of patient responsibility. _(not: handoff)_ `shiftHandover`
 - **Intake/Output** — fluid balance charting. `intakeOutput`
 - **NEWS/MEWS** — (Modified) Early Warning Score computed from vitals. `earlyWarningScore`
 - **Flowsheet** — hourly ICU charting grid. `icuFlowsheet`
@@ -60,7 +60,7 @@ Format: **Term** — definition. *(Use, not: forbidden synonyms)* `code identifi
 ## Diagnostics
 
 - **LIS** — Laboratory Information System (module D6). `lis`
-- **Sample** — collected specimen, barcoded, tracked. *(not: specimen)* `sample`
+- **Sample** — collected specimen, barcoded, tracked. _(not: specimen)_ `sample`
 - **Result** — measured test value; flagged against **Reference Range**; **panic/critical value** triggers alerts. `labResult`
 - **RIS** — Radiology Information System (module D7). `ris`
 - **Modality** — imaging equipment class (X-Ray, CT, MRI, USG). `modality`
@@ -69,18 +69,18 @@ Format: **Term** — definition. *(Use, not: forbidden synonyms)* `code identifi
 
 ## Pharmacy & Inventory
 
-- **Medicine** — a drug product in the formulary (composition, form, schedule). *(not: drug in identifiers)* `medicine`
+- **Medicine** — a drug product in the formulary (composition, form, schedule). _(not: drug in identifiers)_ `medicine`
 - **Batch** — a lot of stock with number + expiry; dispensing is batch-aware (FEFO). `batch`
 - **Dispense** — pharmacy issuing medication against a prescription. `dispense`
 - **Indent** — an internal department stock request. `indent`
 - **GRN** — Goods Receipt Note: recording received purchased stock. `goodsReceipt`
-- **PO** — Purchase Order to a **Vendor** *(ruling N1: never "supplier")*. `purchaseOrder` `vendor`
-- **Asset** — owned physical item; `assetType` distinguishes medical equipment etc. *(ruling N2: never a separate "equipment" collection)* `asset`
+- **PO** — Purchase Order to a **Vendor** _(ruling N1: never "supplier")_. `purchaseOrder` `vendor`
+- **Asset** — owned physical item; `assetType` distinguishes medical equipment etc. _(ruling N2: never a separate "equipment" collection)_ `asset`
 
 ## Financial
 
 - **Bill** — accumulating charge document for a visit/admission; **finalized** to an **Invoice**. `bill` → `invoice`
-- **Charge** — one priced service line posted to a bill. *(not: fee, item in identifiers)* `billItem`
+- **Charge** — one priced service line posted to a bill. _(not: fee, item in identifiers)_ `billItem`
 - **Tariff** — price of a service per class/branch/payer contract. `tariff`
 - **Advance** — deposit paid before/during care, adjusted at billing. `advance`
 - **Refund** — money returned; always references its source payment/bill. `refund`
@@ -105,7 +105,7 @@ Format: **Term** — definition. *(Use, not: forbidden synonyms)* `code identifi
 
 ## Platform & SaaS
 
-- **Edition** — a sellable plan preset (flags + limits), Doc 07. *(not: tier, package)* `plan` / edition
+- **Edition** — a sellable plan preset (flags + limits), Doc 07. _(not: tier, package)_ `plan` / edition
 - **Feature Flag** — per-tenant capability switch `module.<domain>.<name>`. `featureFlag`
 - **Entitlement** — resolved capability+limit for a tenant (plan ∘ overrides). `entitlement`
 - **Master DB** — `paperlesstech_master`; platform data only. |

@@ -9,7 +9,9 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
-    "test": "vitest run"
+    "test": "vitest run --exclude **/*.int.test.ts --exclude **/node_modules/** --exclude **/dist/**",
+    "test:int": "vitest run int.test",
+    "provision": "tsx src/scripts/provisionTenant.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",

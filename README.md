@@ -44,14 +44,14 @@ cp apps/admin/.env.example apps/admin/.env
 pnpm dev                     # all apps with hot reload (turbo)
 ```
 
-| Service | URL |
-|---------|-----|
+| Service                | URL                                                        |
+| ---------------------- | ---------------------------------------------------------- |
 | API health / readiness | http://localhost:4000/health · http://localhost:4000/ready |
-| Workers health | http://localhost:4100/health |
-| Web (tenant app) | http://localhost:3000 (health: /api/health) |
-| Admin console | http://localhost:3001 (health: /api/health) |
-| Mailhog UI | http://localhost:8025 |
-| MinIO console | http://localhost:9001 (minioadmin/minioadmin) |
+| Workers health         | http://localhost:4100/health                               |
+| Web (tenant app)       | http://localhost:3000 (health: /api/health)                |
+| Admin console          | http://localhost:3001 (health: /api/health)                |
+| Mailhog UI             | http://localhost:8025                                      |
+| MinIO console          | http://localhost:9001 (minioadmin/minioadmin)              |
 
 ## Verification
 

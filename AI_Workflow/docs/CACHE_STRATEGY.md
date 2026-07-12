@@ -6,26 +6,26 @@ Governed Redis keyspace (ADR-0006). **Every key pattern must be registered here*
 
 ## Key Registry
 
-| Pattern | Owner module | Strategy | TTL | Invalidation |
-|---------|--------------|----------|-----|--------------|
-| `tenant:{slug}` / `tenant:domain:{host}` | tenants (master) | read-through | 5 min | explicit on registry change + Redis pub/sub `tenant.invalidate` to all pods |
-| `ff:{tenantId}` (flags+entitlements bundle) | subscriptions | read-through | 5 min | explicit on plan/flag change (`platform.subscription.changed`) |
-| `sess:{userId}` / `perm:{userId}` | auth/rbac | write-through on login | access-token TTL | explicit on role change, logout, revocation |
-| `revoked:{jti}` | auth | write-only blocklist | token remaining TTL | expires naturally |
-| `tariff:{tenantId}:{serviceId}` | billing masters | read-through | 10 min | explicit on tariff edit |
-| `ref:icd:{query-hash}` etc. (reference lookups) | reference | read-through | 24 h | version-stamped key on reference data reload |
-| `queue:{tenantId}:{queueId}:token` | appointments | counter (INCR) | end of day | daily reset job; final state persisted to Mongo |
-| `board:beds:{tenantId}:{branchId}` | beds | read-through snapshot for board loads | 30 s | event-driven refresh on `bed.bed.statusChanged` |
-| `rl:{tenantId}:{userOrKey}:{class}` | gateway/middleware | sliding-window counters | window | expires naturally |
-| `idem:{tenantId}:{key}` | idempotency middleware | write-once | 24 h | expires naturally |
-| `report:{tenantId}:{defHash}:{paramsHash}` | reports | read-through | configurable per definition (default 10 min) | explicit on definition change; params in key |
-| `dash:{tenantId}:{key}` | dashboards | read-through over read models | 60 s | time-based only (read models already async) |
-| `lock:{resource}:{id}` | various | distributed lock (SET NX PX) | operation timeout | released by owner; TTL is the safety net |
+| Pattern                                         | Owner module           | Strategy                              | TTL                                          | Invalidation                                                                |
+| ----------------------------------------------- | ---------------------- | ------------------------------------- | -------------------------------------------- | --------------------------------------------------------------------------- |
+| `tenant:{slug}` / `tenant:domain:{host}`        | tenants (master)       | read-through                          | 5 min                                        | explicit on registry change + Redis pub/sub `tenant.invalidate` to all pods |
+| `ff:{tenantId}` (flags+entitlements bundle)     | subscriptions          | read-through                          | 5 min                                        | explicit on plan/flag change (`platform.subscription.changed`)              |
+| `sess:{userId}` / `perm:{userId}`               | auth/rbac              | write-through on login                | access-token TTL                             | explicit on role change, logout, revocation                                 |
+| `revoked:{jti}`                                 | auth                   | write-only blocklist                  | token remaining TTL                          | expires naturally                                                           |
+| `tariff:{tenantId}:{serviceId}`                 | billing masters        | read-through                          | 10 min                                       | explicit on tariff edit                                                     |
+| `ref:icd:{query-hash}` etc. (reference lookups) | reference              | read-through                          | 24 h                                         | version-stamped key on reference data reload                                |
+| `queue:{tenantId}:{queueId}:token`              | appointments           | counter (INCR)                        | end of day                                   | daily reset job; final state persisted to Mongo                             |
+| `board:beds:{tenantId}:{branchId}`              | beds                   | read-through snapshot for board loads | 30 s                                         | event-driven refresh on `bed.bed.statusChanged`                             |
+| `rl:{tenantId}:{userOrKey}:{class}`             | gateway/middleware     | sliding-window counters               | window                                       | expires naturally                                                           |
+| `idem:{tenantId}:{key}`                         | idempotency middleware | write-once                            | 24 h                                         | expires naturally                                                           |
+| `report:{tenantId}:{defHash}:{paramsHash}`      | reports                | read-through                          | configurable per definition (default 10 min) | explicit on definition change; params in key                                |
+| `dash:{tenantId}:{key}`                         | dashboards             | read-through over read models         | 60 s                                         | time-based only (read models already async)                                 |
+| `lock:{resource}:{id}`                          | various                | distributed lock (SET NX PX)          | operation timeout                            | released by owner; TTL is the safety net                                    |
 
 ## Policies
 
 - **Read-through** is the default: `get → miss → load from Mongo → set with TTL`. Single-flight (per-pod promise dedupe) prevents stampedes on hot keys.
-- **Write-through** only where staleness is unacceptable *and* writes are rare (sessions/permissions).
+- **Write-through** only where staleness is unacceptable _and_ writes are rare (sessions/permissions).
 - **Never cache:** PHI clinical content (results, notes), anything patient-identifiable beyond IDs in board snapshots, financial balances. These always read from Mongo.
 - **Invalidation discipline:** whoever writes the source data invalidates the key **in the same service method** (not fire-and-forget in a controller). Cross-pod invalidation via Redis pub/sub.
 - **Cache warming:** on tenant activation and after deploys, a warmer job (SCHEDULER_CATALOG) pre-loads `tenant:*`, `ff:*`, and top tariffs for active tenants — protects post-deploy latency.

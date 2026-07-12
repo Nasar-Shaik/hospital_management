@@ -8,125 +8,125 @@
 
 ## 1. Project Snapshot
 
-| | |
-|---|---|
-| **Project** | MediCore HMS — multi-tenant Hospital Management SaaS (brand/platform domain: `paperlesstech.in`); foundation of the PaperlessTech Platform (docs/PLATFORM_STRATEGY.md) |
-| **Current stage** | 🏗️ **Phase 0 (Sprint 0) complete & runtime-verified — single-repo baseline (`medicore-hms/`, `AI_Workflow/` inside it); no business modules yet** |
-| **Baseline** | History reset to one commit: `chore(repo): initialize Medicore HMS platform foundation`. This repo is the **sole source of truth**; prior Sprint-0 commits are discarded and must not be recreated. |
-| **Last updated** | 2026-07-12 (Sprint 0 bootstrap session) |
-| **Session protocol** | Read `PROJECT_MEMORY.md` → `PROJECT_CONSTITUTION.md` → this file before any work (Constitution mandate) |
-| **Next action** | Phase 1 start: master DB + tenant registry + provisioning + **Connection Manager with tenant-isolation tests built alongside** (Doc 01 P1 order), then auth/RBAC |
-| **Tenancy architecture (locked)** | Master DB `paperlesstech_master` + **one dedicated MongoDB database per hospital** (`hms_<slug>`) + Connection Manager (Doc 03 §1, Doc 04 §2.2.1, ruling N8 in Doc 10) |
-| **Packaging (locked)** | 10 product editions composed from feature flags + limits (Doc 07); one codebase for all 25 org types |
+|                                   |                                                                                                                                                                                                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Project**                       | MediCore HMS — multi-tenant Hospital Management SaaS (brand/platform domain: `paperlesstech.in`); foundation of the PaperlessTech Platform (docs/PLATFORM_STRATEGY.md)                                                                                                  |
+| **Current stage**                 | 🏗️ **Phase 1A (Tenancy Core) complete** — master DB + database-per-tenant is live and isolation-tested. P0 foundation runtime-verified. No business modules yet.                                                                                                        |
+| **Baseline**                      | Single-repo (`medicore-hms/`, `AI_Workflow/` inside it). History reset to `chore(repo): initialize Medicore HMS platform foundation`. This repo is the **sole source of truth**; prior Sprint-0 commits are discarded and must not be recreated.                        |
+| **Last updated**                  | 2026-07-12 (Phase 1A — Tenancy Core)                                                                                                                                                                                                                                    |
+| **Session protocol**              | Read `PROJECT_MEMORY.md` → `PROJECT_CONSTITUTION.md` → this file before any work (Constitution mandate)                                                                                                                                                                 |
+| **Next action**                   | **Phase 1B — Authentication** (ADR-0009). Phase 1A (Tenancy Core) is complete: master DB, registry, Connection Manager, ALS context, host→tenant resolution, tenantScope plugin, per-tenant migrations, provisioning CLI, and a 17-test release-gating isolation suite. |
+| **Tenancy architecture (locked)** | Master DB `paperlesstech_master` + **one dedicated MongoDB database per hospital** (`hms_<slug>`) + Connection Manager (Doc 03 §1, Doc 04 §2.2.1, ruling N8 in Doc 10)                                                                                                  |
+| **Packaging (locked)**            | 10 product editions composed from feature flags + limits (Doc 07); one codebase for all 25 org types                                                                                                                                                                    |
 
 ## 2. Documentation Status
 
-| Doc | Title | Status | Notes |
-|-----|-------|--------|-------|
-| README | Vision, NFRs, stack, tenancy summary | ✅ Done | Reviewed + updated 2026-07-12 |
-| 00 | Progress Tracker (this file) | ✅ Done | Keep current — update rule above |
-| 01 | Phase-Wise Plan | ✅ Done | Reviewed; specialty/support modules added to P3 |
-| 02 | Module Catalog | ✅ Done | Reviewed; D10–D14, B12–B13, C7 added; N1/N2 dedupe |
-| 03 | Database Design | ✅ Done | Rewritten for master + DB-per-tenant; counters, time-series, CQRS added |
-| 04 | System Architecture | ✅ Done | Connection Manager, module boundaries, versioning policy added |
-| 05 | Delivery Playbook | ✅ Done | Edition-mapped milestones, design-partner program |
-| 06 | Feature Checklist | ✅ Done | New module + compliance sections |
-| 07 | Product Editions | ✅ Done | 10 editions, 25 org types, limits matrix |
-| 08 | Design System | ✅ Done | Tokens, components, states, a11y |
-| 09 | Engineering Standards | ✅ Done | Folder→security, 20 sections, CI-enforced |
-| 10 | Architecture Review | ✅ Done | Findings + normative rulings N1–N8 |
-| — | Governance layer: PROJECT_CONSTITUTION, AI_DEVELOPMENT_GUIDELINES, PROJECT_MEMORY, DOMAIN_GLOSSARY, docs/adr/ (0001–0011), docs/* catalogs (event, state machine, workflows, journeys, errors, cache, search, perf, scheduler, retention, DR, observability, risk, cost, ownership, release, rollout, maintenance, platform strategy) | ✅ Done | Added 2026-07-12; keep catalogs updated per AI_DEVELOPMENT_GUIDELINES §4 |
+| Doc    | Title                                                                                                                                                                                                                                                                                                                                 | Status  | Notes                                                                    |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------ |
+| README | Vision, NFRs, stack, tenancy summary                                                                                                                                                                                                                                                                                                  | ✅ Done | Reviewed + updated 2026-07-12                                            |
+| 00     | Progress Tracker (this file)                                                                                                                                                                                                                                                                                                          | ✅ Done | Keep current — update rule above                                         |
+| 01     | Phase-Wise Plan                                                                                                                                                                                                                                                                                                                       | ✅ Done | Reviewed; specialty/support modules added to P3                          |
+| 02     | Module Catalog                                                                                                                                                                                                                                                                                                                        | ✅ Done | Reviewed; D10–D14, B12–B13, C7 added; N1/N2 dedupe                       |
+| 03     | Database Design                                                                                                                                                                                                                                                                                                                       | ✅ Done | Rewritten for master + DB-per-tenant; counters, time-series, CQRS added  |
+| 04     | System Architecture                                                                                                                                                                                                                                                                                                                   | ✅ Done | Connection Manager, module boundaries, versioning policy added           |
+| 05     | Delivery Playbook                                                                                                                                                                                                                                                                                                                     | ✅ Done | Edition-mapped milestones, design-partner program                        |
+| 06     | Feature Checklist                                                                                                                                                                                                                                                                                                                     | ✅ Done | New module + compliance sections                                         |
+| 07     | Product Editions                                                                                                                                                                                                                                                                                                                      | ✅ Done | 10 editions, 25 org types, limits matrix                                 |
+| 08     | Design System                                                                                                                                                                                                                                                                                                                         | ✅ Done | Tokens, components, states, a11y                                         |
+| 09     | Engineering Standards                                                                                                                                                                                                                                                                                                                 | ✅ Done | Folder→security, 20 sections, CI-enforced                                |
+| 10     | Architecture Review                                                                                                                                                                                                                                                                                                                   | ✅ Done | Findings + normative rulings N1–N8                                       |
+| —      | Governance layer: PROJECT_CONSTITUTION, AI_DEVELOPMENT_GUIDELINES, PROJECT_MEMORY, DOMAIN_GLOSSARY, docs/adr/ (0001–0011), docs/* catalogs (event, state machine, workflows, journeys, errors, cache, search, perf, scheduler, retention, DR, observability, risk, cost, ownership, release, rollout, maintenance, platform strategy) | ✅ Done | Added 2026-07-12; keep catalogs updated per AI_DEVELOPMENT_GUIDELINES §4 |
 
 ## 3. Build Status by Phase (Doc 01)
 
-| Phase | Scope | Status | % | Notes |
-|-------|-------|--------|---|-------|
-| P0 | Monorepo, CI, Docker Compose, design tokens, OpenAPI baseline | ✅ Done | 95% | Verified 2026-07-12 on the single-commit baseline: pnpm+turbo, Express API (health/ready, envelope errors, graceful shutdown), BullMQ worker (heartbeat queue, `queueActive: true`), Next.js 15 web+admin (standalone), 8 shared packages, 4 Dockerfiles + compose (host ports mongo 27018 / redis 6380 — do not "fix" to defaults), CI, husky/commitlint, boundary lint (0 violations). All 8 containers healthy; `/ready` → mongo up, redis up. Remaining 5%: OpenAPI generation baseline (deferred to P1 with the first business routes). |
-| P1 | Foundation: master DB + tenant provisioning + Connection Manager, auth/JWT/MFA, RBAC, audit, notifications, files, feature flags, admin console, app shell | ⬜ Not started | 0% | Build order: Doc 01 P1 §Estimated Development Order |
-| P2 | Core ops: masters, patients/MPI, doctors/schedules, appointments/queue, beds, facilities | ⬜ Not started | 0% | Unlocks **Clinic Edition** beta |
-| P3 | Clinical: EMR, consultation, nursing, LIS, RIS, OT, blood bank + flag-gated wave (ED/triage, ICU/NICU/PICU, dialysis, physio, dietetics, CSSD, mortuary, MRD, specialty templates) | ⬜ Not started | 0% | |
-| P4 | Financial: billing engine, pharmacy, inventory, insurance/claims, finance GL, HR/payroll | ⬜ Not started | 0% | Unlocks **Hospital Edition** |
-| P5 | Mobile apps (patient/doctor/staff), communication, home healthcare, occupational health | ⬜ Not started | 0% | |
-| P6 | Analytics: reporting engine, read models, dashboards | ⬜ Not started | 0% | |
-| P7 | Integrations: payments, comms, analyzers, HL7/FHIR/DICOM, ABDM/NHCX, SSO, public API | ⬜ Not started | 0% | |
-| P8 | AI suite (advisory, human-in-the-loop) | ⬜ Not started | 0% | |
-| P9 | Hardening, compliance, DR, GA | ⬜ Not started | 0% | Runs continuously once code exists |
+| Phase | Scope                                                                                                                                                                              | Status         | %    | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0    | Monorepo, CI, Docker Compose, design tokens, OpenAPI baseline                                                                                                                      | ✅ Done        | 95%  | Verified 2026-07-12 on the single-commit baseline: pnpm+turbo, Express API (health/ready, envelope errors, graceful shutdown), BullMQ worker (heartbeat queue, `queueActive: true`), Next.js 15 web+admin (standalone), 8 shared packages, 4 Dockerfiles + compose (host ports mongo 27018 / redis 6380 — do not "fix" to defaults), CI, husky/commitlint, boundary lint (0 violations). All 8 containers healthy; `/ready` → mongo up, redis up. Remaining 5%: OpenAPI generation baseline (deferred to P1 with the first business routes). |
+| P1    | Foundation: master DB + tenant provisioning + Connection Manager, auth/JWT/MFA, RBAC, audit, notifications, files, feature flags, admin console, app shell                         | 🟨 In progress | ~15% | **1A Tenancy Core ✅** (registry, Connection Manager, ALS context, host resolution, tenantScope plugin, per-tenant migrations, provisioning CLI, 17-test isolation suite gating CI). Next: 1B auth, 1C RBAC. Build order: Doc 01 P1 §Estimated Development Order                                                                                                                                                                                                                                                                             |
+| P2    | Core ops: masters, patients/MPI, doctors/schedules, appointments/queue, beds, facilities                                                                                           | ⬜ Not started | 0%   | Unlocks **Clinic Edition** beta                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| P3    | Clinical: EMR, consultation, nursing, LIS, RIS, OT, blood bank + flag-gated wave (ED/triage, ICU/NICU/PICU, dialysis, physio, dietetics, CSSD, mortuary, MRD, specialty templates) | ⬜ Not started | 0%   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| P4    | Financial: billing engine, pharmacy, inventory, insurance/claims, finance GL, HR/payroll                                                                                           | ⬜ Not started | 0%   | Unlocks **Hospital Edition**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| P5    | Mobile apps (patient/doctor/staff), communication, home healthcare, occupational health                                                                                            | ⬜ Not started | 0%   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| P6    | Analytics: reporting engine, read models, dashboards                                                                                                                               | ⬜ Not started | 0%   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| P7    | Integrations: payments, comms, analyzers, HL7/FHIR/DICOM, ABDM/NHCX, SSO, public API                                                                                               | ⬜ Not started | 0%   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| P8    | AI suite (advisory, human-in-the-loop)                                                                                                                                             | ⬜ Not started | 0%   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| P9    | Hardening, compliance, DR, GA                                                                                                                                                      | ⬜ Not started | 0%   | Runs continuously once code exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ## 4. Module Build Ledger
 
 > One row per module (IDs from Doc 02). Update `Status` + `Notes` as work lands; add rows for sub-deliverables if a module is split across PRs. All ⬜ until development starts — listed so future sessions can flip statuses without restructuring.
 
-| Module | Name | Phase | Status |
-|--------|------|-------|--------|
-| A1 | Tenant Management (master DB + provisioning) | P1 | ⬜ |
-| A2 | Subscription & Plans / Editions enforcement | P1 | ⬜ |
-| A3 | Identity & Auth | P1 | ⬜ |
-| A4 | RBAC & Permissions | P1 | ⬜ |
-| A5 | Audit & Activity Logging | P1 | ⬜ |
-| A6 | Notification System | P1 | ⬜ |
-| A7 | File & Document Service | P1 | ⬜ |
-| A8 | White-Label & Custom Domains | P1 | ⬜ |
-| A9 | API Keys & Developer Platform | P1/P7 | ⬜ |
-| B1–B3 | Org structure (profile, branches, departments) | P1/P2 | ⬜ |
-| B4 | Wards/Rooms/Beds/Bed Board | P2 | ⬜ |
-| B5 | OT/ICU/ER registries | P2 | ⬜ |
-| B6 | Ambulance | P2 | ⬜ |
-| B7 | Assets & Maintenance (ruling N2) | P2 | ⬜ |
-| B8 | Partner Masters (ruling N1: vendors) | P2 | ⬜ |
-| B9 | Facility Ops (housekeeping…visitor) | P2 | ⬜ |
-| B10 | Feedback & Complaints | P2 | ⬜ |
-| B11 | Biomedical Waste | P3 | ⬜ |
-| B12 | CSSD | P3 | ⬜ |
-| B13 | Mortuary | P3 | ⬜ |
-| C1 | Patient Registration & MPI | P2 | ⬜ |
-| C2 | Patient Clinical Profile | P3 | ⬜ |
-| C3 | Records/Consent/Discharge/Death | P3 | ⬜ |
-| C4 | Referral & Transfer | P3 | ⬜ |
-| C5 | Wallet/Packages/Payer link | P4 | ⬜ |
-| C6 | Online Registration & Digital Forms | P5 | ⬜ |
-| C7 | MRD / HIM | P3 | ⬜ |
-| D1 | EMR | P3 | ⬜ |
-| D2 | Doctor Management | P2 | ⬜ |
-| D3 | Consultation Workspace | P3 | ⬜ |
-| D4 | Teleconsultation | P3/P5 | ⬜ |
-| D5 | Nursing | P3 | ⬜ |
-| D6 | Laboratory (LIS) | P3 | ⬜ |
-| D7 | Radiology (RIS) | P3 | ⬜ |
-| D8 | Operation Theatre | P3 | ⬜ |
-| D9 | Blood Bank | P3 | ⬜ |
-| D10 | Emergency & Triage | P3 | ⬜ |
-| D11 | Critical Care (ICU/NICU/PICU) | P3 | ⬜ |
-| D12 | Dialysis | P3 | ⬜ |
-| D13 | Physiotherapy & Rehab | P3 | ⬜ |
-| D14 | Clinical Dietetics | P3 | ⬜ |
-| E1 | Appointments/Queue/Token | P2 | ⬜ |
-| F1 | Billing | P4 | ⬜ |
-| F2 | Insurance/TPA/Claims | P4 | ⬜ |
-| F3 | Corporate & Packages | P4 | ⬜ |
-| F4 | Pharmacy | P4 | ⬜ |
-| F5 | Inventory/Store | P4 | ⬜ |
-| F6 | Finance & Accounting | P4 | ⬜ |
-| F7 | HR & Payroll | P4 | ⬜ |
-| G1–G3 | Patient/Doctor/Staff apps | P5 | ⬜ |
-| — | Home Healthcare · Occupational Health | P5 | ⬜ |
-| H1 | Communication Suite | P5 | ⬜ |
-| I1–I2 | Reporting & Dashboards | P6 | ⬜ |
-| J1 | AI Suite | P8 | ⬜ |
-| K1 | Security & Compliance Center | P9 | ⬜ |
-| — | Integrations (HL7/FHIR/ABDM/NHCX/payments/analyzers/SSO) | P7 | ⬜ |
+| Module | Name                                                     | Phase | Status                                                                                                                                                                        |
+| ------ | -------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1     | Tenant Management (master DB + provisioning)             | P1    | 🟨 Core done — registry, Connection Manager, provisioning CLI, lifecycle guards. Pending: super-admin HTTP surface (needs auth), suspend/export/terminate ops, impersonation. |
+| A2     | Subscription & Plans / Editions enforcement              | P1    | ⬜                                                                                                                                                                            |
+| A3     | Identity & Auth                                          | P1    | ⬜                                                                                                                                                                            |
+| A4     | RBAC & Permissions                                       | P1    | ⬜                                                                                                                                                                            |
+| A5     | Audit & Activity Logging                                 | P1    | ⬜                                                                                                                                                                            |
+| A6     | Notification System                                      | P1    | ⬜                                                                                                                                                                            |
+| A7     | File & Document Service                                  | P1    | ⬜                                                                                                                                                                            |
+| A8     | White-Label & Custom Domains                             | P1    | ⬜                                                                                                                                                                            |
+| A9     | API Keys & Developer Platform                            | P1/P7 | ⬜                                                                                                                                                                            |
+| B1–B3  | Org structure (profile, branches, departments)           | P1/P2 | ⬜                                                                                                                                                                            |
+| B4     | Wards/Rooms/Beds/Bed Board                               | P2    | ⬜                                                                                                                                                                            |
+| B5     | OT/ICU/ER registries                                     | P2    | ⬜                                                                                                                                                                            |
+| B6     | Ambulance                                                | P2    | ⬜                                                                                                                                                                            |
+| B7     | Assets & Maintenance (ruling N2)                         | P2    | ⬜                                                                                                                                                                            |
+| B8     | Partner Masters (ruling N1: vendors)                     | P2    | ⬜                                                                                                                                                                            |
+| B9     | Facility Ops (housekeeping…visitor)                      | P2    | ⬜                                                                                                                                                                            |
+| B10    | Feedback & Complaints                                    | P2    | ⬜                                                                                                                                                                            |
+| B11    | Biomedical Waste                                         | P3    | ⬜                                                                                                                                                                            |
+| B12    | CSSD                                                     | P3    | ⬜                                                                                                                                                                            |
+| B13    | Mortuary                                                 | P3    | ⬜                                                                                                                                                                            |
+| C1     | Patient Registration & MPI                               | P2    | ⬜                                                                                                                                                                            |
+| C2     | Patient Clinical Profile                                 | P3    | ⬜                                                                                                                                                                            |
+| C3     | Records/Consent/Discharge/Death                          | P3    | ⬜                                                                                                                                                                            |
+| C4     | Referral & Transfer                                      | P3    | ⬜                                                                                                                                                                            |
+| C5     | Wallet/Packages/Payer link                               | P4    | ⬜                                                                                                                                                                            |
+| C6     | Online Registration & Digital Forms                      | P5    | ⬜                                                                                                                                                                            |
+| C7     | MRD / HIM                                                | P3    | ⬜                                                                                                                                                                            |
+| D1     | EMR                                                      | P3    | ⬜                                                                                                                                                                            |
+| D2     | Doctor Management                                        | P2    | ⬜                                                                                                                                                                            |
+| D3     | Consultation Workspace                                   | P3    | ⬜                                                                                                                                                                            |
+| D4     | Teleconsultation                                         | P3/P5 | ⬜                                                                                                                                                                            |
+| D5     | Nursing                                                  | P3    | ⬜                                                                                                                                                                            |
+| D6     | Laboratory (LIS)                                         | P3    | ⬜                                                                                                                                                                            |
+| D7     | Radiology (RIS)                                          | P3    | ⬜                                                                                                                                                                            |
+| D8     | Operation Theatre                                        | P3    | ⬜                                                                                                                                                                            |
+| D9     | Blood Bank                                               | P3    | ⬜                                                                                                                                                                            |
+| D10    | Emergency & Triage                                       | P3    | ⬜                                                                                                                                                                            |
+| D11    | Critical Care (ICU/NICU/PICU)                            | P3    | ⬜                                                                                                                                                                            |
+| D12    | Dialysis                                                 | P3    | ⬜                                                                                                                                                                            |
+| D13    | Physiotherapy & Rehab                                    | P3    | ⬜                                                                                                                                                                            |
+| D14    | Clinical Dietetics                                       | P3    | ⬜                                                                                                                                                                            |
+| E1     | Appointments/Queue/Token                                 | P2    | ⬜                                                                                                                                                                            |
+| F1     | Billing                                                  | P4    | ⬜                                                                                                                                                                            |
+| F2     | Insurance/TPA/Claims                                     | P4    | ⬜                                                                                                                                                                            |
+| F3     | Corporate & Packages                                     | P4    | ⬜                                                                                                                                                                            |
+| F4     | Pharmacy                                                 | P4    | ⬜                                                                                                                                                                            |
+| F5     | Inventory/Store                                          | P4    | ⬜                                                                                                                                                                            |
+| F6     | Finance & Accounting                                     | P4    | ⬜                                                                                                                                                                            |
+| F7     | HR & Payroll                                             | P4    | ⬜                                                                                                                                                                            |
+| G1–G3  | Patient/Doctor/Staff apps                                | P5    | ⬜                                                                                                                                                                            |
+| —      | Home Healthcare · Occupational Health                    | P5    | ⬜                                                                                                                                                                            |
+| H1     | Communication Suite                                      | P5    | ⬜                                                                                                                                                                            |
+| I1–I2  | Reporting & Dashboards                                   | P6    | ⬜                                                                                                                                                                            |
+| J1     | AI Suite                                                 | P8    | ⬜                                                                                                                                                                            |
+| K1     | Security & Compliance Center                             | P9    | ⬜                                                                                                                                                                            |
+| —      | Integrations (HL7/FHIR/ABDM/NHCX/payments/analyzers/SSO) | P7    | ⬜                                                                                                                                                                            |
 
 ## 5. Key Decisions Log (do not re-litigate; append only)
 
-| Date | Decision | Where |
-|------|----------|-------|
-| 2026-07-12 | Master DB + database-per-tenant replaces shared-collection row isolation | Doc 10 ruling N8; Doc 03 §1 |
-| 2026-07-12 | 10 editions / 25 org types from one codebase via flags+limits | Doc 07 |
-| 2026-07-12 | Vendors/assets normalization; dietetics split clinical vs kitchen | Doc 10 rulings N1–N3 |
-| 2026-07-12 | Module boundary + import rules; API 12-month deprecation policy | Doc 04 §2.4, §5.1 |
-| 2026-07-12 | Event sourcing only for ledger/audit; CQRS-lite read models; clinical docs = versioned snapshots | Doc 03 §9 |
-| 2026-07-12 | AI-first governance: constitution is highest authority; session protocol mandatory; catalogs updated in-PR | PROJECT_CONSTITUTION, AI_DEVELOPMENT_GUIDELINES |
-| 2026-07-12 | No executable third-party plugins in v1; configuration-first extensibility | ADR-0011, docs/PLATFORM_STRATEGY.md |
-| 2026-07-12 | Platform/hms module tagging from P0 for future ERP reuse (Rule P1: no healthcare vocabulary in platform modules) | docs/PLATFORM_STRATEGY.md |
+| Date       | Decision                                                                                                                                                                                                                   | Where                                            |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| 2026-07-12 | Master DB + database-per-tenant replaces shared-collection row isolation                                                                                                                                                   | Doc 10 ruling N8; Doc 03 §1                      |
+| 2026-07-12 | 10 editions / 25 org types from one codebase via flags+limits                                                                                                                                                              | Doc 07                                           |
+| 2026-07-12 | Vendors/assets normalization; dietetics split clinical vs kitchen                                                                                                                                                          | Doc 10 rulings N1–N3                             |
+| 2026-07-12 | Module boundary + import rules; API 12-month deprecation policy                                                                                                                                                            | Doc 04 §2.4, §5.1                                |
+| 2026-07-12 | Event sourcing only for ledger/audit; CQRS-lite read models; clinical docs = versioned snapshots                                                                                                                           | Doc 03 §9                                        |
+| 2026-07-12 | AI-first governance: constitution is highest authority; session protocol mandatory; catalogs updated in-PR                                                                                                                 | PROJECT_CONSTITUTION, AI_DEVELOPMENT_GUIDELINES  |
+| 2026-07-12 | No executable third-party plugins in v1; configuration-first extensibility                                                                                                                                                 | ADR-0011, docs/PLATFORM_STRATEGY.md              |
+| 2026-07-12 | Platform/hms module tagging from P0 for future ERP reuse (Rule P1: no healthcare vocabulary in platform modules)                                                                                                           | docs/PLATFORM_STRATEGY.md                        |
 | 2026-07-12 | Frontend: Next.js (App Router) + React 19 replaces Vite SPA (scope now includes public/SEO/white-label surfaces); Express stays the only API; Next.js is presentation-only; Vite remains as Vitest/playground tooling only | ADR-0012 (supersedes 0003), ruling N9, Doc 04 §3 |
 
 ## 6. How to Resume Work (for the next model/developer)
@@ -139,4 +139,4 @@
 
 ## 7. Work-in-Progress Notes / Handoff
 
-*(empty — no code work started; documentation review pass completed 2026-07-12)*
+_(empty — no code work started; documentation review pass completed 2026-07-12)_
