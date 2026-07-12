@@ -1,0 +1,124 @@
+# Dev environment (Doc 04 §6.1).
+# Default profile: infrastructure only (apps run on host with hot reload).
+# `--profile apps` additionally builds and runs the four app containers.
+name: medicore-hms
+
+services:
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      # Host 27018 to avoid clashing with other local mongo containers.
+      - "27018:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Initiates the single-node replica set on first check (transactions/change streams need RS).
+      test: |
+        mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      # Host 6380 to avoid clashing with other local redis containers.
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025" # SMTP
+      - "8025:8025" # UI
+
+  api:
+    profiles: ["apps"]
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      MONGO_URI: mongodb://mongo:27017/paperlesstech_master?replicaSet=rs0&directConnection=true
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    ports:
+      - "4000:4000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  workers:
+    profiles: ["apps"]
+    build:
+      context: ../..
+      dockerfile: apps/workers/Dockerfile
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      HEALTH_PORT: 4100
+    ports:
+      - "4100:4100"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    profiles: ["apps"]
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    environment:
+      API_BASE_URL: http://api:4000
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  admin:
+    profiles: ["apps"]
+    build:
+      context: ../..
+      dockerfile: apps/admin/Dockerfile
+    environment:
+      API_BASE_URL: http://api:4000
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:4000
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+
+volumes:
+  mongo-data:
+  redis-data:
+  minio-data:

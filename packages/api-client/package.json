@@ -1,0 +1,21 @@
+{
+  "name": "@medicore/api-client",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@medicore/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@medicore/config": "workspace:*",
+    "eslint": "^9.24.0",
+    "typescript": "^5.8.0"
+  }
+}

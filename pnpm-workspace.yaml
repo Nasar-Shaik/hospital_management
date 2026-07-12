@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Dependencies allowed to run postinstall scripts (pnpm 10 security default).
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - msgpackr-extract

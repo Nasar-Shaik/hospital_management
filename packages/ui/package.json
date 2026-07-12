@@ -1,0 +1,11 @@
+{
+  "name": "@medicore/ui",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Design tokens + shared web components (Doc 08). Sprint 0 ships tokens only; Shadcn components land with the app shell in P1.",
+  "exports": {
+    "./tokens.css": "./src/tokens.css"
+  },
+  "sideEffects": ["*.css"]
+}

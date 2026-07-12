@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# builds
+dist/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# env — only *.example files are committed (Doc 09 §20: no secrets in repo)
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# logs & coverage
+*.log
+coverage/
+
+# OS / editor
+.DS_Store
+.idea/

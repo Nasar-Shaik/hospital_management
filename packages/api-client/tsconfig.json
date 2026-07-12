@@ -1,0 +1,9 @@
+{
+  "extends": "@medicore/config/tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["src"]
+}
