@@ -103,6 +103,19 @@ export async function update(userId: string, input: UpdateUserInput): Promise<Us
   return doc ? toUser(doc) : undefined;
 }
 
+/**
+ * How many staff accounts this hospital occupies — the live count behind the
+ * seat limit (Doc 07). Counted, never cached: a drifted counter that over-reports
+ * would lock a hospital out of hiring.
+ */
+export async function count(options: { excludeStatuses?: UserStatus[] } = {}): Promise<number> {
+  const query: Record<string, unknown> = {};
+  if (options.excludeStatuses?.length) {
+    query.status = { $nin: options.excludeStatuses };
+  }
+  return getUserModel(getTenantDb()).countDocuments(query);
+}
+
 export interface ListUsersFilter {
   page: number;
   limit: number;

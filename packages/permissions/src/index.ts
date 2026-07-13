@@ -51,9 +51,11 @@ function p(
 
 const PLATFORM = {
   TENANT_MANAGE: p("tenant:manage", "Configure this organization"),
-  SUBSCRIPTION_MANAGE: p("subscription:manage", "Change plan and billing"),
-  FEATUREFLAG_MANAGE: p("featureflag:manage", "Toggle features for this organization"),
-  PLAN_MANAGE: p("plan:manage", "Manage product plans", "global"),
+  /**
+   * VIEW the subscription and usage. Named `manage` for historical reasons
+   * (Doc 02 A2) — it does NOT let a hospital change what it pays for.
+   */
+  SUBSCRIPTION_MANAGE: p("subscription:manage", "View plan, limits and usage"),
 
   USER_CREATE: p("user:create", "Invite a user"),
   USER_READ: p("user:read", "View users"),
@@ -81,11 +83,28 @@ const PLATFORM = {
   WEBHOOK_MANAGE: p("webhook:manage", "Manage webhooks"),
 } as const;
 
-/** SaaS-operator only. Never granted to a hospital role — these live in the master realm. */
+/**
+ * SaaS-operator only. **Never** granted to a hospital role — `DEFAULT_ROLES`
+ * subtracts this whole group from TENANT_ADMIN, and that subtraction is the only
+ * thing standing between a hospital and the rest of the platform.
+ *
+ * `PLAN_MANAGE` and `FEATUREFLAG_MANAGE` live here, not with the other platform
+ * permissions, and the reason is commercial rather than technical: they decide
+ * what a hospital PAYS FOR. A tenant administrator who could grant themselves
+ * `plan:manage` could upgrade to the top edition for free, and one who could
+ * toggle a feature flag could switch on a module they never bought. Editions are
+ * only worth something if the customer cannot edit their own.
+ *
+ * (This was a real bug, caught in testing: `plan:manage` was originally grouped
+ * with the ordinary platform permissions, so TENANT_ADMIN inherited it and the
+ * demo hospital cheerfully upgraded itself to Enterprise.)
+ */
 const SUPERADMIN = {
   SUPERADMIN_TENANT_MANAGE: p("superadmin:tenant:manage", "Provision and manage tenants", "global"),
   TENANT_IMPERSONATE: p("tenant:impersonate", "Impersonate a tenant user (audited)", "global"),
   TENANT_EXPORT: p("tenant:export", "Export a tenant's data", "global"),
+  PLAN_MANAGE: p("plan:manage", "Change which edition a hospital is on", "global"),
+  FEATUREFLAG_MANAGE: p("featureflag:manage", "Override a hospital's feature flags", "global"),
 } as const;
 
 /* ────────────────────────────────────────────────────────────────────────────

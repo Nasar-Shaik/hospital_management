@@ -23,6 +23,7 @@ import { closeMaster, getMasterConnection } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
 import { migrateTenant, getBySlug, type TenantRegistryEntry } from "../modules/tenants/index.js";
 import { seedRbac } from "../modules/rbac/index.js";
+import { seedPlans } from "../modules/subscriptions/index.js";
 
 const logger = createLogger({ service: "migrate-cli" });
 
@@ -95,6 +96,12 @@ async function main(): Promise<void> {
     console.error("Usage: migrate --all | --slug <slug>");
     process.exit(1);
   }
+
+  // Platform-level first: the plan catalog lives in the master DB and is a
+  // projection of the code-defined editions (Doc 07). A tenant cannot be put on a
+  // plan that does not exist yet.
+  const plans = await seedPlans();
+  logger.info({ plans }, "plan catalog synced");
 
   const targets = slug
     ? await (async () => {

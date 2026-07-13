@@ -16,6 +16,7 @@ export {
   setMfaEnabled,
   listUsers,
   updateUser,
+  countUsers,
   InvalidUserTransitionError,
 } from "./user.service.js";
 

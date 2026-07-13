@@ -19,9 +19,11 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { checkPasswordPolicy, generatePassword } from "../../core/crypto/password.js";
+import { getContext } from "../../core/context/requestContext.js";
 import * as auth from "../auth/index.js";
 import * as rbac from "../rbac/index.js";
 import * as users from "../users/index.js";
+import { assertWithinLimit } from "../subscriptions/index.js";
 import type { User, UserStatus } from "../users/index.js";
 
 export interface StaffMember extends User {
@@ -53,6 +55,10 @@ export interface CreateStaffResult {
  * account has seen it, so it is a handover token, not a credential.
  */
 export async function createStaff(input: CreateStaffInput): Promise<CreateStaffResult> {
+  // The seat limit is checked BEFORE anything is created (Doc 07): a plan limit
+  // must refuse the 26th account cleanly, not half-create it and then fail.
+  await assertWithinLimit(getContext().tenantId, "maxUsers");
+
   const password = input.password ?? generatePassword();
   const failures = checkPasswordPolicy(password);
   if (failures.length > 0) {

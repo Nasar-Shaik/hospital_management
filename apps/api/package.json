@@ -12,7 +12,8 @@
     "test": "vitest run --exclude **/*.int.test.ts --exclude **/node_modules/** --exclude **/dist/**",
     "test:int": "vitest run int.test",
     "provision": "tsx --env-file-if-exists=.env src/scripts/provisionTenant.ts",
-    "migrate": "tsx --env-file-if-exists=.env src/scripts/migrateTenants.ts"
+    "migrate": "tsx --env-file-if-exists=.env src/scripts/migrateTenants.ts",
+    "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",
