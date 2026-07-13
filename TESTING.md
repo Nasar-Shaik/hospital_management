@@ -255,6 +255,21 @@ Same ports as above. **Do not run this at the same time as `pnpm dev`** — they
 
 ---
 
+## 8b. Plans, limits and editions (A2)
+
+A hospital's **edition** decides what it may use and how much. Limits are enforced when you CREATE something — the 11th staff account on a 10-seat Clinic plan is refused with `HMS-PLAN-001`, and nothing is half-created.
+
+```bash
+pnpm --filter @medicore/api plan -- --list                          # the edition catalog
+pnpm --filter @medicore/api plan -- --slug demo --plan PLAN_CLINIC  # change a hospital's plan
+```
+
+Changing a plan is an **operator** action: `plan:manage` is granted to no hospital role, so a customer cannot upgrade itself to Enterprise for free. A hospital admin can _see_ their plan and usage at **/subscription** (amber bar from 80%), but not change it.
+
+A downgrade that would strand people is refused: put 12 staff on a plan and try to drop to Clinic (10 seats) and it tells you to reduce usage first, rather than silently locking two people out.
+
+---
+
 ## 9. Automated tests
 
 ```bash
