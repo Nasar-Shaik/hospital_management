@@ -42,6 +42,17 @@ export async function assertRedisReachable(): Promise<void> {
  * in a state the application never produces on its own.
  */
 export async function flushTestCache(): Promise<void> {
+  // `flushdb` is destructive, and loopback does not prove the server is ours —
+  // a tunnel or another project's container can hold the same local port (see
+  // mongoTestEnv.assertLocalDevMongo, and PROJECT_MEMORY §8).
+  const host = new URL(TEST_REDIS_URL).hostname;
+  if (!["127.0.0.1", "localhost", "::1"].includes(host)) {
+    throw new Error(
+      `REFUSING TO FLUSH: REDIS_TEST_URL points at a non-loopback host (${host}). ` +
+        `Tests flush the whole database and may only do so against a local, disposable Redis.`,
+    );
+  }
+
   const redis = new Redis(TEST_REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
   try {
     await redis.connect();

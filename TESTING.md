@@ -24,7 +24,27 @@ Run both, in that order, in two terminals.
 | Mailhog (fake inbox)    | `8025`  | http://localhost:8025                             | `pnpm docker:dev` |
 | MinIO console (S3)      | `9001`  | http://localhost:9001 (`minioadmin`/`minioadmin`) | `pnpm docker:dev` |
 
-**Mongo is on 27018 and Redis on 6380, not their defaults.** Another project on this machine already binds 27017/6379. Do not "fix" these back — the container-internal ports are standard; only the host mapping differs.
+**Mongo is on 27018 and Redis on 6380, not their defaults.** Another project on this machine (the School ERP containers) already binds 27017/6379. Do not "fix" these back — the container-internal ports are standard; only the host mapping differs.
+
+### If a port is still taken
+
+Override it — never edit the compose file, because 27018/6380 are also baked into `.env.example`, CI and the docs:
+
+```bash
+MONGO_PORT=27019 REDIS_PORT=6381 pnpm docker:dev
+# then point apps/api/.env at the same ports
+```
+
+### The port trap that nearly cost us a database
+
+**A loopback address does not prove the database is local.** An SSH tunnel like `ssh -L 27018:127.0.0.1:27017 user@remote` binds _our_ port on `127.0.0.1` and quietly wins the bind over Docker — after which everything connecting to `127.0.0.1:27018` is talking to a **remote** server. Our integration tests drop databases.
+
+The harness now refuses to run unless the target is loopback **and** has no authentication (the dev container runs open; real servers don't), and it will only ever drop databases named `test_*` or `hms_test-*`. If you see `REFUSING TO RUN`, something else has taken the port:
+
+```bash
+lsof -nP -iTCP:27018 -sTCP:LISTEN     # an SSH tunnel? another container?
+docker ps
+```
 
 **Almost all API testing happens on port 4000.** The web apps (3000/3001) currently render a health page only — there is no login screen yet, because Phase 1B built the authentication _backend_. The login UI arrives with the app shell.
 
