@@ -41,9 +41,11 @@ Honestly and precisely: **the engine works, the dashboard does not exist yet.**
 
 ✅ **Hospital separation.** A staff member logged into Apollo _cannot_ reach Sunshine's data, even holding a valid Apollo login.
 
-❌ **No screens yet.** There is no login page you can click. The web app at `localhost:3000` currently shows a status card, nothing more.
+✅ **A working app you can click.** Sign in at **http://demo.localhost:3000**, see your dashboard, add a colleague, give them a role, sign devices out. Log in as that colleague and the sidebar is smaller — RBAC in action.
 
-**So today you test with commands, not clicks.** See [TESTING.md](./TESTING.md).
+❌ **No clinical screens yet.** Patients, appointments, beds, billing — the greyed-out "soon" items in the sidebar. They are shown so you can see the shape of the product, not to pretend they exist.
+
+See [TESTING.md](./TESTING.md) to run it.
 
 ---
 
@@ -51,7 +53,7 @@ Honestly and precisely: **the engine works, the dashboard does not exist yet.**
 
 This is the order we build in, and each step is testable when it lands.
 
-### Step 1 — Permissions (next up)
+### ✅ Step 1 — Permissions (DONE)
 
 _No new screens, but nothing above is safe without it._
 
@@ -59,9 +61,9 @@ Right now, a logged-in admin can call any part of the system. Permissions fix th
 
 > **Why before the login screen?** The login page's whole job is to let people into things they're allowed to see. Build the page first and we build it twice.
 
-### Step 2 — The login screen and app shell
+### ✅ Step 2 — The login screen and app shell (DONE)
 
-_The first thing you can actually click._
+_You can click it now._
 
 - **Login page** — email + password, on your hospital's address
 - **Two-factor prompt** — the 6-digit code, when it's switched on
@@ -71,7 +73,7 @@ _The first thing you can actually click._
 
 At this point you log in like a real user, in a browser.
 
-### Step 3 — Hospital setup screens
+### Step 3 — Hospital setup screens (next)
 
 _The first thing a new hospital does after logging in._
 

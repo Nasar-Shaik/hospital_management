@@ -1,6 +1,11 @@
 # TESTING — How to run and test locally
 
-The single most common confusion: **`pnpm docker:dev` does not start the application.** It starts only the _infrastructure_ the application needs (databases, cache, storage, mail). Nothing listens on port 4000 after it — you start the apps yourself with `pnpm dev`.
+**Start here: open http://demo.localhost:3000 and sign in.** That is the app.
+
+Two things trip everyone up:
+
+1. **`pnpm docker:dev` does not start the application.** It starts only the _infrastructure_ (databases, cache, storage, mail). You start the apps with `pnpm dev`.
+2. **Do not browse `localhost:3000`.** The hostname IS the hospital — `demo.localhost` means the demo hospital, and plain `localhost` means no hospital at all. `<slug>.localhost` resolves to your machine automatically; you do not need to edit any hosts file.
 
 ```
 pnpm docker:dev   →  mongo, redis, minio, mailhog        (infrastructure)
@@ -47,6 +52,29 @@ docker ps
 ```
 
 **Almost all API testing happens on port 4000.** The web apps (3000/3001) currently render a health page only — there is no login screen yet, because Phase 1B built the authentication _backend_. The login UI arrives with the app shell.
+
+---
+
+## 1b. Using the app (the short version)
+
+```bash
+pnpm docker:dev     # terminal 1 — infrastructure
+pnpm dev            # terminal 2 — the apps
+```
+
+Then open **http://demo.localhost:3000** and sign in with the demo hospital's admin:
+
+|          |                            |
+| -------- | -------------------------- |
+| URL      | http://demo.localhost:3000 |
+| Email    | `admin@demo.test`          |
+| Password | `Demo!Passw0rd#2026`       |
+
+(If that hospital doesn't exist yet, create it — see §4.)
+
+You can then: add a colleague under **Staff** and give them a role, see the roles that exist, change your password, and sign devices out. Log in as the colleague you created and you will see a **smaller sidebar** — that is RBAC working: the menu shows only what their role permits, and the server refuses the rest regardless.
+
+**Never browse `demo.paperlesstech.in` locally.** That domain has wildcard DNS pointing at the real production server — you would be logging in to production, not your laptop. Locally it is always `.localhost`.
 
 ---
 
@@ -260,4 +288,4 @@ Not bugs — not built:
 - **Any business feature** (patients, appointments, billing…). Phase 2+.
 - **Permission enforcement.** Roles exist and ride inside the token, but the `authorize` middleware lands in Phase 1C, so a logged-in admin is not yet _restricted_ by permissions.
 - **Forgot/reset password.** Deliberately postponed until the notification channel exists — a reset flow that cannot deliver a reset is worse than none.
-- **A login UI.** The auth backend is complete and testable via HTTP; the screens come with the app shell.
+- **Permission enforcement in the UI beyond menus.** The sidebar hides what you cannot do and the server refuses it — but there is no role _editor_ yet (you assign an existing role, you cannot yet build a new one from a permission matrix).
