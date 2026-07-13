@@ -22,6 +22,9 @@
 import { ALL_PERMISSIONS, DEFAULT_ROLES } from "@medicore/permissions";
 import { env } from "../../config/env.js";
 import { AppError } from "../../core/errors/appError.js";
+import { recordAudit } from "../../core/audit/auditWriter.js";
+import { publish } from "../../core/events/outbox.js";
+import { EVENTS } from "../../core/events/eventCatalog.js";
 import { cacheDel, cacheGet, cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import * as repo from "./rbac.repository.js";
 import type { Permission, Role, RoleBinding } from "./rbac.repository.js";
@@ -127,6 +130,14 @@ export async function getUserBranchIds(userId: string): Promise<string[]> {
 
 /* ── administration ──────────────────────────────────────────────────────── */
 
+/**
+ * Granting and revoking access is the single most audit-relevant administrative
+ * act in the system — every breach investigation begins with "who gave them
+ * this?". The role binding lives in `userRoles`, which carries no audit plugin
+ * (it is a join table; a field diff of two ObjectIds tells an investigator
+ * nothing), so the change is recorded here in the vocabulary a human reads: the
+ * role's CODE, the branches, and who did it.
+ */
 export async function assignRoleByCode(
   userId: string,
   roleCode: string,
@@ -137,6 +148,17 @@ export async function assignRoleByCode(
 
   await repo.assignRole(userId, role.id, branchIds);
   await invalidateUser(userId); // effective immediately, not in five minutes
+
+  await recordAudit({
+    action: "rbac.role.assigned",
+    category: "security",
+    resource: "user",
+    resourceId: userId,
+    after: { role: role.code, branchIds },
+    meta: { roleId: role.id, isSystem: role.isSystem },
+  });
+
+  await publishRolesChanged(userId, "assigned", role.code);
 }
 
 export async function revokeRoleByCode(userId: string, roleCode: string): Promise<void> {
@@ -145,6 +167,37 @@ export async function revokeRoleByCode(userId: string, roleCode: string): Promis
 
   await repo.revokeRole(userId, role.id);
   await invalidateUser(userId);
+
+  await recordAudit({
+    action: "rbac.role.revoked",
+    category: "security",
+    resource: "user",
+    resourceId: userId,
+    before: { role: role.code },
+    meta: { roleId: role.id },
+  });
+
+  await publishRolesChanged(userId, "revoked", role.code);
+}
+
+/**
+ * The permission cache (`perm:{userId}`) has just been invalidated on THIS pod.
+ * Every other pod is still holding the old answer until its TTL runs out — which
+ * for a revocation means the user keeps a permission they no longer have, for up
+ * to the token lifetime. The event is how the other pods find out; the consumer
+ * that fans it out lands with A6, and until then the TTL remains the bound (the
+ * same bound ADR-0009 already accepts for token revocation).
+ */
+async function publishRolesChanged(
+  userId: string,
+  change: "assigned" | "revoked",
+  roleCode: string,
+): Promise<void> {
+  const claims = await getRoleClaims(userId);
+  await publish({
+    name: EVENTS.USER_ROLES_CHANGED,
+    payload: { userId, change, role: roleCode, roles: claims.roles },
+  });
 }
 
 export interface CreateRoleInput {

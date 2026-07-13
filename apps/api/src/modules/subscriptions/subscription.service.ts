@@ -21,6 +21,9 @@
  */
 import { getEdition, type EditionDefinition } from "@medicore/permissions";
 import { AppError } from "../../core/errors/appError.js";
+import { recordAudit } from "../../core/audit/auditWriter.js";
+import { publish } from "../../core/events/outbox.js";
+import { EVENTS } from "../../core/events/eventCatalog.js";
 import { cacheGet, cacheKeys, cacheSet, cacheDel } from "../../core/redis/redis.js";
 import { env } from "../../config/env.js";
 import { getById as getTenant } from "../tenants/index.js";
@@ -127,6 +130,22 @@ export async function assertWithinLimit(tenantId: string, metric: LimitMetric): 
   const used = await currentUsage(metric);
   if (used < limit) return;
 
+  /**
+   * A hospital that has hit a wall is a fact worth knowing on both sides: the
+   * administrator wants to be told before they discover it while onboarding a
+   * nurse, and we would rather call them than have them call us.
+   *
+   * Published on every blocked attempt, so a client retrying in a loop produces a
+   * burst. Deduplication belongs to the CONSUMER (EVENT_CATALOG: "dedupe per
+   * metric+period") — squashing it here would need state that the enforcement
+   * path has no business owning, and this path must stay fast and simple: it sits
+   * in front of every account creation in the system.
+   */
+  await publish({
+    name: EVENTS.LIMIT_THRESHOLD_REACHED,
+    payload: { metric, used, limit, pct: 100, plan: tenant?.planCode },
+  });
+
   throw new AppError("HMS-PLAN-001", 402, "Plan limit reached", {
     metric,
     used,
@@ -184,12 +203,47 @@ export async function changePlan(tenantId: string, planCode: string): Promise<Su
     }
   }
 
+  const before = await getTenant(tenantId);
+  const fromPlan = before?.planCode;
+
   await repo.setTenantPlan(tenantId, planCode);
 
   // The flag set just moved. Both caches must go, in the method that made the
   // change — not fire-and-forget from a controller (CACHE_STRATEGY).
   await invalidateFeatures(tenantId);
-  await cacheDel(cacheKeys.tenantBySlug((await getTenant(tenantId))?.slug ?? ""));
+  await cacheDel(cacheKeys.tenantBySlug(before?.slug ?? ""));
+
+  /**
+   * Audited as `admin`, not published-and-forgotten. A2 taught this the hard way:
+   * `plan:manage` was briefly reachable by a hospital's own administrator, and the
+   * only reason we could be certain no customer had used it was that the fleet was
+   * still ours. Once there are real customers, "did anyone upgrade themselves"
+   * must be answerable from the trail, not from memory.
+   */
+  await recordAudit({
+    action: "subscription.planChanged",
+    category: "admin",
+    resource: "subscription",
+    resourceId: tenantId,
+    before: { planCode: fromPlan },
+    after: { planCode },
+    meta: { features: edition.flags.length },
+  });
+
+  /**
+   * NOT atomic with the write above, and it cannot be: the plan lives in the
+   * MASTER database and the outbox lives in the tenant's. A crash between the two
+   * loses the notification, never the plan change — the registry stays the source
+   * of truth, and a consumer that missed the event re-reads it on the next request
+   * (entitlement caches are TTL'd at 5 minutes anyway). A master-side outbox would
+   * close the gap; it is not worth a second relay loop for a handful of events a
+   * month, and this comment is here so that trade-off is a decision rather than an
+   * oversight.
+   */
+  await publish({
+    name: EVENTS.SUBSCRIPTION_CHANGED,
+    payload: { tenantId, fromPlan, toPlan: planCode },
+  });
 
   return getSubscription(tenantId);
 }

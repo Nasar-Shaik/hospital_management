@@ -40,6 +40,7 @@ import {
 } from "../../core/crypto/tokens.js";
 import { decryptField, encryptField } from "../../core/crypto/fieldEncryption.js";
 import { signAccessToken, signMfaChallengeToken, verifyToken } from "../../core/crypto/jwt.js";
+import { recordAudit, tryRecordAudit } from "../../core/audit/auditWriter.js";
 import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import * as users from "../users/index.js";
 import type { User } from "../users/index.js";
@@ -131,11 +132,43 @@ async function registerFailure(email: string, device: DeviceInfo, user?: User): 
     expiresAt: new Date(Date.now() + lockoutWindowMs() * 4),
   });
 
+  /**
+   * The failed login is audited even when the email belongs to nobody.
+   *
+   * That is the whole value of it: a hundred failures against a hundred addresses
+   * that do not exist is an enumeration attack, and it is invisible in a trail
+   * that only records failures against real accounts. The audit trail is the one
+   * place this asymmetry is right — the LOGIN RESPONSE still tells an attacker
+   * nothing (HMS-AUTH-001 for every case), but the record we keep for ourselves
+   * distinguishes them.
+   */
+  await tryRecordAudit({
+    action: "auth.login.failed",
+    category: "security",
+    resource: "user",
+    ...(user ? { resourceId: user.id } : {}),
+    outcome: "failure",
+    actorEmail: email,
+    ...(user ? { actorId: user.id } : {}),
+    meta: { reason: user ? "bad-password-or-inactive" : "unknown-email" },
+  });
+
   if (!user) return;
 
   const failures = await repo.countRecentFailures(email, new Date(Date.now() - lockoutWindowMs()));
   if (failures >= env.LOGIN_MAX_ATTEMPTS && user.status === "active") {
-    await users.transitionStatus(user.id, "locked", new Date(Date.now() + lockoutWindowMs()));
+    const lockedUntil = new Date(Date.now() + lockoutWindowMs());
+    await users.transitionStatus(user.id, "locked", lockedUntil);
+
+    await tryRecordAudit({
+      action: "auth.account.locked",
+      category: "security",
+      resource: "user",
+      resourceId: user.id,
+      actorId: user.id,
+      actorEmail: email,
+      meta: { failures, lockedUntil, windowMinutes: env.LOGIN_LOCKOUT_MINUTES },
+    });
   }
 }
 
@@ -178,6 +211,18 @@ export async function login(
   });
   await repo.clearFailures(normalized);
   await users.recordLogin(user.id);
+
+  // Successful logins are audited too, not only failures: "was anyone else in the
+  // system when this chart changed" is answerable only if the successes are there.
+  await recordAudit({
+    action: "auth.login.succeeded",
+    category: "security",
+    resource: "user",
+    resourceId: user.id,
+    actorId: user.id,
+    actorEmail: user.email,
+    meta: { mfaRequired: user.mfaEnabled },
+  });
 
   // Transparent KDF upgrade: when we raise argon2 parameters, users are migrated
   // one successful login at a time, with no forced reset.
@@ -242,6 +287,7 @@ async function issueTokens(
     userId: user.id,
     tenantId: ctx.tenantId,
     tenantSlug: ctx.tenantSlug,
+    email: user.email,
     roles: claims.roles,
     branchIds: claims.branchIds,
   });
@@ -279,6 +325,21 @@ export async function refresh(presentedToken: string, device: DeviceInfo = {}): 
   // it does not matter. The family dies.
   if (stored.usedAt) {
     await burnFamily(stored.family);
+
+    // The single most alarming event this service can produce: a refresh token
+    // was presented twice, which means it existed in two places. It goes in the
+    // trail with the device that presented it, because that is the only thread an
+    // investigator will have to pull on.
+    await tryRecordAudit({
+      action: "auth.token.reuseDetected",
+      category: "security",
+      resource: "user",
+      resourceId: stored.userId,
+      actorId: stored.userId,
+      outcome: "failure",
+      meta: { family: stored.family, sessionsRevoked: true },
+    });
+
     throw new TokenReuseDetectedError({ family: stored.family });
   }
 
@@ -328,6 +389,7 @@ export async function refresh(presentedToken: string, device: DeviceInfo = {}): 
     userId: user.id,
     tenantId: ctx.tenantId,
     tenantSlug: ctx.tenantSlug,
+    email: user.email,
     roles: claims.roles,
     branchIds: claims.branchIds,
   });
@@ -387,12 +449,28 @@ export async function revokeSession(userId: string, sessionId: string): Promise<
   const session = await repo.findSessionById(userId, sessionId);
   if (!session) throw new AppError("HMS-GEN-404", 404, "Session not found", { sessionId });
   await burnFamily(session.family);
+
+  await recordAudit({
+    action: "auth.session.revoked",
+    category: "security",
+    resource: "user",
+    resourceId: userId,
+    meta: { sessionId, scope: "one-device" },
+  });
 }
 
 /** Nuclear option: every device, everywhere. Used after a password change. */
 export async function revokeAllSessions(userId: string): Promise<void> {
   await repo.revokeAllRefreshTokens(userId);
   await repo.revokeAllSessions(userId);
+
+  await recordAudit({
+    action: "auth.session.revoked",
+    category: "security",
+    resource: "user",
+    resourceId: userId,
+    meta: { scope: "all-devices" },
+  });
 }
 
 /* ── passwords ───────────────────────────────────────────────────────────── */
@@ -438,6 +516,18 @@ export async function setPassword(
       : {}),
   });
   await repo.addPasswordHistory(userId, passwordHash, env.PASSWORD_HISTORY_SIZE);
+
+  // The credential collections carry no audit plugin — a diff of a password hash
+  // is both useless and dangerous — so the FACT of the change is recorded here,
+  // with no trace of the secret itself. `recordAudit` redacts hashes anyway; this
+  // path simply never hands it one.
+  await recordAudit({
+    action: "auth.password.set",
+    category: "security",
+    resource: "user",
+    resourceId: userId,
+    meta: { mustChangePassword: options.mustChangePassword ?? false },
+  });
 }
 
 export async function changePassword(

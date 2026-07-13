@@ -17,10 +17,51 @@ const logger = createLogger({ service: "workers" });
 const REDIS_URL = process.env.REDIS_URL;
 const HEALTH_PORT = Number(process.env.HEALTH_PORT ?? 4100);
 const SYSTEM_QUEUE = "system";
+/** Fed by the API's outbox relay (apps/api/src/core/events/outboxRelay.ts). */
+const EVENT_QUEUE = "events";
 
 let queue: Queue | undefined;
 let worker: Worker | undefined;
+let eventWorker: Worker | undefined;
 let lastHeartbeatAt: string | undefined;
+let eventsProcessed = 0;
+
+/** The envelope the relay puts on the wire (EVENT_CATALOG global rules). */
+interface DomainEventJob {
+  eventId: string;
+  name: string;
+  version: number;
+  tenantId: string;
+  traceId?: string;
+  actorId?: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * The consumer end of the transactional outbox.
+ *
+ * Today it does nothing but acknowledge — there are no consumers yet, because
+ * notifications (A6) has not been built. That is not a placeholder for its own
+ * sake: it closes the loop, so the outbox is exercised end to end (publish →
+ * commit → relay → queue → handler) on every login and every staff account
+ * created, rather than being a mechanism we *believe* works and first discover to
+ * be broken on the day a patient's discharge summary depends on it.
+ *
+ * When a real consumer arrives it registers here and MUST dedupe on `eventId`:
+ * delivery is at-least-once by design (see outboxRelay.ts).
+ */
+async function handleDomainEvent(event: DomainEventJob): Promise<void> {
+  eventsProcessed++;
+  logger.info(
+    {
+      event: event.name,
+      eventId: event.eventId,
+      tenantId: event.tenantId,
+      traceId: event.traceId,
+    },
+    "domain event received (no consumer registered yet — acknowledged)",
+  );
+}
 
 /** BullMQ manages its own ioredis connections from options (avoids dual ioredis type identities). */
 function redisConnection(url: string): ConnectionOptions {
@@ -58,8 +99,30 @@ async function start(): Promise<void> {
     logger.error({ jobId: job?.id, err }, "job failed");
   });
 
+  eventWorker = new Worker(
+    EVENT_QUEUE,
+    async (job) => {
+      await handleDomainEvent(job.data as DomainEventJob);
+    },
+    { connection, concurrency: 5 },
+  );
+
+  eventWorker.on("failed", (job, err) => {
+    // A job that exhausts its retries stays in the failed set (the DLQ) — it is
+    // NOT removed. Silent DLQ growth is an incident (ADR-0007), and an event that
+    // vanished because nobody was watching is the failure mode this whole pattern
+    // exists to prevent.
+    logger.error(
+      { jobId: job?.id, event: job?.name, attempts: job?.attemptsMade, err },
+      "domain event handler failed",
+    );
+  });
+
   await queue.upsertJobScheduler("system-heartbeat", { every: 60_000 }, { name: "heartbeat" });
-  logger.info({ queue: SYSTEM_QUEUE }, "worker started; heartbeat scheduled every 60s");
+  logger.info(
+    { queues: [SYSTEM_QUEUE, EVENT_QUEUE] },
+    "worker started; heartbeat every 60s; consuming domain events",
+  );
 }
 
 const healthServer = createServer((req, res) => {
@@ -72,6 +135,8 @@ const healthServer = createServer((req, res) => {
           status: "ok",
           service: "workers",
           queueActive: Boolean(worker),
+          eventsActive: Boolean(eventWorker),
+          eventsProcessed,
           lastHeartbeatAt: lastHeartbeatAt ?? null,
         },
       }),
@@ -91,7 +156,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info({ signal }, "shutdown initiated — finishing in-flight jobs");
   const forceExit = setTimeout(() => process.exit(1), 30_000);
-  await Promise.allSettled([worker?.close(), queue?.close()]);
+  await Promise.allSettled([worker?.close(), eventWorker?.close(), queue?.close()]);
   healthServer.close(() => {
     clearTimeout(forceExit);
     logger.info("shutdown complete");

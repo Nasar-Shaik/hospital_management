@@ -20,8 +20,18 @@ export interface RequestContext {
   connection: Connection;
   /** Populated by `authenticate` (ADR-0009). */
   userId?: string;
+  /** The actor's email, from the token — so the audit trail reads as people, not ids. */
+  userEmail?: string;
   branchIds?: string[];
   roles?: string[];
+  /**
+   * Where the request came from. Carried in the context rather than read from
+   * `req`, because the audit trail is written by services and repositories that
+   * have no access to `req` (Doc 09 §11) — and "who changed this, from where" is
+   * one question, not two. Populated by `resolveTenant`.
+   */
+  ip?: string;
+  userAgent?: string;
   /** Populated by `authorize` (ADR-0010) — the caller's effective permissions. */
   permissions?: string[];
   /**

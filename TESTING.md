@@ -74,6 +74,8 @@ Then open **http://demo.localhost:3000** and sign in with the demo hospital's ad
 
 You can then: add a colleague under **Staff** and give them a role, see the roles that exist, change your password, and sign devices out. Log in as the colleague you created and you will see a **smaller sidebar** — that is RBAC working: the menu shows only what their role permits, and the server refuses the rest regardless.
 
+Then open **Activity trail**. Everything you just did is already in it — who, what, when, from which IP. Nothing you can do in the UI will remove an entry, because no code path exists that edits or deletes one.
+
 **Never browse `demo.paperlesstech.in` locally.** That domain has wildcard DNS pointing at the real production server — you would be logging in to production, not your laptop. Locally it is always `.localhost`.
 
 ---
@@ -270,6 +272,56 @@ A downgrade that would strand people is refused: put 12 staff on a plan and try 
 
 ---
 
+## 8c. The activity trail and tamper evidence (A5)
+
+**In the browser:** sign in and open **Activity trail** (sidebar → Administration). Add a staff member and refresh — you will see four entries for that one click: the account created, the password set, the role assigned, the account activated. Try something you are not allowed to do and the _refusal_ is recorded too.
+
+The trail is **append-only**. There is no edit button, no delete button, and no API route that could make one — the model itself throws on every update and delete operation. A correction is a new entry, never a rewrite.
+
+**Prove it is tamper-evident.** The point of the hash chain is not that we promise the trail is honest; it is that you can check.
+
+```bash
+# Seal recent entries into a hash-chained anchor (this is the nightly job)
+pnpm --filter @medicore/api audit:chain -- --seal --slug demo
+
+# Recompute every hash and every anchor
+pnpm --filter @medicore/api audit:chain -- --verify --slug demo
+#  → "audit chain verified — no tampering detected"   (exit 0)
+```
+
+Now be the attacker. Edit a sealed entry straight in MongoDB — bypassing the application entirely, which is the only way to do it:
+
+```bash
+docker exec $(docker ps -qf name=mongo | head -1) mongosh --quiet --eval '
+  db = db.getSiblingDB("hms_demo");
+  db.auditLogs.updateOne({seq: 1}, {$set: {actorEmail: "someone.else@demo.test"}});'
+
+pnpm --filter @medicore/api audit:chain -- --verify --slug demo
+#  → "AUDIT CHAIN DOES NOT VERIFY — the trail has been altered since it was sealed"
+#  → names the exact entry, and exits 1 (so a cron job alerts)
+```
+
+Hospital admins can run the same check from the UI — the **Check integrity** button on the Activity trail. Tamper evidence that only the vendor can verify is evidence the customer has to take on trust, which defeats the purpose.
+
+**Honest limits.** This _detects_ tampering; it cannot _prevent_ it. And the anchors currently live in the same database they protect, so a determined attacker with full database access could rewrite entries and re-seal. Shipping the daily anchor root off-box is what closes that, and it is on the list.
+
+> ⚠️ `demo` has three entries from A5 development that will never verify (a hashing bug, since fixed — see PROJECT_MEMORY §5). If `--verify --slug demo` reports tampering you did not do, that is why. Re-provision `demo` for a clean trail.
+
+## 8d. Watching an event travel (the outbox)
+
+Every staff account created, role granted, and plan changed publishes a domain event — written to the database **in the same transaction as the change itself**, so a crash can never leave you with a notification about something that did not happen (or a thing that happened with nobody notified).
+
+Watch it end to end. With `pnpm dev` running, create a staff member in the UI, then look at the **workers** output:
+
+```
+domain event received (no consumer registered yet — acknowledged)
+  event: identity.user.created   eventId: fcc6216e-…   traceId: ecdc2037-…
+```
+
+That `traceId` is the same one on the HTTP request that created the account — the whole path is traceable from click to consumer. There is no real consumer yet (that arrives with notifications, A6); the worker acknowledges and logs, which is what keeps the pipeline honest instead of theoretical.
+
+---
+
 ## 9. Automated tests
 
 ```bash
@@ -303,4 +355,5 @@ Not bugs — not built:
 - **Any business feature** (patients, appointments, billing…). Phase 2+.
 - **Permission enforcement.** Roles exist and ride inside the token, but the `authorize` middleware lands in Phase 1C, so a logged-in admin is not yet _restricted_ by permissions.
 - **Forgot/reset password.** Deliberately postponed until the notification channel exists — a reset flow that cannot deliver a reset is worse than none.
+- **Anything a real event consumer would do** (welcome emails, cache fan-out). The outbox delivers events today; the worker acknowledges them and logs. Consumers arrive with A6.
 - **Permission enforcement in the UI beyond menus.** The sidebar hides what you cannot do and the server refuses it — but there is no role _editor_ yet (you assign an existing role, you cannot yet build a new one from a permission matrix).

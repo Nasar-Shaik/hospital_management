@@ -8,6 +8,7 @@ import { bindAddress, env } from "./config/env.js";
 import { closeMaster } from "./core/db/masterDb.js";
 import { closeAllTenantConnections } from "./core/db/connectionManager.js";
 import { closeRedis } from "./core/redis/redis.js";
+import { startOutboxRelay, stopOutboxRelay } from "./core/events/outboxRelay.js";
 
 const logger = createLogger({ service: "api", level: env.LOG_LEVEL });
 const app = createApp(logger);
@@ -19,6 +20,10 @@ const bind = bindAddress();
 const server = app.listen(env.PORT, bind, () => {
   logger.info({ port: env.PORT, bind, nodeEnv: env.NODE_ENV }, "api listening");
 });
+
+// Every pod starts the relay; a Redis lock elects one leader (ADR-0007). Nothing
+// is lost if no leader exists for a while — events wait, durably, in the outbox.
+startOutboxRelay();
 
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
@@ -32,6 +37,11 @@ async function shutdown(signal: string): Promise<void> {
   }, 30_000);
 
   server.close(async () => {
+    // The relay stops BEFORE the connections it uses are closed — a mid-poll
+    // shutdown would otherwise log a wall of "connection closed" errors that look
+    // like an incident and are really just a deploy. Events it did not get to stay
+    // `pending` and the next leader picks them up.
+    await stopOutboxRelay();
     await Promise.allSettled([closeAllTenantConnections(), closeMaster(), closeRedis()]);
     clearTimeout(forceExit);
     logger.info("shutdown complete");

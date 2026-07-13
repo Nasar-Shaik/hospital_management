@@ -5,7 +5,12 @@
 import type { FilterQuery } from "mongoose";
 import { cacheDel, cacheGet, cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import { env } from "../../config/env.js";
-import { getTenantModel, type TenantDoc, type TenantStatus } from "./tenant.model.js";
+import {
+  getTenantModel,
+  SERVABLE_TENANT_STATUSES,
+  type TenantDoc,
+  type TenantStatus,
+} from "./tenant.model.js";
 
 /** Plain, cacheable projection of a registry entry — what resolution needs. */
 export interface TenantRegistryEntry {
@@ -43,6 +48,22 @@ async function findOne(filter: FilterQuery<TenantDoc>): Promise<TenantRegistryEn
   const Tenant = await getTenantModel();
   const doc = await Tenant.findOne(filter).lean<TenantDoc>().exec();
   return doc ? toEntry(doc) : undefined;
+}
+
+/**
+ * Every hospital whose database may legitimately be opened right now.
+ *
+ * Read straight from the master, never from cache: the fleet loops that use this
+ * (the outbox relay, the audit anchor job, the migration runner) walk *all*
+ * tenants, and a stale registry there means a hospital silently stops being
+ * processed — the kind of failure nobody notices until an auditor does.
+ */
+export async function listServable(): Promise<TenantRegistryEntry[]> {
+  const Tenant = await getTenantModel();
+  const docs = await Tenant.find({ status: { $in: SERVABLE_TENANT_STATUSES } })
+    .lean<TenantDoc[]>()
+    .exec();
+  return docs.map(toEntry);
 }
 
 /** Read-through by slug (subdomain tenancy). */

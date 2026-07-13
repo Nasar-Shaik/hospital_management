@@ -60,6 +60,11 @@ export function authenticate() {
         ctx.userId = claims.sub;
         ctx.roles = claims.roles;
         ctx.branchIds = claims.branchIds;
+        // So the audit trail can name a person rather than an ObjectId, without a
+        // user lookup on every write (Doc 09 §9). Tokens minted before this claim
+        // existed simply have no email — the trail falls back to the id, which is
+        // still correct, just less readable.
+        if (claims.eml) ctx.userEmail = claims.eml;
 
         req.auth = {
           userId: claims.sub,

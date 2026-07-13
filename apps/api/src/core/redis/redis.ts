@@ -54,7 +54,70 @@ export const cacheKeys = {
    * `ff:{tenantId}`, TTL 5 min). Invalidated on a plan or flag change.
    */
   tenantFeatures: (tenantId: string) => `ff:${tenantId}`,
+  /**
+   * Leader election for singleton background loops (CACHE_STRATEGY: `lock:{name}`).
+   * Every API pod runs the outbox relay; exactly one of them may relay at a time.
+   */
+  lock: (name: string) => `lock:${name}`,
 } as const;
+
+/**
+ * Best-effort mutual exclusion for background loops.
+ *
+ * This is NOT a correctness primitive and must never be used as one. Redlock's
+ * own authors are clear that a single-node lock can be lost to a GC pause or a
+ * failover, so two holders can briefly coexist. It is used here only to stop N
+ * API pods from doing the same relay work N times — and the relay is safe under
+ * concurrency anyway (`claimDue` is an atomic compare-and-set, and consumers are
+ * idempotent). The lock is an efficiency measure, not the thing that keeps the
+ * system correct. Never guard money or PHI with it.
+ *
+ * Returns false when Redis is unavailable: no lock, no leadership, no relay —
+ * the events simply stay in the outbox until Redis returns, which is exactly
+ * what a durable outbox is for.
+ */
+export async function acquireLock(name: string, ttlMs: number, holder: string): Promise<boolean> {
+  try {
+    const redis = await connected();
+    if (!redis) return false;
+    const result = await redis.set(cacheKeys.lock(name), holder, "PX", ttlMs, "NX");
+    return result === "OK";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extends a lock we already hold. The Lua script makes "check owner" and "extend"
+ * one atomic step — the check-then-extend version can renew a lock that expired
+ * and was taken by someone else in between, which is the classic way a leader
+ * election quietly elects two leaders.
+ */
+export async function renewLock(name: string, ttlMs: number, holder: string): Promise<boolean> {
+  try {
+    const redis = await connected();
+    if (!redis) return false;
+    const script =
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end";
+    const result = await redis.eval(script, 1, cacheKeys.lock(name), holder, String(ttlMs));
+    return result === 1;
+  } catch {
+    return false;
+  }
+}
+
+/** Releases only if we still hold it — same reason as above. */
+export async function releaseLock(name: string, holder: string): Promise<void> {
+  try {
+    const redis = await connected();
+    if (!redis) return;
+    const script =
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+    await redis.eval(script, 1, cacheKeys.lock(name), holder);
+  } catch {
+    /* the TTL will clean it up */
+  }
+}
 
 /** Read-through cache get. Returns undefined on miss OR on any Redis failure (fail soft). */
 export async function cacheGet<T>(key: string): Promise<T | undefined> {

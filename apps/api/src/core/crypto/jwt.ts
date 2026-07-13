@@ -28,6 +28,13 @@ export interface AccessTokenClaims {
   /** tenant registry id — must match the host-resolved tenant */
   tid: string;
   tsl: string;
+  /**
+   * The actor's email. Carried in the token purely so that every audit entry can
+   * name a human without a database read on the write path (Doc 09 §9). It is not
+   * a secret — it is the holder's own address — and it is never used for identity:
+   * `sub` is who you are, this is only how the trail spells it.
+   */
+  eml?: string;
   roles: string[];
   branchIds: string[];
   typ: TokenType;
@@ -40,6 +47,7 @@ export interface SignAccessTokenInput {
   userId: string;
   tenantId: string;
   tenantSlug: string;
+  email?: string;
   roles: string[];
   branchIds: string[];
 }
@@ -78,6 +86,7 @@ export async function signAccessToken(input: SignAccessTokenInput): Promise<Sign
     {
       tid: input.tenantId,
       tsl: input.tenantSlug,
+      ...(input.email ? { eml: input.email } : {}),
       roles: input.roles,
       branchIds: input.branchIds,
     },

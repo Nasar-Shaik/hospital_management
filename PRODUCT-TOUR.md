@@ -43,6 +43,12 @@ Honestly and precisely: **the engine works, the dashboard does not exist yet.**
 
 ✅ **A working app you can click.** Sign in at **http://demo.localhost:3000**, see your dashboard, add a colleague, give them a role, sign devices out. Log in as that colleague and the sidebar is smaller — RBAC in action.
 
+✅ **Editions and limits.** Each hospital is on a plan (Clinic, Hospital, Enterprise…) that decides which modules it gets and how many staff it may have. The 11th account on a 10-seat plan is refused cleanly. A hospital **cannot upgrade itself** — that is an operator action, by design.
+
+✅ **A permanent record of everything.** Open **Activity trail** in the sidebar. Every account created, role granted, password changed, plan changed, and every _refused_ attempt is recorded — who, what, when, from which IP. **It cannot be edited or deleted by anyone, including us**: no code path exists to do it, and each entry is fingerprinted and chained so that meddling directly with the database is _detectable_. The hospital can verify this itself with the **Check integrity** button — a promise you have to take on trust is not a compliance control.
+
+Why this exists before any medical screen: in a hospital, "who changed this record, and when" is a question with legal weight. Building the answer _after_ the patient records exist would mean rebuilding them.
+
 ❌ **No clinical screens yet.** Patients, appointments, beds, billing — the greyed-out "soon" items in the sidebar. They are shown so you can see the shape of the product, not to pretend they exist.
 
 See [TESTING.md](./TESTING.md) to run it.
@@ -72,6 +78,10 @@ _You can click it now._
 - **Change password**
 
 At this point you log in like a real user, in a browser.
+
+### ✅ Step 2b — Editions, limits and the activity trail (DONE)
+
+What a hospital buys is now enforced, and what everybody does is now recorded permanently. These are the two things a hospital's auditors ask about first, and the two things that are painful to retrofit — so they came before the medical screens rather than after.
 
 ### Step 3 — Hospital setup screens (next)
 

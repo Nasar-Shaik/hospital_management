@@ -79,6 +79,21 @@ const envSchema = z.object({
   LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().default(15),
 
   CORS_ORIGINS: z.string().default("http://localhost:3000,http://localhost:3001"),
+
+  /**
+   * Outbox relay (ADR-0007, Doc 03 §5.2). Every API pod runs the loop; a Redis
+   * lock elects one leader, so these knobs describe the FLEET, not the pod.
+   *
+   * Turn the relay off only where something else is relaying (a dedicated pod) or
+   * where nothing should be delivered at all (a restore drill, a forensic copy of
+   * production). An API with the relay off still *records* events — they queue up
+   * durably in the outbox and drain when a relay comes back.
+   */
+  OUTBOX_RELAY_ENABLED: z.coerce.boolean().default(true),
+  OUTBOX_POLL_MS: z.coerce.number().int().min(200).default(2_000),
+  OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
+  /** After this many failed dispatches an event moves to `failed` — the DLQ. */
+  OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -19,5 +19,8 @@ export {
   type ProvisionResult,
 } from "./tenant.service.js";
 
+/** Fleet loops (outbox relay, audit anchoring, migrations) walk every servable hospital. */
+export { listServable } from "./tenant.repository.js";
+
 export type { TenantRegistryEntry } from "./tenant.repository.js";
 export { TENANT_STATUSES, SERVABLE_TENANT_STATUSES, type TenantStatus } from "./tenant.model.js";

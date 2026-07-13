@@ -139,6 +139,46 @@ export interface Paged<T> {
   meta: PageMeta;
 }
 
+/** One entry in the append-only trail (Doc 09 §9). */
+export interface AuditEntry {
+  id: string;
+  seq: number;
+  at: string;
+  actorId?: string;
+  actorEmail?: string;
+  actorRoles?: string[];
+  action: string;
+  category: "phi" | "financial" | "security" | "admin" | "access";
+  resource: string;
+  resourceId?: string;
+  outcome: "success" | "failure";
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+  ip?: string;
+  traceId?: string;
+}
+
+export interface AuditQuery {
+  page?: number;
+  limit?: number;
+  category?: AuditEntry["category"];
+  action?: string;
+  actorId?: string;
+  resource?: string;
+  resourceId?: string;
+  outcome?: AuditEntry["outcome"];
+  from?: string;
+  to?: string;
+}
+
+export interface AuditIntegrity {
+  ok: boolean;
+  anchors: number;
+  entriesVerified: number;
+  problems: { anchorIndex: number; kind: string; detail: string }[];
+}
+
 /* ── the client ───────────────────────────────────────────────────────────── */
 
 export class ApiClient {
@@ -289,6 +329,43 @@ export class ApiClient {
 
   listRoles(): Promise<Role[]> {
     return this.request<Role[]>("GET", "/api/v1/roles");
+  }
+
+  /* ── audit (Doc 09 §9) ── */
+
+  listAudit(params: AuditQuery = {}): Promise<Paged<AuditEntry>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<AuditEntry>(`/api/v1/audit${qs ? `?${qs}` : ""}`);
+  }
+
+  /**
+   * Recomputes the hash chain. Deliberately available to the hospital: tamper
+   * evidence that only the vendor can check is evidence the customer has to take
+   * on trust, which defeats the purpose.
+   */
+  auditIntegrity(): Promise<AuditIntegrity> {
+    return this.request<AuditIntegrity>("GET", "/api/v1/audit/integrity");
+  }
+
+  /**
+   * The CSV export URL. Returned rather than fetched, because the browser must
+   * download it through a normal navigation — an in-memory blob would defeat the
+   * whole point of a file the compliance officer can hand to an auditor.
+   * The export itself is audited server-side (`audit.exported`).
+   */
+  auditExportUrl(params: AuditQuery = {}): string {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "" && key !== "page" && key !== "limit") {
+        query.set(key, String(value));
+      }
+    }
+    const qs = query.toString();
+    return `${this.baseUrl}/api/v1/audit/export${qs ? `?${qs}` : ""}`;
   }
 }
 

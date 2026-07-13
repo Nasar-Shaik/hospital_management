@@ -13,6 +13,7 @@ import { requestId } from "./core/http/requestId.js";
 import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { auditRouter } from "./modules/audit/index.js";
 import { authRouter } from "./modules/auth/index.js";
 import { rbacRouter } from "./modules/rbac/rbac.routes.js";
 import { staffRouter } from "./modules/staff/index.js";
@@ -96,6 +97,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(rbacRouter());
   v1Router.use(staffRouter());
   v1Router.use(subscriptionRouter());
+  v1Router.use(auditRouter());
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

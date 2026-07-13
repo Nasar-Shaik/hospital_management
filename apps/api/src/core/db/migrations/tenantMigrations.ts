@@ -200,4 +200,66 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+  {
+    id: "0007-audit-chain-outbox",
+    description:
+      "Audit sequencing + hash-chain anchors (Doc 09 §9) and the outbox relay index (ADR-0007)",
+    up: async (db) => {
+      for (const name of ["auditAnchors", "counters"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * The gap-free sequence is what makes a DELETED audit entry visible: without
+       * a unique index there is nothing to stop a second entry claiming a hole's
+       * number, and a re-used seq is indistinguishable from an honest one.
+       */
+      await db
+        .collection("auditLogs")
+        .createIndex({ tenantId: 1, seq: 1 }, { unique: true, background: true });
+
+      // The compliance officer's actual query: "what happened, newest first",
+      // filtered by category (PHI vs money vs security).
+      await db.collection("auditLogs").createIndex({ tenantId: 1, at: -1 }, { background: true });
+      await db
+        .collection("auditLogs")
+        .createIndex({ tenantId: 1, category: 1, at: -1 }, { background: true });
+
+      await db
+        .collection("auditAnchors")
+        .createIndex({ tenantId: 1, index: 1 }, { unique: true, background: true });
+
+      /**
+       * The relay's claim query: due, unsent, oldest first. Without this index the
+       * relay scans the whole outbox on every poll — including the `sent` rows,
+       * which is every event the hospital has ever published.
+       */
+      await db
+        .collection("outboxEvents")
+        .createIndex({ tenantId: 1, status: 1, availableAt: 1 }, { background: true });
+
+      // Consumers dedupe on eventId; so does BullMQ's jobId. A duplicate here
+      // would mean two different events claiming the same identity.
+      await db
+        .collection("outboxEvents")
+        .createIndex({ eventId: 1 }, { unique: true, background: true });
+    },
+    down: async (db) => {
+      for (const name of ["auditAnchors", "counters"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+      // `auditLogs` is NOT dropped here. Migration 0003 created it and a `down`
+      // that deletes the audit trail is a compliance incident wearing a rollback
+      // costume — the indexes go, the evidence stays.
+      for (const index of ["tenantId_1_seq_1", "tenantId_1_at_-1", "tenantId_1_category_1_at_-1"]) {
+        await db
+          .collection("auditLogs")
+          .dropIndex(index)
+          .catch(() => undefined);
+      }
+    },
+  },
 ];

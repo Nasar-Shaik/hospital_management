@@ -13,7 +13,8 @@
     "test:int": "vitest run int.test",
     "provision": "tsx --env-file-if-exists=.env src/scripts/provisionTenant.ts",
     "migrate": "tsx --env-file-if-exists=.env src/scripts/migrateTenants.ts",
-    "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts"
+    "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts",
+    "audit:chain": "tsx --env-file-if-exists=.env src/scripts/auditChain.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",
@@ -21,6 +22,7 @@
     "@medicore/types": "workspace:*",
     "@medicore/validation": "workspace:*",
     "@node-rs/argon2": "^2.0.2",
+    "bullmq": "^5.49.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.21.0",

@@ -16,6 +16,7 @@
  */
 import { Schema, type Connection, type Model, type Types } from "mongoose";
 import { tenantScopePlugin } from "../../core/db/plugins/tenantScope.js";
+import { auditPlugin } from "../../core/db/plugins/auditPlugin.js";
 
 /** User-account lifecycle — STATE_MACHINE_CATALOG §12. Only `active` may authenticate. */
 export const USER_STATUSES = ["invited", "active", "locked", "disabled", "archived"] as const;
@@ -59,6 +60,24 @@ const userSchema = new Schema<UserDoc>(
 );
 
 userSchema.plugin(tenantScopePlugin);
+
+/**
+ * Every change to a user account is recorded (Doc 09 §9). "Who gave this person
+ * access, and when" is the first question of any breach investigation, and the
+ * answer has to exist before the breach, not be reconstructed after it.
+ *
+ * `lastLoginAt` and `lockedUntil` are ignored here — not because they do not
+ * matter, but because they matter TOO much to be recorded as anonymous field
+ * diffs. `auth` records them as named security events (`auth.login.succeeded`,
+ * `auth.account.locked`) with the surrounding facts an investigator needs. Left
+ * to the plugin, every single login would also produce a content-free
+ * "user.updated" entry, and a trail that is 95% noise is a trail nobody reads.
+ */
+userSchema.plugin(auditPlugin, {
+  resource: "user",
+  category: "admin",
+  ignore: ["lastLoginAt", "lockedUntil"],
+});
 
 export function getUserModel(conn: Connection): Model<UserDoc> {
   return (conn.models.User as Model<UserDoc>) ?? conn.model<UserDoc>("User", userSchema);

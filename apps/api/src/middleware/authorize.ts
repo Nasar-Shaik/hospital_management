@@ -26,6 +26,7 @@ import type { NextFunction, Request, Response } from "express";
 import type { FeatureFlag, PermissionDefinition } from "@medicore/permissions";
 import { getContext } from "../core/context/requestContext.js";
 import { AppError, InsufficientPermissionError } from "../core/errors/appError.js";
+import { tryRecordAudit } from "../core/audit/auditWriter.js";
 import { requireAuth } from "./authenticate.js";
 import { getEffectivePermissions } from "../modules/rbac/index.js";
 import { isFeatureEnabled } from "../modules/entitlements/index.js";
@@ -63,6 +64,24 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
         // ── layer 2: permission ───────────────────────────────────────────
         const held = await getEffectivePermissions(auth.userId);
         if (!held.has(permission.code)) {
+          /**
+           * A denial is audited (Doc 09 §9). One denial is a user clicking the
+           * wrong thing; forty denials from one account in a minute is somebody
+           * mapping the permission surface, and that pattern is invisible unless
+           * the misses are recorded as well as the hits.
+           *
+           * Best-effort: the request is already being refused, and a failing audit
+           * write must not turn a clean 403 into a confusing 500.
+           */
+          await tryRecordAudit({
+            action: "authz.denied",
+            category: "security",
+            resource: "permission",
+            resourceId: permission.code,
+            outcome: "failure",
+            meta: { required: permission.code, path: req.path, method: req.method },
+          });
+
           throw new InsufficientPermissionError({ required: permission.code });
         }
 

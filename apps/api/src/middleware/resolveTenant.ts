@@ -76,6 +76,11 @@ export function resolveTenant() {
             tenantId: tenant.id,
             tenantSlug: tenant.slug,
             connection,
+            // For the audit trail (Doc 09 §9). `req.ip` is the gateway's view of
+            // the client because `trust proxy` is on — which is the honest value:
+            // it is what we can actually attest to, not what the client claims.
+            ...(req.ip ? { ip: req.ip } : {}),
+            ...(req.get("user-agent") ? { userAgent: req.get("user-agent") } : {}),
           },
           next,
         );

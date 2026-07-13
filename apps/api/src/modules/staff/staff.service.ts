@@ -20,6 +20,8 @@
 import { AppError } from "../../core/errors/appError.js";
 import { checkPasswordPolicy, generatePassword } from "../../core/crypto/password.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { publish } from "../../core/events/outbox.js";
+import { EVENTS } from "../../core/events/eventCatalog.js";
 import * as auth from "../auth/index.js";
 import * as rbac from "../rbac/index.js";
 import * as users from "../users/index.js";
@@ -93,6 +95,26 @@ export async function createStaff(input: CreateStaffInput): Promise<CreateStaffR
   const active = await users.transitionStatus(user.id, "active");
   const claims = await rbac.getRoleClaims(user.id);
 
+  /**
+   * The account exists; now tell the rest of the platform.
+   *
+   * Note what is NOT in this payload: the password. The outbox is durable storage
+   * that operators can read, so a credential placed here would outlive the
+   * handover by years. When notifications (A6) sends the welcome mail it will
+   * mint its own single-use invitation link rather than carry a secret through a
+   * queue (EVENT_CATALOG: "payloads carry IDs and minimal display fields").
+   */
+  await publish({
+    name: EVENTS.USER_CREATED,
+    payload: {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      roles: claims.roles,
+      mustChangePassword: !input.password,
+    },
+  });
+
   return {
     user: { ...active, roles: claims.roles, branchIds: claims.branchIds },
     ...(input.password ? {} : { temporaryPassword: password }),
@@ -152,6 +174,14 @@ export async function setStaffStatus(
   if (status === "disabled") {
     await auth.revokeAllSessions(userId);
     await rbac.invalidateUser(userId);
+
+    // Downstream systems (on-call rotas, integration accounts, the future
+    // notification preferences store) hold their own copies of "who works here".
+    // The sessions are already dead — this is how the copies catch up.
+    await publish({
+      name: EVENTS.USER_DISABLED,
+      payload: { userId, sessionsRevoked: true },
+    });
   }
 
   return getStaff(userId);
