@@ -43,6 +43,17 @@ export const cacheKeys = {
    * Written on logout; read by `authenticate`.
    */
   revokedToken: (jti: string) => `revoked:${jti}`,
+  /**
+   * Effective permissions (CACHE_STRATEGY: `perm:{userId}`, TTL = access-token
+   * life). Read on every authorized request; invalidated explicitly by whoever
+   * changes a role or a binding.
+   */
+  userPermissions: (userId: string) => `perm:${userId}`,
+  /**
+   * Entitlement bundle — the tenant's enabled feature flags (CACHE_STRATEGY:
+   * `ff:{tenantId}`, TTL 5 min). Invalidated on a plan or flag change.
+   */
+  tenantFeatures: (tenantId: string) => `ff:${tenantId}`,
 } as const;
 
 /** Read-through cache get. Returns undefined on miss OR on any Redis failure (fail soft). */

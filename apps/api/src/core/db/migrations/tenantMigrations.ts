@@ -165,4 +165,39 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+  {
+    id: "0006-rbac-permissions",
+    description: "Permission catalog + role grants (ADR-0010) — layer 2 of authorization",
+    up: async (db) => {
+      for (const name of ["permissions", "rolePermissions"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      await db
+        .collection("permissions")
+        .createIndex({ tenantId: 1, code: 1 }, { unique: true, background: true });
+
+      // One grant per (role, permission) — the unique index is what makes
+      // re-seeding idempotent instead of duplicating every grant on each deploy.
+      await db
+        .collection("rolePermissions")
+        .createIndex(
+          { tenantId: 1, roleId: 1, permissionId: 1 },
+          { unique: true, background: true },
+        );
+
+      // The hot authorization query: role ids → permission codes.
+      await db
+        .collection("rolePermissions")
+        .createIndex({ tenantId: 1, roleId: 1, permissionCode: 1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["permissions", "rolePermissions"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];

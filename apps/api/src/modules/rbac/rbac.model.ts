@@ -63,6 +63,63 @@ const userRoleSchema = new Schema<UserRoleDoc>(
 );
 userRoleSchema.plugin(tenantScopePlugin);
 
+/* ── permissions (the tenant's copy of the code-defined catalog) ─────────── */
+
+export interface PermissionDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  /** `resource:action` — matches a code in `@medicore/permissions`. Immutable. */
+  code: string;
+  resource: string;
+  action: string;
+  scope: string;
+  description: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const permissionSchema = new Schema<PermissionDoc>(
+  {
+    code: { type: String, required: true },
+    resource: { type: String, required: true },
+    action: { type: String, required: true },
+    scope: { type: String, required: true, default: "tenant" },
+    description: { type: String, required: true },
+  },
+  { timestamps: true, collection: "permissions", autoIndex: false },
+);
+permissionSchema.plugin(tenantScopePlugin);
+
+/* ── rolePermissions (the grant) ─────────────────────────────────────────── */
+
+export interface RolePermissionDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  roleId: string;
+  permissionId: string;
+  /**
+   * Denormalized copy of the permission's code.
+   *
+   * Safe because codes are immutable by rule (see @medicore/permissions), and it
+   * turns the hottest query in the system — "what may this user do?" — from three
+   * round trips into two. Authorization runs on every single request; a join we
+   * can avoid, we avoid.
+   */
+  permissionCode: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const rolePermissionSchema = new Schema<RolePermissionDoc>(
+  {
+    roleId: { type: String, required: true },
+    permissionId: { type: String, required: true },
+    permissionCode: { type: String, required: true },
+  },
+  { timestamps: true, collection: "rolePermissions", autoIndex: false },
+);
+rolePermissionSchema.plugin(tenantScopePlugin);
+
 export function getRoleModel(conn: Connection): Model<RoleDoc> {
   return (conn.models.Role as Model<RoleDoc>) ?? conn.model<RoleDoc>("Role", roleSchema);
 }
@@ -74,19 +131,16 @@ export function getUserRoleModel(conn: Connection): Model<UserRoleDoc> {
   );
 }
 
-/**
- * System roles seeded into every new tenant database (provisioning, Doc 04 §7).
- *
- * Deliberately minimal: TENANT_ADMIN is what a hospital needs to log in and
- * configure itself on day one. The full clinical role set (DOCTOR, NURSE,
- * RECEPTIONIST, PHARMACIST, LAB_TECH, …) is seeded in Phase 1C alongside the
- * permission catalog that gives those roles meaning — seeding named roles with
- * no permissions attached would be a lie in the database.
- */
-export const SYSTEM_ROLES = [
-  {
-    code: "TENANT_ADMIN",
-    name: "Administrator",
-    description: "Full administrative access to this hospital's configuration and users.",
-  },
-] as const;
+export function getPermissionModel(conn: Connection): Model<PermissionDoc> {
+  return (
+    (conn.models.Permission as Model<PermissionDoc>) ??
+    conn.model<PermissionDoc>("Permission", permissionSchema)
+  );
+}
+
+export function getRolePermissionModel(conn: Connection): Model<RolePermissionDoc> {
+  return (
+    (conn.models.RolePermission as Model<RolePermissionDoc>) ??
+    conn.model<RolePermissionDoc>("RolePermission", rolePermissionSchema)
+  );
+}

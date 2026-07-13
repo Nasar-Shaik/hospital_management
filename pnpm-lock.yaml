@@ -80,6 +80,9 @@ importers:
       "@medicore/logger":
         specifier: workspace:*
         version: link:../../packages/logger
+      "@medicore/permissions":
+        specifier: workspace:*
+        version: link:../../packages/permissions
       "@medicore/types":
         specifier: workspace:*
         version: link:../../packages/types

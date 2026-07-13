@@ -1,22 +1,41 @@
 /**
  * RBAC module — PUBLIC INTERFACE (Doc 04 §2.4, Constitution §5).
  *
- * `auth` imports `getRoleClaims` from here to stamp the access token. Nothing
- * imports the repository or the models directly.
+ * `auth` imports `getRoleClaims` to stamp the token; `authorize` imports
+ * `getEffectivePermissions` to decide requests. Nothing imports the repository
+ * or the models directly.
  *
  * Platform module (PLATFORM_STRATEGY §2) — reusable by any product on this
  * platform.
  */
 export {
+  // seeding
+  seedRbac,
   seedSystemRoles,
+  // the hot path
+  getEffectivePermissions,
+  hasPermission,
   getRoleClaims,
+  getUserBranchIds,
+  getAuthorizationProfile,
+  // administration
   assignRoleByCode,
+  revokeRoleByCode,
+  createRole,
+  setRolePermissions,
+  deleteRole,
+  getRolePermissions,
   listRoles,
+  listPermissions,
   getRoleByCode,
-  revokeRole,
+  getRoleById,
+  // cache invalidation (callers that change what a user may do)
+  invalidateUser,
+  invalidateRole,
   type UserRoleClaims,
+  type CreateRoleInput,
+  type SeedResult,
   type Role,
   type RoleBinding,
+  type Permission,
 } from "./rbac.service.js";
-
-export { SYSTEM_ROLES } from "./rbac.model.js";

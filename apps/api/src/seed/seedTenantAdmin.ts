@@ -22,7 +22,7 @@ import type { Connection } from "mongoose";
 import { runWithContext } from "../core/context/requestContext.js";
 import { checkPasswordPolicy } from "../core/crypto/password.js";
 import { setPassword } from "../modules/auth/index.js";
-import { assignRoleByCode, seedSystemRoles } from "../modules/rbac/index.js";
+import { assignRoleByCode, seedRbac } from "../modules/rbac/index.js";
 import { createUser, getByEmail, transitionStatus } from "../modules/users/index.js";
 
 const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I/O — they are misread on paper
@@ -91,7 +91,9 @@ export async function seedTenantAdmin(input: SeedTenantAdminInput): Promise<Seed
       connection: input.connection,
     },
     async () => {
-      await seedSystemRoles();
+      // The permission catalog and the default roles, with their grants (ADR-0010).
+      // Idempotent, so this doubles as the repair path for an existing tenant.
+      await seedRbac();
 
       const existing = await getByEmail(input.email);
       if (existing) {

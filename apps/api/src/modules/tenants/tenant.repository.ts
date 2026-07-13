@@ -17,6 +17,12 @@ export interface TenantRegistryEntry {
   customDomain?: string;
   status: TenantStatus;
   region?: string;
+  /**
+   * The edition this hospital bought (Doc 07). Entitlements resolve their flag
+   * baseline from it (ADR-0010 layer 1), so it rides along on the cached entry
+   * rather than costing a second master lookup on the hot path.
+   */
+  planCode?: string;
 }
 
 function toEntry(doc: TenantDoc): TenantRegistryEntry {
@@ -29,6 +35,7 @@ function toEntry(doc: TenantDoc): TenantRegistryEntry {
     ...(doc.customDomain ? { customDomain: doc.customDomain } : {}),
     status: doc.status,
     ...(doc.region ? { region: doc.region } : {}),
+    ...(doc.subscription?.planCode ? { planCode: doc.subscription.planCode } : {}),
   };
 }
 

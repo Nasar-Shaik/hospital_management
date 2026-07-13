@@ -14,6 +14,7 @@ import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { authRouter } from "./modules/auth/index.js";
+import { rbacRouter } from "./modules/rbac/rbac.routes.js";
 import { env } from "./config/env.js";
 
 export function createApp(logger: Logger): Express {
@@ -48,12 +49,13 @@ export function createApp(logger: Logger): Express {
    *
    * `authenticate` is applied per-route rather than to the whole router, because
    * /auth/login and /auth/refresh must stay reachable without a token. Business
-   * routers (Phase 2) mount as:
-   *     v1Router.use("/patients", authenticate(), authorize(PERMS.…), patientsRouter())
-   * Remaining chain slots: authorize (1C) → idempotency (P2).
+   * routers (Phase 2) mount the same way the RBAC router already does:
+   *     authenticate() → authorize(PERMISSIONS.X, { feature }) → validate() → handler
+   * Remaining chain slot: idempotency (P2, for money-moving POSTs).
    */
   const v1Router = Router();
   v1Router.use("/auth", authRouter());
+  v1Router.use(rbacRouter());
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

@@ -18,11 +18,27 @@ export interface RequestContext {
   tenantSlug: string;
   /** The tenant's dedicated database connection (Connection Manager). */
   connection: Connection;
-  /** Populated by auth in Phase 1B; empty until then. */
+  /** Populated by `authenticate` (ADR-0009). */
   userId?: string;
   branchIds?: string[];
   roles?: string[];
+  /** Populated by `authorize` (ADR-0010) — the caller's effective permissions. */
   permissions?: string[];
+  /**
+   * The row-scope decision for THIS request, published by `authorize` and applied
+   * by repositories via `scopeFilter()`. A middleware sees a route, not a row —
+   * so the last layer of authorization has to be handed down to where the query
+   * is built.
+   */
+  scope?: RequestScope;
+}
+
+export interface RequestScope {
+  /** The permission that admitted this request. */
+  permission: string;
+  level: "own" | "branch" | "tenant" | "global";
+  branchIds: string[];
+  userId: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

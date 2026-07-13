@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",
+    "@medicore/permissions": "workspace:*",
     "@medicore/types": "workspace:*",
     "@medicore/validation": "workspace:*",
     "@node-rs/argon2": "^2.0.2",
