@@ -9,6 +9,7 @@
  * No credential ever leaves this module in plaintext, and nothing here is
  * hand-rolled crypto — that is forbidden (Constitution §11).
  */
+import { randomInt } from "node:crypto";
 import { hash as argonHash, verify as argonVerify } from "@node-rs/argon2";
 import { env } from "../../config/env.js";
 
@@ -76,4 +77,39 @@ export function checkPasswordPolicy(plaintext: string): string[] {
   if (!/\d/.test(plaintext)) failures.push("must contain a digit");
   if (!/[^A-Za-z0-9]/.test(plaintext)) failures.push("must contain a symbol");
   return failures;
+}
+
+// Ambiguous glyphs (I/l/1, O/0) are excluded — these passwords get read aloud,
+// written down, and typed from paper.
+const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const LOWER = "abcdefghijkmnopqrstuvwxyz";
+const DIGITS = "23456789";
+const SYMBOLS = "!@#$%^&*-_=+";
+
+/**
+ * A temporary password for an invited user or an admin reset. It satisfies the
+ * policy BY CONSTRUCTION rather than by retrying until it happens to pass, and
+ * it is generated with a CSPRNG — `Math.random()` here would be a real
+ * vulnerability, not a style problem.
+ */
+export function generatePassword(length = 20): string {
+  const alphabet = UPPER + LOWER + DIGITS + SYMBOLS;
+  const required = [
+    UPPER[randomInt(UPPER.length)],
+    LOWER[randomInt(LOWER.length)],
+    DIGITS[randomInt(DIGITS.length)],
+    SYMBOLS[randomInt(SYMBOLS.length)],
+  ];
+  const rest = Array.from(
+    { length: Math.max(0, length - required.length) },
+    () => alphabet[randomInt(alphabet.length)],
+  );
+
+  // Shuffle, so the guaranteed characters aren't always in the first four slots.
+  const chars = [...required, ...rest];
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j] as string, chars[i] as string];
+  }
+  return chars.join("");
 }

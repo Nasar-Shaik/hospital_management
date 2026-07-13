@@ -89,3 +89,55 @@ export async function recordLogin(userId: string): Promise<void> {
     { lastLoginAt: new Date(), $unset: { lockedUntil: 1 } },
   );
 }
+
+export interface UpdateUserInput {
+  name?: string;
+  phone?: string;
+  employeeId?: string;
+}
+
+export async function update(userId: string, input: UpdateUserInput): Promise<User | undefined> {
+  const doc = await getUserModel(getTenantDb()).findOneAndUpdate({ _id: userId }, input, {
+    new: true,
+  });
+  return doc ? toUser(doc) : undefined;
+}
+
+export interface ListUsersFilter {
+  page: number;
+  limit: number;
+  q?: string;
+  status?: UserStatus;
+}
+
+export interface UserPage {
+  users: User[];
+  total: number;
+}
+
+export async function list(filter: ListUsersFilter): Promise<UserPage> {
+  const model = getUserModel(getTenantDb());
+
+  const query: Record<string, unknown> = {};
+  if (filter.status) query.status = filter.status;
+  if (filter.q) {
+    // Anchored, escaped: an unescaped user string in a regex is both a
+    // correctness bug and a ReDoS vector.
+    const safe = filter.q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    query.$or = [
+      { name: { $regex: safe, $options: "i" } },
+      { email: { $regex: `^${safe}`, $options: "i" } },
+    ];
+  }
+
+  const [docs, total] = await Promise.all([
+    model
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip((filter.page - 1) * filter.limit)
+      .limit(filter.limit),
+    model.countDocuments(query),
+  ]);
+
+  return { users: docs.map(toUser), total };
+}

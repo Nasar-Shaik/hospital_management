@@ -58,3 +58,5 @@ export const getById = repo.findById;
 export const getByEmail = repo.findByEmail;
 export const recordLogin = repo.recordLogin;
 export const setMfaEnabled = repo.setMfaEnabled;
+export const listUsers = repo.list;
+export const updateUser = repo.update;

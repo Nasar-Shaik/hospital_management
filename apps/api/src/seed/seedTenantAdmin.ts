@@ -17,45 +17,11 @@
  * context is exactly right — and it means the tenantScope plugin protects the
  * seed path too.
  */
-import { randomInt } from "node:crypto";
 import type { Connection } from "mongoose";
 import { runWithContext } from "../core/context/requestContext.js";
-import { checkPasswordPolicy } from "../core/crypto/password.js";
-import { setPassword } from "../modules/auth/index.js";
+import { createStaff } from "../modules/staff/index.js";
 import { assignRoleByCode, seedRbac } from "../modules/rbac/index.js";
-import { createUser, getByEmail, transitionStatus } from "../modules/users/index.js";
-
-const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I/O — they are misread on paper
-const LOWER = "abcdefghijkmnopqrstuvwxyz";
-const DIGITS = "23456789";
-const SYMBOLS = "!@#$%^&*-_=+";
-
-/**
- * A password an operator will read aloud once and then discard. It satisfies the
- * policy by construction rather than by retrying until it happens to pass.
- */
-function generatePassword(length = 20): string {
-  const alphabet = UPPER + LOWER + DIGITS + SYMBOLS;
-  const required = [
-    UPPER[randomInt(UPPER.length)],
-    LOWER[randomInt(LOWER.length)],
-    DIGITS[randomInt(DIGITS.length)],
-    SYMBOLS[randomInt(SYMBOLS.length)],
-  ];
-  const rest = Array.from(
-    { length: length - required.length },
-    () => alphabet[randomInt(alphabet.length)],
-  );
-
-  // Fisher–Yates with a CSPRNG, so the guaranteed characters are not always in
-  // the first four positions.
-  const chars = [...required, ...rest];
-  for (let i = chars.length - 1; i > 0; i--) {
-    const j = randomInt(i + 1);
-    [chars[i], chars[j]] = [chars[j] as string, chars[i] as string];
-  }
-  return chars.join("");
-}
+import { getByEmail } from "../modules/users/index.js";
 
 export interface SeedTenantAdminInput {
   tenantId: string;
@@ -101,28 +67,20 @@ export async function seedTenantAdmin(input: SeedTenantAdminInput): Promise<Seed
         return { userId: existing.id, email: existing.email, created: false };
       }
 
-      const password = input.password ?? generatePassword();
-      const failures = checkPasswordPolicy(password);
-      if (failures.length > 0) {
-        throw new Error(`admin password rejected by policy: ${failures.join("; ")}`);
-      }
-
-      const user = await createUser({
+      // Delegated to the staff module: "how a user comes into existence" has ONE
+      // implementation (identity → credential → role binding → activate), and the
+      // day-one admin is not a special case of it.
+      const result = await createStaff({
         email: input.email,
         name: input.name ?? "Administrator",
-        status: "invited",
+        roles: ["TENANT_ADMIN"],
+        ...(input.password ? { password: input.password } : {}),
       });
 
-      // A generated password is a one-time secret: the admin must replace it on
-      // first login. An operator-chosen one is assumed to be already private.
-      await setPassword(user.id, password, { mustChangePassword: !input.password });
-      await assignRoleByCode(user.id, "TENANT_ADMIN");
-      await transitionStatus(user.id, "active");
-
       return {
-        userId: user.id,
-        email: user.email,
-        ...(input.password ? {} : { generatedPassword: password }),
+        userId: result.user.id,
+        email: result.user.email,
+        ...(result.temporaryPassword ? { generatedPassword: result.temporaryPassword } : {}),
         created: true,
       };
     },

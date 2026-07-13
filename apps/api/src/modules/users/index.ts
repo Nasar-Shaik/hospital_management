@@ -14,8 +14,16 @@ export {
   getByEmail,
   recordLogin,
   setMfaEnabled,
+  listUsers,
+  updateUser,
   InvalidUserTransitionError,
 } from "./user.service.js";
 
-export type { User, CreateUserInput } from "./user.repository.js";
+export type {
+  User,
+  CreateUserInput,
+  UpdateUserInput,
+  ListUsersFilter,
+  UserPage,
+} from "./user.repository.js";
 export { USER_STATUSES, type UserStatus } from "./user.model.js";

@@ -15,6 +15,7 @@ import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { authRouter } from "./modules/auth/index.js";
 import { rbacRouter } from "./modules/rbac/rbac.routes.js";
+import { staffRouter } from "./modules/staff/index.js";
 import { env } from "./config/env.js";
 
 export function createApp(logger: Logger): Express {
@@ -56,6 +57,7 @@ export function createApp(logger: Logger): Express {
   const v1Router = Router();
   v1Router.use("/auth", authRouter());
   v1Router.use(rbacRouter());
+  v1Router.use(staffRouter());
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);
