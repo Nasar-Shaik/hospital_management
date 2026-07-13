@@ -38,13 +38,26 @@ function setRefreshCookie(res: Response, refreshToken: string): void {
     httpOnly: true, // unreadable from JavaScript — the point of the cookie
     secure: env.NODE_ENV === "production",
     sameSite: "lax",
-    path: "/api/v1/auth",
+    /**
+     * Path `/`, not `/api/v1/auth`.
+     *
+     * The web app and the API share a hostname (the hostname IS the tenant), and
+     * Next.js middleware must see this cookie to decide "logged in?" before it
+     * renders a protected page. A path-scoped cookie is invisible to it, which
+     * would force the guard to live in client JavaScript after the page has
+     * already been served.
+     *
+     * It costs the cookie being sent on same-host requests it isn't needed for.
+     * It is httpOnly and useless without the tenant + a valid family, so the
+     * trade is a few bytes for a server-side route guard.
+     */
+    path: "/",
     maxAge: env.REFRESH_TOKEN_TTL_DAYS * 86_400_000,
   });
 }
 
 function clearRefreshCookie(res: Response): void {
-  res.clearCookie(REFRESH_COOKIE, { path: "/api/v1/auth" });
+  res.clearCookie(REFRESH_COOKIE, { path: "/" });
 }
 
 /** The refresh token may arrive from the cookie (web) or the body (mobile). */

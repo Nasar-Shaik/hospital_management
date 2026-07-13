@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { AuthProvider } from "../components/AuthProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,13 +9,18 @@ export const metadata: Metadata = {
 };
 
 /**
- * Root layout. Route groups (public)/(portal)/(app) with their own nested
- * layouts land in P1 per Doc 04 §3.2 — Sprint 0 ships only the root shell.
+ * Root layout (Doc 04 §3.2).
+ *
+ * `AuthProvider` wraps everything, /login included: the login page needs the same
+ * session machinery to CREATE a session that the rest of the app uses to CONSUME
+ * one. Splitting them would mean two implementations of the token lifecycle.
  */
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="antialiased">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

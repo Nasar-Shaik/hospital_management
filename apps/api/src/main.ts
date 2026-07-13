@@ -4,7 +4,7 @@
  */
 import { createLogger } from "@medicore/logger";
 import { createApp } from "./app.js";
-import { env } from "./config/env.js";
+import { bindAddress, env } from "./config/env.js";
 import { closeMaster } from "./core/db/masterDb.js";
 import { closeAllTenantConnections } from "./core/db/connectionManager.js";
 import { closeRedis } from "./core/redis/redis.js";
@@ -12,8 +12,12 @@ import { closeRedis } from "./core/redis/redis.js";
 const logger = createLogger({ service: "api", level: env.LOG_LEVEL });
 const app = createApp(logger);
 
-const server = app.listen(env.PORT, () => {
-  logger.info({ port: env.PORT, nodeEnv: env.NODE_ENV }, "api listening");
+// In production this binds to loopback: the API is reachable only through the
+// gateway, so a misconfigured firewall cannot expose Express to the internet.
+const bind = bindAddress();
+
+const server = app.listen(env.PORT, bind, () => {
+  logger.info({ port: env.PORT, bind, nodeEnv: env.NODE_ENV }, "api listening");
 });
 
 let shuttingDown = false;

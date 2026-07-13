@@ -68,6 +68,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      # Inside a container, 127.0.0.1 is reachable only from the container itself,
+      # so the production default would make the API unreachable. Docker's network
+      # provides the isolation here instead of the bind address.
+      API_BIND: 0.0.0.0
       MONGO_URI: mongodb://mongo:27017/?directConnection=true
       REDIS_URL: redis://redis:6379
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001

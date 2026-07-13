@@ -43,7 +43,7 @@ import { signAccessToken, signMfaChallengeToken, verifyToken } from "../../core/
 import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import * as users from "../users/index.js";
 import type { User } from "../users/index.js";
-import { getRoleClaims } from "../rbac/index.js";
+import { getEffectivePermissions, getRoleClaims } from "../rbac/index.js";
 import * as repo from "./auth.repository.js";
 import type { Session } from "./auth.repository.js";
 
@@ -72,6 +72,17 @@ export interface AuthenticatedUser {
   branchIds: string[];
   mfaEnabled: boolean;
   mustChangePassword: boolean;
+  /**
+   * Effective permissions, returned by `/auth/me` only.
+   *
+   * For the UI to hide what the user cannot do — never as an authorization
+   * decision. The server re-checks every request independently, so a user who
+   * edits this array in their browser gets a visible menu item and a 403 behind
+   * it (Constitution §3.6). Deliberately absent from the login response, and
+   * from the token, so that revoking a permission takes effect at once rather
+   * than when the token expires.
+   */
+  permissions?: string[];
 }
 
 export interface TokenPair {
@@ -564,6 +575,7 @@ export async function getCurrentUser(userId: string): Promise<AuthenticatedUser>
 
   const claims = await getRoleClaims(userId);
   const credential = await repo.findCredential(userId);
+  const permissions = await getEffectivePermissions(userId);
 
   return {
     id: user.id,
@@ -573,6 +585,7 @@ export async function getCurrentUser(userId: string): Promise<AuthenticatedUser>
     branchIds: claims.branchIds,
     mfaEnabled: user.mfaEnabled,
     mustChangePassword: credential?.mustChangePassword ?? false,
+    permissions: [...permissions],
   };
 }
 

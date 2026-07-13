@@ -10,6 +10,21 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info"),
 
   /**
+   * Which network interface to listen on.
+   *
+   * Defaults to `127.0.0.1` in production: the API is meant to sit BEHIND the
+   * gateway (Nginx/Traefik), so it should be unreachable from the network even
+   * if a firewall rule is wrong or a security group is too generous. Binding to
+   * 0.0.0.0 in production is how an internal service ends up on the public
+   * internet by accident.
+   *
+   * Containers must override it — inside Docker, `127.0.0.1` is reachable only
+   * from within the container itself, so compose sets `API_BIND=0.0.0.0` and
+   * Docker's own networking provides the isolation instead.
+   */
+  API_BIND: z.string().optional(),
+
+  /**
    * Shared MongoDB cluster URI. The master DB and all co-located tenant DBs are
    * databases ON this cluster (selected via `useDb`). A tenant promoted to a
    * dedicated server overrides it with its own `dbUri` in the registry
@@ -83,4 +98,13 @@ export const env = loadEnv();
 /** Tenant DB name from slug — the single place this convention is encoded. */
 export function tenantDatabaseName(slug: string): string {
   return `${env.TENANT_DB_PREFIX}${slug}`;
+}
+
+/**
+ * The interface to listen on. Production defaults to loopback (gateway-only);
+ * everything else to all interfaces, because dev and containers need reachability.
+ */
+export function bindAddress(): string {
+  if (env.API_BIND) return env.API_BIND;
+  return env.NODE_ENV === "production" ? "127.0.0.1" : "0.0.0.0";
 }

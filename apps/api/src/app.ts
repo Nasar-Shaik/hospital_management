@@ -28,7 +28,43 @@ export function createApp(logger: Logger): Express {
   app.use(helmet());
   app.use(
     cors({
-      origin: env.CORS_ORIGINS.split(",").map((o) => o.trim()),
+      /**
+       * Tenant-aware CORS.
+       *
+       * In PRODUCTION the web app and the API share a hostname (the gateway routes
+       * `/api/*`), so requests are same-origin and CORS barely applies — only the
+       * explicitly listed origins are honoured.
+       *
+       * In DEVELOPMENT they differ by PORT, which makes them different origins, so
+       * the browser demands CORS. And the origin is per-hospital by nature
+       * (`apollo.localhost:3000`, `demo.localhost:3000`), so a fixed allowlist
+       * cannot work — a new tenant would be locked out of its own login page. We
+       * therefore reflect any origin under the tenant base domain.
+       *
+       * This is a dev-only relaxation, gated on NODE_ENV, and it grants nothing:
+       * every request still has to pass tenant resolution, authentication and
+       * authorization. CORS decides who may *ask*, never who may *have*.
+       */
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true); // curl, server-to-server, same-origin
+
+        const allowlist = env.CORS_ORIGINS.split(",").map((o) => o.trim());
+        if (allowlist.includes(origin)) return callback(null, true);
+
+        if (env.NODE_ENV !== "production") {
+          try {
+            const { hostname } = new URL(origin);
+            const base = env.TENANT_BASE_DOMAIN;
+            if (hostname === base || hostname.endsWith(`.${base}`)) {
+              return callback(null, true);
+            }
+          } catch {
+            /* malformed Origin — fall through to refusal */
+          }
+        }
+
+        return callback(null, false);
+      },
       credentials: true,
     }),
   );
