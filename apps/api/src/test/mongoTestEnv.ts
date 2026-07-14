@@ -13,10 +13,12 @@
 import mongoose from "mongoose";
 
 /**
- * Local dev uses the docker compose mongo on 27018 (infra/docker/docker-compose.yml).
- * `directConnection=true` is mandatory: the dev replica set advertises its member as
- * `localhost:27017`, so topology discovery would otherwise redirect us to whatever
- * else listens on host port 27017 (PROJECT_MEMORY §8).
+ * Local dev uses the docker compose mongo on 27018 (infra/docker/docker-compose.yml),
+ * which listens on 27018 INSIDE the container too and advertises `localhost:27018` —
+ * so replica-set discovery resolves back to the same server and can no longer redirect
+ * this harness to an unrelated Mongo on port 27017. `directConnection=true` is kept as
+ * the second lock: it skips discovery entirely. That matters here more than anywhere
+ * else in the codebase, because this harness calls `dropDatabase()` (PROJECT_MEMORY §8).
  */
 export const TEST_MONGO_URI =
   process.env.MONGO_TEST_URI ?? "mongodb://127.0.0.1:27018/?directConnection=true";

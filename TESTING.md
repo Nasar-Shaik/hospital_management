@@ -18,18 +18,20 @@ Run both, in that order, in two terminals.
 
 ## 1. Ports
 
-| What                    | Port    | URL                                               | Started by        |
-| ----------------------- | ------- | ------------------------------------------------- | ----------------- |
-| **API (Express)**       | `4000`  | http://localhost:4000/health                      | `pnpm dev`        |
-| Workers (BullMQ)        | `4100`  | http://localhost:4100/health                      | `pnpm dev`        |
-| Web (Next.js)           | `3000`  | http://localhost:3000                             | `pnpm dev`        |
-| Admin console (Next.js) | `3001`  | http://localhost:3001                             | `pnpm dev`        |
-| MongoDB                 | `27018` | `mongodb://127.0.0.1:27018`                       | `pnpm docker:dev` |
-| Redis                   | `6380`  | `redis://127.0.0.1:6380`                          | `pnpm docker:dev` |
-| Mailhog (fake inbox)    | `8025`  | http://localhost:8025                             | `pnpm docker:dev` |
-| MinIO console (S3)      | `9001`  | http://localhost:9001 (`minioadmin`/`minioadmin`) | `pnpm docker:dev` |
+| What                    | Port    | URL                                                | Started by        |
+| ----------------------- | ------- | -------------------------------------------------- | ----------------- |
+| **API (Express)**       | `4000`  | http://localhost:4000/health                       | `pnpm dev`        |
+| Workers (BullMQ)        | `4100`  | http://localhost:4100/health                       | `pnpm dev`        |
+| Web (Next.js)           | `3000`  | http://localhost:3000                              | `pnpm dev`        |
+| Admin console (Next.js) | `3001`  | http://localhost:3001                              | `pnpm dev`        |
+| MongoDB                 | `27018` | `mongodb://127.0.0.1:27018/?directConnection=true` | `pnpm docker:dev` |
+| Redis                   | `6380`  | `redis://127.0.0.1:6380`                           | `pnpm docker:dev` |
+| Mailhog (fake inbox)    | `8025`  | http://localhost:8025                              | `pnpm docker:dev` |
+| MinIO console (S3)      | `9001`  | http://localhost:9001 (`minioadmin`/`minioadmin`)  | `pnpm docker:dev` |
 
-**Mongo is on 27018 and Redis on 6380, not their defaults.** Another project on this machine (the School ERP containers) already binds 27017/6379. Do not "fix" these back — the container-internal ports are standard; only the host mapping differs.
+**Mongo is on 27018 and Redis on 6380, not their defaults.** Another project on this machine (the School ERP containers) already binds 27017/6379. Do not "fix" these back.
+
+**Mongo is 27018 on _both_ sides of the container — that one is load-bearing, not cosmetic.** A replica-set client follows the address the server advertises rather than the one you typed. If mongod listened on 27017 internally it would have to advertise `localhost:27017`, which from the host is the _School ERP's_ Mongo — and since both replica sets are named `rs0`, the driver would have followed it there believing it had found our primary. Publishing `27018:27018` makes the advertised address true from inside and outside, so discovery resolves back to us. Changing the internal port re-opens that hole.
 
 ### If a port is still taken
 
@@ -39,6 +41,8 @@ Override it — never edit the compose file, because 27018/6380 are also baked i
 MONGO_PORT=27019 REDIS_PORT=6381 pnpm docker:dev
 # then point apps/api/.env at the same ports
 ```
+
+Overriding `MONGO_PORT` breaks the both-sides-equal property above: the host would publish 27019 while the replica set still advertises 27018, so topology discovery points at a port that has nothing on it. Every URI in this repo carries `directConnection=true`, which skips discovery, so this is survivable — but a bare URI in Compass will fail until you also map the container's 27018 to the same number.
 
 ### The port trap that nearly cost us a database
 

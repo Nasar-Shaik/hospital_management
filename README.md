@@ -120,10 +120,39 @@ Fully containerized run (builds all four app images):
 docker compose -f infra/docker/docker-compose.yml --profile apps up --build
 ```
 
+## Inspecting the database (MongoDB Compass)
+
+```
+mongodb://localhost:27018/?directConnection=true
+```
+
+Paste that into Compass and connect. No username, no password — the dev container runs open, and the integration harness _refuses to run_ against a server that has auth (that check is what tells local Mongo apart from a real one).
+
+**Why the port is 27018 on both sides — and why that is a safety property, not a preference**
+
+Mongo runs as a single-node replica set, because transactions and change streams do not exist without one. A replica-set client does not keep talking to the server you named: it asks that server _who the members are_, throws your address away, and reconnects to the address the server reports. So the address in the RS config must be true **for the client**, and the client is usually on your Mac — outside the container.
+
+That is where a second project's Mongo becomes reachable. If mongod listened on 27017 inside the container, the only honest thing it could call itself is `localhost:27017` — true in there, but on your Mac that address is _whatever else you happen to be running_. The driver would follow it straight out of our container and into the other project. Docker isolation is not violated: both servers publish a port to your Mac on purpose, and the client simply walks from one to the other. Worse, replica sets are named `rs0` by default on both sides, so the driver cannot tell it has crossed projects — it thinks it found its own primary.
+
+So mongod listens on **27018 inside the container too**, published `27018:27018`, and advertises `localhost:27018`. One address that is true from both sides. Discovery now resolves to the same server you typed, and a client that forgets `directConnection=true` still lands here. Keep the flag anyway — it skips discovery altogether, and it is what makes the URI correct from _inside_ another container (where `localhost` means that container).
+
+This is the same problem Kafka solves with `advertised.listeners`: a containerized server must announce an address that means the same thing to the outside.
+
+**What you'll see once connected**
+
+| Database                    | Contents                                                                                                                                                                                      |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `paperlesstech_master`      | The control plane: `tenants` (the hospital registry), `plans`, `platformUsers` (operators), `platformAuditLogs`. No patient ever appears here.                                                |
+| `hms_demo`, `hms_apollo`, … | **One database per hospital** (ADR-0005). Its own `users`, `roles`, `auditLogs`, `outboxEvents`. Isolation is the database boundary, not a `WHERE tenant_id =` clause a developer can forget. |
+
+Open `hms_demo` and `hms_other` side by side — that visible separation _is_ the tenancy model.
+
 ## Rules that CI enforces
 
 Conventional commits (commitlint) · Prettier + ESLint (strict TS, no `any`, no `console`) · typecheck · unit tests · **tenant-isolation + authentication integration suites** (real Mongo + Redis services) · dependency-cruiser boundaries (acyclic graph; modules only via `index.ts`; frontends never import backend; packages never import apps).
 
 ## What the codebase deliberately does NOT contain yet
 
-RBAC enforcement (Phase 1C — roles exist and ride in the token, but the `authorize` middleware and permission catalog do not), forgot/reset-password (needs the notification channel from A6 — a reset flow that cannot deliver a reset is worse than none), SSO and passkeys (Enterprise edition), and all business modules (P2+). Do not add them without following the module spec (Doc 02) and updating [00-PROGRESS-TRACKER.md](./AI_Workflow/PlanofActionforHMS/00-PROGRESS-TRACKER.md).
+Notifications (A6), file storage (A7) and white-labelling (A8) — and therefore forgot/reset-password, which A6 blocks on purpose: a reset flow that cannot deliver a reset is worse than none. SSO and passkeys (Enterprise edition). Operator impersonation and tenant export/terminate. And **every clinical module (P2+) — the platform can be sold and run, but it cannot yet treat a patient.**
+
+Do not add them without following the module spec (Doc 02) and updating [00-PROGRESS-TRACKER.md](./AI_Workflow/PlanofActionforHMS/00-PROGRESS-TRACKER.md).

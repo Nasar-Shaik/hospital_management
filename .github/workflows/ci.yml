@@ -18,18 +18,9 @@ jobs:
     timeout-minutes: 20
 
     services:
-      # Real MongoDB for the tenant-isolation suite. `mongodb-replica-set` style
-      # single-node RS gives us transactions; the isolation tests connect with
-      # directConnection=true so no topology discovery is involved.
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+      # NOTE: MongoDB is deliberately NOT a `services:` container — see the
+      # "Start MongoDB" step below. GitHub cannot pass a command to a service, and
+      # mongod needs `--replSet` to support transactions at all.
 
       # Real Redis for the auth suite's access-token blocklist. Without it the
       # blocklist assertions would pass vacuously — cache helpers fail soft, so a
@@ -46,6 +37,38 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # MongoDB must be a single-node REPLICA SET, not a standalone: transactions
+      # and change streams do not exist without one. A `services:` container cannot
+      # take a command, so a standalone is all it could ever give us — and a
+      # standalone fails only at the moment a service first opens a transaction,
+      # which is a confusing way to discover this months later.
+      - name: Start MongoDB (single-node replica set)
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7 \
+            mongod --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'db.adminCommand({ping:1})' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec mongo mongosh --quiet --eval \
+            "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+          # Wait for the primary to be elected — an RS that has not finished electing
+          # rejects writes, and the first test would fail for a reason that has
+          # nothing to do with the test.
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break
+            sleep 1
+          done
+          # Prove it before any suite runs: if transactions are unavailable, fail
+          # HERE with a clear message rather than inside an unrelated assertion.
+          docker exec mongo mongosh --quiet --eval '
+            const s = db.getMongo().startSession();
+            s.startTransaction();
+            s.getDatabase("ci_probe").c.insertOne({ok: 1});
+            s.commitTransaction();
+            print("transactions: OK");
+          '
 
       - uses: pnpm/action-setup@v4
         with:
