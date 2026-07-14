@@ -18,7 +18,7 @@
     "boundaries": "depcruise apps packages --config .dependency-cruiser.cjs",
     "docker:dev": "docker compose -f infra/docker/docker-compose.yml up -d",
     "docker:dev:down": "docker compose -f infra/docker/docker-compose.yml down",
-    "clean": "rm -rf apps/*/.next apps/*/dist packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
+    "clean": "rm -rf apps/*/.next apps/*/.next-dev apps/*/dist packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
     "prepare": "husky",
     "verify": "node scripts/verify.mjs"
   },

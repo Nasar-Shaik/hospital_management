@@ -22,3 +22,7 @@ coverage/
 # OS / editor
 .DS_Store
 .idea/
+
+# Dev-server build output (separate from .next so a production build cannot
+# clobber a running dev server — see apps/*/next.config.ts).
+.next-dev/
