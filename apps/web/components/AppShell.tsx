@@ -55,7 +55,7 @@ const NAVIGATION: NavSection[] = [
     title: "Clinical",
     items: [
       { label: "Patients", href: "/patients", permission: "patient:read" },
-      { label: "Appointments", href: "/appointments", permission: "appointment:read", soon: true },
+      { label: "Appointments", href: "/appointments", permission: "appointment:read" },
       { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },
     ],
   },

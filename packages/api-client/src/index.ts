@@ -234,6 +234,52 @@ export interface RegisterPatientResult {
   possibleDuplicates: DuplicateCandidate[];
 }
 
+/* ── appointments (Doc 02 E1) ── */
+
+export type AppointmentStatus =
+  | "requested"
+  | "confirmed"
+  | "checked_in"
+  | "in_consultation"
+  | "completed"
+  | "cancelled"
+  | "no_show"
+  | "rescheduled";
+
+export interface Appointment {
+  id: string;
+  patientId: string;
+  doctorId: string;
+  branchId?: string;
+  startAt: string;
+  endAt: string;
+  status: AppointmentStatus;
+  reason?: string;
+  /** Assigned at CHECK-IN, in arrival order — not at booking. */
+  tokenNumber?: number;
+  /** Set on the retired appointment when it was rescheduled. */
+  rescheduledTo?: string;
+  createdAt: string;
+}
+
+/** A bookable slot. Computed per day from the doctor's weekly template — never stored. */
+export interface Slot {
+  startAt: string;
+  endAt: string;
+}
+
+export interface DoctorSchedule {
+  id: string;
+  doctorId: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekday: number;
+  /** Minutes from local midnight. 540 = 09:00. */
+  startMinute: number;
+  endMinute: number;
+  slotMinutes: number;
+  active: boolean;
+}
+
 export interface OperatorSession {
   accessToken: string;
   expiresIn: number;
@@ -496,6 +542,99 @@ export class ApiClient {
     reason: string;
   }): Promise<{ survivor: Patient; merged: Patient }> {
     return this.request("POST", "/api/v1/patients/merge", input);
+  }
+
+  /* ── appointments (Doc 02 E1) ── */
+
+  /**
+   * The slots still open for a doctor on a day.
+   *
+   * NOT a reservation. A slot returned here can be gone a second later, which is
+   * exactly why `bookAppointment` does not trust it — the server lets a unique
+   * index arbitrate and answers `HMS-APT-001` with alternatives if you lose.
+   */
+  getAvailability(doctorId: string, date: Date): Promise<Slot[]> {
+    const query = new URLSearchParams({ doctorId, date: date.toISOString() });
+    return this.request<Slot[]>("GET", `/api/v1/appointments/availability?${query.toString()}`);
+  }
+
+  listAppointments(
+    params: {
+      page?: number;
+      limit?: number;
+      doctorId?: string;
+      patientId?: string;
+      status?: AppointmentStatus;
+      from?: Date;
+      to?: Date;
+    } = {},
+  ): Promise<Paged<Appointment>> {
+    const query = new URLSearchParams();
+    if (params.page) query.set("page", String(params.page));
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.doctorId) query.set("doctorId", params.doctorId);
+    if (params.patientId) query.set("patientId", params.patientId);
+    if (params.status) query.set("status", params.status);
+    if (params.from) query.set("from", params.from.toISOString());
+    if (params.to) query.set("to", params.to.toISOString());
+    const qs = query.toString();
+    return this.paged<Appointment>(`/api/v1/appointments${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Throws `ApiClientError` with `code === "HMS-APT-001"` when the slot went first. */
+  bookAppointment(input: {
+    patientId: string;
+    doctorId: string;
+    startAt: Date;
+    reason?: string;
+  }): Promise<Appointment> {
+    return this.request<Appointment>("POST", "/api/v1/appointments", {
+      ...input,
+      startAt: input.startAt.toISOString(),
+    });
+  }
+
+  /* Lifecycle — STATE_MACHINE_CATALOG §1. The server refuses any edge not listed there. */
+
+  confirmAppointment(id: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/confirm`, {});
+  }
+
+  checkInAppointment(id: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/check-in`, {});
+  }
+
+  startConsultation(id: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/start`, {});
+  }
+
+  completeAppointment(id: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/complete`, {});
+  }
+
+  markNoShow(id: string, reason?: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/no-show`, { reason });
+  }
+
+  /** A reason is required — "cancelled" with no why is useless to everyone downstream. */
+  cancelAppointment(id: string, reason: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/cancel`, { reason });
+  }
+
+  /* ── doctor schedules (Doc 02 D2) ── */
+
+  getDoctorSchedule(doctorId: string): Promise<DoctorSchedule[]> {
+    return this.request<DoctorSchedule[]>("GET", `/api/v1/doctors/${doctorId}/schedule`);
+  }
+
+  setDoctorSchedule(input: {
+    doctorId: string;
+    weekday: number;
+    startMinute: number;
+    endMinute: number;
+    slotMinutes: number;
+  }): Promise<DoctorSchedule> {
+    return this.request<DoctorSchedule>("PUT", "/api/v1/doctors/schedule", input);
   }
 
   /* ── rbac ── */
