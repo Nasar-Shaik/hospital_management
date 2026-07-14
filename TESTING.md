@@ -363,6 +363,19 @@ pnpm --filter @medicore/api test:int                     # 46 integration tests
 
 ---
 
+### `Cannot find module './963.js'` — or any Webpack chunk that does not exist
+
+The Next.js build cache is corrupt. It is not your code, and reloading will not fix it.
+
+```bash
+pnpm clean     # removes .next, dist and turbo caches
+pnpm dev       # start again
+```
+
+**What causes it:** `pnpm build` (the production build) and `pnpm dev` (the dev server) both write to `apps/web/.next`. Run the build while the dev server is up and the production build replaces the chunks the dev server has open — it then asks for a file that no longer exists. Harmless, and `pnpm clean` always fixes it.
+
+**So: don't run `pnpm build` while `pnpm dev` is running.** If you do, just clean and restart.
+
 ## 10. When something goes wrong
 
 | Symptom                                          | Cause and fix                                                                                                        |
