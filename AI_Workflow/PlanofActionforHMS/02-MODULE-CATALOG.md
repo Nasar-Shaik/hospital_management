@@ -563,17 +563,51 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 
 # DOMAIN E — Appointments & Scheduling
 
-## E1. Appointment Management
+## E0. Encounter & Patient Journey — **THE ENTRY POINT** (ADR-0013)
 
-**Purpose:** Full scheduling lifecycle — calendar, online booking, walk-ins, queue, tokens, reminders, reschedule/cancel, waiting list.
-**Pages:** Calendar (day/week/month/resource), Book Appointment, Online Booking Manager, Walk-in Intake, **Queue Board**, Token Display, Waiting List, Reminders Config, Reschedule/Cancel, Appointment Status.
-**Collections:** `appointments`, `appointmentSlots`, `queues`, `tokens`, `waitingList`, `appointmentReminders`.
-**REST APIs:** `CRUD /appointments`, `POST /appointments/:id/checkin|reschedule|cancel|noshow`, `GET /appointments/calendar`, `CRUD /queues`, `POST /tokens/next`, `CRUD /waiting-list`.
-**Permissions:** `appointment:create|read|update|cancel`, `queue:manage`.
-**Dependencies:** C1, D2 (doctor schedules), Notifications.
+**Purpose:** The central clinical object. Every patient contact — booked, walk-in, emergency, referral, camp, telemedicine — becomes an **Encounter**, and every note, order, result and charge hangs on exactly one. This module, **not E1**, is where a patient journey begins.
+
+**Why it is not part of E1:** only ONE of our six target organization types (the private hospital) is appointment-first. A government hospital, a small clinic and a diagnostic centre are walk-in-first. Modelling the walk-in as an "exception" to the appointment — which the blueprint previously did — makes the majority journey a special case of the minority one, and forces a hospital that never books anything to enable an appointment book just to see a patient.
+
+**Pages:** Registration/Intake (walk-in), Arrival & Check-in, **Queue Board**, Token Display, Encounter Timeline, Episode View (OP history + admission in one story), Transfer/Refer.
+**Collections:** `encounters`, `episodesOfCare`. (`workItems` lives in E2.)
+**REST APIs:** `POST /encounters` (walk-in/emergency), `POST /appointments/:id/checkin` → creates the encounter, `POST /encounters/:id/transition`, `GET /encounters/:id/timeline`, `GET /episodes/:id`.
+**Permissions:** `encounter:create|read|update|close`, `encounter:transfer`.
+**Dependencies:** C1 (patients). **E1 is an OPTIONAL origin, not a dependency.**
+**Feature flag:** `module.ops.opd` — **independent of `module.ops.appointments`**, so OPD can be bought without the appointment book.
+**Policy:** `encounterPolicy` (entry, tokenIssuedAt, routing, billingMode, pharmacy) — seeded from the tenant's `organizationType` preset. **`if (organizationType === "government")` is forbidden in code (ADR-0013 §6).**
+**Mobile:** doctor app (my waiting patients), staff (intake/queue), patient app (my visit status).
+
+## E2. Work Queue Engine — **PLATFORM MODULE** (ADR-0014)
+
+**Purpose:** One queue engine consumed by every department — doctor, lab, radiology, pharmacy, billing, admission, insurance — with different queue types, priorities, permissions and routing rules.
+
+**It is a PROJECTION, never a source of truth.** `workItems` is a read model built by outbox consumers from `order.placed` / `encounter.started`, idempotent on `(sourceType, sourceId)` and rebuildable from the domain at any time. An authoritative queue table would be a dual write to two systems that cannot commit together — the exact failure the outbox exists to prevent, reintroduced where a dropped write means a blood test nobody performs.
+
+**Rule P1 (PLATFORM_STRATEGY):** zero clinical vocabulary. It routes _work items_ to _targets_ by _priority_. School ERP inherits it for admission approvals and fee escalations, unchanged.
+
+**Collections:** `workItems`, `queueDefinitions`, `routingRules`.
+**REST APIs:** `GET /queues/:type`, `POST /work-items/:id/claim|release|complete`, `POST /queues/rebuild` (operator).
+**Permissions:** `queue:read|claim|manage`, scoped per queue type.
+**Dependencies:** the outbox (A5b). Consumed by D1, E0, F1, lab, radiology, pharmacy.
+
+## E1. Appointment Management — an encounter ORIGIN, not an entry point
+
+**Purpose:** Scheduling — calendar, online booking, reminders, reschedule/cancel, waiting list. **An appointment is a promise of a future Encounter (ADR-0013).** `checked_in` keeps the promise: it creates the Encounter and hands the patient to E0.
+
+**Queue, tokens and walk-in intake MOVED OUT of this module** to E0/E2. A token is a queue concern, not a scheduling concern — a walk-in has a token and no appointment, and in a government hospital that is the normal case.
+
+**Pages:** Calendar (day/week/month/resource), Book Appointment, Online Booking Manager, Reminders Config, Reschedule/Cancel, Appointment Status.
+**Collections:** `appointments`, `appointmentSlots`, `waitingList`, `appointmentReminders`.
+**REST APIs:** `CRUD /appointments`, `POST /appointments/:id/checkin|reschedule|cancel|noshow`, `GET /appointments/calendar`, `CRUD /waiting-list`.
+**Permissions:** `appointment:create|read|update|cancel`.
+**Dependencies:** C1, E0 (check-in creates the encounter), D2 (doctor schedules), Notifications.
+**Feature flag:** `module.ops.appointments` — a hospital may run OPD (E0) without it.
 **Reports:** Bookings, no-show %, wait time, utilization, channel mix.
-**Mobile:** Patient app (book/manage), doctor app (schedule), staff (queue).
+**Mobile:** Patient app (book/manage), doctor app (schedule).
 **Future:** AI slot optimization + no-show prediction (Phase 8), overbooking rules, group/recurring appts.
+
+**Implemented (2026-07-14):** the double-booking unique partial index and the appointment state machine are live and **survive this change untouched** — only `tokenNumber` moves to the Encounter.
 
 ---
 

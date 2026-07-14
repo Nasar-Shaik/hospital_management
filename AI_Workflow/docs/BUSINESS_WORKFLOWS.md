@@ -14,19 +14,48 @@ End-to-end business processes, written so an AI agent can implement or verify a 
 4. Event `patient.patient.registered` → welcome message.
    **Exceptions:** duplicate detected post-facto → Duplicate Merge flow (`patient.patients.merged`); emergency unknown patient → temp UHID, reconcile later.
 
-## 2. Appointment Booking → Consultation
+## 2. The OP Encounter — ONE flow, every organization type (ADR-0013)
 
-**Trigger:** patient app / reception / walk-in.
+**This section previously described "Appointment Booking → Consultation" and listed the walk-in as an _exception_.** That was backwards. Only ONE of our six target organization types (the private hospital) is appointment-first; the government hospital, the small clinic and the diagnostic centre are walk-in-first. **The Encounter is the flow. The appointment is one way of starting it.**
 
-1. Select doctor+slot (availability from `doctorSchedules`+`appointmentSlots`) → `appointment: requested→confirmed` → `appointment.appointment.booked` → confirmation + reminder jobs.
-2. Arrival: check-in → token issued → queue position (realtime queue board).
-3. Doctor: opens Consultation Workspace → SOAP note, diagnoses (ICD), orders, prescription (sign → `clinical.prescription.signed`).
-4. Close consultation → `appointment: completed` → follow-up scheduled if prescribed → OP bill assembled from posted charges.
-   **Exceptions:** no-show (auto after grace → waiting-list promotion); walk-in without appointment (queue-only token); teleconsult variant (video room instead of check-in; e-prescription delivery).
+**Trigger:** any encounter origin — `appointment | walk_in | emergency | referral | camp | telemedicine | corporate`.
 
-## 3. IP Admission
+1. **Arrival.** The patient is identified (existing UHID) or registered (§1 → new UHID). An **Encounter opens** (`arrived`) → `encounter.encounter.started`.
+   - Origin `walk_in` (clinic, government): the encounter is created **directly**. There is no appointment and none is fabricated.
+   - Origin `appointment`: `checked_in` on the appointment **creates** the encounter. The promise is kept.
+2. **Token & queue.** A token is issued against the **Encounter** (not the appointment) and a doctor work item appears on the queue board. When it is issued is policy — `encounterPolicy.tokenIssuedAt`: at registration (government, clinic) or at check-in (private).
+3. **Routing.** To a named doctor (private, clinic) or to a **department / OP room** (government) — `encounterPolicy.routing`. The doctor logs in and simply **sees their waiting patients**; nobody hands them a list.
+4. **Consultation.** `in_progress` → SOAP note, diagnoses (ICD), **orders**, prescription (sign → `clinical.prescription.signed`).
+5. **Investigations.** Each order → `order.order.placed` → **the work item appears in the lab/radiology queue automatically.** No paper, no hand-off. The encounter moves to `awaiting_results` — **the patient keeps the SAME encounter while they go to the lab.**
+6. **Reports return.** Technician performs → pathologist/radiologist **verifies** → `released` → `order.result.released` → the report is available to the ordering doctor and the encounter becomes actionable again.
+   > **Step 6 is why `awaiting_results` exists.** Without it, hospitals re-register the returning patient and fragment one visit into two — the commonest data-quality disaster in an OPD. It double-counts the census and splits the bill.
+7. **Decision.** Prescribe · refer · **admit** (→ §3) · schedule follow-up.
+8. **Close.** `encounter: closed` → `encounter.encounter.closed` → OP bill assembled from posted charges.
+   - `billingMode: prepaid` (private) — payment gates the consultation.
+   - `billingMode: postpaid` (clinic) — pay on the way out.
+   - `billingMode: zero_tariff` (government) — **charges are still posted, at ₹0.** Billing is never skipped: a government hospital must still report drug consumption, per-patient cost and NHM utilisation, and that data cannot be reconstructed later. A zero-rupee invoice is a record; a missing invoice is a hole (ADR-0013 §6).
 
-**Trigger:** admission order from OPD/ED consultation, or planned admission.
+**Exceptions:** no-show (auto after grace → waiting-list promotion); `left_without_being_seen` (queued, never called); teleconsult variant (video room instead of physical arrival).
+
+### The three canonical journeys are ONE graph plus five policy switches
+
+No workflow engine, no per-tenant graph, no branching on `organizationType` (ADR-0013 §5–6).
+
+| Policy          | Private hospital | Small clinic | Government hospital  |
+| --------------- | ---------------- | ------------ | -------------------- |
+| `entry`         | appointment      | walk-in      | walk-in              |
+| `tokenIssuedAt` | check-in         | registration | registration         |
+| `routing`       | named doctor     | the doctor   | department / OP room |
+| `billingMode`   | prepaid          | postpaid     | zero_tariff          |
+| `pharmacy`      | in-house         | external     | in-house             |
+
+## 3. IP Admission — a LINKED encounter, not a continuation (ADR-0013 §4)
+
+**Trigger:** an **admission order** from the OP/ED encounter, or a planned admission.
+
+**The OP encounter CLOSES (`admitted`) and an INPATIENT encounter OPENS in the SAME Episode of Care.** The admission therefore inherits the whole story — the OP consultation notes, every investigation, every report, every prescription — because they all hang on encounters that belong to that episode. The doctor sees one unbroken timeline; the system keeps two billable, countable encounters.
+
+> Extending the OP encounter through the admission was rejected: OP and IP tariffs differ, bed charges accrue per day, and census/ALOS/NABH all count encounters. Two encounters can always be joined into a timeline; one encounter can never be split back apart once notes and charges have accumulated. **Continuity is a read concern; separation is a billing and statutory concern.**
 
 1. Staff: select ward/class → bed picked from Bed Board (`bed: available→reserved`).
 2. Capture admitting doctor, diagnosis, expected stay; collect advance (per tariff class policy).

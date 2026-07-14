@@ -19,15 +19,22 @@ Format: **Term** — definition. _(Use, not: forbidden synonyms)_ `code identifi
 
 ## Encounters & Care Settings
 
-- **Visit** — one patient–provider interaction episode; typed `OP | IP | ER | TELE | HOME`. The umbrella unit clinical activity hangs on. _(not: encounter — FHIR mapping note: a Visit maps to FHIR `Encounter`)_ `visit`
+- **Encounter** — one contact between a patient and the hospital, from arrival to departure; classed `OP | IP | ER | TELE | HOME`. **The central clinical object** — every note, order, result and charge hangs on exactly one Encounter (ADR-0013). _(not: visit, case, OPD ticket)_ `encounter`
+
+  > **`Visit` is RETIRED (ADR-0013, 2026-07-14).** This glossary previously defined `Visit` and forbade `encounter`. That is reversed. We use the FHIR R4 name because ABDM/NHCX — which we are already committed to — **is** FHIR R4, so the name makes integration a mapping instead of a translation. "Visit" is also ambiguous in Indian usage (it usually means one OP consultation), which is precisely the narrower thing that must not be confused with the episode. Do not reintroduce `visit` as an identifier.
+
+- **Encounter origin** — how the encounter came to exist: `appointment | walk_in | emergency | referral | camp | telemedicine | corporate | transfer`. An **Appointment is a promise of a future Encounter, never the Encounter itself** — the Encounter begins on arrival. `origin`
+- **Episode of Care** — the container that links related Encounters into one care story (the OP consultation, the investigations, and the admission that followed). **An admission does NOT extend the OP encounter — it opens a new one in the same Episode** (ADR-0013 §4). `episodeOfCare`
+- **Order** — a request for work to be done for a patient during an Encounter: `lab | radiology | pharmacy | procedure | referral | admission | diet`. Maps to FHIR `ServiceRequest`. **The spine that makes information follow the patient** — an order placed by a doctor appears in the destination department's queue. Orders belong to an Encounter, never to a note. _(not: request, requisition)_ `order`
+- **Result** — what came back from an Order, once verified by the pathologist/radiologist and released to the ordering doctor. Maps to FHIR `DiagnosticReport`. _(not: report — reserved for analytics)_ `result`
 - **OPD / OP** — Outpatient Department / outpatient context: care without admission. `op`
 - **IPD / IP** — Inpatient Department / inpatient context: care under admission. `ip`
-- **Admission** — the act+record of taking a patient inpatient (bed, admitting doctor, deposit) until **Discharge**. _(not: hospitalization)_ `admission`
+- **Admission** — the act+record of taking a patient inpatient (bed, admitting doctor, deposit) until **Discharge**. Opens an **inpatient Encounter** linked to the same Episode of Care as the OP encounter that preceded it. _(not: hospitalization)_ `admission`
 - **Discharge** — formal end of an admission, producing a **Discharge Summary**. `discharge`
 - **LAMA** — Left Against Medical Advice: a discharge disposition. `lama`
 - **Triage** — ED severity classification (ESI/CTAS level) performed before treatment. `triage`
-- **Appointment** — a scheduled future visit slot with a doctor/resource. _(not: booking — except public "online booking" flows)_ `appointment`
-- **Token** — the queue sequence number issued for a same-day consultation. `token`
+- **Appointment** — a scheduled future slot with a doctor/resource: a **promise of an Encounter**, and one of several encounter origins — not an entry point (ADR-0013). _(not: booking — except public "online booking" flows)_ `appointment`
+- **Token** — the queue sequence number a patient is called by. Issued against the **Encounter**, not the Appointment (ADR-0013/0014) — a walk-in has a token and no appointment, and that is the normal case in a government hospital or a clinic. `token`
 - **Referral** — directing a patient to another doctor/department/facility. `referral`
 - **Transfer** — moving an admitted patient between beds/wards/branches. `transfer`
 - **Teleconsultation** — remote video/voice consultation. _(not: telemedicine session)_ `teleconsult`
