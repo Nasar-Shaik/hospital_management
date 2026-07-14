@@ -78,22 +78,73 @@ export const seedSystemRoles = async (): Promise<Role[]> => (await seedRbac()).r
 /* ── the hot path: effective permissions ─────────────────────────────────── */
 
 /**
- * Every permission code this user holds. Read-through cached.
+ * Everything authorization needs about a user, in ONE cached bundle:
+ * which permissions they hold, and which branches they may see.
  *
- * Called on every authorized request, so the cached path is one Redis GET.
+ * ── WHY PERMISSIONS ARE NOT IN THE TOKEN ─────────────────────────────────────
+ * Putting 144 permission codes in the JWT is the obvious optimization — no Redis
+ * read, no database read, authorization becomes free. It is also the reason so
+ * many systems cannot revoke access: a permission baked into a token is true
+ * until that token expires. Fire someone, and the system knows they are revoked
+ * and lets them in anyway for the next fifteen minutes.
+ *
+ * So the token says who you ARE (`sub`, `tid`) and authorization is re-derived
+ * from the DATABASE on every request, through this cache. Revoke a role and the
+ * writing service method drops this key; the very next request — with the same,
+ * still-valid token — reads the new answer. Verified: an AUDITOR whose role is
+ * revoked gets HMS-AUTH-005 immediately, with no re-login and no token refresh.
+ *
+ * The cache lives in Redis, which every pod shares, so an invalidation is
+ * platform-wide the instant it happens — not per-pod, not eventually.
+ *
+ * ── WHY `branchIds` IS IN HERE AND NOT READ FROM THE TOKEN ───────────────────
+ * It used to come from the token's claims, which made ROW scope stale in exactly
+ * the situation where it matters most: a nurse moved off a ward, or restricted
+ * during an investigation, would keep seeing the old ward's patients until her
+ * token expired. Permissions were live and scope was not — the weaker half
+ * silently decided the outcome. They are now one bundle, invalidated together,
+ * because a partial answer to "what may this person see" is not an answer.
+ *
+ * ── COST ─────────────────────────────────────────────────────────────────────
+ * One Redis GET on the hot path. That is the price of being able to say "access
+ * revoked" and mean it, and it is a bargain.
  */
-export async function getEffectivePermissions(userId: string): Promise<Set<string>> {
+export interface AuthorizationBundle {
+  permissions: string[];
+  branchIds: string[];
+}
+
+async function getAuthorizationBundle(userId: string): Promise<AuthorizationBundle> {
   const key = cacheKeys.userPermissions(userId);
 
-  const cached = await cacheGet<string[]>(key);
-  if (cached) return new Set(cached);
+  const cached = await cacheGet<AuthorizationBundle>(key);
+  if (cached) return cached;
 
-  const codes = await repo.findPermissionCodesForUser(userId);
+  const [permissions, claims] = await Promise.all([
+    repo.findPermissionCodesForUser(userId),
+    getRoleClaims(userId),
+  ]);
 
-  // TTL matches the access token's life: a permission change invalidates
-  // explicitly, and this bounds the damage if an invalidation is ever missed.
-  await cacheSet(key, codes, env.ACCESS_TOKEN_TTL_SECONDS);
-  return new Set(codes);
+  const bundle: AuthorizationBundle = { permissions, branchIds: claims.branchIds };
+
+  // TTL matches the access token's life: a change invalidates explicitly, and
+  // this bounds the damage if an invalidation is ever missed. Permissions fail
+  // CLOSED — a Redis miss costs a database read and yields the same answer.
+  await cacheSet(key, bundle, env.ACCESS_TOKEN_TTL_SECONDS);
+  return bundle;
+}
+
+/** Every permission code this user holds, live. */
+export async function getEffectivePermissions(userId: string): Promise<Set<string>> {
+  return new Set((await getAuthorizationBundle(userId)).permissions);
+}
+
+/**
+ * The branches this user may see, live — NOT from their token.
+ * `authorize` uses this to build the row-scope filter (ADR-0010 layer 3).
+ */
+export async function getEffectiveBranchIds(userId: string): Promise<string[]> {
+  return (await getAuthorizationBundle(userId)).branchIds;
 }
 
 export async function hasPermission(userId: string, code: string): Promise<boolean> {

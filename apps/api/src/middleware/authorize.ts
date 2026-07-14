@@ -28,7 +28,7 @@ import { getContext } from "../core/context/requestContext.js";
 import { AppError, InsufficientPermissionError } from "../core/errors/appError.js";
 import { tryRecordAudit } from "../core/audit/auditWriter.js";
 import { requireAuth } from "./authenticate.js";
-import { getEffectivePermissions } from "../modules/rbac/index.js";
+import { getEffectivePermissions, getEffectiveBranchIds } from "../modules/rbac/index.js";
 import { isFeatureEnabled } from "../modules/entitlements/index.js";
 
 export interface AuthorizeOptions {
@@ -86,11 +86,21 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
         }
 
         // ── layer 3: publish the scope; repositories enforce it ───────────
+        //
+        // `branchIds` comes from the LIVE authorization bundle, not from the
+        // token. Reading it from the token made row scope stale in precisely the
+        // case that matters: a nurse moved off a ward, or restricted during an
+        // investigation, kept seeing the old ward's patients until her token
+        // expired. Permissions were live and scope was not — and the weaker half
+        // silently decided what she could see.
+        const branchIds = await getEffectiveBranchIds(auth.userId);
+
         ctx.permissions = [...held];
+        ctx.branchIds = branchIds;
         ctx.scope = {
           permission: permission.code,
           level: permission.scope ?? "tenant",
-          branchIds: auth.branchIds,
+          branchIds,
           userId: auth.userId,
         };
 
