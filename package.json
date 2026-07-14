@@ -20,7 +20,7 @@
     "docker:dev:down": "docker compose -f infra/docker/docker-compose.yml down",
     "clean": "rm -rf apps/*/.next apps/*/dist packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
     "prepare": "husky",
-    "doctor": "node scripts/doctor.mjs"
+    "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.0",

@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 /**
- * `pnpm doctor` — is the local stack actually working?
+ * `pnpm verify` — is the local stack actually working?
+ *
+ * ⚠️  THE NAME IS LOAD-BEARING. Do not rename this to `doctor`, `audit`, `check`,
+ *     `status` or any other pnpm BUILT-IN command. pnpm resolves built-ins BEFORE
+ *     package scripts, so `pnpm doctor` silently runs *pnpm's* doctor and your
+ *     script never executes — it prints an unrelated warning and exits 0, which
+ *     looks exactly like a script that ran and found nothing.
+ *
+ *     This has now bitten us twice: once as `pnpm audit` (shadowed the audit-chain
+ *     CLI) and once as `pnpm doctor`. Before naming a script, run `pnpm <name>` in
+ *     a repo that does NOT define it: `Command "<name>" not found` means the name
+ *     is safe; anything else means pnpm owns it.
  *
  * WHY THIS EXISTS
  * ---------------
