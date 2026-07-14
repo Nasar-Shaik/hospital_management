@@ -16,6 +16,7 @@ import { Suspense, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiClientError, isMfaChallenge } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { apiTarget } from "../../lib/api";
 import { Alert, Button, Card, Field } from "../../components/ui";
 
 function LoginForm() {
@@ -34,9 +35,24 @@ function LoginForm() {
 
   const destination = params.get("next") ?? "/dashboard";
 
+  /**
+   * A NON-ApiClientError means the request never got an answer: DNS, the wrong
+   * host, a dead API. "Check your connection" is useless advice for the most
+   * common cause by far, which is that the address itself is wrong — and the
+   * hostname IS the hospital here, so a wrong address is not a typo, it is a
+   * request aimed at another machine entirely.
+   *
+   * `apiTarget()` reports where the browser actually TRIED to go. That single
+   * fact turns a mystery into a diagnosis, and it is the difference between
+   * "the app is broken" and "I am on the wrong URL". (It cost us a support
+   * round-trip to learn this; the answer belongs on the screen, not in a doc.)
+   */
   function describe(err: unknown): string {
     if (!(err instanceof ApiClientError)) {
-      return "Could not reach the server. Check your connection and try again.";
+      const target = apiTarget();
+      return target
+        ? `Could not reach the hospital's server at ${target}. If you are running this locally, check the web address — it must be a hospital hostname such as demo.localhost:3000.`
+        : "Could not reach the server. Check your connection and try again.";
     }
     switch (err.code) {
       case "HMS-AUTH-001":

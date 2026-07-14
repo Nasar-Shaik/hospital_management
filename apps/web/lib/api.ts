@@ -27,6 +27,21 @@ export function currentHost(): string {
   return window.location.hostname;
 }
 
+/**
+ * Where the browser actually tried to reach the API — for ERROR MESSAGES only.
+ *
+ * When a request dies at the network layer the user gets no status code and no
+ * error body, only a thrown fetch. Telling them "check your connection" when the
+ * real cause is that they typed a hostname belonging to a different machine is
+ * advice that sends them looking in the wrong place. Showing the target they hit
+ * makes the mistake self-evident.
+ *
+ * Empty in production (same origin), where there is no confusion to resolve.
+ */
+export function apiTarget(): string {
+  return apiBaseUrl();
+}
+
 export function browserApi(getAccessToken?: () => string | undefined): ApiClient {
   return createApiClient({
     baseUrl: apiBaseUrl(),
