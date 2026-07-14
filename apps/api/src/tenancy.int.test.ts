@@ -16,7 +16,12 @@ import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mong
 // Point the app's config at the test cluster BEFORE any module reads env.
 process.env.MONGO_URI = TEST_MONGO_URI;
 process.env.MONGO_MASTER_DB = "test_paperlesstech_master";
-process.env.TENANT_BASE_DOMAIN = "paperlesstech.in";
+// `.test` is RESERVED by RFC 6761 and can never resolve on the public internet.
+// The suite previously used the real production domain — which has wildcard DNS
+// pointing at the live server, so any code path that ever performed a lookup
+// would have reached out to production from a test run. A test must not be able
+// to touch a system it is not testing, even by accident.
+process.env.TENANT_BASE_DOMAIN = "medicore.test";
 delete process.env.REDIS_URL; // exercise the DB path, not the cache, in isolation tests
 
 const { getTenantConnection, closeAllTenantConnections, openConnectionCount } =
@@ -197,15 +202,15 @@ describe("TENANT ISOLATION — the property the whole platform rests on", () => 
 
 describe("host → tenant resolution (Doc 04 §2.2.1)", () => {
   it("parses hosts and extracts slugs", () => {
-    expect(normalizeHost("Apollo.PaperlessTech.in:3000")).toBe("apollo.paperlesstech.in");
-    expect(slugFromHost("apollo.paperlesstech.in")).toBe("apollo");
-    expect(slugFromHost("www.paperlesstech.in")).toBeUndefined();
-    expect(slugFromHost("paperlesstech.in")).toBeUndefined();
+    expect(normalizeHost("Apollo.MediCore.test:3000")).toBe("apollo.medicore.test");
+    expect(slugFromHost("apollo.medicore.test")).toBe("apollo");
+    expect(slugFromHost("www.medicore.test")).toBeUndefined();
+    expect(slugFromHost("medicore.test")).toBeUndefined();
     expect(slugFromHost("hms.apollohospital.com")).toBeUndefined(); // custom domain path
   });
 
   it("resolves a tenant by subdomain", async () => {
-    const tenant = await resolveTenantFromHost(`${SLUG_A}.paperlesstech.in`);
+    const tenant = await resolveTenantFromHost(`${SLUG_A}.medicore.test`);
     expect(tenant?.id).toBe(tenantA.id);
   });
 
@@ -215,7 +220,7 @@ describe("host → tenant resolution (Doc 04 §2.2.1)", () => {
   });
 
   it("does not resolve an unknown host", async () => {
-    expect(await resolveTenantFromHost("nobody.paperlesstech.in")).toBeUndefined();
+    expect(await resolveTenantFromHost("nobody.medicore.test")).toBeUndefined();
     expect(await resolveTenantFromHost("evil.example.com")).toBeUndefined();
   });
 });

@@ -14,6 +14,7 @@
  *        --admin-email admin@apollo.com
  */
 import { createLogger } from "@medicore/logger";
+import { env } from "../config/env.js";
 import { provisionTenant } from "../modules/tenants/index.js";
 import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
@@ -91,13 +92,33 @@ async function main(): Promise<void> {
     process.stdout.write(
       "\n" +
         "  ┌─ First-login credentials (shown once — not recoverable) ─┐\n" +
-        `     URL       https://${slug}.${process.env.TENANT_BASE_DOMAIN ?? "paperlesstech.in"}\n` +
+        `     URL       ${signInUrl(slug)}\n` +
         `     Email     ${admin.email}\n` +
         `     Password  ${admin.generatedPassword}\n` +
         "     The administrator must change this at first login.\n" +
         "  └───────────────────────────────────────────────────────────┘\n\n",
     );
   }
+}
+
+/**
+ * The address this hospital is actually reachable at — printed, so the operator
+ * never has to guess or assemble it.
+ *
+ * It is derived from `TENANT_BASE_DOMAIN` (which defaults to `localhost`), NOT
+ * from a hardcoded production domain: a CLI that prints
+ * `https://demo.paperlesstech.in` on a developer's laptop is telling them to
+ * browse the live server. Locally that means `http` and the web port; in
+ * production it means `https` on the gateway, with no port at all.
+ */
+function signInUrl(slug: string): string {
+  const domain = env.TENANT_BASE_DOMAIN;
+  const local = domain === "localhost" || domain.endsWith(".localhost");
+  if (!local) return `https://${slug}.${domain}`;
+
+  // The port the BROWSER uses (the web app), not the API's — this is a link for a human.
+  const webPort = process.env.WEB_PORT ?? "3000";
+  return `http://${slug}.${domain}:${webPort}`;
 }
 
 main()

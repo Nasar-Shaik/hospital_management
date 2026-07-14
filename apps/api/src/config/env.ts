@@ -3,6 +3,36 @@
  * Doc 09 §13: process.env access ONLY in this module).
  */
 import { z } from "@medicore/validation";
+import { activeProfile, applyProductionInvariants, PROFILE_DEFAULTS } from "./profiles.js";
+
+/**
+ * A boolean from an environment variable. Never use `z.coerce.boolean()` for this.
+ *
+ * Environment variables are always STRINGS, and `Boolean("false")` is `true` —
+ * every non-empty string is truthy. `z.coerce.boolean()` therefore reads
+ * `PASSWORD_REQUIRE_COMPLEXITY=false` as **true**, silently doing the exact
+ * opposite of what the config file says. It cost us a bewildered ten minutes
+ * here; in production it would be a security control that reports itself as ON
+ * while being OFF, or vice versa.
+ *
+ * Accepts the spellings people actually write, and REJECTS anything else rather
+ * than guessing — a typo'd flag must fail at boot, not resolve to a coin flip.
+ */
+const envBool = (defaultValue: boolean) =>
+  z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      if (value === undefined || value === "") return defaultValue;
+      const normalized = value.trim().toLowerCase();
+      if (["true", "1", "yes", "on"].includes(normalized)) return true;
+      if (["false", "0", "no", "off"].includes(normalized)) return false;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `must be true/false (got "${value}")`,
+      });
+      return z.NEVER;
+    });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -37,8 +67,23 @@ const envSchema = z.object({
   MONGO_MASTER_DB: z.string().default("paperlesstech_master"),
   /** Tenant database naming: `hms_<slug>` (Doc 03 §1.1). */
   TENANT_DB_PREFIX: z.string().default("hms_"),
-  /** Subdomain tenancy: `<slug>.paperlesstech.in` (Doc 04 §2.2.1). */
-  TENANT_BASE_DOMAIN: z.string().default("paperlesstech.in"),
+  /**
+   * Subdomain tenancy: `<slug>.<TENANT_BASE_DOMAIN>` (Doc 04 §2.2.1).
+   *
+   * **Defaults to `localhost`, and that default is a safety property, not a
+   * convenience.** An unconfigured process must behave like a local one.
+   *
+   * The previous default was the real production domain, which meant a developer
+   * who forgot a `.env` got a system quietly configured for production: CORS
+   * would reflect `*.paperlesstech.in` origins, provisioning would print
+   * production URLs, and — because `*.paperlesstech.in` has wildcard DNS pointing
+   * at the live server — a browser following those instructions leaves the
+   * machine entirely. A default should fail safe, and "safe" here means "local".
+   *
+   * Production sets this explicitly. Naming your own domain is one line of
+   * config; discovering that dev was silently aimed at production is an incident.
+   */
+  TENANT_BASE_DOMAIN: z.string().default("localhost"),
 
   REDIS_URL: z.string().url().optional(),
   /** Registry cache TTL in seconds — CACHE_STRATEGY: `tenant:{slug}` 5 min. */
@@ -71,8 +116,19 @@ const envSchema = z.object({
    */
   API_ENCRYPTION_KEY: z.string().min(32, "API_ENCRYPTION_KEY must be a 32-byte base64/hex key"),
 
-  /** Password policy (Doc 09 §20; NABH/HIPAA account-security controls). */
-  PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).default(12),
+  /**
+   * Password policy (Doc 09 §20; NABH/HIPAA account-security controls).
+   *
+   * The DEFAULTS are the production policy: 12 characters with mixed case, a
+   * digit and a symbol. Local development may relax both (see the two guards in
+   * `loadEnv`) so a developer can type `123456` all day — a strong password on a
+   * throwaway laptop database buys nothing and costs a hundred keystrokes an hour.
+   *
+   * The floor of 4 exists only so dev can go low; production cannot use it.
+   */
+  PASSWORD_MIN_LENGTH: z.coerce.number().int().min(4).default(12),
+  /** Mixed case + digit + symbol. Forced ON in production, whatever the config says. */
+  PASSWORD_REQUIRE_COMPLEXITY: envBool(true),
   PASSWORD_HISTORY_SIZE: z.coerce.number().int().default(5),
   /** Brute-force lockout. */
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().default(5),
@@ -89,7 +145,7 @@ const envSchema = z.object({
    * production). An API with the relay off still *records* events — they queue up
    * durably in the outbox and drain when a relay comes back.
    */
-  OUTBOX_RELAY_ENABLED: z.coerce.boolean().default(true),
+  OUTBOX_RELAY_ENABLED: envBool(true),
   OUTBOX_POLL_MS: z.coerce.number().int().min(200).default(2_000),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
   /** After this many failed dispatches an event moves to `failed` — the DLQ. */
@@ -98,14 +154,69 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+/**
+ * Resolves the effective configuration. Precedence, lowest to highest:
+ *
+ *   1. schema default (this file)   2. profile default (profiles.ts)
+ *   3. environment variable          4. production invariant (profiles.ts)
+ *
+ * Step 4 runs LAST and cannot be overridden — see `applyProductionInvariants`.
+ */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = envSchema.safeParse(source);
+  const profile = activeProfile(source.NODE_ENV ?? "development");
+
+  // Profile defaults fill only what the environment did NOT set: a deployment
+  // always outranks a default, and an empty string counts as "set" (that is how
+  // `API_BIND=""` asks for a dual-stack bind).
+  const merged: Record<string, string | undefined> = { ...source };
+  for (const [key, value] of Object.entries(PROFILE_DEFAULTS[profile])) {
+    if (merged[key] === undefined) merged[key] = value;
+  }
+
+  const parsed = envSchema.safeParse(merged);
   if (!parsed.success) {
     // Boot-time failure must be loud and precise (fail fast).
     console.error("Invalid environment configuration:", parsed.error.flatten().fieldErrors);
     process.exit(1);
   }
-  return parsed.data;
+
+  const config: Record<string, unknown> = parsed.data;
+
+  if (profile === "production") {
+    for (const violation of applyProductionInvariants(config)) {
+      // Not a warning. A production deployment that tried to weaken a security
+      // property is a defect in someone's pipeline, and it must be impossible to
+      // scroll past.
+      console.error(
+        `[SECURITY] ${violation.key}=${violation.attempted} is not permitted in production — ` +
+          `using ${violation.enforced} instead (${violation.why}). Fix the configuration.`,
+      );
+    }
+  }
+
+  return config as Env;
+}
+
+/**
+ * A human-readable summary of what this process actually decided — logged at
+ * boot. Never prints a secret; a key's PRESENCE is reported, never its value.
+ *
+ * This exists because every config bug we have hit was invisible: the process
+ * looked healthy and was quietly pointed at the wrong thing. One line at startup
+ * that says "profile=local, hosts=*.localhost, bind=dual-stack" turns an hour of
+ * confused debugging into a glance.
+ */
+export function describeConfig(): Record<string, string> {
+  return {
+    profile: activeProfile(env.NODE_ENV),
+    nodeEnv: env.NODE_ENV,
+    hospitalHosts: `*.${env.TENANT_BASE_DOMAIN}`,
+    apiBind: env.API_BIND ? env.API_BIND : ":: (dual-stack)",
+    passwordPolicy: env.PASSWORD_REQUIRE_COMPLEXITY
+      ? `${String(env.PASSWORD_MIN_LENGTH)}+ chars, mixed case + digit + symbol`
+      : `${String(env.PASSWORD_MIN_LENGTH)}+ chars, NO complexity (development only)`,
+    outboxRelay: env.OUTBOX_RELAY_ENABLED ? "on" : "off",
+  };
 }
 
 export const env = loadEnv();
@@ -116,10 +227,24 @@ export function tenantDatabaseName(slug: string): string {
 }
 
 /**
- * The interface to listen on. Production defaults to loopback (gateway-only);
- * everything else to all interfaces, because dev and containers need reachability.
+ * The interface to listen on.
+ *
+ * `undefined` means "let Node choose", which on a dual-stack host means `::` —
+ * IPv6 **and** IPv4-mapped addresses. That is the correct default for local dev,
+ * and getting it wrong is not theoretical:
+ *
+ *   `demo.localhost` resolves to `::1` BEFORE `127.0.0.1` on macOS. Binding
+ *   `0.0.0.0` listens on IPv4 only, so the browser's request to `[::1]:4000` was
+ *   refused while `curl` silently fell back to IPv4 and reported success. The API
+ *   looked perfectly healthy from the terminal and was unreachable from the
+ *   browser — the worst kind of bug, because every tool you would reach for to
+ *   diagnose it says everything is fine.
+ *
+ * Production still defaults to loopback: the API is reachable only through the
+ * gateway, so a misconfigured firewall cannot expose Express to the internet.
+ * Containers set `API_BIND=0.0.0.0` explicitly (container networks are IPv4).
  */
-export function bindAddress(): string {
+export function bindAddress(): string | undefined {
   if (env.API_BIND) return env.API_BIND;
-  return env.NODE_ENV === "production" ? "127.0.0.1" : "0.0.0.0";
+  return env.NODE_ENV === "production" ? "127.0.0.1" : undefined;
 }

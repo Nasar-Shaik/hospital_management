@@ -68,7 +68,7 @@ Then open **http://demo.localhost:3000** and sign in with the demo hospital's ad
 | -------- | -------------------------- |
 | URL      | http://demo.localhost:3000 |
 | Email    | `admin@demo.test`          |
-| Password | `Demo!Passw0rd#2026`       |
+| Password | `123456`                   |
 
 (If that hospital doesn't exist yet, create it — see §4.)
 
@@ -77,6 +77,35 @@ You can then: add a colleague under **Staff** and give them a role, see the role
 Then open **Activity trail**. Everything you just did is already in it — who, what, when, from which IP. Nothing you can do in the UI will remove an entry, because no code path exists that edits or deletes one.
 
 **Never browse `demo.paperlesstech.in` locally.** That domain has wildcard DNS pointing at the real production server — you would be logging in to production, not your laptop. Locally it is always `.localhost`.
+
+---
+
+## 1c. Why `123456` works locally (and cannot in production)
+
+Local dev runs a deliberately weak password policy — 6 characters, no complexity — because typing a 12-character passphrase fifty times a day to test a login screen buys nothing on a throwaway laptop database. It is set in `apps/api/.env`:
+
+```bash
+PASSWORD_MIN_LENGTH=6
+PASSWORD_REQUIRE_COMPLEXITY=false
+```
+
+**You cannot ship this.** When `NODE_ENV=production` the API _ignores_ both settings, restores the real policy (12 chars, mixed case, digit, symbol), and logs a `[SECURITY]` error naming the mistake. Try it:
+
+```
+[SECURITY] PASSWORD_MIN_LENGTH=6 is not permitted in production — using 12 instead
+           (a hospital's records may not be protected by a PIN). Fix the configuration.
+```
+
+That guard is _why_ the local convenience is allowed to exist. A security property that depends on nobody making a configuration mistake is not a security property.
+
+Everything that differs between local and production lives in **one file**: `apps/api/src/config/profiles.ts`. Secrets never go there (git history is forever) — those stay environment variables.
+
+The API prints its effective configuration at boot, so you can always see what it actually decided:
+
+```
+api listening  profile=local  hospitalHosts=*.localhost  apiBind=:: (dual-stack)
+               passwordPolicy=6+ chars, NO complexity (development only)
+```
 
 ---
 
@@ -158,7 +187,7 @@ API=http://localhost:4000/api/v1
 
 # ── login ────────────────────────────────────────────────────────────────
 LOGIN=$(curl -s -X POST $API/auth/login -H "$H" -H 'Content-Type: application/json' \
-        -d '{"email":"admin@demo.test","password":"Demo!Passw0rd#2026"}')
+        -d '{"email":"admin@demo.test","password":"123456"}')
 echo "$LOGIN"
 
 ACCESS=$(echo "$LOGIN"  | python3 -c "import sys,json;print(json.load(sys.stdin)['data']['accessToken'])")
@@ -193,7 +222,7 @@ curl -s -X POST $API/auth/login -H "$H" -H 'Content-Type: application/json' \
 # An unknown hospital is rejected before credentials are even looked at.
 curl -s -X POST $API/auth/login -H 'Host: nosuch.paperlesstech.in' \
      -H 'Content-Type: application/json' \
-     -d '{"email":"admin@demo.test","password":"Demo!Passw0rd#2026"}'   # → HMS-TEN-001
+     -d '{"email":"admin@demo.test","password":"123456"}'   # → HMS-TEN-001
 
 # REFRESH TOKEN THEFT. Rotate once, then replay the old token — the whole
 # session family is destroyed, for the thief AND the real user.

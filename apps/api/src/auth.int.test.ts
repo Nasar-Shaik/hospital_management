@@ -26,7 +26,7 @@ import { assertRedisReachable, flushTestCache, TEST_REDIS_URL } from "./test/red
 process.env.MONGO_URI = TEST_MONGO_URI;
 process.env.REDIS_URL = TEST_REDIS_URL;
 process.env.MONGO_MASTER_DB = "test_auth_master";
-process.env.TENANT_BASE_DOMAIN = "paperlesstech.in";
+process.env.TENANT_BASE_DOMAIN = "medicore.test";
 process.env.LOGIN_MAX_ATTEMPTS = "5";
 
 const { createApp } = await import("./app.js");
@@ -45,8 +45,8 @@ const SLUG_A = "test-auth-apollo";
 const SLUG_B = "test-auth-sunshine";
 const DB_A = `hms_${SLUG_A}`;
 const DB_B = `hms_${SLUG_B}`;
-const HOST_A = `${SLUG_A}.paperlesstech.in`;
-const HOST_B = `${SLUG_B}.paperlesstech.in`;
+const HOST_A = `${SLUG_A}.medicore.test`;
+const HOST_B = `${SLUG_B}.medicore.test`;
 
 const ADMIN_EMAIL = "admin@apollo.test";
 const ADMIN_PASSWORD = "Str0ng!Admin#Pass1";
@@ -163,7 +163,7 @@ describe("login", () => {
   });
 
   it("rejects an unknown host before it ever looks at the credentials", async () => {
-    const res = await loginAs("ghost.paperlesstech.in", ADMIN_EMAIL, ADMIN_PASSWORD);
+    const res = await loginAs("ghost.medicore.test", ADMIN_EMAIL, ADMIN_PASSWORD);
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe("HMS-TEN-001");
   });
@@ -420,13 +420,39 @@ describe("password policy and change", () => {
     expect(res.body.error.code).toBe("HMS-AUTH-001");
   });
 
-  it("enforces the policy on the new password", async () => {
+  /**
+   * The policy is enforced at TWO layers, and both are load-bearing:
+   *
+   *   the SCHEMA  rejects a password that is too short (a boundary rule, cheap,
+   *               and it never reaches the service)
+   *   the SERVICE rejects one that is long enough but too simple — complexity and
+   *               history are business rules the schema cannot express
+   *
+   * Both are asserted, because a change that accidentally moved length-checking
+   * out of the schema, or complexity out of the service, would leave the other
+   * test passing and the hole open.
+   */
+  it("rejects a password below the minimum length at the validation boundary", async () => {
     const login = await loginAs(HOST_A, email, GOOD_PASSWORD);
     const res = await request(app)
       .post("/api/v1/auth/change-password")
       .set("Host", HOST_A)
       .set("Authorization", `Bearer ${login.body.data.accessToken}`)
-      .send({ currentPassword: GOOD_PASSWORD, newPassword: "password123" });
+      .send({ currentPassword: GOOD_PASSWORD, newPassword: "Ab1!x" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+    expect(res.body.error.details.fields.newPassword).toBeTruthy();
+  });
+
+  it("rejects a long-but-simple password in the service policy", async () => {
+    const login = await loginAs(HOST_A, email, GOOD_PASSWORD);
+    const res = await request(app)
+      .post("/api/v1/auth/change-password")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${login.body.data.accessToken}`)
+      // Long enough to clear the schema; no uppercase, no digit, no symbol.
+      .send({ currentPassword: GOOD_PASSWORD, newPassword: "passwordpassword" });
 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("HMS-VAL-001");

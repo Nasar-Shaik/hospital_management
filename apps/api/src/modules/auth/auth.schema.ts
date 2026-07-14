@@ -8,6 +8,7 @@
  * client uses yet.
  */
 import { z } from "@medicore/validation";
+import { env } from "../../config/env.js";
 
 export const loginSchema = z
   .object({
@@ -36,7 +37,20 @@ export const logoutSchema = z
 export const changePasswordSchema = z
   .object({
     currentPassword: z.string().min(1).max(512),
-    newPassword: z.string().min(8).max(512),
+    /**
+     * The bound comes from the POLICY, not from a literal.
+     *
+     * This was `min(8)` — a second, silent definition of "how long is a password"
+     * that disagreed with `checkPasswordPolicy` the moment the configured minimum
+     * moved. The schema would reject at 8 while the policy demanded 12, or reject
+     * at 8 while the policy allowed 6, and the caller would get a validation error
+     * that contradicted the rule the service was actually enforcing.
+     *
+     * One policy, one source. The service still re-checks (schemas bound length;
+     * only the policy knows about history and complexity), but they can no longer
+     * disagree about the number.
+     */
+    newPassword: z.string().min(env.PASSWORD_MIN_LENGTH).max(512),
   })
   .strict();
 

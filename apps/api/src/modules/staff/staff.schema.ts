@@ -2,6 +2,7 @@
  * User DTOs (Doc 09 §5/§6). `.strict()` — an unexpected field is a 400.
  */
 import { z } from "@medicore/validation";
+import { env } from "../../config/env.js";
 
 export const createUserSchema = z
   .object({
@@ -53,7 +54,7 @@ export const setUserStatusSchema = z
 export const resetPasswordSchema = z
   .object({
     /** Omit to have a strong temporary password generated and returned once. */
-    password: z.string().min(8).max(512).optional(),
+    password: z.string().min(env.PASSWORD_MIN_LENGTH).max(512).optional(),
   })
   .strict();
 
