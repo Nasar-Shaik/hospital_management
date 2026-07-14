@@ -34,6 +34,7 @@ import { getTenantConnection } from "../../core/db/connectionManager.js";
 import { recordAudit } from "../../core/audit/auditWriter.js";
 import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import { seedTenantAdmin } from "../../seed/seedTenantAdmin.js";
+import { seedNotificationTemplates } from "../../seed/notificationTemplates.js";
 import {
   provisionTenant,
   transitionStatus,
@@ -294,6 +295,26 @@ export async function createHospital(
     ...(input.adminName ? { name: input.adminName } : {}),
     password,
   });
+
+  /**
+   * ── THE SECOND STEP THAT WAS BEING FORGOTTEN ──────────────────────────────
+   * Without this, a hospital created through the API has NO notification templates:
+   * no welcome message, no appointment confirmation, no reminder, and no
+   * critical-result alert. Every one of them fails with "no such template" — logged,
+   * and otherwise silent.
+   *
+   * The CLI provisioning script has always seeded them. This path did not, and the
+   * divergence went unnoticed because nothing had yet tried to SEND anything from a
+   * hospital provisioned over HTTP. It surfaced the first time a critical potassium
+   * had nowhere to go (Orders, ADR-0013 §3).
+   *
+   * This function's own header warns about exactly this failure — "provision now,
+   * seed later, and the second step is forgotten" — which it is, again. The lesson is
+   * that a provisioning path is only correct if it is the ONLY one, and these two are
+   * now kept in step by this call and by `migrateTenants`, which re-seeds every
+   * existing hospital so the ones already provisioned are healed on the next migrate.
+   */
+  await seedNotificationTemplates(tenant.id, tenant.slug, connection);
 
   // OUR trail.
   await repo.recordPlatformAudit({

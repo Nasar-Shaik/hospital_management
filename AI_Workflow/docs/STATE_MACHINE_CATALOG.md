@@ -68,16 +68,29 @@ signed → cancelled          (doctor only; reason; already-administered doses u
 
 Guards: `signed` is immutable (changes = new version); dispensing decrements batch stock transactionally. Terminal: **dispensed, discarded, cancelled**.
 
-## 7. Lab Order
+## 7. Specimen (was "Lab Order" — SUPERSEDED by §15)
+
+> **The lifecycle of a lab ORDER is §15, not this.** ADR-0013 §3 makes the Order one polymorphic object across lab, radiology, pharmacy, procedure, referral, admission and diet — one machine, because the lifecycle does not differ by category; only the destination does. Two competing order machines in this catalog would be a defect by its own opening rule, since code must implement _exactly_ these states.
+>
+> What was written here was never really an order lifecycle. It was **two** lifecycles wearing one name: the order's (`ordered → … → reported`) and the **specimen's** (`sample_pending → collected → received_in_lab → rejected_sample → recollect`). Those two genuinely are different — a tube of blood is a physical object that can be haemolysed, mislabelled, lost in transit, or drawn again — and merging them is what made the original machine unimplementable without a `category === "lab"` branch.
+>
+> So the sample states stay, as the SPECIMEN machine, and they will ship with the Lab module. The order states move to §15.
+
+**Not yet implemented** — the Order (§15) carries lab work today, and does so without a specimen. A hospital that sends its samples to an outside lab needs exactly that and nothing more.
 
 ```
-ordered → sample_pending → collected → received_in_lab → in_progress
-       → resulted → verified → approved → reported
-any-pre-resulted → cancelled (reason) ; sample states → rejected_sample → sample_pending (recollect)
-approved → amended            (post-report correction: new version, audit, notify clinician)
+pending → collected → in_transit → received → accepted
+collected|in_transit|received → rejected → pending      (recollect: haemolysed, clotted, mislabelled)
+pending → cancelled                                     (the order was called off before the draw)
 ```
 
-Guards: `approved` requires `lab:approve` (pathologist); panic values at `resulted` trigger the panic alert path immediately (before approval). Terminal: **reported** (amendments create versions), **cancelled**.
+Guards:
+
+- **A rejected specimen does NOT cancel the Order.** The order is still owed; a new tube is drawn against it. Collapsing the two is how a patient gets told their test was cancelled when in fact it is being repeated.
+- **`rejected` must carry a reason**, and the reason is clinical, not administrative: a haemolysed potassium reads falsely high, which is the exact value most likely to trigger a panic alert. A specimen the lab silently re-ran is a wrong number nobody can trace.
+- Cancelling an Order after the specimen is drawn must not silently discard it (§15) — the specimen has its own life, and somebody is holding the tube.
+
+Terminal: **accepted, cancelled**.
 
 ## 8. Insurance Claim
 

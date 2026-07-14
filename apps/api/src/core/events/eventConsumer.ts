@@ -37,6 +37,7 @@ import { runWithContext } from "../context/requestContext.js";
 import { getTenantConnection } from "../db/connectionManager.js";
 import { getById } from "../../modules/tenants/index.js";
 import { appointmentConsumers } from "../../modules/appointments/index.js";
+import { orderConsumers } from "../../modules/orders/index.js";
 import { patientConsumers } from "../../modules/patients/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
@@ -57,7 +58,7 @@ const logger = createLogger({ service: "event-consumer" });
  * as forgot-password. Both land together, next. A welcome email that cannot let
  * someone in is a worse product than no welcome email.
  */
-const MODULES: ModuleConsumers[] = [appointmentConsumers, patientConsumers];
+const MODULES: ModuleConsumers[] = [appointmentConsumers, patientConsumers, orderConsumers];
 
 function mergeHandlers(): {
   events: Map<string, EventHandler[]>;

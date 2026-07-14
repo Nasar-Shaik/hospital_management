@@ -39,7 +39,24 @@ export async function assertMailhogReachable(): Promise<void> {
   }
 }
 
-/** Empties the inbox, so one test cannot read another's mail. */
+/**
+ * Empties the inbox, so one test cannot read another's mail.
+ *
+ * ── THIS DELETES EVERYTHING, FOR EVERY SUITE ────────────────────────────────
+ * There is ONE Mailhog, and it has no notion of an inbox per test file. So this is a
+ * destructive operation on a shared resource: two suites that both send mail and both
+ * clear it will delete each other's messages, and the symptom is not an error — it is
+ * an assertion that mysteriously finds nothing, in whichever suite happened to lose
+ * the race.
+ *
+ * That is exactly what happened when Orders became the second suite to use the mail
+ * server (it had been the sole preserve of the notifications suite), and it is why
+ * `test:int` now runs with `--no-file-parallelism`.
+ *
+ * Integration suites share ONE Mongo, ONE Redis and ONE SMTP server. They are isolated
+ * in Mongo and Redis by naming — a database and a key prefix per suite — but mail has
+ * no such handle to hang isolation on. Serial execution is what keeps them honest.
+ */
 export async function clearMailbox(): Promise<void> {
   await fetch(`${MAILHOG_API}/api/v1/messages`, { method: "DELETE" });
 }

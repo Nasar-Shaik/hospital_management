@@ -122,6 +122,73 @@ export const DEFAULT_TEMPLATES: TemplateSeed[] = [
       "{{hospital}}",
     ].join("\n"),
   },
+
+  /* ── Orders (ADR-0013 §3) — these go to STAFF, not to patients ───────────── */
+
+  {
+    key: "order.result.released",
+    channel: "email",
+    /**
+     * "Reports become available automatically to the requesting doctor" — this is
+     * the message that makes that sentence true. Placeholders: {{doctorName}}
+     * {{patientName}} {{uhid}} {{testName}}.
+     *
+     * It deliberately carries NO RESULT VALUE. A report is read in the chart, where
+     * the reference ranges, the previous results and the rest of the picture are —
+     * not in an email a doctor skims on a phone, and not in an inbox that is not
+     * covered by the audit log. The message says "it is ready"; the system says what
+     * it says.
+     */
+    description: "Tells the ordering doctor that a result has been released.",
+    subject: "Result ready: {{testName}} — {{patientName}}",
+    body: [
+      "Dear {{doctorName}},",
+      "",
+      "A result you ordered has been verified and released.",
+      "",
+      "  Test:     {{testName}}",
+      "  Patient:  {{patientName}} (UHID {{uhid}})",
+      "",
+      "The report is available on the patient's chart.",
+      "",
+      "{{hospital}}",
+    ].join("\n"),
+  },
+  {
+    key: "order.critical",
+    channel: "email",
+    /**
+     * ── THE ONLY MESSAGE IN THIS FILE THAT CANNOT WAIT ──────────────────────
+     * A potassium of 7.2 stops the heart. This one is sent SYNCHRONOUSLY, inside the
+     * request that recorded the result, before verification and long before release
+     * (order.service.ts) — it does not go near the outbox, because durable and fast
+     * are different promises and the patient only has time for one of them.
+     *
+     * It DOES carry the value, unlike every other message here. The whole purpose is
+     * to make a human act in the next few minutes, and "a critical result is ready,
+     * please log in" wastes the minutes that are the point.
+     *
+     * Email is the floor, not the ceiling. A hospital that means this seriously
+     * points the template at SMS or a push channel — which is a template edit, not a
+     * code change, and that is exactly why the channel lives on the template.
+     */
+    description: "CRITICAL result. Sent immediately to the ordering doctor, before verification.",
+    subject: "CRITICAL RESULT — {{patientName}} — {{testName}}",
+    body: [
+      "Dear {{doctorName}},",
+      "",
+      "A CRITICAL result has been recorded for your patient. Please act now.",
+      "",
+      "  Patient:  {{patientName}} (UHID {{uhid}})",
+      "  Test:     {{testName}}",
+      "  Result:   {{result}}",
+      "",
+      "This value has NOT yet been verified by a pathologist. It is being sent to you",
+      "immediately because waiting for verification could cost more than it is worth.",
+      "",
+      "{{hospital}}",
+    ].join("\n"),
+  },
 ];
 
 /**

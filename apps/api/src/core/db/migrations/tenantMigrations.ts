@@ -537,4 +537,76 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+  {
+    id: "0013-orders",
+    description: "Orders — the spine that carries work between departments (ADR-0013 §3)",
+    up: async (db) => {
+      await db.createCollection("orders").catch(() => undefined);
+
+      /**
+       * ── THE DEPARTMENT WORKLIST INDEX ───────────────────────────────────────
+       * This index IS the lab's worklist, and the radiology worklist, and the
+       * pharmacy's. "Doctor orders appear automatically in the destination
+       * department" is not a hand-off somebody has to build — it is this query
+       * being fast.
+       *
+       * `priorityRank` before `orderedAt` is deliberate and it is clinical: sickest
+       * first, then oldest. A worklist sorted purely by arrival time is a worklist
+       * in which the emergency troponin waits behind the routine cholesterol.
+       */
+      await db
+        .collection("orders")
+        .createIndex(
+          { tenantId: 1, category: 1, status: 1, priorityRank: 1, orderedAt: 1 },
+          { background: true, name: "department_worklist" },
+        );
+
+      /**
+       * ── THE IDEMPOTENCY INDEX ───────────────────────────────────────────────
+       * A doctor double-clicking "Order CBC" must not draw two tubes of blood from a
+       * real arm and raise two bills for it. Nor must a client retrying after a
+       * timeout — and that is the case a disabled button cannot save you from,
+       * because the first request may well have succeeded before the connection
+       * dropped.
+       *
+       * PARTIAL, because `requestId` is optional: a `curl` without one still works,
+       * and without the partial filter every such order would collide on `null`.
+       */
+      await db.collection("orders").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_order_per_request_id",
+        },
+      );
+
+      // "Is anything still owed on this visit?" — the question that decides whether a
+      // patient parked in `awaiting_results` can be called back in to the doctor.
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, encounterId: 1, status: 1 }, { background: true });
+
+      // The patient's investigations, newest first — and the episode read that makes
+      // an admission inherit the OP consultation's tests (ADR-0013 §4).
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, patientId: 1, orderedAt: -1 }, { background: true });
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, episodeId: 1, orderedAt: 1 }, { background: true });
+
+      // "What have I ordered, and what has come back?" — the doctor's own list.
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, orderedBy: 1, status: 1, orderedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("orders")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

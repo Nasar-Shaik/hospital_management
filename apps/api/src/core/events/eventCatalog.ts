@@ -93,6 +93,56 @@ export const EVENTS = {
    * into one slot, which is the very thing the unique index exists to prevent.
    */
   APPOINTMENT_CANCELLED: "appointment.appointment.cancelled",
+
+  /* ── Orders (ADR-0013 §3) — the spine between departments ────────────────── */
+
+  /**
+   * A doctor ordered something: a test, a scan, a drug, a procedure, a referral.
+   *
+   * THIS EVENT IS THE HAND-OFF. "Doctor orders appear automatically in the
+   * destination department" is not a queue feature and not a screen — it is this
+   * event reaching the department that has to do the work. There is no paper, no
+   * phone call, and no separate "send to lab" step that somebody can forget.
+   *
+   * Consumers: the destination department's worklist; (later) the work-queue
+   * projection (ADR-0014), for which this is the SECOND and THIRD producer and
+   * therefore the thing that finally makes a universal queue worth building.
+   */
+  ORDER_PLACED: "order.order.placed",
+  /**
+   * The order was called off. Consumers: the destination department (drop the work
+   * item — the patient is not coming), billing (do not charge for it).
+   *
+   * Must be idempotent: cancelling an already-cancelled order is a no-op, and
+   * at-least-once delivery guarantees the consumer will see this twice.
+   */
+  ORDER_CANCELLED: "order.order.cancelled",
+  /**
+   * The result is signed, released, and now visible to the doctor who ordered it.
+   *
+   * The RETURN half of the spine. Consumers: notifications (tell the ordering
+   * doctor); encounters (a patient parked in `awaiting_results` with nothing left
+   * outstanding becomes actionable again — see `order.consumers.ts`).
+   *
+   * `released`, NOT `completed` or `verified`, because a result that has been run
+   * but not signed off must never reach the person who will act on it.
+   */
+  RESULT_RELEASED: "order.result.released",
+  /**
+   * A result carries a value that can kill the patient today — a potassium of 7.2,
+   * a haemoglobin of 3.
+   *
+   * ── THIS EVENT IS THE AUDIT TRAIL, NOT THE ALERT ────────────────────────────
+   * The alert itself is raised SYNCHRONOUSLY, inside the call that recorded the
+   * result, before this event is ever published (see `order.service.ts`). The
+   * outbox is durable, but "durable" and "fast" are different promises, and a relay
+   * that is a minute behind is a fine place for a welcome email and an
+   * unconscionable one for a critical potassium.
+   *
+   * So this event exists to make the alert AUDITABLE and to fan it out to anyone
+   * else who cares. It is not the path the warning travels down.
+   */
+  CRITICAL_RESULT_FLAGGED: "order.result.criticalFlagged",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
@@ -137,6 +187,11 @@ const NOTIFYING_EVENTS = new Set<string>([
   EVENTS.PATIENT_REGISTERED,
   EVENTS.APPOINTMENT_BOOKED,
   EVENTS.APPOINTMENT_CANCELLED,
+  // The report reaching the doctor who asked for it. Note that CRITICAL_RESULT_FLAGGED
+  // is deliberately NOT here: its alert has already been raised synchronously by the
+  // time it is published, and routing it through a queue as well would make the
+  // warning arrive twice while teaching us to believe the queue was fast enough.
+  EVENTS.RESULT_RELEASED,
 ]);
 
 export function queuesFor(name: string): string[] {

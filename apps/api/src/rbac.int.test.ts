@@ -312,6 +312,54 @@ const PROBES: Record<string, Probe> = {
     method: "post",
     url: "/api/v1/encounters/64b7f0000000000000000001/left",
   },
+  /**
+   * Orders (ADR-0013 §3). The interesting rows in the matrix are the ones a DOCTOR
+   * is DENIED: a doctor may place an order and read it, but may not perform, verify
+   * or release one. A doctor who could verify their own result would be the only pair
+   * of eyes on it — and the second pair of eyes is the entire mechanism by which a
+   * wrong number is caught before somebody acts on it.
+   */
+  "POST /api/v1/orders": {
+    method: "post",
+    url: "/api/v1/orders",
+    body: {
+      encounterId: "64b7f0000000000000000001",
+      category: "lab",
+      code: "CBC",
+      name: "Complete Blood Count",
+    },
+  },
+  "GET /api/v1/orders": { method: "get", url: "/api/v1/orders" },
+  "GET /api/v1/orders/:id": {
+    method: "get",
+    url: "/api/v1/orders/64b7f0000000000000000001",
+  },
+  "POST /api/v1/orders/:id/accept": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/accept",
+  },
+  "POST /api/v1/orders/:id/start": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/start",
+  },
+  "POST /api/v1/orders/:id/complete": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/complete",
+    body: { summary: "matrix probe" },
+  },
+  "POST /api/v1/orders/:id/verify": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/verify",
+  },
+  "POST /api/v1/orders/:id/release": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/release",
+  },
+  "POST /api/v1/orders/:id/cancel": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/cancel",
+    body: { reason: "matrix probe" },
+  },
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",
@@ -682,6 +730,36 @@ describe("privilege boundaries that must never move", () => {
       .set("Host", HOST_A)
       .set("Authorization", `Bearer ${tokens.DOCTOR}`)
       .send({ patientId: "64b7f0000000000000000001", doctorId: "64b7f0000000000000000002" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("a DOCTOR cannot VERIFY a result — they would be the only pair of eyes on it", async () => {
+    // The doctor asks the question and wants a particular answer. The person who
+    // certifies that the answer is real cannot be the same person, which is why
+    // `order:verify` is not in the DOCTOR grant. This is the check that catches a
+    // wrong number before somebody prescribes against it.
+    for (const path of ["verify", "release", "complete"]) {
+      const res = await request(app)
+        .post(`/api/v1/orders/64b7f0000000000000000001/${path}`)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.DOCTOR}`)
+        .send({ summary: "doctor should not be able to do this" });
+
+      expect(res.status, `DOCTOR must not be able to ${path} an order`).toBe(403);
+      expect(res.body.error.code).toBe("HMS-AUTH-005");
+    }
+  });
+
+  it("a RECEPTIONIST cannot see the order book — what was ordered is a diagnosis not yet written down", async () => {
+    // An order list leaks the SUSPICION even when the result is negative: an HIV test,
+    // a beta-hCG, a psychiatric referral. The front desk books and bills; it does not
+    // read what the doctor is worried about.
+    const res = await request(app)
+      .get("/api/v1/orders")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.RECEPTIONIST}`);
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("HMS-AUTH-005");

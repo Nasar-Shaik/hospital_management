@@ -187,7 +187,32 @@ const CLINICAL = {
   CONSULTATION_MANAGE: p("consultation:manage", "Conduct consultations", "own"),
   PRESCRIPTION_CREATE: p("prescription:create", "Compose a prescription", "own"),
   PRESCRIPTION_SIGN: p("prescription:sign", "Sign a prescription (licensed)", "own"),
+  /**
+   * The Order lifecycle (ADR-0013 §3, STATE_MACHINE_CATALOG §15).
+   *
+   * ONE polymorphic object carries work between departments — lab, radiology,
+   * pharmacy, procedure, referral, admission, diet — so these verbs are generic.
+   * They are NOT per-category duplicates of each other, because the lifecycle does
+   * not differ by category; only the destination does.
+   *
+   * ── WHY `verify` IS NOT `perform` ───────────────────────────────────────────
+   * A technician performs the test; a pathologist SIGNS IT OFF. Collapsing the two
+   * lets an unverified result reach the doctor who will act on it, and that is a
+   * patient-safety failure, not a workflow shortcut.
+   *
+   * ── WHY GENERIC VERBS ARE NOT ENOUGH ON THEIR OWN ───────────────────────────
+   * A generic `order:verify` would let a PATHOLOGIST sign off a RADIOLOGY scan.
+   * Authority over a category is therefore checked separately, against the
+   * category-specific permission that already exists (`lab:approve`,
+   * `radiology:sign`) — see `orders/order.authority.ts`. Generic verb, specific
+   * authority; no new RBAC machinery.
+   */
   ORDER_CREATE: p("order:create", "Order labs, imaging, procedures", "branch"),
+  ORDER_READ: p("order:read", "View orders and department worklists", "branch"),
+  ORDER_PERFORM: p("order:perform", "Accept and perform an ordered item", "branch"),
+  ORDER_VERIFY: p("order:verify", "Verify a completed result (sign-off)", "branch"),
+  ORDER_RELEASE: p("order:release", "Release a verified result to the ordering doctor", "branch"),
+  ORDER_CANCEL: p("order:cancel", "Cancel an order", "branch"),
 
   TELECONSULT_HOST: p("teleconsult:host", "Host a video consultation", "own"),
   TELECONSULT_JOIN: p("teleconsult:join", "Join a video consultation", "own"),
@@ -567,7 +592,12 @@ export const DEFAULT_ROLES = [
       CLINICAL.CONSULTATION_MANAGE,
       CLINICAL.PRESCRIPTION_CREATE,
       CLINICAL.PRESCRIPTION_SIGN,
+      // Places the order and follows it. NOT `order:perform` and NOT `order:verify`
+      // — a doctor who could sign off their own lab result would be the only pair of
+      // eyes on it, which is precisely the check the second signature exists to be.
       CLINICAL.ORDER_CREATE,
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_CANCEL,
       CLINICAL.TELECONSULT_HOST,
       CLINICAL.LAB_ORDER,
       CLINICAL.RADIOLOGY_ORDER,
@@ -594,6 +624,9 @@ export const DEFAULT_ROLES = [
       CLINICAL.NURSING_MANAGE,
       CLINICAL.MAR_ADMINISTER,
       CLINICAL.LAB_COLLECT,
+      // Nurses work the ward's worklist: they carry out procedures and diet orders.
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_PERFORM,
       ORGANIZATION.BED_ALLOCATE,
       OPERATIONS.APPOINTMENT_READ,
       PLATFORM.FILE_READ,
@@ -647,6 +680,10 @@ export const DEFAULT_ROLES = [
       FINANCE.PHARMACY_DISPENSE,
       FINANCE.PHARMACY_STOCK,
       FINANCE.PHARMACY_PURCHASE,
+      // The pharmacy's worklist is the same object as the lab's — that is the whole
+      // claim of ADR-0013 §3, and this line is where it either holds or does not.
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_PERFORM,
       CLINICAL.EMR_READ,
     ),
   },
@@ -658,6 +695,12 @@ export const DEFAULT_ROLES = [
       PATIENT.PATIENT_READ,
       CLINICAL.LAB_COLLECT,
       CLINICAL.LAB_RESULT,
+      // Works the lab's worklist: accepts the order, runs it, enters the result.
+      // Emphatically NOT `order:verify` — the whole point of the technician /
+      // pathologist split is that the person who ran the test is not the person who
+      // certifies it.
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_PERFORM,
       PLATFORM.FILE_UPLOAD,
     ),
   },
@@ -668,7 +711,13 @@ export const DEFAULT_ROLES = [
     permissions: codes(
       PATIENT.PATIENT_READ,
       CLINICAL.LAB_RESULT,
+      // `lab:approve` is what gives this role AUTHORITY OVER THE LAB CATEGORY. A
+      // pathologist holds `order:verify` like a radiologist does, but only one of
+      // them can sign off a blood test — see orders/order.authority.ts.
       CLINICAL.LAB_APPROVE,
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_VERIFY,
+      CLINICAL.ORDER_RELEASE,
       CLINICAL.EMR_READ,
     ),
   },
@@ -679,7 +728,12 @@ export const DEFAULT_ROLES = [
     permissions: codes(
       PATIENT.PATIENT_READ,
       CLINICAL.RADIOLOGY_REPORT,
+      // Authority over the RADIOLOGY category, and only that one.
       CLINICAL.RADIOLOGY_SIGN,
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_PERFORM,
+      CLINICAL.ORDER_VERIFY,
+      CLINICAL.ORDER_RELEASE,
       CLINICAL.EMR_READ,
       PLATFORM.FILE_UPLOAD,
     ),
