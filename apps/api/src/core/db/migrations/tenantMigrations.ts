@@ -350,4 +350,62 @@ export const tenantMigrations: Migration[] = [
       await db.collection("userRoles").updateMany({}, { $unset: { branchScope: "" } });
     },
   },
+  {
+    id: "0010-appointments",
+    description: "Appointment book + doctor schedules (Doc 02 E1/D2)",
+    up: async (db) => {
+      for (const name of ["appointments", "doctorSchedules"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * ── THE DOUBLE-BOOKING INVARIANT ────────────────────────────────────────
+       * This index IS the rule "a doctor cannot be in two places at once". It is
+       * not a performance index that happens to be unique — it is the only thing
+       * that actually prevents the race, and no service-level check can replace it:
+       * two receptionists both read "10:30 is free" and both write, and only the
+       * database can arbitrate between them.
+       *
+       * PARTIAL, on `occupies`, because a cancelled appointment must RELEASE its
+       * slot while a booked one holds it. `partialFilterExpression` cannot express
+       * `status: {$in: [...]}`, which is why the occupying states are collapsed
+       * into that one boolean (appointment.model.ts).
+       *
+       * If you ever find yourself dropping this to fix a bug, the bug is elsewhere.
+       */
+      await db.collection("appointments").createIndex(
+        { tenantId: 1, doctorId: 1, startAt: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { occupies: { $eq: true } },
+          background: true,
+          name: "one_doctor_one_slot",
+        },
+      );
+
+      // The two screens that exist: a doctor's day, and a patient's history.
+      await db
+        .collection("appointments")
+        .createIndex({ tenantId: 1, doctorId: 1, startAt: 1, status: 1 }, { background: true });
+      await db
+        .collection("appointments")
+        .createIndex({ tenantId: 1, patientId: 1, startAt: -1 }, { background: true });
+      await db
+        .collection("appointments")
+        .createIndex({ tenantId: 1, branchId: 1, startAt: 1 }, { background: true });
+
+      // One active template per doctor per weekday — the upsert key.
+      await db
+        .collection("doctorSchedules")
+        .createIndex({ tenantId: 1, doctorId: 1, weekday: 1 }, { unique: true, background: true });
+    },
+    down: async (db) => {
+      for (const name of ["appointments", "doctorSchedules"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];

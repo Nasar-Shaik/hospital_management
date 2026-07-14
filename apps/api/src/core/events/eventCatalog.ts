@@ -54,6 +54,23 @@ export const EVENTS = {
    * reference must be a no-op (ADR-0007).
    */
   PATIENTS_MERGED: "patient.patients.merged",
+
+  /* ── Appointments (Doc 02 E1) ───────────────────────────────────────────── */
+
+  /**
+   * A slot was booked. Consumer (A6): the confirmation message, and the reminder
+   * job scheduled for the day before — which is the single highest-value
+   * notification in the product, because a reminder that lands is a no-show that
+   * does not happen, and an empty slot is revenue the hospital cannot recover.
+   */
+  APPOINTMENT_BOOKED: "appointment.appointment.booked",
+  /**
+   * A slot was given up. Consumers: notifications, and (later) the waiting list,
+   * which promotes someone into the freed slot. Promotion MUST be idempotent —
+   * at-least-once delivery means a duplicate would otherwise promote two people
+   * into one slot, which is the very thing the unique index exists to prevent.
+   */
+  APPOINTMENT_CANCELLED: "appointment.appointment.cancelled",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];

@@ -223,6 +223,74 @@ const PROBES: Record<string, Probe> = {
       reason: "matrix probe",
     },
   },
+  "GET /api/v1/appointments": { method: "get", url: "/api/v1/appointments" },
+  "GET /api/v1/appointments/availability": {
+    method: "get",
+    url: "/api/v1/appointments/availability?doctorId=64b7f0000000000000000001&date=2026-08-03",
+  },
+  "GET /api/v1/appointments/:id": {
+    method: "get",
+    url: "/api/v1/appointments/64b7f0000000000000000001",
+  },
+  "POST /api/v1/appointments": {
+    method: "post",
+    url: "/api/v1/appointments",
+    body: {
+      patientId: "64b7f0000000000000000001",
+      doctorId: "64b7f0000000000000000002",
+      startAt: "2099-01-01T09:00:00.000Z",
+    },
+  },
+  "POST /api/v1/appointments/:id/confirm": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/confirm",
+  },
+  "POST /api/v1/appointments/:id/check-in": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/check-in",
+  },
+  "POST /api/v1/appointments/:id/start": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/start",
+  },
+  "POST /api/v1/appointments/:id/complete": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/complete",
+  },
+  "POST /api/v1/appointments/:id/reschedule": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/reschedule",
+    body: { startAt: "2099-01-01T09:00:00.000Z", reason: "matrix probe" },
+  },
+  "POST /api/v1/appointments/:id/no-show": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/no-show",
+    body: {},
+  },
+  "POST /api/v1/appointments/:id/cancel": {
+    method: "post",
+    url: "/api/v1/appointments/64b7f0000000000000000001/cancel",
+    body: { reason: "matrix probe" },
+  },
+  "GET /api/v1/doctors/:doctorId/schedule": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001/schedule",
+  },
+  "PUT /api/v1/doctors/schedule": {
+    method: "put",
+    url: "/api/v1/doctors/schedule",
+    body: {
+      doctorId: "64b7f0000000000000000001",
+      weekday: 1,
+      startMinute: 540,
+      endMinute: 780,
+      slotMinutes: 15,
+    },
+  },
+  "DELETE /api/v1/doctors/schedule/:id": {
+    method: "delete",
+    url: "/api/v1/doctors/schedule/64b7f0000000000000000001",
+  },
 };
 
 /** The roles under test. Chosen to span the privilege range, not to be exhaustive. */
@@ -312,7 +380,13 @@ beforeAll(async () => {
   await dropDatabases(["test_rbac_master", DB_A, DB_B]);
   await flushTestCache();
 
-  const a = await provisionTenant({ hospitalName: "Apollo RBAC", slug: SLUG_A });
+  // Apollo BUYS scheduling; Sunshine has no plan at all. That difference is what
+  // makes layer 1 (entitlement) testable — see the entitlement suite at the bottom.
+  const a = await provisionTenant({
+    hospitalName: "Apollo RBAC",
+    slug: SLUG_A,
+    planCode: "PLAN_CLINIC",
+  });
   const b = await provisionTenant({ hospitalName: "Sunshine RBAC", slug: SLUG_B });
   tenantA = { id: a.tenant.id, slug: SLUG_A, databaseName: a.tenant.databaseName };
   tenantB = { id: b.tenant.id, slug: SLUG_B, databaseName: b.tenant.databaseName };
@@ -648,5 +722,58 @@ describe("row scope: branch confinement (the P2 bug, pinned)", () => {
       `a confined nurse saw ${branches.join(",")}`,
     ).toBe(true);
     expect(res.body.data.length).toBeGreaterThan(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 6. LAYER 1 — ENTITLEMENT. Until appointments shipped, NO route carried a
+ *    feature flag, so this layer of ADR-0010 had never been exercised end to end.
+ *    It is the layer that makes editions worth money.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("entitlement (layer 1): a hospital cannot use what it did not buy", () => {
+  it("an entitled hospital reaches the appointment book", async () => {
+    // Apollo is on PLAN_CLINIC, which includes module.ops.appointments.
+    const res = await request(app)
+      .get("/api/v1/appointments")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.TENANT_ADMIN}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  it("an UNSUBSCRIBED hospital is refused — with HMS-PLAN-002, not HMS-AUTH-005", async () => {
+    /**
+     * Sunshine has no plan. Its administrator holds `appointment:read` — the
+     * permission is not the problem, the SUBSCRIPTION is — so the error must say
+     * so. HMS-AUTH-005 would send that admin hunting through the role editor for
+     * a permission that can never help them; HMS-PLAN-002 sends them to sales.
+     *
+     * That is why layer 1 runs BEFORE layer 2 (ADR-0010), and this is the test
+     * that proves the order, not just the outcome.
+     */
+    const res = await request(app)
+      .get("/api/v1/appointments")
+      .set("Host", HOST_B)
+      .set("Authorization", `Bearer ${tokenTenantB}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-PLAN-002");
+  });
+
+  it("no plan does not mean no limits — every appointment route is gated, not just the list", async () => {
+    // A gate on the read but not the write is worse than no gate: the hospital
+    // simply uses the parts that were forgotten.
+    for (const [id, probe] of Object.entries(PROBES)) {
+      if (!id.includes("/appointments") && !id.includes("/doctors/")) continue;
+
+      const res = await request(app)
+        [probe.method](probe.url)
+        .set("Host", HOST_B)
+        .set("Authorization", `Bearer ${tokenTenantB}`)
+        .send(probe.body ?? {});
+
+      expect(res.body.error?.code, `${id} was not entitlement-gated`).toBe("HMS-PLAN-002");
+    }
   });
 });
