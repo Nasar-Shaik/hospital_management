@@ -88,6 +88,21 @@ const envSchema = z.object({
   REDIS_URL: z.string().url().optional(),
   /** Registry cache TTL in seconds — CACHE_STRATEGY: `tenant:{slug}` 5 min. */
   TENANT_CACHE_TTL_SECONDS: z.coerce.number().int().default(300),
+  /**
+   * How long we remember that a host does NOT exist (negative caching).
+   *
+   * Without this, every request to an unknown host is an uncached query against
+   * the MASTER registry — the one database that routes every hospital on the
+   * platform. We publish wildcard DNS (`*.paperlesstech.in`), so anyone can spray
+   * `a1.…`, `a2.…` and turn that into a denial of service that takes down routing
+   * for every customer at once. Remembering a miss makes the flood free.
+   *
+   * SHORT on purpose (30s, not the 5 minutes we cache a hit). A hospital that was
+   * probed before it was provisioned must not 404 for five minutes afterwards —
+   * and provisioning busts the key anyway (tenant.repository.create), so this TTL
+   * is only the belt to that braces.
+   */
+  TENANT_MISS_CACHE_TTL_SECONDS: z.coerce.number().int().default(30),
 
   /** Connection Manager guardrails (Doc 04 §2.2.1; PROJECT_MEMORY assumption A3). */
   TENANT_MAX_CONNECTIONS: z.coerce.number().int().default(200),

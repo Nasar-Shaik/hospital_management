@@ -95,26 +95,65 @@ export async function listServable(): Promise<TenantRegistryEntry[]> {
   return docs.map(toEntry);
 }
 
-/** Read-through by slug (subdomain tenancy). */
-export async function findBySlug(slug: string): Promise<TenantRegistryEntry | undefined> {
-  const key = cacheKeys.tenantBySlug(slug);
-  const cached = await cacheGet<TenantRegistryEntry>(key);
-  if (cached) return cached;
+/**
+ * ── NEGATIVE CACHING: WHY A MISS IS WORTH REMEMBERING ────────────────────────
+ *
+ * The obvious read-through caches only what it FINDS. That leaves every request
+ * to an unknown host as an uncached query against the MASTER registry — the single
+ * database that routes every hospital on the platform.
+ *
+ * We publish wildcard DNS (`*.paperlesstech.in`), which means a stranger can spray
+ * `a1.paperlesstech.in`, `a2.…`, `a3.…` and each one costs us a master-DB lookup.
+ * Degrade the master registry and NOBODY can reach ANY hospital: it is the one
+ * component whose failure is platform-wide. Remembering "this host does not exist"
+ * makes that flood free to serve.
+ *
+ * The marker is a distinct shape rather than a cached `undefined`, because Redis
+ * cannot store "I looked and there was nothing" any other way — and a cache that
+ * cannot distinguish "not cached" from "cached as absent" would simply never cache
+ * the miss.
+ */
+interface AbsentMarker {
+  absent: true;
+}
+const ABSENT: AbsentMarker = { absent: true };
 
-  const entry = await findOne({ slug });
-  if (entry) await cacheSet(key, entry, env.TENANT_CACHE_TTL_SECONDS);
+function isAbsent(value: TenantRegistryEntry | AbsentMarker): value is AbsentMarker {
+  return (value as AbsentMarker).absent === true;
+}
+
+async function remember(
+  key: string,
+  entry: TenantRegistryEntry | undefined,
+): Promise<TenantRegistryEntry | undefined> {
+  await cacheSet(
+    key,
+    entry ?? ABSENT,
+    // A miss is remembered for far less time than a hit. The cost of being wrong is
+    // asymmetric: a stale hit serves an old plan code for 5 minutes; a stale MISS
+    // 404s a hospital that exists. `create()` busts the key regardless — this TTL
+    // is the safety net for anything that writes the registry without telling us.
+    entry ? env.TENANT_CACHE_TTL_SECONDS : env.TENANT_MISS_CACHE_TTL_SECONDS,
+  );
   return entry;
 }
 
-/** Read-through by verified custom domain. */
+/** Read-through by slug (subdomain tenancy). Caches misses — see above. */
+export async function findBySlug(slug: string): Promise<TenantRegistryEntry | undefined> {
+  const key = cacheKeys.tenantBySlug(slug);
+  const cached = await cacheGet<TenantRegistryEntry | AbsentMarker>(key);
+  if (cached) return isAbsent(cached) ? undefined : cached;
+
+  return remember(key, await findOne({ slug }));
+}
+
+/** Read-through by verified custom domain. Caches misses — see above. */
 export async function findByCustomDomain(host: string): Promise<TenantRegistryEntry | undefined> {
   const key = cacheKeys.tenantByDomain(host);
-  const cached = await cacheGet<TenantRegistryEntry>(key);
-  if (cached) return cached;
+  const cached = await cacheGet<TenantRegistryEntry | AbsentMarker>(key);
+  if (cached) return isAbsent(cached) ? undefined : cached;
 
-  const entry = await findOne({ customDomain: host });
-  if (entry) await cacheSet(key, entry, env.TENANT_CACHE_TTL_SECONDS);
-  return entry;
+  return remember(key, await findOne({ customDomain: host }));
 }
 
 export async function findById(id: string): Promise<TenantRegistryEntry | undefined> {
@@ -141,7 +180,31 @@ export async function create(input: {
     subscription: input.planCode ? { planCode: input.planCode } : {},
     status: "provisioning",
   });
-  return toEntry(doc.toObject<TenantDoc>());
+
+  const entry = toEntry(doc.toObject<TenantDoc>());
+
+  /**
+   * Forget any cached ABSENCE of this slug, the moment the hospital exists.
+   *
+   * Negative caching (see `remember`) means a slug someone probed before it existed
+   * — a typo, a crawler, an operator checking whether the name was free — is cached
+   * as absent. If that is never forgotten, the brand-new hospital 404s for the rest
+   * of the miss TTL, and the person it 404s at is the customer we onboarded thirty
+   * seconds ago, on their first ever visit.
+   *
+   * HONESTY ABOUT WHAT THIS LINE ACTUALLY DOES: provisioning ends by activating the
+   * tenant (`transitionStatus` → `updateStatus` → `invalidate`), so that path
+   * already clears the key — deleting this line alone does NOT break the suite, and
+   * the falsification proved it. It is kept because it narrows the window: between
+   * `create()` and activation there are migrations and seeds, any of which can fail
+   * and leave the tenant un-activated with a stale absence still cached. The
+   * invariant worth stating is not "this line fixes it" but:
+   *
+   *     REMEMBERING AN ABSENCE OBLIGES YOU TO FORGET IT THE INSTANT IT STOPS BEING
+   *     TRUE — and the registry has exactly one place where that becomes true.
+   */
+  await invalidate(entry);
+  return entry;
 }
 
 export async function updateStatus(

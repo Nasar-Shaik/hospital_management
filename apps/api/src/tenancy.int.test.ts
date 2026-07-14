@@ -223,6 +223,10 @@ describe("host → tenant resolution (Doc 04 §2.2.1)", () => {
     expect(await resolveTenantFromHost("nobody.medicore.test")).toBeUndefined();
     expect(await resolveTenantFromHost("evil.example.com")).toBeUndefined();
   });
+
+  // The CACHING of that absence is proved in `registryCache.int.test.ts`, which runs
+  // with a real Redis. This suite deliberately runs without one (see the top of the
+  // file), so a cache assertion here would pass vacuously.
 });
 
 describe("lifecycle guards (STATE_MACHINE_CATALOG §11)", () => {
