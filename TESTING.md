@@ -319,6 +319,33 @@ A downgrade that would strand people is refused: put 12 staff on a plan and try 
 
 ---
 
+## 8b2. The operator console — creating hospitals (A1)
+
+This is how a hospital gets onto the platform without a developer.
+
+**Bootstrap the first operator** (once — it refuses to run again, because a script that mints super-admins on a live platform is a back door):
+
+```bash
+pnpm --filter @medicore/api operator -- \
+  --email you@paperlesstech.in --name "Your Name" --password 'super123'
+```
+
+**Then open http://admin.localhost:3001** and sign in with those credentials.
+
+You will see every hospital on the platform. Click **+ New hospital**, fill in a name, a slug, an edition and an admin email — and you get back a sign-in URL, an email and a temporary password, shown once. That hospital now has its own database, its own migrations, its own roles and an administrator who can log in immediately. Hand the three lines to the customer.
+
+You can also **re-price** a hospital, **suspend** one (which locks every member of their staff out immediately — it is for non-payment and security incidents, not a pause button), and **issue a fresh administrator** when a customer phones to say they are locked out.
+
+### The security properties worth checking yourself
+
+- **`admin` is a reserved slug.** Try to create a hospital with the slug `admin` and it is refused. The hostname IS the tenant, so a hospital called `admin` would own the console's own address.
+- **An operator token does not work on a hospital.** Take the console's token and call `/api/v1/users` on `demo.localhost:4000` → `HMS-AUTH-002`. It carries no tenant claim, so it can never match a hospital.
+- **A hospital admin's token does not work on the console.** The mirror: `HMS-AUTH-002`.
+- **The hospital can see us.** After creating one, sign in as its admin and open **Activity trail**: the first entries name the operator who provisioned it. When we issue an administrator, that is recorded there too. A customer who cannot see the vendor's actions in their own audit log has no way to detect us misusing them.
+- **No PHI.** There is no screen or route in the console that shows patient data, and there never should be.
+
+---
+
 ## 8c. The activity trail and tamper evidence (A5)
 
 **In the browser:** sign in and open **Activity trail** (sidebar → Administration). Add a staff member and refresh — you will see four entries for that one click: the account created, the password set, the role assigned, the account activated. Try something you are not allowed to do and the _refusal_ is recorded too.

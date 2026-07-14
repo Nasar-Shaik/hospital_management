@@ -179,6 +179,56 @@ export interface AuditIntegrity {
   problems: { anchorIndex: number; kind: string; detail: string }[];
 }
 
+/* ── platform / operator console (Doc 02 A1) ─────────────────────────────── */
+
+export type PlatformRole = "SUPER_ADMIN" | "SUPPORT";
+
+export interface OperatorSession {
+  accessToken: string;
+  expiresIn: number;
+  operator: {
+    id: string;
+    email: string;
+    name: string;
+    roles: PlatformRole[];
+    mustChangePassword: boolean;
+  };
+}
+
+export interface Hospital {
+  id: string;
+  slug: string;
+  hospitalName: string;
+  status: "provisioning" | "trial" | "active" | "suspended" | "terminated";
+  planCode?: string;
+  databaseName: string;
+  /** Where this hospital is reachable — assembled by the API so no UI has to guess. */
+  url: string;
+}
+
+export interface HospitalDetail extends Hospital {
+  usage: { metric: string; used: number; limit?: number; warning?: boolean; exceeded?: boolean }[];
+  features: string[];
+}
+
+export interface Edition {
+  code: string;
+  name: string;
+  entitlements: string[];
+  limits: Record<string, number | undefined>;
+}
+
+export interface OperatorAuditEntry {
+  id: string;
+  at: string;
+  actorEmail?: string;
+  action: string;
+  tenantSlug?: string;
+  outcome: "success" | "failure";
+  meta?: Record<string, unknown>;
+  ip?: string;
+}
+
 /* ── the client ───────────────────────────────────────────────────────────── */
 
 export class ApiClient {
@@ -370,6 +420,73 @@ export class ApiClient {
    */
   auditIntegrity(): Promise<AuditIntegrity> {
     return this.request<AuditIntegrity>("GET", "/api/v1/audit/integrity");
+  }
+
+  /* ── platform / operator console (Doc 02 A1) ──────────────────────────────
+   *
+   * A SEPARATE prefix and a SEPARATE token type. An operator is not a hospital
+   * user, and none of these calls will work with a hospital's access token — the
+   * API rejects it at the door (HMS-AUTH-002). That is deliberate: the two
+   * identity systems must not be interchangeable anywhere, including here.
+   */
+
+  operatorLogin(email: string, password: string): Promise<OperatorSession> {
+    return this.request<OperatorSession>("POST", "/api/platform/v1/auth/login", {
+      email,
+      password,
+    });
+  }
+
+  operatorMe(): Promise<{ id: string; email: string; roles: PlatformRole[] }> {
+    return this.request("GET", "/api/platform/v1/auth/me");
+  }
+
+  operatorLogout(): Promise<unknown> {
+    return this.request("POST", "/api/platform/v1/auth/logout", {});
+  }
+
+  listHospitals(): Promise<Hospital[]> {
+    return this.request<Hospital[]>("GET", "/api/platform/v1/hospitals");
+  }
+
+  getHospital(id: string): Promise<HospitalDetail> {
+    return this.request<HospitalDetail>("GET", `/api/platform/v1/hospitals/${id}`);
+  }
+
+  /** Creates the hospital AND its first administrator — one operation, never two. */
+  createHospital(input: {
+    slug: string;
+    hospitalName: string;
+    planCode: string;
+    adminEmail: string;
+    adminName?: string;
+    trial?: boolean;
+  }): Promise<{ hospital: Hospital; admin: { email: string; temporaryPassword?: string } }> {
+    return this.request("POST", "/api/platform/v1/hospitals", input);
+  }
+
+  setHospitalStatus(id: string, status: Hospital["status"]): Promise<Hospital> {
+    return this.request<Hospital>("POST", `/api/platform/v1/hospitals/${id}/status`, { status });
+  }
+
+  setHospitalPlan(id: string, planCode: string): Promise<unknown> {
+    return this.request("POST", `/api/platform/v1/hospitals/${id}/plan`, { planCode });
+  }
+
+  /** The "we're locked out" call. Returns a temporary password, shown once. */
+  issueHospitalAdmin(
+    id: string,
+    input: { email: string; name?: string },
+  ): Promise<{ email: string; temporaryPassword: string }> {
+    return this.request("POST", `/api/platform/v1/hospitals/${id}/admin`, input);
+  }
+
+  listEditions(): Promise<Edition[]> {
+    return this.request<Edition[]>("GET", "/api/platform/v1/editions");
+  }
+
+  operatorAudit(): Promise<OperatorAuditEntry[]> {
+    return this.request<OperatorAuditEntry[]>("GET", "/api/platform/v1/audit");
   }
 
   /**

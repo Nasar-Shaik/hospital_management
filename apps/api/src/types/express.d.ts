@@ -18,6 +18,20 @@ declare global {
         /** Access-token expiry (epoch seconds). */
         expiresAt: number;
       };
+      /**
+       * Set by `authenticatePlatform` (Doc 02 A1) — an OPERATOR, not a hospital
+       * user. A SEPARATE field from `auth` on purpose: the two populations must
+       * never be interchangeable, and a route that reads `req.auth` can never
+       * accidentally be satisfied by an operator (or the reverse). The type system
+       * enforces what the tokens already enforce.
+       */
+      operator?: {
+        id: string;
+        email: string;
+        roles: ("SUPER_ADMIN" | "SUPPORT")[];
+        jti: string;
+        expiresAt: number;
+      };
     }
   }
 }

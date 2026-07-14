@@ -38,6 +38,41 @@ export class InvalidTenantTransitionError extends AppError {
 /** Slugs become database names and subdomains — keep them boring and safe. */
 const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/;
 
+/**
+ * Slugs the platform needs for itself. **The hostname IS the tenant**, so a
+ * hospital slugged `admin` would own `admin.paperlesstech.in` — the operator
+ * console's own address. A customer could then serve content on our control-plane
+ * hostname, harvest operator logins, or simply break the console for everyone.
+ *
+ * `www`, `api`, `app` and `mail` are reserved for the same reason: each is a
+ * hostname the platform will want, and a tenant that holds it takes it forever
+ * (a slug is baked into the database name and cannot be changed without a
+ * migration).
+ *
+ * Refusing a name is cheap. Taking one back from a paying customer is not.
+ */
+const RESERVED_SLUGS = new Set([
+  "admin",
+  "api",
+  "app",
+  "www",
+  "mail",
+  "status",
+  "docs",
+  "support",
+  "billing",
+  "console",
+  "platform",
+  "static",
+  "assets",
+  "cdn",
+  "auth",
+  "login",
+  "internal",
+  "system",
+  "test",
+]);
+
 export interface ProvisionTenantInput {
   hospitalName: string;
   slug: string;
@@ -62,6 +97,11 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
   if (!SLUG_PATTERN.test(input.slug)) {
     throw new AppError("HMS-VAL-001", 400, "Validation failed", {
       slug: "must be 3–40 chars, lowercase alphanumeric or hyphen, not starting/ending with a hyphen",
+    });
+  }
+  if (RESERVED_SLUGS.has(input.slug)) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      slug: `"${input.slug}" is reserved by the platform — it is a hostname we serve ourselves`,
     });
   }
   const existing = await repo.findBySlug(input.slug);

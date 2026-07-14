@@ -15,6 +15,7 @@ import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { auditRouter } from "./modules/audit/index.js";
+import { platformRouter } from "./modules/platform/index.js";
 import { authRouter } from "./modules/auth/index.js";
 import { rbacRouter } from "./modules/rbac/rbac.routes.js";
 import { staffRouter } from "./modules/staff/index.js";
@@ -96,6 +97,19 @@ export function createApp(logger: Logger): Express {
    *     authenticate() → authorize(PERMISSIONS.X, { feature }) → validate() → handler
    * Remaining chain slot: idempotency (P2, for money-moving POSTs).
    */
+  /**
+   * The CONTROL PLANE (Doc 02 A1) — mounted BEFORE the tenant router and outside
+   * `resolveTenant`, because an operator's request names no hospital.
+   *
+   * This separation is structural, not stylistic: there is no tenant context on
+   * these routes, so no service reached from here can accidentally pick up a
+   * tenant connection. When the control plane must enter a hospital's data (to
+   * count seats, to seed an administrator), it opens that connection explicitly
+   * and narrowly. And an operator token is rejected by /api/v1 — it carries no
+   * `tid`, so it can never match a host-resolved tenant.
+   */
+  app.use("/api/platform/v1", platformRouter());
+
   const v1Router = Router();
   v1Router.use("/auth", authRouter());
   v1Router.use(rbacRouter());

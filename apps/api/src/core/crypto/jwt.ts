@@ -19,15 +19,33 @@ import { newId } from "./tokens.js";
 const ALGORITHM = "HS256";
 const secret = new TextEncoder().encode(env.API_JWT_SECRET);
 
-/** `access` authorizes requests; `mfa` only authorizes completing an MFA challenge. */
-export type TokenType = "access" | "mfa";
+/**
+ * `access`   — a HOSPITAL user, acting inside exactly one tenant. Carries `tid`.
+ * `mfa`      — only authorizes completing an MFA challenge; carries no authority.
+ * `platform` — an OPERATOR (us), acting across the fleet. Carries NO `tid`, and
+ *              is rejected by every tenant route.
+ *
+ * The two authority types are separated at the token level on purpose. A
+ * `platform` token presented to `/api/v1/*` fails `verifyToken(token, "access")`
+ * because the type does not match; a tenant token presented to the operator
+ * console fails for the mirror reason. Neither can be mistaken for the other,
+ * and no route has to remember to check — the type check IS the check.
+ */
+export type TokenType = "access" | "mfa" | "platform";
 
 export interface AccessTokenClaims {
   /** userId */
   sub: string;
-  /** tenant registry id — must match the host-resolved tenant */
-  tid: string;
-  tsl: string;
+  /**
+   * Tenant registry id — must match the host-resolved tenant.
+   *
+   * OPTIONAL because a `platform` token has none. That absence is a security
+   * feature, not a gap: `authenticate` compares this against the resolved tenant,
+   * and `undefined` matches no hospital, so an operator token cannot authorize a
+   * request inside tenant data even if it reached one.
+   */
+  tid?: string;
+  tsl?: string;
   /**
    * The actor's email. Carried in the token purely so that every audit entry can
    * name a human without a database read on the write path (Doc 09 §9). It is not
@@ -95,6 +113,35 @@ export async function signAccessToken(input: SignAccessTokenInput): Promise<Sign
     input.userId,
   );
 }
+
+/**
+ * An OPERATOR's token (Doc 02 A1).
+ *
+ * It carries no `tid` — deliberately, and this is load-bearing. `authenticate`
+ * (the tenant middleware) compares `claims.tid` against the host-resolved tenant
+ * and throws HMS-TEN-003 on any mismatch. A token with no `tid` can never match
+ * any hospital, so even if the type check were somehow bypassed, an operator
+ * token still cannot authorize a request inside a hospital's data. Two
+ * independent barriers, and the second one costs nothing.
+ *
+ * Shorter-lived than a hospital session: this account can reach every hospital on
+ * the platform, so the window in which a stolen token is useful should be small.
+ */
+export async function signPlatformToken(input: {
+  userId: string;
+  email: string;
+  roles: string[];
+}): Promise<SignedToken> {
+  return sign(
+    { eml: input.email, roles: input.roles, branchIds: [] },
+    "platform",
+    PLATFORM_TOKEN_TTL_SECONDS,
+    input.userId,
+  );
+}
+
+/** 30 minutes. An operator token is more dangerous than a clinician's — it lives shorter. */
+const PLATFORM_TOKEN_TTL_SECONDS = 1_800;
 
 /**
  * Issued when the password is correct but MFA is still outstanding. It carries
