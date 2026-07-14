@@ -305,7 +305,7 @@ Hospital admins can run the same check from the UI — the **Check integrity** b
 
 **Honest limits.** This _detects_ tampering; it cannot _prevent_ it. And the anchors currently live in the same database they protect, so a determined attacker with full database access could rewrite entries and re-seal. Shipping the daily anchor root off-box is what closes that, and it is on the list.
 
-> ⚠️ `demo` has three entries from A5 development that will never verify (a hashing bug, since fixed — see PROJECT_MEMORY §5). If `--verify --slug demo` reports tampering you did not do, that is why. Re-provision `demo` for a clean trail.
+> If `--verify` ever reports tampering you did not do, that is a bug in us, not evidence against you — tell us. It happened once during A5 development (a hashing bug, since fixed), and a tamper alarm that cries wolf is worse than no alarm at all.
 
 ## 8d. Watching an event travel (the outbox)
 

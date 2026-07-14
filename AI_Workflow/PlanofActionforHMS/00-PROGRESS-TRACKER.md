@@ -155,7 +155,7 @@ Known gaps, each a deliberate decision rather than an oversight:
 - **No real event consumers.** `apps/workers` acknowledges and logs. That is what closes the loop end to end today; A6 (notifications) registers the first genuine consumer.
 - **`identity.user.rolesChanged` has no fan-out consumer**, so a revoked permission can persist on OTHER pods until the `perm:{userId}` TTL expires (≤ access-token life). Same bound ADR-0009 already accepts for token revocation. The event exists so the fix is a consumer, not a redesign.
 - **Anchors are stored in the same database they protect.** That is honest tamper _evidence_, not tamper _proof_ — an attacker with full DB access can rewrite entries and re-seal. Shipping anchors off-box (S3 object-lock / a signed daily digest to the compliance officer) is what makes the chain adversarial, and it is an ops task.
-- **`hms_demo` carries 3 audit entries that will never verify** — written during A5 development, before the `actorRoles` default bug was fixed (see §8). They are dev artifacts, not evidence of tampering. Re-provision `demo`, or wipe `hms_demo.auditLogs`/`auditAnchors`/`counters`, to get a clean trail. `hms_chaintest` is a throwaway tenant created to prove tamper detection; delete it whenever.
+- **`hms_chaintest` is a throwaway tenant** created to prove tamper detection against a live database edit. Harmless; delete it whenever. (`hms_demo`'s trail was reset on 2026-07-14 after the `actorRoles` hashing bug — it now verifies clean from `seq 1`.)
 
 ## 8. Activity Log (chronological; append only)
 
