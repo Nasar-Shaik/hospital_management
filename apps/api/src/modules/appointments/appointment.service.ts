@@ -26,6 +26,7 @@ import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { getPatient } from "../patients/index.js";
+import { startEncounter } from "../encounters/index.js";
 import * as repo from "./appointment.repository.js";
 import { canTransition, type AppointmentStatus } from "./appointment.model.js";
 import { availableSlots, slotsFor, type Slot } from "./slots.js";
@@ -86,6 +87,20 @@ export interface BookAppointmentInput {
   branchId?: string;
   departmentId?: string;
   reason?: string;
+}
+
+/**
+ * Checking a patient in for next Tuesday puts them in TODAY's queue and makes the
+ * doctor's list lie about who is actually waiting.
+ */
+function assertToday(startAt: Date): void {
+  const today = startOfDay(new Date());
+  if (startAt < today || startAt >= endOfDay(new Date())) {
+    throw new AppError("HMS-STATE-001", 422, "Invalid state transition", {
+      to: "checked_in",
+      reason: "a patient can only be checked in on the day of their appointment",
+    });
+  }
 }
 
 export async function bookAppointment(input: BookAppointmentInput): Promise<repo.Appointment> {
@@ -207,23 +222,11 @@ async function transition(
      * lie about who is actually waiting.
      */
     if (to === "checked_in") {
-      const today = startOfDay(new Date());
-      if (current.startAt < today || current.startAt >= endOfDay(new Date())) {
-        throw new AppError("HMS-STATE-001", 422, "Invalid state transition", {
-          from: current.status,
-          to,
-          reason: "a patient can only be checked in on the day of their appointment",
-        });
-      }
-
-      // The token is assigned in ARRIVAL order, at check-in — not at booking. Who
-      // is seen next is decided by who is here, not by who booked first.
-      extra.tokenNumber = await repo.nextTokenNumber(
-        current.doctorId,
-        today,
-        endOfDay(new Date()),
-        session,
-      );
+      assertToday(current.startAt);
+      // The TOKEN is no longer issued here. It belongs to the Encounter (ADR-0013):
+      // a walk-in has a token and no appointment, and in a government hospital that
+      // is not an edge case — it is every patient. `checkInAppointment` creates the
+      // encounter, which issues the token according to the hospital's policy.
     }
 
     const updated = await repo.setStatus(
@@ -269,8 +272,52 @@ export const confirmAppointment = (id: string): Promise<repo.Appointment> =>
 export const cancelAppointment = (id: string, reason: string): Promise<repo.Appointment> =>
   transition(id, "cancelled", reason);
 
-export const checkInAppointment = (id: string): Promise<repo.Appointment> =>
-  transition(id, "checked_in");
+/**
+ * The patient turned up for their booked slot — and THIS is where the appointment
+ * stops being the centre of the world and hands over to the Encounter (ADR-0013).
+ *
+ * An appointment is a PROMISE of a visit. Check-in is the moment the promise is
+ * kept: an Encounter is created (origin `appointment`), and from here on every note,
+ * order, result and charge hangs on that, exactly as it does for a patient who
+ * simply walked in.
+ *
+ * ── WHY THE ENCOUNTER IS CREATED BEFORE THE APPOINTMENT IS UPDATED ──────────
+ * They cannot share one transaction: `startEncounter` opens its own, and nesting
+ * two would either deadlock or leave an encounter committed by a transaction that
+ * the appointment's then aborted.
+ *
+ * So they are sequenced, and the ORDER is chosen by which failure is survivable:
+ *
+ *   encounter first  → a crash leaves a patient IN THE QUEUE whose appointment
+ *                      still says `confirmed`. They are in the building, the doctor
+ *                      can see them, and re-running check-in RESUMES the same
+ *                      encounter (the unique index sees to that) rather than making
+ *                      a second. It converges.
+ *   appointment first → a crash leaves an appointment marked `checked_in` with
+ *                      nobody in the queue. The desk believes the patient was seen
+ *                      to; the patient is sitting in the waiting room, invisible.
+ *
+ * The first is self-healing. The second loses the patient.
+ */
+export async function checkInAppointment(id: string): Promise<repo.Appointment> {
+  const current = await repo.findById(id);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Appointment not found", { id });
+  if (!canTransition(current.status, "checked_in")) {
+    throw invalidTransition(current.status, "checked_in");
+  }
+  assertToday(current.startAt);
+
+  const { encounter } = await startEncounter({
+    patientId: current.patientId,
+    origin: "appointment",
+    doctorId: current.doctorId,
+    appointmentId: current.id,
+    ...(current.branchId ? { branchId: current.branchId } : {}),
+    ...(current.reason ? { reason: current.reason } : {}),
+  });
+
+  return transition(id, "checked_in", undefined, { encounterId: encounter.id });
+}
 
 export const startConsultation = (id: string): Promise<repo.Appointment> =>
   transition(id, "in_consultation");

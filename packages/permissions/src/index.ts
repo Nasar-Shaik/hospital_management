@@ -233,6 +233,18 @@ const CLINICAL = {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 const OPERATIONS = {
+  /**
+   * The patient journey (ADR-0013). `encounter:create` is the front desk's core
+   * verb — it is what a walk-in registration IS, and it is deliberately separate
+   * from `appointment:create`: a government hospital books nothing and still admits
+   * hundreds of patients a day through this permission.
+   */
+  ENCOUNTER_CREATE: p("encounter:create", "Start a patient visit", "branch"),
+  ENCOUNTER_READ: p("encounter:read", "View patient visits and the queue", "branch"),
+  ENCOUNTER_UPDATE: p("encounter:update", "Move a visit through its stages", "branch"),
+  /** Closing ends the visit and freezes what can be billed against it. */
+  ENCOUNTER_CLOSE: p("encounter:close", "Close a patient visit", "branch"),
+
   APPOINTMENT_CREATE: p("appointment:create", "Book an appointment", "branch"),
   APPOINTMENT_READ: p("appointment:read", "View appointments", "branch"),
   APPOINTMENT_UPDATE: p("appointment:update", "Reschedule an appointment", "branch"),
@@ -315,6 +327,20 @@ export const ALL_PERMISSION_CODES: string[] = ALL_PERMISSIONS.map((x) => x.code)
 
 export const FEATURE_FLAGS = {
   // Operations
+  /**
+   * The patient journey: encounters, the queue, tokens (ADR-0013).
+   *
+   * DELIBERATELY INDEPENDENT of `module.ops.appointments`. A government hospital
+   * buys OPD and never books an appointment in its life; a diagnostic centre takes
+   * walk-ins with a prescription from elsewhere. Bundling the two would force them
+   * to enable an appointment book they will never open, and would make the majority
+   * journey a special case of the minority one — which is the exact bug ADR-0013
+   * exists to close.
+   *
+   * Every edition has it. A hospital that cannot admit a patient to a queue is not
+   * a cheaper product, it is a broken one.
+   */
+  OPS_OPD: "module.ops.opd",
   OPS_APPOINTMENTS: "module.ops.appointments",
   OPS_IPD: "module.ops.ipd",
   OPS_INTER_BRANCH: "module.ops.interBranch",
@@ -381,6 +407,8 @@ export interface EditionDefinition {
 const F = FEATURE_FLAGS;
 
 const CLINIC_FLAGS: FeatureFlag[] = [
+  // The entry point. Every edition has it — see FEATURE_FLAGS.OPS_OPD.
+  F.OPS_OPD,
   F.OPS_APPOINTMENTS,
   F.CLINICAL_EMR_BASIC,
   F.FINANCE_OP_BILLING,
@@ -521,6 +549,13 @@ export const DEFAULT_ROLES = [
     description: "Consults, prescribes, orders and signs clinical records.",
     permissions: codes(
       PATIENT.PATIENT_READ,
+      // Sees their waiting patients, calls them in, and closes the visit. NOT
+      // `encounter:create` — starting a visit is the front desk's job, and a doctor
+      // who can conjure one can bypass registration (and therefore the UHID, the
+      // queue and the bill).
+      OPERATIONS.ENCOUNTER_READ,
+      OPERATIONS.ENCOUNTER_UPDATE,
+      OPERATIONS.ENCOUNTER_CLOSE,
       PATIENT.RECORD_READ,
       PATIENT.RECORD_WRITE,
       PATIENT.DISCHARGE_CREATE,
@@ -548,6 +583,10 @@ export const DEFAULT_ROLES = [
     description: "Vitals, medication administration, nursing notes, bed care.",
     permissions: codes(
       PATIENT.PATIENT_READ,
+      // Triage and moving patients along the queue. A nurse does not CLOSE a visit:
+      // closing it freezes what can be billed and asserts the consultation happened.
+      OPERATIONS.ENCOUNTER_READ,
+      OPERATIONS.ENCOUNTER_UPDATE,
       PATIENT.RECORD_READ,
       CLINICAL.EMR_READ,
       CLINICAL.VITALS_RECORD,
@@ -568,6 +607,11 @@ export const DEFAULT_ROLES = [
       PATIENT.PATIENT_REGISTER,
       PATIENT.PATIENT_READ,
       PATIENT.PATIENT_UPDATE,
+      // The walk-in desk. In a government hospital or a clinic this — not the
+      // appointment book — is the front door of the whole product.
+      OPERATIONS.ENCOUNTER_CREATE,
+      OPERATIONS.ENCOUNTER_READ,
+      OPERATIONS.ENCOUNTER_UPDATE,
       OPERATIONS.APPOINTMENT_CREATE,
       OPERATIONS.APPOINTMENT_READ,
       OPERATIONS.APPOINTMENT_UPDATE,

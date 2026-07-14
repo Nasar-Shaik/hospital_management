@@ -25,7 +25,7 @@ export interface Appointment {
   endAt: Date;
   status: AppointmentStatus;
   reason?: string;
-  tokenNumber?: number;
+  encounterId?: string;
   rescheduledTo?: string;
   statusHistory: StatusChange[];
   createdAt: Date;
@@ -44,7 +44,7 @@ function toAppointment(doc: AppointmentDoc): Appointment {
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
     ...(doc.departmentId ? { departmentId: doc.departmentId } : {}),
     ...(doc.reason ? { reason: doc.reason } : {}),
-    ...(doc.tokenNumber !== undefined ? { tokenNumber: doc.tokenNumber } : {}),
+    ...(doc.encounterId ? { encounterId: doc.encounterId.toString() } : {}),
     ...(doc.rescheduledTo ? { rescheduledTo: doc.rescheduledTo.toString() } : {}),
   };
 }
@@ -185,22 +185,6 @@ export async function list(
   ]);
 
   return { appointments: docs.map(toAppointment), total };
-}
-
-/** The next token number for a doctor's day — assigned at CHECK-IN, in arrival order. */
-export async function nextTokenNumber(
-  doctorId: string,
-  dayStart: Date,
-  dayEnd: Date,
-  session: ClientSession,
-): Promise<number> {
-  const highest = await getAppointmentModel(getTenantDb())
-    .findOne({ doctorId, startAt: { $gte: dayStart, $lt: dayEnd }, tokenNumber: { $exists: true } })
-    .sort({ tokenNumber: -1 })
-    .select("tokenNumber")
-    .session(session);
-
-  return (highest?.tokenNumber ?? 0) + 1;
 }
 
 /* ── doctor schedules ─────────────────────────────────────────────────────── */

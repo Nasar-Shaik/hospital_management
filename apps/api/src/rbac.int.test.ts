@@ -272,6 +272,46 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/appointments/64b7f0000000000000000001/cancel",
     body: { reason: "matrix probe" },
   },
+  "POST /api/v1/encounters": {
+    method: "post",
+    url: "/api/v1/encounters",
+    body: { patientId: "64b7f0000000000000000001", doctorId: "64b7f0000000000000000002" },
+  },
+  "GET /api/v1/encounters": { method: "get", url: "/api/v1/encounters" },
+  "GET /api/v1/encounters/:id": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001",
+  },
+  "GET /api/v1/episodes/:id/timeline": {
+    method: "get",
+    url: "/api/v1/episodes/64b7f0000000000000000001/timeline",
+  },
+  "POST /api/v1/encounters/:id/queue": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/queue",
+  },
+  "POST /api/v1/encounters/:id/start": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/start",
+  },
+  "POST /api/v1/encounters/:id/investigations": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/investigations",
+  },
+  "POST /api/v1/encounters/:id/close": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/close",
+    body: {},
+  },
+  "POST /api/v1/encounters/:id/cancel": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/cancel",
+    body: { reason: "matrix probe" },
+  },
+  "POST /api/v1/encounters/:id/left": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/left",
+  },
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",
@@ -631,6 +671,20 @@ describe("privilege boundaries that must never move", () => {
       });
     expect(merge.status).toBe(403);
     expect(merge.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("a DOCTOR cannot START a visit — that is the front desk's job", async () => {
+    // A doctor who can conjure an encounter can see a patient who was never
+    // registered: no UHID, no queue position, no bill. The desk starts visits;
+    // clinicians move them along. (The doctor CAN read and close them.)
+    const res = await request(app)
+      .post("/api/v1/encounters")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.DOCTOR}`)
+      .send({ patientId: "64b7f0000000000000000001", doctorId: "64b7f0000000000000000002" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
   });
 
   it("a RECEPTIONIST cannot browse the notification ledger — a message body is PHI", async () => {

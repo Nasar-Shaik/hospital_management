@@ -102,8 +102,14 @@ export interface AppointmentDoc {
   occupies?: true;
 
   reason?: string;
-  /** The queue/token number a patient is called by. Assigned at check-in, not at booking. */
-  tokenNumber?: number;
+  /**
+   * The Encounter this appointment produced at check-in (ADR-0013).
+   *
+   * An appointment is a PROMISE of a visit; this is the visit it became. The TOKEN
+   * lives on the encounter, not here — a walk-in has a token and no appointment, and
+   * in a government hospital that is every single patient.
+   */
+  encounterId?: Types.ObjectId;
 
   /** Set on the OLD appointment when it is rescheduled — links the chain. */
   rescheduledTo?: Types.ObjectId;
@@ -133,7 +139,7 @@ const appointmentSchema = new Schema<AppointmentDoc>(
     occupies: { type: Boolean, default: undefined },
 
     reason: { type: String, trim: true, maxlength: 500 },
-    tokenNumber: { type: Number },
+    encounterId: { type: Schema.Types.ObjectId },
     rescheduledTo: { type: Schema.Types.ObjectId },
 
     statusHistory: {

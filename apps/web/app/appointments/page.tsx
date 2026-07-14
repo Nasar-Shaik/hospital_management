@@ -505,7 +505,7 @@ function Appointments() {
                       {time(a.startAt)}
                     </td>
                     <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-fg-muted)]">
-                      {a.tokenNumber ?? "—"}
+                      {a.encounterId ? "in queue" : "—"}
                     </td>
                     <td className="py-2.5 pr-4">
                       <span className="text-[var(--color-fg)]">{nameOf(a.patientId)}</span>{" "}

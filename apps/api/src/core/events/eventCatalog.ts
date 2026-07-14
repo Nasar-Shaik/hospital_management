@@ -55,6 +55,28 @@ export const EVENTS = {
    */
   PATIENTS_MERGED: "patient.patients.merged",
 
+  /* ── Encounters (Doc 02 E0, ADR-0013) ───────────────────────────────────── */
+
+  /**
+   * A patient is in the building — booked, walked in, or brought in.
+   *
+   * The CENTRAL clinical event. Consumers do not care which origin it was, and that
+   * indifference is the architecture: a government hospital that never books an
+   * appointment produces exactly this event, hundreds of times a day.
+   *
+   * Consumers: the queue board; notifications; analytics. Later: the work-queue
+   * projection (ADR-0014), which turns this into a doctor's work item.
+   */
+  ENCOUNTER_STARTED: "encounter.encounter.started",
+  /**
+   * The visit is over. Consumers: billing (the OP bill is assembled from charges
+   * posted against this encounter), MRD, analytics.
+   *
+   * NOT the same as discharge — an encounter that ends in `admitted` opens an
+   * INPATIENT encounter in the same Episode of Care rather than closing the story.
+   */
+  ENCOUNTER_CLOSED: "encounter.encounter.closed",
+
   /* ── Appointments (Doc 02 E1) ───────────────────────────────────────────── */
 
   /**

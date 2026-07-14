@@ -256,7 +256,11 @@ export interface Appointment {
   status: AppointmentStatus;
   reason?: string;
   /** Assigned at CHECK-IN, in arrival order — not at booking. */
-  tokenNumber?: number;
+  /**
+   * The Encounter this appointment became at check-in (ADR-0013). The TOKEN lives on
+   * the encounter — a walk-in has a token and no appointment.
+   */
+  encounterId?: string;
   /** Set on the retired appointment when it was rescheduled. */
   rescheduledTo?: string;
   createdAt: string;

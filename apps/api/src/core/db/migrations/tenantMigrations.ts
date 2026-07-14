@@ -465,4 +465,76 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+
+  {
+    id: "0012-encounters",
+    description: "Encounter + Episode of Care — the central clinical object (ADR-0013)",
+    up: async (db) => {
+      for (const name of ["encounters", "episodesOfCare"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * ── THE ONE-OPEN-ENCOUNTER INVARIANT ────────────────────────────────────
+       * This index IS the rule "a patient cannot be in the building twice at once".
+       *
+       * It exists to make the commonest data-quality disaster in an OPD physically
+       * impossible: a patient goes to the lab, comes back, and a clerk who cannot
+       * see that their visit is still open registers them AGAIN. One visit becomes
+       * two — the census double-counts them, the bill splits across two records
+       * that no longer reconcile, and the doctor's history has a hole in it.
+       *
+       * No service-level check can prevent it: two desks both read "no open
+       * encounter" and both write. Only the database can arbitrate, and this is
+       * where it does. The service catches the duplicate-key error and hands the
+       * clerk back the encounter that already exists — which is what they actually
+       * wanted, because the patient is already here.
+       *
+       * PARTIAL, on `open`, because a patient must be able to come back TOMORROW.
+       * `partialFilterExpression` cannot express `status: {$in: [...]}`, which is
+       * why the live states collapse into that one boolean (encounter.model.ts) —
+       * exactly as `appointments.occupies` does for the double-booking index.
+       */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, patientId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true } },
+          background: true,
+          name: "one_open_encounter_per_patient",
+        },
+      );
+
+      // The queue board: who is waiting, in token order, for this doctor/department.
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, doctorId: 1, status: 1, token: 1 }, { background: true });
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, departmentId: 1, status: 1, token: 1 }, { background: true });
+
+      // The patient's history, newest first.
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, patientId: 1, arrivedAt: -1 }, { background: true });
+
+      // The care story: every encounter in one episode (ADR-0013 §4). This is the
+      // read that makes an admission inherit the OP consultation that preceded it.
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, episodeId: 1, arrivedAt: 1 }, { background: true });
+
+      await db
+        .collection("episodesOfCare")
+        .createIndex({ tenantId: 1, patientId: 1, startedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["encounters", "episodesOfCare"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];
