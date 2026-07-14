@@ -130,6 +130,13 @@ const envSchema = z.object({
   /** Mixed case + digit + symbol. Forced ON in production, whatever the config says. */
   PASSWORD_REQUIRE_COMPLEXITY: envBool(true),
   PASSWORD_HISTORY_SIZE: z.coerce.number().int().default(5),
+  /**
+   * The password every generated DEV account gets (staff, hospital admins, the
+   * operator bootstrap). Ignored entirely when NODE_ENV=production, where
+   * `generatePassword` mints a strong random one instead — and where the forced
+   * production policy would reject this anyway. See core/crypto/password.ts.
+   */
+  DEV_DEFAULT_PASSWORD: z.string().default("123456"),
   /** Brute-force lockout. */
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().default(5),
   LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().default(15),

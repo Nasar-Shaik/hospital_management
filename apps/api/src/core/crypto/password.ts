@@ -101,12 +101,40 @@ const DIGITS = "23456789";
 const SYMBOLS = "!@#$%^&*-_=+";
 
 /**
- * A temporary password for an invited user or an admin reset. It satisfies the
- * policy BY CONSTRUCTION rather than by retrying until it happens to pass, and
- * it is generated with a CSPRNG — `Math.random()` here would be a real
- * vulnerability, not a style problem.
+ * A temporary password for an invited user, a new hospital's administrator, or an
+ * admin reset. It satisfies the policy BY CONSTRUCTION rather than by retrying
+ * until it happens to pass, and it is generated with a CSPRNG — `Math.random()`
+ * here would be a real vulnerability, not a style problem.
+ *
+ * ── IN LOCAL DEVELOPMENT IT RETURNS A FIXED, KNOWN PASSWORD ──────────────────
+ * Every dev account gets `DEV_DEFAULT_PASSWORD` (`123456`). A random 20-character
+ * password is precisely the wrong thing on a throwaway laptop database: you copy
+ * it out of a terminal, paste it into a form, lose it, and re-provision. Nothing
+ * is protected, and an hour a week is spent on it.
+ *
+ * This is THE single place any temporary password is minted — staff accounts,
+ * hospital administrators, the operator bootstrap — so fixing it here fixes it
+ * everywhere, and there is no second code path where a random one can leak back in.
+ *
+ * ── AND IT CANNOT REACH PRODUCTION ───────────────────────────────────────────
+ * Guarded twice, on purpose:
+ *   1. `NODE_ENV === "production"` skips the fixed password entirely.
+ *   2. The fixed password must still PASS `checkPasswordPolicy` — and in
+ *      production `loadEnv` forces the real policy (12 chars, mixed case, digit,
+ *      symbol) regardless of what any .env asks for. `123456` cannot satisfy it.
+ * If someone sets DEV_DEFAULT_PASSWORD in production, it is ignored and the
+ * account gets a strong random password anyway. The convenience is unreachable
+ * from a hospital, which is the only reason it is safe to have.
  */
 export function generatePassword(length = 20): string {
+  if (env.NODE_ENV !== "production") {
+    const devPassword = env.DEV_DEFAULT_PASSWORD;
+    // Belt and braces: if the local policy were tightened, the fixed password
+    // would no longer satisfy it — fall through to a strong one rather than mint
+    // a credential the service is about to reject.
+    if (checkPasswordPolicy(devPassword).length === 0) return devPassword;
+  }
+
   const alphabet = UPPER + LOWER + DIGITS + SYMBOLS;
   const required = [
     UPPER[randomInt(UPPER.length)],

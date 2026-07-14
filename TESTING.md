@@ -98,7 +98,20 @@ Then open **Activity trail**. Everything you just did is already in it — who, 
 
 ---
 
-## 1c. Why `123456` works locally (and cannot in production)
+## 1c. Every dev password is `123456`
+
+There is one password on the whole local platform. It is not a convention you have to remember — it is what the code generates:
+
+| Account                                  | Where                       | Password |
+| ---------------------------------------- | --------------------------- | -------- |
+| Hospital admin (`admin@demo.test`)       | http://demo.localhost:3000  | `123456` |
+| Operator (`ops@paperlesstech.in`)        | http://admin.localhost:3001 | `123456` |
+| Any staff member you create              | the hospital app            | `123456` |
+| Any hospital you create from the console | its own URL                 | `123456` |
+
+`generatePassword()` — the single place any temporary password is minted — returns `DEV_DEFAULT_PASSWORD` when `NODE_ENV` is not `production`. There is no second code path, so no random password can leak back in.
+
+## Why `123456` works locally (and cannot in production)
 
 Local dev runs a deliberately weak password policy — 6 characters, no complexity — because typing a 12-character passphrase fifty times a day to test a login screen buys nothing on a throwaway laptop database. It is set in `apps/api/.env`:
 
