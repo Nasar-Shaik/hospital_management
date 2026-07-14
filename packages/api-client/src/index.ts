@@ -193,7 +193,28 @@ export class ApiClient {
     this.getAccessToken = options.getAccessToken;
     this.credentials = options.credentials ?? "include";
     this.tenantHost = options.tenantHost;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+
+    /**
+     * `.bind(globalThis)` is not defensive style — it is the difference between
+     * this client working in a browser and not working at all.
+     *
+     * `fetch` stored bare and later invoked as `this.fetchImpl(...)` is called
+     * with `this` = the ApiClient instance. The browser's `fetch` is a method of
+     * `Window` and refuses any other receiver:
+     *
+     *     TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation
+     *
+     * The request is then NEVER SENT — no network entry, no server log, nothing
+     * to find. And because a TypeError is not an ApiClientError, the UI reported
+     * it as "could not reach the server", which sent us hunting through DNS,
+     * ports, CORS and IPv6 for a bug that lived in this one line.
+     *
+     * Node's `fetch` is a plain function with no receiver requirement, so every
+     * test, every curl and every server-side check passed while the browser was
+     * broken 100% of the time. That asymmetry is the lesson: **a client that only
+     * runs in a browser must be tested in a browser.**
+     */
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
   private async send<T>(

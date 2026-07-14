@@ -151,7 +151,62 @@ try {
   record(false, "CORS preflight", "the API did not answer", "Fix the API check above first.");
 }
 
-/* 6 ── The only question that actually matters: can a human sign in? */
+/* 6 ── Does the code the BROWSER runs actually work in a browser?
+ *
+ * This check exists because the previous version of this script reported
+ * "everything works" while the login page was broken 100% of the time, for an
+ * hour. The API client stored `fetch` unbound and called it as `this.fetchImpl()`;
+ * a browser refuses that (`Illegal invocation`) and NEVER SENDS THE REQUEST, while
+ * Node's `fetch` has no receiver requirement and works fine. So every server-side
+ * check passed, and the only broken thing was the one thing a user touches.
+ *
+ * A green check that cannot go red when the product is broken is worse than no
+ * check at all: it actively sends you looking somewhere else. So we now execute
+ * the shipped client bundle under a fetch that behaves like the browser's.
+ */
+try {
+  const { ApiClient } = await import("../packages/api-client/dist/index.js");
+
+  const nodeFetch = globalThis.fetch;
+  /** Chrome's fetch is a method of Window and throws on any other receiver. */
+  function browserLikeFetch(...args) {
+    if (this !== undefined && this !== globalThis) {
+      throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+    }
+    return nodeFetch.apply(globalThis, args);
+  }
+
+  const client = new ApiClient({
+    baseUrl: `http://${HOST}:${API_PORT}`,
+    credentials: "omit",
+    fetchImpl: undefined, // force the client to reach for the global, as a browser does
+  });
+  // Swap in the strict fetch AFTER construction so the constructor's own binding
+  // is what gets tested — that is precisely where the bug lived.
+  const saved = globalThis.fetch;
+  globalThis.fetch = browserLikeFetch;
+  try {
+    await new ApiClient({ baseUrl: `http://${HOST}:${API_PORT}`, credentials: "omit" }).health();
+    record(true, "Browser-safe API client", "the shipped client runs under browser rules", null);
+  } finally {
+    globalThis.fetch = saved;
+  }
+  void client;
+} catch (err) {
+  const illegal = /Illegal invocation/.test(err?.message ?? "");
+  record(
+    false,
+    "Browser-safe API client",
+    illegal ? "fetch is called with the wrong receiver" : (err?.message ?? "client failed"),
+    illegal
+      ? "packages/api-client stores `fetch` unbound. It must be\n" +
+          "      `globalThis.fetch.bind(globalThis)` — otherwise the browser throws and the\n" +
+          "      request is never sent, while Node works fine and hides it."
+      : "The shipped client bundle does not run. Rebuild: pnpm --filter @medicore/api-client build",
+  );
+}
+
+/* 7 ── The only question that actually matters: can a human sign in? */
 try {
   const res = await get(`http://${HOST}:${API_PORT}/api/v1/auth/login`, {
     method: "POST",

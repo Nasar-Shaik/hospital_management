@@ -10,6 +10,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import type { Logger } from "@medicore/logger";
 import { requestId } from "./core/http/requestId.js";
+import { requestLog } from "./core/http/requestLog.js";
 import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
@@ -27,6 +28,9 @@ export function createApp(logger: Logger): Express {
   app.set("trust proxy", true); // behind Nginx/Traefik gateway (Doc 04 §2.1)
 
   app.use(requestId);
+  // Before helmet/cors: a request refused BY cors must still appear in the log,
+  // or a CORS failure looks identical to a request that never arrived.
+  app.use(requestLog(logger));
   app.use(helmet());
   app.use(
     cors({
