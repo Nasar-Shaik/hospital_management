@@ -60,7 +60,25 @@ docker ps
 ```bash
 pnpm docker:dev     # terminal 1 — infrastructure
 pnpm dev            # terminal 2 — the apps
+pnpm doctor         # terminal 3 — is it actually working?
 ```
+
+**`pnpm doctor` is the answer to "why isn't it working".** It checks the containers, DNS, the API _on the address the browser will use_, the web app, CORS, and then performs a real login — and prints the fix, not the symptom:
+
+```
+  MediCore — local stack  (hospital: demo)
+
+  ✔ Infrastructure (Mongo + Redis)     both containers up
+  ✔ DNS: demo.localhost                resolves to ::1, 127.0.0.1
+  ✔ API on http://demo.localhost:4000  HTTP 200
+  ✔ Web on http://demo.localhost:3000  HTTP 200
+  ✔ CORS preflight                     allows http://demo.localhost:3000
+  ✔ Login as admin@demo.test           signed in as Administrator
+
+  Everything works. Sign in at http://demo.localhost:3000
+```
+
+When something fails it names the cause and the command that fixes it. Never debug the login screen by hand again — run this first. (`pnpm doctor apollo` checks a different hospital.)
 
 Then open **http://demo.localhost:3000** and sign in with the demo hospital's admin:
 
