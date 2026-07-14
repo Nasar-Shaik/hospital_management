@@ -23,6 +23,7 @@ import { closeMaster, getMasterConnection } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
 import { migrateTenant, getBySlug, type TenantRegistryEntry } from "../modules/tenants/index.js";
 import { seedRbac } from "../modules/rbac/index.js";
+import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
 
 const logger = createLogger({ service: "migrate-cli" });
@@ -55,6 +56,7 @@ interface Outcome {
   migrations: string[];
   permissionsAdded: number;
   roles: number;
+  templatesAdded: number;
   error?: string;
 }
 
@@ -80,11 +82,18 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     async () => seedRbac(),
   );
 
+  // 3. The notification templates. Also idempotent, and also here rather than only
+  //    in `provisionTenant`: a template added in a later release must reach the
+  //    hospitals that were provisioned BEFORE it existed, or they silently lose a
+  //    message. It never overwrites wording a hospital has edited.
+  const templatesAdded = await seedNotificationTemplates(tenant.id, tenant.slug, connection);
+
   return {
     slug: tenant.slug,
     migrations,
     permissionsAdded: seeded.permissionsAdded,
     roles: seeded.roles.length,
+    templatesAdded,
   };
 }
 
@@ -124,6 +133,7 @@ async function main(): Promise<void> {
         migrations: [],
         permissionsAdded: 0,
         roles: 0,
+        templatesAdded: 0,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -139,6 +149,7 @@ async function main(): Promise<void> {
           migrationsApplied: result.migrations,
           permissionsAdded: result.permissionsAdded,
           roles: result.roles,
+          templatesAdded: result.templatesAdded,
         },
         "tenant converged",
       );

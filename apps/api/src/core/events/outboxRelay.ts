@@ -40,7 +40,7 @@ import { getTenantConnection } from "../db/connectionManager.js";
 import { acquireLock, releaseLock, renewLock } from "../redis/redis.js";
 import { listServable } from "../../modules/tenants/index.js";
 import { claimDue, markRetryOrFail, markSent, type OutboxEventDoc } from "./outbox.js";
-import { EVENT_QUEUE } from "./eventCatalog.js";
+import { EVENT_QUEUE, NOTIFICATION_QUEUE, queuesFor } from "./eventCatalog.js";
 
 const logger = createLogger({ service: "outbox-relay" });
 
@@ -64,7 +64,8 @@ function redisConnection(url: string): ConnectionOptions {
   };
 }
 
-let queue: Queue | undefined;
+/** One Queue object per target queue name, opened at start (see `queuesFor`). */
+const queues = new Map<string, Queue>();
 let timer: NodeJS.Timeout | undefined;
 let running = false;
 let stopped = false;
@@ -74,34 +75,46 @@ function backoffFor(attempts: number): number {
   return BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)] ?? 300_000;
 }
 
+/**
+ * Puts one event on every queue that cares about it (`queuesFor`).
+ *
+ * ALL enqueues must succeed before the event is marked sent. If the second one
+ * fails, the whole event is retried — which redelivers to the first queue too, and
+ * is exactly why consumers dedupe (at-least-once, by design). The alternative,
+ * marking sent after a partial fan-out, would silently drop the notification while
+ * the analytics copy sailed through: a lost message that leaves no trace anywhere.
+ */
 async function dispatch(conn: Connection, event: OutboxEventDoc): Promise<void> {
-  if (!queue) throw new Error("relay queue not initialized");
+  const envelope = {
+    eventId: event.eventId,
+    name: event.name,
+    version: event.version,
+    tenantId: event.tenantId,
+    branchId: event.branchId,
+    occurredAt: event.occurredAt,
+    actorId: event.actorId,
+    traceId: event.traceId,
+    payload: event.payload,
+  };
 
-  await queue.add(
-    event.name,
-    {
-      eventId: event.eventId,
-      name: event.name,
-      version: event.version,
-      tenantId: event.tenantId,
-      branchId: event.branchId,
-      occurredAt: event.occurredAt,
-      actorId: event.actorId,
-      traceId: event.traceId,
-      payload: event.payload,
-    },
-    {
+  for (const name of queuesFor(event.name)) {
+    const target = queues.get(name);
+    if (!target) throw new Error(`relay queue "${name}" not initialized`);
+
+    await target.add(event.name, envelope, {
       // The consumer-side dedupe key. BullMQ refuses a duplicate jobId, which
       // collapses most redeliveries before a handler ever runs — belt to the
       // consumers' idempotency braces, not a replacement for it (a completed job
       // is eventually removed, after which the same id can be added again).
+      // Job ids are per-queue, so the same event may sit in two queues at once —
+      // which is the intent: two different concerns, two independent deliveries.
       jobId: event.eventId,
       attempts: 5,
       backoff: { type: "exponential", delay: 1_000 },
       removeOnComplete: { count: 1_000 },
       removeOnFail: false, // the DLQ: a failed job stays visible until an operator looks
-    },
-  );
+    });
+  }
 
   await markSent(conn, event._id);
 }
@@ -197,14 +210,18 @@ export function startOutboxRelay(): void {
     return;
   }
 
-  queue = new Queue(EVENT_QUEUE, { connection: redisConnection(env.REDIS_URL) });
+  const connection = redisConnection(env.REDIS_URL);
+  for (const name of [EVENT_QUEUE, NOTIFICATION_QUEUE]) {
+    queues.set(name, new Queue(name, { connection }));
+  }
+
   stopped = false;
   timer = setInterval(() => void tick(), env.OUTBOX_POLL_MS);
   // Do not hold the process open for a poll: shutdown drains HTTP, not this.
   timer.unref();
 
   logger.info(
-    { pollMs: env.OUTBOX_POLL_MS, batch: env.OUTBOX_BATCH_SIZE, queue: EVENT_QUEUE },
+    { pollMs: env.OUTBOX_POLL_MS, batch: env.OUTBOX_BATCH_SIZE, queues: [...queues.keys()] },
     "outbox relay started",
   );
 }
@@ -213,6 +230,6 @@ export async function stopOutboxRelay(): Promise<void> {
   stopped = true;
   if (timer) clearInterval(timer);
   await releaseLock(LOCK_NAME, holderId);
-  await queue?.close();
-  queue = undefined;
+  await Promise.allSettled([...queues.values()].map((q) => q.close()));
+  queues.clear();
 }

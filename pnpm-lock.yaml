@@ -116,6 +116,9 @@ importers:
       mongoose:
         specifier: ^8.13.0
         version: 8.24.1
+      nodemailer:
+        specifier: ^9.0.3
+        version: 9.0.3
       otpauth:
         specifier: ^9.5.1
         version: 9.5.1
@@ -135,6 +138,9 @@ importers:
       "@types/node":
         specifier: ^22.14.0
         version: 22.20.1
+      "@types/nodemailer":
+        specifier: ^8.0.1
+        version: 8.0.1
       "@types/supertest":
         specifier: ^6.0.3
         version: 6.0.3
@@ -1926,6 +1932,12 @@ packages:
     resolution:
       {
         integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==,
+      }
+
+  "@types/nodemailer@8.0.1":
+    resolution:
+      {
+        integrity: sha512-PxpaInm8V1JQDd4j0ds5HfvWQk8JupS1C0Picb96QJsrrRDjBH+DlK7L4ZdNSqNULhiZRQHc40nLVShaGxXAMw==,
       }
 
   "@types/qs@6.15.1":
@@ -4036,6 +4048,13 @@ packages:
       }
     hasBin: true
 
+  nodemailer@9.0.3:
+    resolution:
+      {
+        integrity: sha512-n+YP+NKwR5zRWa60k3GiQ6Q3B4KXCoAw40dAKeCtYn020iNN74aWK2liXIC3ZEATeGql7we3tE3t8QwhY0eskw==,
+      }
+    engines: { node: ">=6.0.0" }
+
   npm-run-path@5.3.0:
     resolution:
       {
@@ -5917,6 +5936,10 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  "@types/nodemailer@8.0.1":
+    dependencies:
+      "@types/node": 22.20.1
+
   "@types/qs@6.15.1": {}
 
   "@types/range-parser@1.2.7": {}
@@ -7171,6 +7194,8 @@ snapshots:
     dependencies:
       detect-libc: 2.1.2
     optional: true
+
+  nodemailer@9.0.3: {}
 
   npm-run-path@5.3.0:
     dependencies:

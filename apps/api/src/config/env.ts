@@ -157,6 +157,59 @@ const envSchema = z.object({
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(50),
   /** After this many failed dispatches an event moves to `failed` — the DLQ. */
   OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
+
+  /* ── Notifications (Doc 02 A6) ─────────────────────────────────────────── */
+
+  /**
+   * Whether this pod consumes the notifications queue at all.
+   *
+   * Off means events still queue durably — nothing is lost, delivery is merely
+   * deferred until a consumer returns. That is the state you want during a
+   * restore drill or on a forensic copy of production, where the LAST thing you
+   * want is a thousand patients receiving yesterday's appointment reminders again.
+   */
+  NOTIFY_CONSUMER_ENABLED: envBool(true),
+
+  /**
+   * The outbound kill switch, per channel (FEATURE_ROLLOUT: standing `ops.*`
+   * switches for outbound notifications). Turning email off does not stop
+   * notifications being RECORDED — they land in the ledger as `suppressed`, so
+   * the hospital can see exactly what would have gone out and to whom.
+   *
+   * This is the switch you reach for at 3am when a template bug is mailing the
+   * wrong people. It is separate from NOTIFY_CONSUMER_ENABLED on purpose: one
+   * stops delivery, the other stops the whole pipeline.
+   */
+  NOTIFY_EMAIL_ENABLED: envBool(true),
+
+  /**
+   * SMTP. Unset host = no email transport: the service records every message as
+   * `unreachable` rather than crashing, so a dev machine with no mail server is a
+   * degraded pipeline, never a broken one.
+   *
+   * Dev points at Mailhog (infra/docker: SMTP 1025, inbox UI http://localhost:8025).
+   */
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().default(1025),
+  SMTP_SECURE: envBool(false),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  MAIL_FROM: z.string().default("MediCore <no-reply@paperlesstech.in>"),
+
+  /**
+   * The timezone a patient-facing time is rendered in.
+   *
+   * A reminder that names the wrong hour is worse than no reminder: the patient
+   * arrives five and a half hours late and blames the hospital. Timestamps are
+   * stored in UTC (they always should be) and MUST be rendered in the timezone the
+   * patient actually lives in.
+   *
+   * This is a platform-wide default because branch-level timezones are not modelled
+   * yet (B1–B3). It is the ONE place that assumption is written down, so when a
+   * hospital group spans Kochi and Dubai, this is the line that becomes a lookup —
+   * not a search through every template.
+   */
+  DEFAULT_TIMEZONE: z.string().default("Asia/Kolkata"),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -223,6 +276,15 @@ export function describeConfig(): Record<string, string> {
       ? `${String(env.PASSWORD_MIN_LENGTH)}+ chars, mixed case + digit + symbol`
       : `${String(env.PASSWORD_MIN_LENGTH)}+ chars, NO complexity (development only)`,
     outboxRelay: env.OUTBOX_RELAY_ENABLED ? "on" : "off",
+    // "consuming, but mail goes nowhere" is a state that looks healthy and is not.
+    // It is worth one word at boot rather than a support ticket a week later.
+    notifications: !env.NOTIFY_CONSUMER_ENABLED
+      ? "consumer off"
+      : !env.NOTIFY_EMAIL_ENABLED
+        ? "on (email suppressed)"
+        : env.SMTP_HOST
+          ? `on (smtp ${env.SMTP_HOST}:${String(env.SMTP_PORT)})`
+          : "on (no SMTP host — email unreachable)",
   };
 }
 

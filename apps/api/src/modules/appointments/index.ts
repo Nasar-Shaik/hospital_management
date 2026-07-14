@@ -29,6 +29,13 @@ export {
   type BookAppointmentInput,
 } from "./appointment.service.js";
 
+/**
+ * What this module does when an appointment event fires: the confirmation, the
+ * cancellation, and the day-before reminder. Registered by the event consumer's
+ * composition root — core/events/eventConsumer.ts.
+ */
+export { appointmentConsumers } from "./appointment.consumers.js";
+
 export {
   APPOINTMENT_STATUSES,
   canTransition,

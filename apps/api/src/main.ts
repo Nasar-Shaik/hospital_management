@@ -9,6 +9,8 @@ import { closeMaster } from "./core/db/masterDb.js";
 import { closeAllTenantConnections } from "./core/db/connectionManager.js";
 import { closeRedis } from "./core/redis/redis.js";
 import { startOutboxRelay, stopOutboxRelay } from "./core/events/outboxRelay.js";
+import { startEventConsumer, stopEventConsumer } from "./core/events/eventConsumer.js";
+import { closeTaskQueue } from "./core/events/taskQueue.js";
 
 const logger = createLogger({ service: "api", level: env.LOG_LEVEL });
 const app = createApp(logger);
@@ -34,6 +36,12 @@ const server = bind ? app.listen(env.PORT, bind, onListening) : app.listen(env.P
 // is lost if no leader exists for a while — events wait, durably, in the outbox.
 startOutboxRelay();
 
+// EVERY pod consumes, though — no lock. Unlike the relay (which reads every
+// tenant's outbox and would duplicate work), consumers pull from a shared queue:
+// BullMQ hands each job to exactly one of them, so more pods is more throughput
+// rather than more copies of the same email.
+startEventConsumer();
+
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
@@ -50,7 +58,10 @@ async function shutdown(signal: string): Promise<void> {
     // shutdown would otherwise log a wall of "connection closed" errors that look
     // like an incident and are really just a deploy. Events it did not get to stay
     // `pending` and the next leader picks them up.
-    await stopOutboxRelay();
+    // The consumer stops before its database does. A job killed mid-flight is not
+    // lost — BullMQ returns it to the queue and another pod takes it, and the
+    // dedupe key means the patient is not told twice.
+    await Promise.allSettled([stopOutboxRelay(), stopEventConsumer(), closeTaskQueue()]);
     await Promise.allSettled([closeAllTenantConnections(), closeMaster(), closeRedis()]);
     clearTimeout(forceExit);
     logger.info("shutdown complete");

@@ -34,6 +34,18 @@ Registry of **every** scheduled/recurring background job. A cron/repeatable job 
 | `health.dlq-monitor`         | every 5 min                           | ops           | platform            | DLQ depth check across queues → alert                                                                                                                 | page at threshold                                                                                                               |
 | `health.dr-drill-reminder`   | quarterly                             | ops           | platform            | open a DR-drill task per runbook                                                                                                                      | log                                                                                                                             |
 
+## `reminder.appointments` is implemented as a DELAYED JOB, not a 5-minute sweep (A6, 2026-07-14)
+
+The row above describes a cron that wakes every 5 minutes and asks each tenant's database whether anything is due. What shipped instead: when an appointment is booked, the consumer schedules ONE delayed BullMQ job for T-24h (`core/events/taskQueue.ts`, `jobId: reminder:{tenantId}:{appointmentId}`).
+
+**Why.** The sweep costs 288 empty scans a day per tenant on a clinic with a quiet Tuesday, and it is the same work either way. The delayed job is scheduled at the moment its cause occurs.
+
+**The sweep's one real advantage is recovery of lost schedules — and we do not need it.** The EVENT that schedules the reminder is durable in the outbox, so a job lost with its Redis instance is rescheduled when that event is redelivered. Durability lives in the outbox, once, instead of in every consumer.
+
+**Cancellation is not handled, on purpose.** Nothing cancels or reschedules the job when the appointment changes. The job carries an appointment id, and the handler RE-READS the appointment when it fires: if it no longer `occupiesSlot()` (cancelled, rescheduled, completed, no-showed), it sends nothing. The delayed job is a trigger; the database is the truth. Keeping the decision in two places — a durable database and a volatile queue — and requiring them to agree is how a patient gets reminded to attend an appointment they cancelled last week.
+
+T-2h reminders are not built. When they are, they are a second `delayMs` on the same mechanism.
+
 ## Implementation status (A5)
 
 ✅ = implemented. Everything else is planned.

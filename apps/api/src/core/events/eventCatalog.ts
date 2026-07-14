@@ -76,10 +76,47 @@ export const EVENTS = {
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
 
 /**
- * The queue each event is dispatched to (ADR-0007: one queue per concern).
+ * The general fan-out queue, consumed by `apps/workers`.
  *
- * Everything lands on `events` today because no consumer is specialized yet.
- * When notifications (A6) arrives it gets its own queue and its own concurrency
- * budget, so a backlog of welcome emails can never delay a panic-value alert.
+ * Every event still lands here. Its consumer does nothing but acknowledge and log
+ * today — which is not waste: it keeps the whole pipe (publish → commit → relay →
+ * queue → handler) exercised on every login and every booking, so we do not first
+ * discover the pipe is broken on the day a discharge summary depends on it.
  */
 export const EVENT_QUEUE = "events";
+
+/**
+ * The notifications queue, consumed IN-PROCESS by the API (core/events/eventConsumer.ts).
+ * Its own queue and its own concurrency budget — exactly as this file promised
+ * when it said "when notifications (A6) arrives it gets its own queue", so a
+ * backlog of welcome emails can never delay a panic-value alert.
+ */
+export const NOTIFICATION_QUEUE = "notifications";
+
+/**
+ * Which queues an event is delivered to (ADR-0007: one queue per concern).
+ *
+ * ── AN EVENT GOES TO EVERY QUEUE THAT CARES, NOT TO ONE ─────────────────────
+ * This is a topic fan-out, and the duplication is the point. Two BullMQ Workers on
+ * the SAME queue do not each get every job — they split them. So if the API's
+ * notification consumer and the workers' consumer both sat on `events`, roughly
+ * half of all bookings would never produce a confirmation, and the other half would
+ * look like proof that it worked. That bug is invisible in a demo and obvious to a
+ * patient.
+ *
+ * A separate queue per concern also means separate retry budgets: a mail server
+ * outage retries emails without re-running analytics, and a poisoned analytics job
+ * cannot block a reminder.
+ *
+ * The same `eventId` is used as the BullMQ job id in each queue, so redelivery is
+ * still collapsed per queue, and consumers still dedupe (at-least-once, always).
+ */
+const NOTIFYING_EVENTS = new Set<string>([
+  EVENTS.PATIENT_REGISTERED,
+  EVENTS.APPOINTMENT_BOOKED,
+  EVENTS.APPOINTMENT_CANCELLED,
+]);
+
+export function queuesFor(name: string): string[] {
+  return NOTIFYING_EVENTS.has(name) ? [EVENT_QUEUE, NOTIFICATION_QUEUE] : [EVENT_QUEUE];
+}

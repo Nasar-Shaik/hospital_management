@@ -272,6 +272,16 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/appointments/64b7f0000000000000000001/cancel",
     body: { reason: "matrix probe" },
   },
+  "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
+  "GET /api/v1/notifications/templates": {
+    method: "get",
+    url: "/api/v1/notifications/templates",
+  },
+  "PUT /api/v1/notifications/templates/:key": {
+    method: "put",
+    url: "/api/v1/notifications/templates/appointment.reminder",
+    body: { enabled: true },
+  },
   "GET /api/v1/doctors/:doctorId/schedule": {
     method: "get",
     url: "/api/v1/doctors/64b7f0000000000000000001/schedule",
@@ -621,6 +631,20 @@ describe("privilege boundaries that must never move", () => {
       });
     expect(merge.status).toBe(403);
     expect(merge.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("a RECEPTIONIST cannot browse the notification ledger — a message body is PHI", async () => {
+    // The ledger holds every message we ever sent, and each one names a patient,
+    // their doctor and when they are coming in. It is a patient list with extra
+    // steps, and "can send appointments out" must not quietly become "can read
+    // everyone's".
+    const res = await request(app)
+      .get("/api/v1/notifications")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.RECEPTIONIST}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
   });
 });
 

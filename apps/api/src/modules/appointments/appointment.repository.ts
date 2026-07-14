@@ -49,10 +49,12 @@ function toAppointment(doc: AppointmentDoc): Appointment {
   };
 }
 
-/** Mongo's duplicate-key error. The ONE signal that a slot was taken between our read and our write. */
-export function isDuplicateKey(err: unknown): boolean {
-  return (err as { code?: number } | undefined)?.code === 11000;
-}
+/**
+ * Mongo's duplicate-key error. The ONE signal that a slot was taken between our
+ * read and our write. Shared with the notification ledger, which uses the same
+ * mechanism to enforce one-message-per-cause (core/db/mongoErrors.ts).
+ */
+export { isDuplicateKey } from "../../core/db/mongoErrors.js";
 
 export interface CreateAppointmentInput {
   patientId: string;

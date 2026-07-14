@@ -112,6 +112,10 @@ services:
       # store — never from a committed file (Doc 09 §20).
       API_JWT_SECRET: ${API_JWT_SECRET:-local-compose-jwt-secret-not-for-any-real-environment}
       API_ENCRYPTION_KEY: ${API_ENCRYPTION_KEY:-bG9jYWwtY29tcG9zZS1lbmMta2V5LTMyLWJ5dGVzISE=}
+      # Notifications (A6). `mailhog` is the service name on the compose network —
+      # from INSIDE a container, `localhost` would mean the api container itself.
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
     ports:
       - "4000:4000"
     depends_on:

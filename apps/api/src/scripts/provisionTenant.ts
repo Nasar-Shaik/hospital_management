@@ -17,6 +17,7 @@ import { createLogger } from "@medicore/logger";
 import { env } from "../config/env.js";
 import { provisionTenant } from "../modules/tenants/index.js";
 import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
+import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
@@ -85,6 +86,16 @@ async function main(): Promise<void> {
   });
 
   logger.info({ userId: admin.userId, email: admin.email, created: admin.created }, "admin seeded");
+
+  // The messages this hospital sends its patients. Seeded at birth so the first
+  // booking is confirmed — a hospital whose first patient got silence because a
+  // template was missing would be right to distrust everything after it.
+  const templates = await seedNotificationTemplates(
+    result.tenant.id,
+    result.tenant.slug,
+    connection,
+  );
+  logger.info({ templates }, "notification templates seeded");
 
   if (admin.generatedPassword) {
     // Deliberately on stdout, not through the logger: logs are shipped, indexed

@@ -29,6 +29,12 @@ export {
   type RegisterPatientResult,
 } from "./patient.service.js";
 
+/**
+ * What this module does when a patient event fires (welcome message). Registered by
+ * the event consumer's composition root — core/events/eventConsumer.ts.
+ */
+export { patientConsumers } from "./patient.consumers.js";
+
 export { PATIENT_STATUSES, GENDERS, BLOOD_GROUPS } from "./patient.model.js";
 export type { PatientStatus, Gender, BloodGroup } from "./patient.model.js";
 export { DUPLICATE_THRESHOLD, type DuplicateCandidate } from "./mpi.js";

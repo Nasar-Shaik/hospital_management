@@ -126,6 +126,16 @@ Fully containerized run (builds all four app images):
 docker compose -f infra/docker/docker-compose.yml --profile apps up --build
 ```
 
+## Reading the mail the system sends (Mailhog)
+
+Every notification MediCore sends in dev goes to **Mailhog**, not to a real inbox — nothing leaves your machine, which is the only acceptable posture for a system whose test fixtures are patient names.
+
+    open http://localhost:8025
+
+Book an appointment at `http://demo.localhost:3000/appointments` and the confirmation appears there within a couple of seconds (the outbox relay polls every 2s). Registering a patient sends a welcome carrying their UHID.
+
+The full path is worth knowing when something does not arrive: `publish()` → `outboxEvents` (same transaction as the booking) → relay → BullMQ `notifications` queue → consumer (in `apps/api`) → SMTP. If the mail is missing, `GET /api/v1/notifications` shows the ledger — including messages recorded as `unreachable` (the patient has no email address) or `suppressed` (an admin disabled the template).
+
 ## Inspecting the database (MongoDB Compass)
 
 ```

@@ -408,4 +408,61 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+
+  {
+    id: "0011-notifications",
+    description: "Notification ledger + template catalog (Doc 02 A6)",
+    up: async (db) => {
+      for (const name of ["notifications", "notificationTemplates"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * ── THE IDEMPOTENCY INVARIANT ───────────────────────────────────────────
+       * This index IS the rule "one message per cause". It is not a lookup index
+       * that happens to be unique — it is the only thing that actually stops a
+       * patient receiving two confirmations for one booking.
+       *
+       * Delivery is at-least-once by design (ADR-0007): the relay redelivers rather
+       * than risk losing an event, so the consumer WILL see `appointment.booked`
+       * twice. No service-level "have we already sent this?" check can arbitrate
+       * that — two handlers on two pods both read "no" and both send. Only the
+       * database can decide, and this is where it does.
+       *
+       * The caller supplies `dedupeKey` from the message's CAUSE
+       * (`appointment.confirmation:{id}`), never from its content — so a redelivery,
+       * a DLQ replay, or a restore all collide here and lose.
+       */
+      await db
+        .collection("notifications")
+        .createIndex(
+          { tenantId: 1, dedupeKey: 1 },
+          { unique: true, background: true, name: "one_message_per_cause" },
+        );
+
+      // "Did they get it?" — the ledger's reason to exist, asked at a front desk
+      // with a patient on the phone. Newest first, per recipient.
+      await db
+        .collection("notifications")
+        .createIndex({ tenantId: 1, recipientId: 1, createdAt: -1 }, { background: true });
+
+      // The operator's view: what is stuck, what bounced, what never had an address.
+      await db
+        .collection("notifications")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+
+      // The key the code renders by — and the upsert key the seed writes through.
+      await db
+        .collection("notificationTemplates")
+        .createIndex({ tenantId: 1, key: 1 }, { unique: true, background: true });
+    },
+    down: async (db) => {
+      for (const name of ["notifications", "notificationTemplates"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];
