@@ -15,7 +15,8 @@
     "migrate": "tsx --env-file-if-exists=.env src/scripts/migrateTenants.ts",
     "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts",
     "audit:chain": "tsx --env-file-if-exists=.env src/scripts/auditChain.ts",
-    "operator": "tsx --env-file-if-exists=.env src/scripts/createOperator.ts"
+    "operator": "tsx --env-file-if-exists=.env src/scripts/createOperator.ts",
+    "routes": "tsx --env-file-if-exists=.env src/scripts/routeAudit.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",

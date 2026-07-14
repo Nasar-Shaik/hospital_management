@@ -98,7 +98,7 @@ jobs:
       # and a real Redis — these suites fail, never skip, if the infrastructure is
       # unreachable: a silently skipped isolation suite is indistinguishable from a
       # passing one.
-      - name: Integration tests (tenant isolation + authentication)
+      - name: Integration tests (tenant isolation + authentication + RBAC matrix)
         run: pnpm --filter @medicore/api test:int
         env:
           MONGO_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true

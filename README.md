@@ -112,7 +112,13 @@ curl -s localhost:4000/health | jq                       # liveness
 curl -s localhost:4000/ready | jq                        # readiness (deps)
 ```
 
-The integration suites (46 tests: 17 tenant-isolation, 29 auth) run against a **real** MongoDB and Redis and **fail rather than skip** when either is unreachable. That is not fussiness: a silently skipped isolation suite is indistinguishable from a passing one, and because cache helpers fail soft, the token-revocation assertions would pass vacuously with no Redis running.
+The integration suites (**175 tests**: 17 tenant-isolation, 30 auth, 128 RBAC matrix) run against a **real** MongoDB and Redis and **fail rather than skip** when either is unreachable. That is not fussiness: a silently skipped isolation suite is indistinguishable from a passing one, and because cache helpers fail soft, the token-revocation assertions would pass vacuously with no Redis running.
+
+```bash
+pnpm --filter @medicore/api routes    # every route that shipped, and what guards it
+```
+
+The **RBAC matrix suite** does not hold a hand-written list of routes. It reads the shipped Express app and fails if any `/api/v1` route lacks a permission, or carries one nobody wrote an expectation for — so _a new unprotected route breaks the build_. The per-role expectations are derived from the permission catalog rather than typed out, because a hand-maintained expectation table drifts toward the code it is testing until it asserts nothing.
 
 Fully containerized run (builds all four app images):
 

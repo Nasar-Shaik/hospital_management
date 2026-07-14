@@ -26,6 +26,7 @@ import type { NextFunction, Request, Response } from "express";
 import type { FeatureFlag, PermissionDefinition } from "@medicore/permissions";
 import { getContext } from "../core/context/requestContext.js";
 import { AppError, InsufficientPermissionError } from "../core/errors/appError.js";
+import { tagMiddleware } from "../core/http/routeInventory.js";
 import { tryRecordAudit } from "../core/audit/auditWriter.js";
 import { requireAuth } from "./authenticate.js";
 import { getEffectivePermissions, getEffectiveBranchScope } from "../modules/rbac/index.js";
@@ -46,76 +47,86 @@ export interface AuthorizeOptions {
  *                  patientsRouter());
  */
 export function authorize(permission: PermissionDefinition, options: AuthorizeOptions = {}) {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    void (async () => {
-      try {
-        const auth = requireAuth(req);
-        const ctx = getContext();
+  /**
+   * Tagged so the route table can be AUDITED rather than eyeballed. The RBAC
+   * matrix suite reads these tags back off the shipped Express app and fails CI
+   * if any /api/v1 route lacks a permission, or carries one nobody wrote an
+   * expectation for. An unprotected route is invisible in a diff; it is not
+   * invisible to `routeInventory` (core/http/routeInventory.ts).
+   */
+  return tagMiddleware(
+    (req: Request, _res: Response, next: NextFunction): void => {
+      void (async () => {
+        try {
+          const auth = requireAuth(req);
+          const ctx = getContext();
 
-        // ── layer 1: entitlement ──────────────────────────────────────────
-        if (options.feature) {
-          if (!(await isFeatureEnabled(ctx.tenantId, options.feature))) {
-            throw new AppError("HMS-PLAN-002", 403, "Feature not in your edition", {
-              feature: options.feature,
-            });
+          // ── layer 1: entitlement ──────────────────────────────────────────
+          if (options.feature) {
+            if (!(await isFeatureEnabled(ctx.tenantId, options.feature))) {
+              throw new AppError("HMS-PLAN-002", 403, "Feature not in your edition", {
+                feature: options.feature,
+              });
+            }
           }
+
+          // ── layer 2: permission ───────────────────────────────────────────
+          const held = await getEffectivePermissions(auth.userId);
+          if (!held.has(permission.code)) {
+            /**
+             * A denial is audited (Doc 09 §9). One denial is a user clicking the
+             * wrong thing; forty denials from one account in a minute is somebody
+             * mapping the permission surface, and that pattern is invisible unless
+             * the misses are recorded as well as the hits.
+             *
+             * Best-effort: the request is already being refused, and a failing audit
+             * write must not turn a clean 403 into a confusing 500.
+             */
+            await tryRecordAudit({
+              action: "authz.denied",
+              category: "security",
+              resource: "permission",
+              resourceId: permission.code,
+              outcome: "failure",
+              meta: { required: permission.code, path: req.path, method: req.method },
+            });
+
+            throw new InsufficientPermissionError({ required: permission.code });
+          }
+
+          // ── layer 3: publish the scope; repositories enforce it ───────────
+          //
+          // The scope comes from the LIVE authorization bundle, not from the token.
+          // Reading it from the token made row scope stale in precisely the case
+          // that matters: a nurse moved off a ward, or restricted during an
+          // investigation, kept seeing the old ward's patients until her token
+          // expired. Permissions were live and scope was not — and the weaker half
+          // silently decided what she could see.
+          //
+          // `allBranches` travels WITH `branchIds` and is never inferred from it
+          // being empty — an empty list is also what a restricted binding looks like
+          // after something goes wrong, and those two cases must not collapse into
+          // one answer (rbac.model.ts).
+          const { branchIds, allBranches } = await getEffectiveBranchScope(auth.userId);
+
+          ctx.permissions = [...held];
+          ctx.branchIds = branchIds;
+          ctx.scope = {
+            permission: permission.code,
+            level: permission.scope ?? "tenant",
+            branchIds,
+            allBranches,
+            userId: auth.userId,
+          };
+
+          next();
+        } catch (err) {
+          next(err);
         }
-
-        // ── layer 2: permission ───────────────────────────────────────────
-        const held = await getEffectivePermissions(auth.userId);
-        if (!held.has(permission.code)) {
-          /**
-           * A denial is audited (Doc 09 §9). One denial is a user clicking the
-           * wrong thing; forty denials from one account in a minute is somebody
-           * mapping the permission surface, and that pattern is invisible unless
-           * the misses are recorded as well as the hits.
-           *
-           * Best-effort: the request is already being refused, and a failing audit
-           * write must not turn a clean 403 into a confusing 500.
-           */
-          await tryRecordAudit({
-            action: "authz.denied",
-            category: "security",
-            resource: "permission",
-            resourceId: permission.code,
-            outcome: "failure",
-            meta: { required: permission.code, path: req.path, method: req.method },
-          });
-
-          throw new InsufficientPermissionError({ required: permission.code });
-        }
-
-        // ── layer 3: publish the scope; repositories enforce it ───────────
-        //
-        // The scope comes from the LIVE authorization bundle, not from the token.
-        // Reading it from the token made row scope stale in precisely the case
-        // that matters: a nurse moved off a ward, or restricted during an
-        // investigation, kept seeing the old ward's patients until her token
-        // expired. Permissions were live and scope was not — and the weaker half
-        // silently decided what she could see.
-        //
-        // `allBranches` travels WITH `branchIds` and is never inferred from it
-        // being empty — an empty list is also what a restricted binding looks like
-        // after something goes wrong, and those two cases must not collapse into
-        // one answer (rbac.model.ts).
-        const { branchIds, allBranches } = await getEffectiveBranchScope(auth.userId);
-
-        ctx.permissions = [...held];
-        ctx.branchIds = branchIds;
-        ctx.scope = {
-          permission: permission.code,
-          level: permission.scope ?? "tenant",
-          branchIds,
-          allBranches,
-          userId: auth.userId,
-        };
-
-        next();
-      } catch (err) {
-        next(err);
-      }
-    })();
-  };
+      })();
+    },
+    { permission: permission.code, ...(options.feature ? { feature: options.feature } : {}) },
+  );
 }
 
 /**
@@ -124,20 +135,23 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
  * available?"). Rare by design: most routes need a permission too.
  */
 export function requireFeature(feature: FeatureFlag) {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    void (async () => {
-      try {
-        requireAuth(req);
-        const ctx = getContext();
-        if (!(await isFeatureEnabled(ctx.tenantId, feature))) {
-          throw new AppError("HMS-PLAN-002", 403, "Feature not in your edition", { feature });
+  return tagMiddleware(
+    (req: Request, _res: Response, next: NextFunction): void => {
+      void (async () => {
+        try {
+          requireAuth(req);
+          const ctx = getContext();
+          if (!(await isFeatureEnabled(ctx.tenantId, feature))) {
+            throw new AppError("HMS-PLAN-002", 403, "Feature not in your edition", { feature });
+          }
+          next();
+        } catch (err) {
+          next(err);
         }
-        next();
-      } catch (err) {
-        next(err);
-      }
-    })();
-  };
+      })();
+    },
+    { feature },
+  );
 }
 
 /**

@@ -418,7 +418,7 @@ That `traceId` is the same one on the HTTP request that created the account — 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build   # full quality gate
 pnpm boundaries                                          # module boundary rules
-pnpm --filter @medicore/api test:int                     # 46 integration tests
+pnpm --filter @medicore/api test:int                     # 175 integration tests (isolation + auth + RBAC matrix)
 ```
 
 `test:int` needs `pnpm docker:dev` running. It covers 17 tenant-isolation tests and 29 authentication tests against a **real** MongoDB and Redis, and it **fails rather than skips** if either is missing — a silently skipped isolation suite looks exactly like a passing one.

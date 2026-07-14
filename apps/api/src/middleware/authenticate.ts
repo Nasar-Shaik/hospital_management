@@ -21,6 +21,7 @@ import type { NextFunction, Request, Response } from "express";
 import { getContext } from "../core/context/requestContext.js";
 import { verifyToken } from "../core/crypto/jwt.js";
 import { cacheGet, cacheKeys } from "../core/redis/redis.js";
+import { tagMiddleware } from "../core/http/routeInventory.js";
 import { SessionExpiredError, TenantMismatchError } from "../core/errors/appError.js";
 
 function bearerToken(req: Request): string | undefined {
@@ -31,55 +32,60 @@ function bearerToken(req: Request): string | undefined {
 }
 
 export function authenticate() {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    void (async () => {
-      try {
-        const token = bearerToken(req);
-        if (!token) throw new SessionExpiredError({ reason: "missing bearer token" });
-
-        let claims;
+  // Tagged so `routeInventory` can prove every /api/v1 route is behind it — see
+  // core/http/routeInventory.ts. A route that forgot this is invisible in review.
+  return tagMiddleware(
+    (req: Request, _res: Response, next: NextFunction): void => {
+      void (async () => {
         try {
-          claims = await verifyToken(token, "access");
-        } catch {
-          // Bad signature, wrong issuer, expired, or an MFA-challenge token used
-          // as an access token — all indistinguishable to the caller on purpose.
-          throw new SessionExpiredError();
+          const token = bearerToken(req);
+          if (!token) throw new SessionExpiredError({ reason: "missing bearer token" });
+
+          let claims;
+          try {
+            claims = await verifyToken(token, "access");
+          } catch {
+            // Bad signature, wrong issuer, expired, or an MFA-challenge token used
+            // as an access token — all indistinguishable to the caller on purpose.
+            throw new SessionExpiredError();
+          }
+
+          const ctx = getContext();
+          if (claims.tid !== ctx.tenantId) {
+            throw new TenantMismatchError({ expected: ctx.tenantSlug, token: claims.tsl });
+          }
+
+          if (await cacheGet<number>(cacheKeys.revokedToken(claims.jti))) {
+            throw new SessionExpiredError({ reason: "token revoked" });
+          }
+
+          // Enrich the request context in place — everything downstream in this
+          // async tree (services, repositories, audit) sees the caller.
+          ctx.userId = claims.sub;
+          ctx.roles = claims.roles;
+          ctx.branchIds = claims.branchIds;
+          // So the audit trail can name a person rather than an ObjectId, without a
+          // user lookup on every write (Doc 09 §9). Tokens minted before this claim
+          // existed simply have no email — the trail falls back to the id, which is
+          // still correct, just less readable.
+          if (claims.eml) ctx.userEmail = claims.eml;
+
+          req.auth = {
+            userId: claims.sub,
+            roles: claims.roles,
+            branchIds: claims.branchIds,
+            jti: claims.jti,
+            expiresAt: claims.exp,
+          };
+
+          next();
+        } catch (err) {
+          next(err);
         }
-
-        const ctx = getContext();
-        if (claims.tid !== ctx.tenantId) {
-          throw new TenantMismatchError({ expected: ctx.tenantSlug, token: claims.tsl });
-        }
-
-        if (await cacheGet<number>(cacheKeys.revokedToken(claims.jti))) {
-          throw new SessionExpiredError({ reason: "token revoked" });
-        }
-
-        // Enrich the request context in place — everything downstream in this
-        // async tree (services, repositories, audit) sees the caller.
-        ctx.userId = claims.sub;
-        ctx.roles = claims.roles;
-        ctx.branchIds = claims.branchIds;
-        // So the audit trail can name a person rather than an ObjectId, without a
-        // user lookup on every write (Doc 09 §9). Tokens minted before this claim
-        // existed simply have no email — the trail falls back to the id, which is
-        // still correct, just less readable.
-        if (claims.eml) ctx.userEmail = claims.eml;
-
-        req.auth = {
-          userId: claims.sub,
-          roles: claims.roles,
-          branchIds: claims.branchIds,
-          jti: claims.jti,
-          expiresAt: claims.exp,
-        };
-
-        next();
-      } catch (err) {
-        next(err);
-      }
-    })();
-  };
+      })();
+    },
+    { authenticates: true },
+  );
 }
 
 /** The authenticated caller. Throws if used on a route that is not behind `authenticate`. */

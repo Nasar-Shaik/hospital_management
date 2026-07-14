@@ -19,6 +19,7 @@
  */
 import type { NextFunction, Request, Response } from "express";
 import { SessionExpiredError, InsufficientPermissionError } from "../core/errors/appError.js";
+import { tagMiddleware } from "../core/http/routeInventory.js";
 import { verifyToken } from "../core/crypto/jwt.js";
 import { cacheGet, cacheKeys } from "../core/redis/redis.js";
 import { findPlatformUserById } from "../modules/platform/platform.repository.js";
@@ -31,61 +32,68 @@ function bearer(req: Request): string | undefined {
 }
 
 export function authenticatePlatform() {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    void (async () => {
-      try {
-        const token = bearer(req);
-        if (!token) throw new SessionExpiredError({ reason: "no operator token" });
-
-        /**
-         * Type is checked INSIDE verification: a hospital user's access token
-         * cannot be replayed here, whatever else it carries.
-         *
-         * The failure is translated to HMS-AUTH-002 rather than allowed to escape
-         * as a raw Error. Presenting the wrong kind of token is an ordinary
-         * authentication event — a stale tab, a copied header, someone probing —
-         * and a 500 for it would be wrong twice over: it tells the caller our
-         * internals hiccuped (they did not), and it pages an on-call engineer for
-         * something that is working exactly as designed.
-         */
-        let claims;
+  // Tagged for `routeInventory`. Deliberately a DIFFERENT tag from `authenticate()`:
+  // an operator token and a tenant token are mutually rejecting populations, and a
+  // route audit that showed both as merely "authenticated" would hide the one
+  // mistake that matters — a route mounted on the wrong side of the boundary.
+  return tagMiddleware(
+    (req: Request, _res: Response, next: NextFunction): void => {
+      void (async () => {
         try {
-          claims = await verifyToken(token, "platform");
-        } catch {
-          throw new SessionExpiredError({ reason: "not a valid operator token" });
+          const token = bearer(req);
+          if (!token) throw new SessionExpiredError({ reason: "no operator token" });
+
+          /**
+           * Type is checked INSIDE verification: a hospital user's access token
+           * cannot be replayed here, whatever else it carries.
+           *
+           * The failure is translated to HMS-AUTH-002 rather than allowed to escape
+           * as a raw Error. Presenting the wrong kind of token is an ordinary
+           * authentication event — a stale tab, a copied header, someone probing —
+           * and a 500 for it would be wrong twice over: it tells the caller our
+           * internals hiccuped (they did not), and it pages an on-call engineer for
+           * something that is working exactly as designed.
+           */
+          let claims;
+          try {
+            claims = await verifyToken(token, "platform");
+          } catch {
+            throw new SessionExpiredError({ reason: "not a valid operator token" });
+          }
+
+          if (await cacheGet<number>(cacheKeys.revokedToken(claims.jti))) {
+            throw new SessionExpiredError({ reason: "token revoked" });
+          }
+
+          /**
+           * Re-read the operator on EVERY request rather than trusting the token's
+           * roles. A hospital user's roles are cached for their token's lifetime
+           * (ADR-0010) and that is an accepted bound — but an operator account that
+           * has just been disabled must lose access NOW, not in thirty minutes. This
+           * population is tiny; the read costs nothing and it removes the one window
+           * in which a fired operator still has the keys to every hospital.
+           */
+          const operator = await findPlatformUserById(claims.sub);
+          if (!operator || operator.status !== "active") {
+            throw new SessionExpiredError({ reason: "operator account is not active" });
+          }
+
+          req.operator = {
+            id: operator.id,
+            email: operator.email,
+            roles: operator.roles,
+            jti: claims.jti,
+            expiresAt: claims.exp,
+          };
+
+          next();
+        } catch (err) {
+          next(err);
         }
-
-        if (await cacheGet<number>(cacheKeys.revokedToken(claims.jti))) {
-          throw new SessionExpiredError({ reason: "token revoked" });
-        }
-
-        /**
-         * Re-read the operator on EVERY request rather than trusting the token's
-         * roles. A hospital user's roles are cached for their token's lifetime
-         * (ADR-0010) and that is an accepted bound — but an operator account that
-         * has just been disabled must lose access NOW, not in thirty minutes. This
-         * population is tiny; the read costs nothing and it removes the one window
-         * in which a fired operator still has the keys to every hospital.
-         */
-        const operator = await findPlatformUserById(claims.sub);
-        if (!operator || operator.status !== "active") {
-          throw new SessionExpiredError({ reason: "operator account is not active" });
-        }
-
-        req.operator = {
-          id: operator.id,
-          email: operator.email,
-          roles: operator.roles,
-          jti: claims.jti,
-          expiresAt: claims.exp,
-        };
-
-        next();
-      } catch (err) {
-        next(err);
-      }
-    })();
-  };
+      })();
+    },
+    { platformAuth: true },
+  );
 }
 
 export function requireOperator(req: Request): NonNullable<Request["operator"]> {
@@ -104,17 +112,20 @@ export function requireOperator(req: Request): NonNullable<Request["operator"]> 
  * operators should hold the role that cannot re-price a customer by accident.
  */
 export function requirePlatformRole(...allowed: PlatformRole[]) {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    const operator = requireOperator(req);
-    if (!allowed.some((role) => operator.roles.includes(role))) {
-      next(
-        new InsufficientPermissionError({
-          required: allowed.join(" or "),
-          held: operator.roles,
-        }),
-      );
-      return;
-    }
-    next();
-  };
+  return tagMiddleware(
+    (req: Request, _res: Response, next: NextFunction): void => {
+      const operator = requireOperator(req);
+      if (!allowed.some((role) => operator.roles.includes(role))) {
+        next(
+          new InsufficientPermissionError({
+            required: allowed.join(" or "),
+            held: operator.roles,
+          }),
+        );
+        return;
+      }
+      next();
+    },
+    { platformRoles: allowed },
+  );
 }
