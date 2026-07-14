@@ -28,7 +28,7 @@ import { getContext } from "../core/context/requestContext.js";
 import { AppError, InsufficientPermissionError } from "../core/errors/appError.js";
 import { tryRecordAudit } from "../core/audit/auditWriter.js";
 import { requireAuth } from "./authenticate.js";
-import { getEffectivePermissions, getEffectiveBranchIds } from "../modules/rbac/index.js";
+import { getEffectivePermissions, getEffectiveBranchScope } from "../modules/rbac/index.js";
 import { isFeatureEnabled } from "../modules/entitlements/index.js";
 
 export interface AuthorizeOptions {
@@ -87,13 +87,18 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
 
         // ── layer 3: publish the scope; repositories enforce it ───────────
         //
-        // `branchIds` comes from the LIVE authorization bundle, not from the
-        // token. Reading it from the token made row scope stale in precisely the
-        // case that matters: a nurse moved off a ward, or restricted during an
+        // The scope comes from the LIVE authorization bundle, not from the token.
+        // Reading it from the token made row scope stale in precisely the case
+        // that matters: a nurse moved off a ward, or restricted during an
         // investigation, kept seeing the old ward's patients until her token
         // expired. Permissions were live and scope was not — and the weaker half
         // silently decided what she could see.
-        const branchIds = await getEffectiveBranchIds(auth.userId);
+        //
+        // `allBranches` travels WITH `branchIds` and is never inferred from it
+        // being empty — an empty list is also what a restricted binding looks like
+        // after something goes wrong, and those two cases must not collapse into
+        // one answer (rbac.model.ts).
+        const { branchIds, allBranches } = await getEffectiveBranchScope(auth.userId);
 
         ctx.permissions = [...held];
         ctx.branchIds = branchIds;
@@ -101,6 +106,7 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
           permission: permission.code,
           level: permission.scope ?? "tenant",
           branchIds,
+          allBranches,
           userId: auth.userId,
         };
 
@@ -140,14 +146,26 @@ export function requireFeature(feature: FeatureFlag) {
  * Turns the caller's scope into a Mongo query fragment:
  *
  *   own    → only rows they own      ({ createdBy: me }, or a caller-supplied field)
- *   branch → only their branches     ({ branchId: { $in: [...] } })
+ *   branch → their branches, or everything if the binding is hospital-wide
  *   tenant → everything in the hospital (the tenantScope plugin already ensures this)
  *   global → unrestricted (platform operators only)
  *
- * A `branch`-scoped user with NO branches assigned is not "allowed everywhere" —
- * they are allowed nowhere, and this returns an impossible filter. Treating an
- * empty list as "no restriction" is the classic way branch scoping silently
- * becomes no scoping at all.
+ * ── THE `branch` CASE, WHICH IS THE SUBTLE ONE ───────────────────────────────
+ * Two DIFFERENT situations both used to arrive here as an empty `branchIds`:
+ *
+ *   (a) "this person is not confined to any branch"  → should see everything
+ *   (b) "this person is confined, to nothing"        → should see nothing
+ *
+ * They are opposites, and an empty array cannot tell them apart. This code used
+ * to treat every empty list as (b) and fail closed — correct for (b), and the
+ * reason it went unnoticed is that no `branch`-scoped resource existed. The moment
+ * one did (patients, P2), every administrator's patient list came back empty:
+ * everyone was case (a) and everyone was being answered as case (b).
+ *
+ * So the binding now states which it is (`branchScope`, rbac.model.ts) and the
+ * answer is read, not guessed. Fail-closed remains exactly where it belongs — a
+ * binding that SAYS it is branch-confined and names no branch still gets nothing,
+ * so a cleared list can never silently become "the whole hospital".
  */
 export function scopeFilter(ownField = "createdBy"): Record<string, unknown> {
   const scope = getContext().scope;
@@ -157,10 +175,10 @@ export function scopeFilter(ownField = "createdBy"): Record<string, unknown> {
     case "own":
       return { [ownField]: scope.userId };
     case "branch":
-      if (scope.branchIds.length === 0) {
-        // Fail closed. See above.
-        return { branchId: { $in: [] } };
-      }
+      // (a) not confined to any branch — the hospital-wide binding.
+      if (scope.allBranches) return {};
+      // (b) confined, but to nothing. An impossible filter, deliberately.
+      if (scope.branchIds.length === 0) return { branchId: { $in: [] } };
       return { branchId: { $in: scope.branchIds } };
     case "tenant":
     case "global":

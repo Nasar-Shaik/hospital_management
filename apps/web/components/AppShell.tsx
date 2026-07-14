@@ -17,6 +17,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
+import { ThemeToggle } from "@medicore/ui";
 import { useAuth } from "./AuthProvider";
 import { Badge, Button } from "./ui";
 
@@ -53,7 +54,7 @@ const NAVIGATION: NavSection[] = [
   {
     title: "Clinical",
     items: [
-      { label: "Patients", href: "/patients", permission: "patient:read", soon: true },
+      { label: "Patients", href: "/patients", permission: "patient:read" },
       { label: "Appointments", href: "/appointments", permission: "appointment:read", soon: true },
       { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },
     ],
@@ -86,9 +87,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-[var(--color-bg-subtle)]">
-      <aside className="hidden w-64 shrink-0 border-r border-[var(--color-border)] bg-white lg:block">
+      <aside className="hidden w-64 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] lg:block">
         <div className="flex h-16 items-center gap-2.5 border-b border-[var(--color-border)] px-6">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand-600)] text-sm font-bold text-white">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand-600)] text-sm font-bold text-[var(--color-on-accent)]">
             M
           </div>
           <span className="font-semibold text-[var(--color-fg)]">MediCore</span>
@@ -141,64 +142,68 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-white px-6">
+        <header className="flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-6">
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-[var(--color-fg)]">
               {typeof window !== "undefined" ? window.location.hostname : ""}
             </p>
           </div>
 
-          <div className="relative">
-            <button
-              onClick={() => setMenuOpen((o) => !o)}
-              className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-[var(--color-bg-subtle)]"
-            >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-brand-100)] text-xs font-semibold text-[var(--color-brand-700)]">
-                {initials(user.name)}
-              </span>
-              <span className="hidden text-left sm:block">
-                <span className="block text-sm font-medium text-[var(--color-fg)]">
-                  {user.name}
-                </span>
-                <span className="block text-xs text-[var(--color-fg-muted)]">
-                  {user.roles[0] ?? "No role"}
-                </span>
-              </span>
-            </button>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
 
-            {menuOpen && (
-              <div className="absolute right-0 z-10 mt-2 w-56 rounded-xl border border-[var(--color-border)] bg-white p-1.5 shadow-lg">
-                <div className="border-b border-[var(--color-border)] px-3 py-2.5">
-                  <p className="truncate text-sm font-medium">{user.email}</p>
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {user.roles.map((role) => (
-                      <Badge key={role} tone="brand">
-                        {role}
-                      </Badge>
-                    ))}
+            <div className="relative">
+              <button
+                onClick={() => setMenuOpen((o) => !o)}
+                className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-[var(--color-bg-subtle)]"
+              >
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-brand-100)] text-xs font-semibold text-[var(--color-brand-700)]">
+                  {initials(user.name)}
+                </span>
+                <span className="hidden text-left sm:block">
+                  <span className="block text-sm font-medium text-[var(--color-fg)]">
+                    {user.name}
+                  </span>
+                  <span className="block text-xs text-[var(--color-fg-muted)]">
+                    {user.roles[0] ?? "No role"}
+                  </span>
+                </span>
+              </button>
+
+              {menuOpen && (
+                <div className="absolute right-0 z-10 mt-2 w-56 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1.5 shadow-lg">
+                  <div className="border-b border-[var(--color-border)] px-3 py-2.5">
+                    <p className="truncate text-sm font-medium">{user.email}</p>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {user.roles.map((role) => (
+                        <Badge key={role} tone="brand">
+                          {role}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                  <Link
+                    href="/change-password"
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+                  >
+                    Change password
+                  </Link>
+                  <Link
+                    href="/sessions"
+                    onClick={() => setMenuOpen(false)}
+                    className="block rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+                  >
+                    Active sessions
+                  </Link>
+                  <div className="mt-1 border-t border-[var(--color-border)] pt-1">
+                    <Button variant="ghost" onClick={() => void logout()} className="w-full">
+                      Sign out
+                    </Button>
                   </div>
                 </div>
-                <Link
-                  href="/change-password"
-                  onClick={() => setMenuOpen(false)}
-                  className="block rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-                >
-                  Change password
-                </Link>
-                <Link
-                  href="/sessions"
-                  onClick={() => setMenuOpen(false)}
-                  className="block rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-                >
-                  Active sessions
-                </Link>
-                <div className="mt-1 border-t border-[var(--color-border)] pt-1">
-                  <Button variant="ghost" onClick={() => void logout()} className="w-full">
-                    Sign out
-                  </Button>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </header>
 

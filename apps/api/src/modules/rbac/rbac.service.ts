@@ -33,6 +33,8 @@ import type { Permission, Role, RoleBinding } from "./rbac.repository.js";
 export interface UserRoleClaims {
   roles: string[];
   branchIds: string[];
+  /** True when any binding reaches the whole hospital. Authorization reads this LIVE, not from the token. */
+  allBranches: boolean;
 }
 
 /* ── seeding ─────────────────────────────────────────────────────────────── */
@@ -112,6 +114,14 @@ export const seedSystemRoles = async (): Promise<Role[]> => (await seedRbac()).r
 export interface AuthorizationBundle {
   permissions: string[];
   branchIds: string[];
+  /**
+   * True when at least one of this user's role bindings reaches the whole hospital
+   * (`branchScope: "all"`). Carried as a FACT rather than inferred downstream from
+   * `branchIds.length === 0`, because an empty list is also what a restricted
+   * binding looks like after a bug eats its branches — and those two must not be
+   * the same answer. See rbac.model.ts.
+   */
+  allBranches: boolean;
 }
 
 async function getAuthorizationBundle(userId: string): Promise<AuthorizationBundle> {
@@ -125,7 +135,11 @@ async function getAuthorizationBundle(userId: string): Promise<AuthorizationBund
     getRoleClaims(userId),
   ]);
 
-  const bundle: AuthorizationBundle = { permissions, branchIds: claims.branchIds };
+  const bundle: AuthorizationBundle = {
+    permissions,
+    branchIds: claims.branchIds,
+    allBranches: claims.allBranches,
+  };
 
   // TTL matches the access token's life: a change invalidates explicitly, and
   // this bounds the damage if an invalidation is ever missed. Permissions fail
@@ -140,11 +154,18 @@ export async function getEffectivePermissions(userId: string): Promise<Set<strin
 }
 
 /**
- * The branches this user may see, live — NOT from their token.
+ * The branch scope this user actually has, live — NOT from their token.
  * `authorize` uses this to build the row-scope filter (ADR-0010 layer 3).
+ *
+ * Returns both halves together on purpose: "which branches" is meaningless without
+ * "…or is this person unrestricted", and answering one without the other is how
+ * the patient list ended up empty for everybody (see rbac.model.ts).
  */
-export async function getEffectiveBranchIds(userId: string): Promise<string[]> {
-  return (await getAuthorizationBundle(userId)).branchIds;
+export async function getEffectiveBranchScope(
+  userId: string,
+): Promise<{ branchIds: string[]; allBranches: boolean }> {
+  const bundle = await getAuthorizationBundle(userId);
+  return { branchIds: bundle.branchIds, allBranches: bundle.allBranches };
 }
 
 export async function hasPermission(userId: string, code: string): Promise<boolean> {
@@ -167,14 +188,24 @@ export async function invalidateRole(roleId: string): Promise<void> {
 
 export async function getRoleClaims(userId: string): Promise<UserRoleClaims> {
   const bindings = await repo.findBindingsForUser(userId);
+
   const branchIds = new Set<string>();
   for (const binding of bindings) {
     for (const branchId of binding.branchIds) branchIds.add(branchId);
   }
-  return { roles: bindings.map((b) => b.roleCode), branchIds: [...branchIds] };
+
+  /**
+   * Bindings UNION, they never intersect: a nurse who is ward staff at Branch A
+   * and also holds a hospital-wide quality role sees the whole hospital. The wider
+   * grant wins, because that is what granting it meant. An administrator who wants
+   * to confine her must narrow the wide binding, not add a narrow one beside it.
+   */
+  const allBranches = bindings.some((b) => b.branchScope === "all");
+
+  return { roles: bindings.map((b) => b.roleCode), branchIds: [...branchIds], allBranches };
 }
 
-/** The branches a user is scoped to. Empty = not restricted to specific branches. */
+/** The branches a user is confined to. Meaningless unless `allBranches` is false. */
 export async function getUserBranchIds(userId: string): Promise<string[]> {
   return (await getRoleClaims(userId)).branchIds;
 }

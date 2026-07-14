@@ -129,6 +129,27 @@ active|disabled|invited → archived
 
 Guards: `invited` has no credential yet — only accepting the invitation sets one. `locked` is entered automatically after `LOGIN_MAX_ATTEMPTS` failures inside `LOGIN_LOCKOUT_MINUTES` and leaves automatically when that window elapses; an admin may unlock early. `disabled` is an explicit human act (offboarding) and blocks login until reversed. Only `active` may authenticate — every other state fails as `HMS-AUTH-001` (indistinguishable to the caller, so login is never a user-enumeration oracle). Deleting a clinician who has signed records is forbidden — clinical attribution must survive offboarding — so `archived` is soft and terminal. Terminal: **archived**.
 
+## 13. Patient (tenant DB) — the MPI record
+
+```
+active → merged                        (a human declares this to be the same person)
+```
+
+That is the whole lifecycle, and its shortness is the design.
+
+A patient does not become "inactive". Someone who has not visited in ten years is the same person with the same allergies, and a status that hid them would hide them from the clinician who needs them at 3am. There is no `deleted` either: a patient record is a legal document under a statutory retention period (DATA_RETENTION_POLICY), so **no code path deletes one** — the merge service marks and links, it never removes.
+
+Guards:
+
+- **`merged` is terminal and the merged row is KEPT** — with its UHID, its history and a `mergedInto` pointer. The old UHID is already on a wristband, a lab slip and an insurance claim, so a lookup by that number must still resolve or those documents become unverifiable.
+- **No chains.** Merging into a record that is _itself_ merged is refused (`HMS-STATE-001`). Otherwise A → B → C forms, every consumer re-pointing a `patientId` has to walk a linked list, and one of those lists eventually contains a cycle. Merge into the record that is actually alive.
+- **A merged record is immutable.** Editing demographics on it would silently change the evidence the merge decision was made on.
+- Merging requires `patient:merge` — deliberately _not_ implied by `patient:register`. It is the one irreversible action in the module.
+
+Deciding two records are one person is a **clinical safety** act, not a data-cleanup act: get it wrong and one person's allergies sit on another person's chart. So it is never automatic. The MPI (`mpi.ts`) only ever _proposes_ — `HMS-PAT-002` stops a probable duplicate and asks a human, and a human with the permission may still override, which is itself audited (`patient.duplicateOverridden`).
+
+Terminal: **merged**.
+
 ---
 
 ## Adding an entity lifecycle

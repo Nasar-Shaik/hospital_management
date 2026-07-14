@@ -35,6 +35,25 @@ export const EVENTS = {
   USER_DISABLED: "identity.user.disabled",
   /** A role binding changed. Consumer: permission cache invalidation across pods. */
   USER_ROLES_CHANGED: "identity.user.rolesChanged",
+
+  /* ── Patients (Doc 02 C1) ───────────────────────────────────────────────── */
+
+  /** A patient was registered. Consumers (A6): welcome message; analytics. */
+  PATIENT_REGISTERED: "patient.patient.registered",
+  /**
+   * Two records were found to be the same person.
+   *
+   * The single most important event in this catalog for anything built later.
+   * EVERY module that stores a `patientId` — appointments, visits, bills, lab
+   * orders, prescriptions — must consume this and re-point its references, or it
+   * will keep serving a chart that a human has already declared obsolete.
+   *
+   * The merged record is NOT deleted, so a consumer that misses this event is
+   * stale rather than broken. Consumers must be idempotent: at-least-once
+   * delivery means they will see it twice, and re-pointing an already-re-pointed
+   * reference must be a no-op (ADR-0007).
+   */
+  PATIENTS_MERGED: "patient.patients.merged",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];

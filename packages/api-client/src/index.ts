@@ -183,6 +183,57 @@ export interface AuditIntegrity {
 
 export type PlatformRole = "SUPER_ADMIN" | "SUPPORT";
 
+/* ── patients (Doc 02 C1) ── */
+
+export type PatientStatus = "active" | "merged";
+export type Gender = "male" | "female" | "other" | "unknown";
+
+export interface Patient {
+  id: string;
+  /** The number on the wristband. Tenant-scoped, permanent, never reused. */
+  uhid: string;
+  name: string;
+  gender: Gender;
+  status: PatientStatus;
+  dob?: string;
+  bloodGroup?: string;
+  branchId?: string;
+  contact: { phone?: string; email?: string };
+  address?: Record<string, string | undefined>;
+  /** Set when this record was merged INTO another — it is no longer the live chart. */
+  mergedInto?: string;
+  mergedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RegisterPatientInput {
+  name: string;
+  gender?: Gender;
+  dob?: string;
+  bloodGroup?: string;
+  branchId?: string;
+  contact?: { phone?: string; email?: string };
+  address?: Record<string, string | undefined>;
+  /** Overrides a duplicate warning. Requires `patient:merge` server-side. */
+  force?: boolean;
+}
+
+/** One record the MPI thinks might be the same person, and why (mpi.ts). */
+export interface DuplicateCandidate {
+  patient: Patient;
+  /** 0–100. At or above 60 the API refuses to register without `force`. */
+  score: number;
+  /** "phone", "name", "date of birth", "gender" — shown to the clerk, never hidden. */
+  matchedOn: string[];
+}
+
+export interface RegisterPatientResult {
+  patient: Patient;
+  /** Near-misses BELOW the block threshold. Shown as a hint, not enforced. */
+  possibleDuplicates: DuplicateCandidate[];
+}
+
 export interface OperatorSession {
   accessToken: string;
   expiresIn: number;
@@ -394,6 +445,57 @@ export class ApiClient {
 
   resetStaffPassword(id: string): Promise<{ temporaryPassword?: string }> {
     return this.request("POST", `/api/v1/users/${id}/reset-password`, {});
+  }
+
+  /* ── patients (Doc 02 C1) ── */
+
+  listPatients(
+    params: { page?: number; limit?: number; q?: string; status?: PatientStatus } = {},
+  ): Promise<Paged<Patient>> {
+    const query = new URLSearchParams();
+    if (params.page) query.set("page", String(params.page));
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.q) query.set("q", params.q);
+    if (params.status) query.set("status", params.status);
+    const qs = query.toString();
+    return this.paged<Patient>(`/api/v1/patients${qs ? `?${qs}` : ""}`);
+  }
+
+  getPatient(id: string): Promise<Patient> {
+    return this.request<Patient>("GET", `/api/v1/patients/${id}`);
+  }
+
+  /**
+   * Registers a patient. Throws `ApiClientError` with `code === "HMS-PAT-002"`
+   * when the MPI thinks this person is already here — the caller is expected to
+   * show `details.candidates` and let a human decide, NOT to silently retry with
+   * `force`. That is the whole reason the API refuses instead of guessing.
+   */
+  registerPatient(input: RegisterPatientInput): Promise<RegisterPatientResult> {
+    return this.request<RegisterPatientResult>("POST", "/api/v1/patients", input);
+  }
+
+  updatePatient(id: string, input: Partial<RegisterPatientInput>): Promise<Patient> {
+    return this.request<Patient>("PATCH", `/api/v1/patients/${id}`, input);
+  }
+
+  /** The as-you-type duplicate check. POST because the body carries PHI. */
+  checkDuplicatePatients(input: {
+    name: string;
+    gender?: string;
+    dob?: string;
+    phone?: string;
+    excludeId?: string;
+  }): Promise<DuplicateCandidate[]> {
+    return this.request<DuplicateCandidate[]>("POST", "/api/v1/patients/check-duplicates", input);
+  }
+
+  mergePatients(input: {
+    survivorId: string;
+    duplicateId: string;
+    reason: string;
+  }): Promise<{ survivor: Patient; merged: Patient }> {
+    return this.request("POST", "/api/v1/patients/merge", input);
   }
 
   /* ── rbac ── */

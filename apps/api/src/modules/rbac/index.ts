@@ -15,7 +15,7 @@ export {
   // the hot path
   getEffectivePermissions,
   /** Live branch scope — NOT from the token, so a reassignment takes effect at once. */
-  getEffectiveBranchIds,
+  getEffectiveBranchScope,
   hasPermission,
   getRoleClaims,
   getUserBranchIds,

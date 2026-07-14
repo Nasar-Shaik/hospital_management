@@ -48,6 +48,12 @@ export interface RequestScope {
   permission: string;
   level: "own" | "branch" | "tenant" | "global";
   branchIds: string[];
+  /**
+   * True when the caller's role bindings reach the whole hospital. Distinct from
+   * `branchIds.length === 0`, which is what a CONFINED binding looks like when it
+   * names no branch — the opposite meaning (see `scopeFilter`).
+   */
+  allBranches: boolean;
   userId: string;
 }
 

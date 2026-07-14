@@ -13,13 +13,14 @@
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiClientError, type Edition, type Hospital } from "@medicore/api-client";
+import { ThemeToggle } from "@medicore/ui";
 import { OperatorProvider, useOperator } from "../lib/operator";
 
 function statusColor(status: Hospital["status"]): string {
-  if (status === "active") return "bg-emerald-50 text-emerald-700";
-  if (status === "trial") return "bg-amber-50 text-amber-700";
-  if (status === "suspended") return "bg-red-50 text-red-700";
-  return "bg-slate-100 text-slate-600";
+  if (status === "active") return "bg-[var(--color-success-bg)] text-[var(--color-success)]";
+  if (status === "trial") return "bg-[var(--color-warning-bg)] text-[var(--color-warning)]";
+  if (status === "suspended") return "bg-[var(--color-danger-bg)] text-[var(--color-danger)]";
+  return "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)]";
 }
 
 /* ── login ────────────────────────────────────────────────────────────────── */
@@ -51,45 +52,51 @@ function OperatorLogin() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-900 px-4">
+    <main className="flex min-h-screen items-center justify-center bg-[var(--color-bg-subtle)] px-4">
       <form onSubmit={submit} className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-slate-700 text-lg font-bold text-white">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-lg font-bold text-[var(--color-fg)]">
             P
           </div>
-          <h1 className="text-xl font-semibold text-white">Operator console</h1>
-          <p className="mt-1 text-sm text-slate-400">PaperlessTech platform — staff only.</p>
+          <h1 className="text-xl font-semibold text-[var(--color-fg)]">Operator console</h1>
+          <p className="mt-1 text-sm text-[var(--color-fg-subtle)]">
+            PaperlessTech platform — staff only.
+          </p>
         </div>
 
-        <div className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
-          {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+        <div className="space-y-4 rounded-xl bg-[var(--color-bg-elevated)] p-6 shadow-xl">
+          {error && (
+            <p className="rounded-lg bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
+              {error}
+            </p>
+          )}
 
           <label className="block">
-            <span className="text-sm font-medium text-slate-700">Email</span>
+            <span className="text-sm font-medium text-[var(--color-fg)]">Email</span>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
             />
           </label>
 
           <label className="block">
-            <span className="text-sm font-medium text-slate-700">Password</span>
+            <span className="text-sm font-medium text-[var(--color-fg)]">Password</span>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
             />
           </label>
 
           <button
             type="submit"
             disabled={busy}
-            className="w-full rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+            className="w-full rounded-lg bg-[var(--color-fg)] py-2.5 text-sm font-medium text-[var(--color-bg)] disabled:opacity-60"
           >
             {busy ? "Signing in…" : "Sign in"}
           </button>
@@ -200,28 +207,31 @@ function Console() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white">
+    <main className="min-h-screen bg-[var(--color-bg-subtle)]">
+      <header className="border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div>
-            <h1 className="text-lg font-semibold text-slate-900">Operator console</h1>
-            <p className="text-xs text-slate-500">
+            <h1 className="text-lg font-semibold text-[var(--color-fg)]">Operator console</h1>
+            <p className="text-xs text-[var(--color-fg-muted)]">
               {hospitals.length} hospitals · signed in as {operator?.email} (
               {operator?.roles.join(", ")})
             </p>
           </div>
-          <button
-            onClick={logout}
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
-          >
-            Sign out
-          </button>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <button
+              onClick={logout}
+              className="rounded-lg border border-[var(--color-border-strong)] px-3 py-1.5 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 
       <div className="mx-auto max-w-6xl space-y-6 p-6">
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <div className="rounded-lg border border-[var(--color-danger)] bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-red-800">
             {error}
           </div>
         )}
@@ -229,33 +239,33 @@ function Console() {
         {/* Shown ONCE. We store only a hash, so there is no "show it again" — and
             pretending otherwise would be a lie we could not honour. */}
         {created && (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-            <h2 className="font-semibold text-emerald-900">
+          <div className="rounded-xl border border-[var(--color-success)] bg-[var(--color-success-bg)] p-5">
+            <h2 className="font-semibold text-[var(--color-success)]">
               {created.hospital.hospitalName} is ready
             </h2>
-            <p className="mt-1 text-sm text-emerald-800">
+            <p className="mt-1 text-sm text-[var(--color-success)]">
               Hand these to the hospital. The password is shown once and cannot be recovered — we
               store only a hash of it.
             </p>
             <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
               <div>
-                <dt className="text-emerald-700">Sign-in URL</dt>
-                <dd className="font-mono text-emerald-950">{created.hospital.url}</dd>
+                <dt className="text-[var(--color-success)]">Sign-in URL</dt>
+                <dd className="font-mono text-[var(--color-success)]">{created.hospital.url}</dd>
               </div>
               <div>
-                <dt className="text-emerald-700">Email</dt>
-                <dd className="font-mono text-emerald-950">{created.email}</dd>
+                <dt className="text-[var(--color-success)]">Email</dt>
+                <dd className="font-mono text-[var(--color-success)]">{created.email}</dd>
               </div>
               <div>
-                <dt className="text-emerald-700">Temporary password</dt>
-                <dd className="font-mono font-semibold text-emerald-950">
+                <dt className="text-[var(--color-success)]">Temporary password</dt>
+                <dd className="font-mono font-semibold text-[var(--color-success)]">
                   {created.password ?? "(the one you set)"}
                 </dd>
               </div>
             </dl>
             <button
               onClick={() => setCreated(null)}
-              className="mt-4 text-sm font-medium text-emerald-800 underline"
+              className="mt-4 text-sm font-medium text-[var(--color-success)] underline"
             >
               I have copied these
             </button>
@@ -265,7 +275,7 @@ function Console() {
         {isSuperAdmin && !showForm && (
           <button
             onClick={() => setShowForm(true)}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+            className="rounded-lg bg-[var(--color-fg)] px-4 py-2 text-sm font-medium text-[var(--color-bg)]"
           >
             + New hospital
           </button>
@@ -274,10 +284,10 @@ function Console() {
         {showForm && (
           <form
             onSubmit={createHospital}
-            className="space-y-4 rounded-xl border border-slate-200 bg-white p-6"
+            className="space-y-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-6"
           >
-            <h2 className="font-semibold text-slate-900">New hospital</h2>
-            <p className="text-sm text-slate-500">
+            <h2 className="font-semibold text-[var(--color-fg)]">New hospital</h2>
+            <p className="text-sm text-[var(--color-fg-muted)]">
               Creates the database, runs its migrations, seeds the roles and issues the first
               administrator — one operation. A hospital without an administrator is a room locked
               from the inside.
@@ -285,17 +295,17 @@ function Console() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
-                <span className="text-sm font-medium text-slate-700">Hospital name</span>
+                <span className="text-sm font-medium text-[var(--color-fg)]">Hospital name</span>
                 <input
                   value={form.hospitalName}
                   onChange={(e) => setForm({ ...form, hospitalName: e.target.value })}
                   required
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
                 />
               </label>
 
               <label className="block">
-                <span className="text-sm font-medium text-slate-700">
+                <span className="text-sm font-medium text-[var(--color-fg)]">
                   Address (slug) — permanent
                 </span>
                 <input
@@ -303,22 +313,24 @@ function Console() {
                   onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase() })}
                   required
                   placeholder="sunrise"
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 font-mono text-sm"
                 />
                 {fieldErrors.slug && (
-                  <span className="mt-1 block text-xs text-red-600">{fieldErrors.slug[0]}</span>
+                  <span className="mt-1 block text-xs text-[var(--color-danger)]">
+                    {fieldErrors.slug[0]}
+                  </span>
                 )}
-                <span className="mt-1 block text-xs text-slate-500">
+                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
                   Becomes their hostname AND their database name. It cannot be changed later.
                 </span>
               </label>
 
               <label className="block">
-                <span className="text-sm font-medium text-slate-700">Edition</span>
+                <span className="text-sm font-medium text-[var(--color-fg)]">Edition</span>
                 <select
                   value={form.planCode}
                   onChange={(e) => setForm({ ...form, planCode: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
                 >
                   {editions.map((edition) => (
                     <option key={edition.code} value={edition.code}>
@@ -330,7 +342,7 @@ function Console() {
               </label>
 
               <label className="block">
-                <span className="text-sm font-medium text-slate-700">
+                <span className="text-sm font-medium text-[var(--color-fg)]">
                   First administrator (email)
                 </span>
                 <input
@@ -338,7 +350,7 @@ function Console() {
                   value={form.adminEmail}
                   onChange={(e) => setForm({ ...form, adminEmail: e.target.value })}
                   required
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
                 />
               </label>
             </div>
@@ -347,14 +359,14 @@ function Console() {
               <button
                 type="submit"
                 disabled={saving}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                className="rounded-lg bg-[var(--color-fg)] px-4 py-2 text-sm font-medium text-[var(--color-bg)] disabled:opacity-60"
               >
                 {saving ? "Creating…" : "Create hospital"}
               </button>
               <button
                 type="button"
                 onClick={() => setShowForm(false)}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600"
+                className="rounded-lg border border-[var(--color-border-strong)] px-4 py-2 text-sm text-[var(--color-fg-muted)]"
               >
                 Cancel
               </button>
@@ -362,9 +374,9 @@ function Console() {
           </form>
         )}
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 text-xs text-slate-500 uppercase">
+            <thead className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-muted)] uppercase">
               <tr>
                 <th className="px-4 py-3 font-medium">Hospital</th>
                 <th className="px-4 py-3 font-medium">Status</th>
@@ -373,10 +385,10 @@ function Console() {
                 {isSuperAdmin && <th className="px-4 py-3 font-medium">Actions</th>}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-[var(--color-border)]">
               {loading && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-subtle)]">
                     Loading the fleet…
                   </td>
                 </tr>
@@ -386,14 +398,14 @@ function Console() {
                 hospitals.map((hospital) => (
                   <tr key={hospital.id}>
                     <td className="px-4 py-3">
-                      <span className="block font-medium text-slate-900">
+                      <span className="block font-medium text-[var(--color-fg)]">
                         {hospital.hospitalName}
                       </span>
                       <a
                         href={hospital.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="font-mono text-xs text-slate-500 underline"
+                        className="font-mono text-xs text-[var(--color-fg-muted)] underline"
                       >
                         {hospital.url}
                       </a>
@@ -410,7 +422,7 @@ function Console() {
                         <select
                           value={hospital.planCode ?? ""}
                           onChange={(e) => void changePlan(hospital, e.target.value)}
-                          className="rounded-md border border-slate-300 px-2 py-1 text-xs"
+                          className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs"
                         >
                           <option value="">— none —</option>
                           {editions.map((edition) => (
@@ -420,10 +432,12 @@ function Console() {
                           ))}
                         </select>
                       ) : (
-                        <span className="text-slate-600">{hospital.planCode ?? "—"}</span>
+                        <span className="text-[var(--color-fg-muted)]">
+                          {hospital.planCode ?? "—"}
+                        </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">
+                    <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-subtle)]">
                       {hospital.databaseName}
                     </td>
                     {isSuperAdmin && (
@@ -431,14 +445,14 @@ function Console() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => void issueAdmin(hospital)}
-                            className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                            className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
                           >
                             Issue admin
                           </button>
                           {hospital.status === "suspended" ? (
                             <button
                               onClick={() => void changeStatus(hospital, "active")}
-                              className="rounded-md border border-emerald-300 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50"
+                              className="rounded-md border border-[var(--color-success)] px-2 py-1 text-xs text-[var(--color-success)] hover:bg-[var(--color-success-bg)]"
                             >
                               Reactivate
                             </button>
@@ -456,7 +470,7 @@ function Console() {
                                   void changeStatus(hospital, "suspended");
                                 }
                               }}
-                              className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                              className="rounded-md border border-[var(--color-danger)] px-2 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]"
                             >
                               Suspend
                             </button>
@@ -470,7 +484,7 @@ function Console() {
           </table>
         </div>
 
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-[var(--color-fg-subtle)]">
           Operators manage hospitals, not their patients. Nothing in this console exposes clinical
           data, and every action taken here is recorded in the hospital&apos;s own audit trail —
           where their compliance officer can see it.

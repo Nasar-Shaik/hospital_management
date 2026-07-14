@@ -262,4 +262,92 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+  {
+    id: "0008-patients",
+    description: "Patient master + MPI (Doc 02 C1) — the first PHI collection",
+    up: async (db) => {
+      await db.createCollection("patients").catch(() => undefined);
+
+      /**
+       * The UHID is the hospital's promise that this number means this person, and
+       * only the database can keep that promise. A service-level "check then
+       * insert" loses the race between two clerks registering at the same instant
+       * — and two patients sharing a UHID is not a bug you can fix afterwards,
+       * because you can no longer tell which records belonged to whom.
+       */
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, uhid: 1 }, { unique: true, background: true });
+
+      // The MPI's `$or`: each arm needs its own index or the duplicate check
+      // degrades into a collection scan — run on every registration, at a desk,
+      // with a patient standing there.
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, nameKey: 1 }, { background: true });
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, "contact.phone": 1 }, { background: true });
+      await db.collection("patients").createIndex({ tenantId: 1, dob: 1 }, { background: true });
+
+      // The patient list: active first, newest first, branch-scoped.
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, branchId: 1, status: 1 }, { background: true });
+    },
+    down: async (db) => {
+      /**
+       * This drops a collection of PATIENT RECORDS. It exists because Doc 09 §14
+       * requires every migration to have a `down`, and it is honest about what it
+       * does — but rolling this back on a live hospital destroys clinical data
+       * that is under a statutory retention period (DATA_RETENTION_POLICY). The
+       * real rollback for a bad patients release is a code revert, not this.
+       */
+      await db
+        .collection("patients")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0009-role-branch-scope",
+    description:
+      "Explicit branch scope on role bindings (ADR-0010) — an empty list stops meaning two things",
+    up: async (db) => {
+      /**
+       * Backfills `branchScope` on every existing binding, from what its branch
+       * list already implied:
+       *
+       *   branchIds empty     → "all"       nobody has been confined to a branch,
+       *                                     because branches are not a feature yet
+       *                                     (B1–B3). This is every user today.
+       *   branchIds non-empty → "branches"  confined to exactly those.
+       *
+       * This preserves today's behaviour EXACTLY and grants nobody anything they
+       * did not already have. Before P2 there was no `branch`-scoped resource, so
+       * every user effectively reached their whole hospital; this writes that fact
+       * down so `scopeFilter` no longer has to infer it from an empty array.
+       *
+       * Ordered AFTER 0008 because that is the migration that made the ambiguity
+       * reachable — `patients` is the first branch-scoped collection.
+       */
+      await db.collection("userRoles").updateMany(
+        {
+          branchScope: { $exists: false },
+          $or: [{ branchIds: { $size: 0 } }, { branchIds: { $exists: false } }],
+        },
+        { $set: { branchScope: "all" } },
+      );
+
+      await db
+        .collection("userRoles")
+        .updateMany({ branchScope: { $exists: false } }, { $set: { branchScope: "branches" } });
+    },
+    down: async (db) => {
+      await db.collection("userRoles").updateMany({}, { $unset: { branchScope: "" } });
+    },
+  },
 ];

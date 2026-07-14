@@ -39,15 +39,44 @@ const roleSchema = new Schema<RoleDoc>(
 );
 roleSchema.plugin(tenantScopePlugin);
 
+/**
+ * Is this binding restricted to particular branches, or does it reach the whole
+ * hospital? (ADR-0010 layer 3.)
+ *
+ * ── WHY THIS FIELD EXISTS AT ALL ─────────────────────────────────────────────
+ * It replaces an EMPTY `branchIds` array as the carrier of that meaning, and it
+ * was added the day the first branch-scoped resource shipped (patients, P2),
+ * because the empty array had quietly come to mean two opposite things:
+ *
+ *     rbac.model     "empty means all branches this role can reach"
+ *     rbac.service   "Empty = not restricted to specific branches"
+ *     authorize      "$in: []  →  Fail closed. Allowed NOWHERE."
+ *
+ * Both readings are defensible, which is precisely why `[]` must not be the thing
+ * that decides. Nothing exercised the contradiction while every resource was
+ * tenant-scoped; the first `branch`-scoped collection made the whole patient list
+ * empty for every user in the hospital, including the administrator who had just
+ * registered them.
+ *
+ * ── AND WHY IT IS NOT SIMPLY "[] MEANS EVERYWHERE" ───────────────────────────
+ * Because that is the failure the fail-closed rule was written to prevent, and it
+ * remains right: if a bug, a bad migration or a careless edit ever CLEARS the
+ * branch list on a restricted binding, "empty = everywhere" silently promotes a
+ * ward nurse to the whole hospital. With the intent stored explicitly, that same
+ * accident leaves `branchScope: "branches"` with no branches — and grants nothing,
+ * loudly. Unrestricted access now requires a value somebody deliberately set.
+ */
+export const BRANCH_SCOPES = ["all", "branches"] as const;
+export type BranchScope = (typeof BRANCH_SCOPES)[number];
+
 export interface UserRoleDoc {
   _id: Types.ObjectId;
   tenantId: string;
   userId: string;
   roleId: string;
-  /**
-   * Branch scoping (Doc 03 §1): empty means "all branches this role can reach".
-   * Row-level scope enforcement arrives with the authorize middleware in 1C.
-   */
+  /** `all` → the whole hospital. `branches` → only `branchIds` (empty = nowhere). */
+  branchScope: BranchScope;
+  /** Meaningful only when `branchScope === "branches"`. */
   branchIds: string[];
   createdAt: Date;
   updatedAt: Date;
@@ -57,6 +86,7 @@ const userRoleSchema = new Schema<UserRoleDoc>(
   {
     userId: { type: String, required: true },
     roleId: { type: String, required: true },
+    branchScope: { type: String, enum: BRANCH_SCOPES, required: true, default: "all" },
     branchIds: { type: [String], default: [] },
   },
   { timestamps: true, collection: "userRoles", autoIndex: false },

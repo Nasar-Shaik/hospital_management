@@ -102,3 +102,27 @@ export class TenantUnavailableError extends AppError {
     super("HMS-TEN-004", 503, "A dependency is unavailable", details);
   }
 }
+
+/* ── Patients (Doc 02 C1, ERROR_CODES: HMS-PAT-*) ────────────────────────── */
+
+/** HMS-PAT-001 — no patient with that id or UHID *that this caller may see*. */
+export class PatientNotFoundError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-PAT-001", 404, "Patient not found", details);
+  }
+}
+
+/**
+ * HMS-PAT-002 — the MPI believes this person is already registered.
+ *
+ * A 409, not a 400: the request is well-formed and may well be correct. It is a
+ * CONFLICT with what we already know, and the resolution is a human decision —
+ * use the existing record, or override and register anyway (which needs
+ * `patient:merge`). `details.candidates` carries who we think they are, with the
+ * reason for each, because a refusal a clerk cannot act on just gets worked around.
+ */
+export class DuplicatePatientError extends AppError {
+  constructor(details: unknown) {
+    super("HMS-PAT-002", 409, "Possible duplicate patient", details);
+  }
+}

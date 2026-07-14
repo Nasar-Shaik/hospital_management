@@ -22,10 +22,10 @@ export function Button({
 }) {
   const styles: Record<string, string> = {
     primary:
-      "bg-[var(--color-brand-600)] text-white hover:bg-[var(--color-brand-700)] disabled:bg-[var(--color-brand-600)]/50",
+      "bg-[var(--color-brand-600)] text-[var(--color-on-accent)] hover:bg-[var(--color-brand-700)] disabled:bg-[var(--color-brand-600)]/50",
     secondary:
-      "bg-white text-[var(--color-fg)] border border-[var(--color-border-strong)] hover:bg-[var(--color-bg-subtle)]",
-    danger: "bg-[var(--color-danger)] text-white hover:opacity-90",
+      "bg-[var(--color-bg-elevated)] text-[var(--color-fg)] border border-[var(--color-border-strong)] hover:bg-[var(--color-bg-subtle)]",
+    danger: "bg-[var(--color-danger)] text-[var(--color-on-accent)] hover:opacity-90",
     ghost: "text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]",
   };
 
@@ -65,7 +65,7 @@ export function Field({
         // a screen reader and to a colour-blind user (Doc 08 accessibility).
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${props.name ?? label}-error` : undefined}
-        className={`w-full rounded-lg border bg-white px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-[var(--color-fg-subtle)] focus:ring-2 focus:ring-[var(--color-brand-500)]/30 ${
+        className={`w-full rounded-lg border bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm outline-none transition-colors placeholder:text-[var(--color-fg-subtle)] focus:ring-2 focus:ring-[var(--color-brand-500)]/30 ${
           error
             ? "border-[var(--color-danger)] focus:border-[var(--color-danger)]"
             : "border-[var(--color-border-strong)] focus:border-[var(--color-brand-500)]"

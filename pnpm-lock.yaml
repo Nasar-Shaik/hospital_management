@@ -302,7 +302,23 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
-  packages/ui: {}
+  packages/ui:
+    devDependencies:
+      "@medicore/config":
+        specifier: workspace:*
+        version: link:../config
+      "@types/react":
+        specifier: ^19.0.0
+        version: 19.2.17
+      eslint:
+        specifier: ^9.24.0
+        version: 9.39.5(jiti@2.7.0)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
 
   packages/utils:
     devDependencies:

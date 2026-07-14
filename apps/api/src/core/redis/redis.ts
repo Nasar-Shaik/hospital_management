@@ -44,11 +44,24 @@ export const cacheKeys = {
    */
   revokedToken: (jti: string) => `revoked:${jti}`,
   /**
-   * Effective permissions (CACHE_STRATEGY: `perm:{userId}`, TTL = access-token
-   * life). Read on every authorized request; invalidated explicitly by whoever
-   * changes a role or a binding.
+   * The authorization bundle — permissions + branch scope (CACHE_STRATEGY:
+   * `perm:{userId}`, TTL = access-token life). Read on every authorized request;
+   * invalidated explicitly by whoever changes a role or a binding.
+   *
+   * ── THE `v2` IS LOAD-BEARING. BUMP IT WHENEVER THE BUNDLE'S SHAPE CHANGES. ──
+   * A cached bundle outlives a deploy. When `allBranches` was added to the bundle
+   * (P2), every entry already in Redis lacked the field — and the new code reads a
+   * missing `allBranches` as `false`, which means "confined to no branches", which
+   * means every user in every hospital would have seen an EMPTY PATIENT LIST for
+   * up to a full TTL after the release, then silently started working. A bug that
+   * heals itself in fifteen minutes is one nobody can reproduce and everybody
+   * remembers.
+   *
+   * Versioning the key sidesteps the whole class: old-shaped entries are simply
+   * never read again, and they expire on their own. This is cheaper and safer than
+   * a migration, because the cache is not a source of truth — it can be abandoned.
    */
-  userPermissions: (userId: string) => `perm:${userId}`,
+  userPermissions: (userId: string) => `perm:v2:${userId}`,
   /**
    * Entitlement bundle — the tenant's enabled feature flags (CACHE_STRATEGY:
    * `ff:{tenantId}`, TTL 5 min). Invalidated on a plan or flag change.

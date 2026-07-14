@@ -20,6 +20,7 @@ import { authRouter } from "./modules/auth/index.js";
 import { rbacRouter } from "./modules/rbac/rbac.routes.js";
 import { staffRouter } from "./modules/staff/index.js";
 import { subscriptionRouter } from "./modules/subscriptions/index.js";
+import { patientRouter } from "./modules/patients/index.js";
 import { env } from "./config/env.js";
 
 export function createApp(logger: Logger): Express {
@@ -116,6 +117,8 @@ export function createApp(logger: Logger): Express {
   v1Router.use(staffRouter());
   v1Router.use(subscriptionRouter());
   v1Router.use(auditRouter());
+  // The first clinical module (P2). Everything above it is platform.
+  v1Router.use(patientRouter());
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

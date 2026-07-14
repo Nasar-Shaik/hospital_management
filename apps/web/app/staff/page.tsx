@@ -130,7 +130,7 @@ function StaffDirectory() {
                 Give them this temporary password. It is shown <strong>once</strong> — we store only
                 its hash, so it cannot be retrieved again. They must change it at first sign-in.
               </p>
-              <code className="mt-1 inline-block rounded-md bg-white px-3 py-1.5 font-mono text-sm">
+              <code className="mt-1 inline-block rounded-md bg-[var(--color-bg-elevated)] px-3 py-1.5 font-mono text-sm">
                 {created.password}
               </code>
             </div>
@@ -169,7 +169,7 @@ function StaffDirectory() {
               <select
                 value={form.role}
                 onChange={(e) => setForm({ ...form, role: e.target.value })}
-                className="w-full rounded-lg border border-[var(--color-border-strong)] bg-white px-3.5 py-2.5 text-sm"
+                className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm"
               >
                 <option value="">No role (can sign in, can do nothing)</option>
                 {roles.map((role) => (

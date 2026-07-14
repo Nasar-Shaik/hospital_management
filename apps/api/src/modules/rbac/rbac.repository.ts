@@ -8,6 +8,7 @@ import {
   getRoleModel,
   getRolePermissionModel,
   getUserRoleModel,
+  type BranchScope,
   type RoleDoc,
 } from "./rbac.model.js";
 import { getTenantDb } from "../../core/context/requestContext.js";
@@ -158,6 +159,7 @@ export async function findPermissionCodesForRole(roleId: string): Promise<string
 export interface RoleBinding {
   roleId: string;
   roleCode: string;
+  branchScope: BranchScope;
   branchIds: string[];
 }
 
@@ -172,7 +174,9 @@ export async function findBindingsForUser(userId: string): Promise<RoleBinding[]
   return bindings.flatMap((b) => {
     const roleCode = codeById.get(b.roleId);
     // A binding whose role was deleted grants nothing.
-    return roleCode ? [{ roleId: b.roleId, roleCode, branchIds: b.branchIds }] : [];
+    return roleCode
+      ? [{ roleId: b.roleId, roleCode, branchScope: b.branchScope, branchIds: b.branchIds }]
+      : [];
   });
 }
 
@@ -194,14 +198,24 @@ export async function findPermissionCodesForUser(userId: string): Promise<string
   return [...new Set(grants.map((g) => g.permissionCode))];
 }
 
+/**
+ * Binds a role to a user.
+ *
+ * The caller's INTENT is read from whether they named any branches — naming some
+ * means "restrict to these", naming none means "the whole hospital" — and then it
+ * is STORED, so nothing downstream has to re-derive it from an array that a later
+ * bug could empty. That is the whole point of `branchScope` (see rbac.model.ts).
+ */
 export async function assignRole(
   userId: string,
   roleId: string,
   branchIds: string[] = [],
 ): Promise<void> {
+  const branchScope: BranchScope = branchIds.length > 0 ? "branches" : "all";
+
   await getUserRoleModel(getTenantDb()).findOneAndUpdate(
     { userId, roleId },
-    { userId, roleId, branchIds },
+    { userId, roleId, branchScope, branchIds },
     { upsert: true },
   );
 }

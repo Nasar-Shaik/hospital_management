@@ -112,7 +112,7 @@ function LoginForm() {
     <main className="flex min-h-screen items-center justify-center bg-[var(--color-bg-subtle)] px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-600)] text-lg font-bold text-white">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-600)] text-lg font-bold text-[var(--color-on-accent)]">
             M
           </div>
           <h1 className="text-xl font-semibold text-[var(--color-fg)]">

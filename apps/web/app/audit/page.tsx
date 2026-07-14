@@ -174,7 +174,7 @@ function AuditTrail() {
             }}
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
               category === option.value
-                ? "bg-[var(--color-brand-600)] font-medium text-white"
+                ? "bg-[var(--color-brand-600)] font-medium text-[var(--color-on-accent)]"
                 : "border border-[var(--color-border)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
             }`}
           >
