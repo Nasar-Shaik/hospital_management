@@ -2,6 +2,7 @@
  * Platform DTOs (Doc 09 §5/§6).
  */
 import { z } from "@medicore/validation";
+import { ORGANIZATION_TYPES } from "@medicore/permissions";
 import { env } from "../../config/env.js";
 import { PLATFORM_ROLES } from "./platform.model.js";
 
@@ -36,6 +37,19 @@ export const createHospitalSchema = z
       ),
     hospitalName: z.string().min(2).max(120),
     planCode: z.string().regex(/^PLAN_[A-Z_]+$/, "must be a plan code such as PLAN_HOSPITAL"),
+    /**
+     * What KIND of hospital this is (ADR-0013 §6). Asked here because provisioning
+     * is the one moment the question can be put cleanly to a human.
+     *
+     * It selects a policy PRESET — where a journey starts, when a token is issued,
+     * whether patients are routed to a doctor or a department, and how they are
+     * billed. `government_hospital` gets `billingMode: zero_tariff`: the patient
+     * pays NOTHING, and every charge is still posted at ₹0, because the hospital
+     * must report drug consumption and per-patient cost even when nobody pays.
+     *
+     * Optional — defaults to `private_hospital`, the commonest customer.
+     */
+    organizationType: z.enum(ORGANIZATION_TYPES).optional(),
     adminEmail: z.string().email().max(254),
     adminName: z.string().min(2).max(120).optional(),
     /** Omit and a strong one is generated and shown ONCE. */

@@ -25,6 +25,7 @@
  *     accident.
  */
 import { createLogger } from "@medicore/logger";
+import type { OrganizationType } from "@medicore/permissions";
 import { AppError, InvalidCredentialsError } from "../../core/errors/appError.js";
 import { hashPassword, verifyPassword, generatePassword } from "../../core/crypto/password.js";
 import { signPlatformToken } from "../../core/crypto/jwt.js";
@@ -234,6 +235,15 @@ export interface CreateHospitalInput {
   /** Omit and one is generated and returned ONCE. */
   adminPassword?: string;
   trial?: boolean;
+  /**
+   * What kind of hospital this is (ADR-0013 §6). Selects a policy preset; after
+   * provisioning it is descriptive only, and no code may branch on it.
+   *
+   * `government_hospital` → `billingMode: zero_tariff`: the patient pays nothing
+   * and every charge is still posted at ₹0, because the hospital must report drug
+   * consumption and per-patient cost even when nobody pays.
+   */
+  organizationType?: OrganizationType;
 }
 
 export interface CreateHospitalResult {
@@ -264,6 +274,7 @@ export async function createHospital(
     hospitalName: input.hospitalName,
     planCode: input.planCode,
     trial: input.trial ?? false,
+    ...(input.organizationType ? { organizationType: input.organizationType } : {}),
   });
 
   const tenant = result.tenant;

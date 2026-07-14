@@ -3,6 +3,11 @@
  * or written (Doc 09 §10). Lookups are read-through cached (CACHE_STRATEGY).
  */
 import type { FilterQuery } from "mongoose";
+import {
+  resolveEncounterPolicy,
+  type EncounterPolicy,
+  type OrganizationType,
+} from "@medicore/permissions";
 import { cacheDel, cacheGet, cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import { env } from "../../config/env.js";
 import {
@@ -28,6 +33,28 @@ export interface TenantRegistryEntry {
    * rather than costing a second master lookup on the hot path.
    */
   planCode?: string;
+  /**
+   * What kind of hospital this is (ADR-0013 §6). Rides on the cached registry entry
+   * because the effective encounter policy is resolved on the hot path (every
+   * encounter created), and a second master lookup per patient arrival is not free.
+   *
+   * DESCRIPTIVE ONLY. Nothing branches on it — callers resolve the POLICY.
+   */
+  organizationType?: OrganizationType;
+  /** This hospital's deliberate deviations from its preset. Never a preset snapshot. */
+  encounterPolicy?: Partial<EncounterPolicy>;
+}
+
+/**
+ * The encounter policy actually in force for a hospital: its preset, plus whatever
+ * it has deliberately changed (ADR-0013 §5).
+ *
+ * This is how a caller asks "does this hospital charge?" — `policy.billingMode`,
+ * never `organizationType`. A government hospital that opens a paid private ward
+ * changes one override; under a type branch it would need a code change.
+ */
+export function policyOf(tenant: TenantRegistryEntry): EncounterPolicy {
+  return resolveEncounterPolicy(tenant.organizationType, tenant.encounterPolicy);
 }
 
 function toEntry(doc: TenantDoc): TenantRegistryEntry {
@@ -41,6 +68,8 @@ function toEntry(doc: TenantDoc): TenantRegistryEntry {
     status: doc.status,
     ...(doc.region ? { region: doc.region } : {}),
     ...(doc.subscription?.planCode ? { planCode: doc.subscription.planCode } : {}),
+    ...(doc.organizationType ? { organizationType: doc.organizationType } : {}),
+    ...(doc.encounterPolicy ? { encounterPolicy: doc.encounterPolicy } : {}),
   };
 }
 
@@ -99,12 +128,14 @@ export async function create(input: {
   customDomain?: string;
   region?: string;
   planCode?: string;
+  organizationType?: OrganizationType;
 }): Promise<TenantRegistryEntry> {
   const Tenant = await getTenantModel();
   const doc = await Tenant.create({
     hospitalName: input.hospitalName,
     slug: input.slug,
     databaseName: input.databaseName,
+    ...(input.organizationType ? { organizationType: input.organizationType } : {}),
     ...(input.customDomain ? { customDomain: input.customDomain } : {}),
     ...(input.region ? { region: input.region } : {}),
     subscription: input.planCode ? { planCode: input.planCode } : {},

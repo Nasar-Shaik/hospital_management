@@ -9,6 +9,7 @@
  * invalid transition throws HMS-STATE-001 rather than corrupting state.
  */
 import { getTenantConnection, releaseTenantConnection } from "../../core/db/connectionManager.js";
+import type { OrganizationType } from "@medicore/permissions";
 import { migrateTenantDb } from "../../core/db/migrations/runner.js";
 import { tenantMigrations } from "../../core/db/migrations/tenantMigrations.js";
 import { AppError } from "../../core/errors/appError.js";
@@ -79,6 +80,20 @@ export interface ProvisionTenantInput {
   customDomain?: string;
   region?: string;
   planCode?: string;
+  /**
+   * What kind of hospital this is (ADR-0013 §6) — private, government, clinic,
+   * diagnostic centre, medical college.
+   *
+   * It selects a POLICY PRESET (entry, token point, routing, billing mode,
+   * pharmacy) and is descriptive from then on. A government hospital gets
+   * `billingMode: zero_tariff` — the patient pays nothing and **every charge is
+   * still posted at ₹0**, because the hospital must report drug consumption and
+   * per-patient cost even when nobody pays. Billing is never switched off by type.
+   *
+   * This is the ONE moment the question can be asked cleanly. Defaults to
+   * `private_hospital` (@medicore/permissions), which is the commonest customer.
+   */
+  organizationType?: OrganizationType;
   /** Start in trial rather than active (Doc 07 §5.4). */
   trial?: boolean;
 }
@@ -116,6 +131,7 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
     ...(input.customDomain ? { customDomain: input.customDomain } : {}),
     ...(input.region ? { region: input.region } : {}),
     ...(input.planCode ? { planCode: input.planCode } : {}),
+    ...(input.organizationType ? { organizationType: input.organizationType } : {}),
   });
 
   // Creating the DB = connecting to it and writing; Mongo materializes it lazily.

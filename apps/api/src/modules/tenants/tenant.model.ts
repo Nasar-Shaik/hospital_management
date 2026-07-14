@@ -3,6 +3,11 @@
  * Platform module: business modules never touch this (Doc 04 §2.2.1).
  */
 import { Schema, type Connection, type Model, type Types } from "mongoose";
+import {
+  ORGANIZATION_TYPES,
+  type EncounterPolicy,
+  type OrganizationType,
+} from "@medicore/permissions";
 import { getMasterConnection } from "../../core/db/masterDb.js";
 
 /** Tenant lifecycle — STATE_MACHINE_CATALOG §11. Transitions are guarded in the service. */
@@ -40,6 +45,26 @@ export interface TenantDoc {
   subscription: TenantSubscription;
   status: TenantStatus;
   region?: string;
+  /**
+   * What KIND of hospital this is (ADR-0013 §6). It selects a policy preset at
+   * provisioning and is descriptive from then on.
+   *
+   * Nothing may branch on it. `if (organizationType === "government_hospital")` is
+   * forbidden — code asks the POLICY, never the type (see @medicore/permissions
+   * organizations.ts). Government hospitals run paid private wards; the branch is
+   * not even true, and it would make that customer unsellable.
+   */
+  organizationType?: OrganizationType;
+  /**
+   * The deliberate deviations this hospital has made from its preset.
+   *
+   * ONLY the overrides are stored — never a snapshot of the preset. A copied preset
+   * drifts: improve the government default next year and every hospital provisioned
+   * before it silently keeps the old one. Effective policy is resolved at read time
+   * (`resolveEncounterPolicy`), so we can improve defaults AND honour every choice a
+   * hospital has actually made.
+   */
+  encounterPolicy?: Partial<EncounterPolicy>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -59,6 +84,10 @@ const tenantSchema = new Schema<TenantDoc>(
     },
     status: { type: String, enum: TENANT_STATUSES, required: true, default: "provisioning" },
     region: { type: String },
+    organizationType: { type: String, enum: ORGANIZATION_TYPES },
+    // Free-form on purpose: it is a Partial<EncounterPolicy>, and the enum for each
+    // field is enforced where it is resolved, not smeared across the schema.
+    encounterPolicy: { type: Schema.Types.Mixed },
   },
   { timestamps: true, collection: "tenants" },
 );

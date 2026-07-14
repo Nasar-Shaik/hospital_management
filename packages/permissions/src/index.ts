@@ -660,3 +660,13 @@ export const DEFAULT_ROLES = [
 ] as const satisfies readonly RoleDefinition[];
 
 export type DefaultRoleCode = (typeof DEFAULT_ROLES)[number]["code"];
+
+/**
+ * Organization types + their policy presets (ADR-0013 §6).
+ *
+ * `organizationType` selects a preset at provisioning and is DESCRIPTIVE thereafter.
+ * Code asks the POLICY ("is billingMode zero_tariff?"), never the TYPE
+ * ("is this a government hospital?") — see organizations.ts for why that
+ * distinction decides whether a customer is sellable.
+ */
+export * from "./organizations.js";

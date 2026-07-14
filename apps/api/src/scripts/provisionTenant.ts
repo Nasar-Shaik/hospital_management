@@ -14,8 +14,9 @@
  *        --admin-email admin@apollo.com
  */
 import { createLogger } from "@medicore/logger";
+import { ORGANIZATION_TYPES, type OrganizationType } from "@medicore/permissions";
 import { env } from "../config/env.js";
-import { provisionTenant } from "../modules/tenants/index.js";
+import { provisionTenant, policyOf } from "../modules/tenants/index.js";
 import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
@@ -42,11 +43,19 @@ async function main(): Promise<void> {
   if (!hospitalName || !slug) {
     console.error(
       'Usage: provision --name "Apollo Hospital" --slug apollo [--domain hms.apollo.com]\n' +
-        "                 [--plan PLAN_CLINIC] [--trial] [--admin-email admin@apollo.com]\n" +
+        "                 [--plan PLAN_CLINIC] [--org-type government_hospital] [--trial]\n" +
+        "                 [--admin-email admin@apollo.com]\n" +
         "                 [--admin-name \"Dr Rao\"] [--admin-password '…']\n\n" +
         "Omit --admin-password and a strong one is generated and printed ONCE.",
     );
     process.exit(1);
+  }
+
+  const orgType = arg("--org-type") as OrganizationType | undefined;
+  if (orgType && !ORGANIZATION_TYPES.includes(orgType)) {
+    throw new Error(
+      `--org-type must be one of: ${ORGANIZATION_TYPES.join(", ")} (got "${orgType}")`,
+    );
   }
 
   const result = await provisionTenant({
@@ -54,6 +63,7 @@ async function main(): Promise<void> {
     slug,
     ...(customDomain ? { customDomain } : {}),
     ...(planCode ? { planCode } : {}),
+    ...(orgType ? { organizationType: orgType } : {}),
     trial,
   });
 
@@ -63,6 +73,11 @@ async function main(): Promise<void> {
       slug: result.tenant.slug,
       database: result.tenant.databaseName,
       status: result.tenant.status,
+      // The policy this hospital will actually run on — derived from its type, not
+      // stored as a copy. Logged at birth because "why is this hospital billing
+      // patients ₹0?" should be answerable without reading code.
+      organizationType: result.tenant.organizationType ?? "private_hospital (default)",
+      policy: policyOf(result.tenant),
       migrationsApplied: result.migrationsApplied,
     },
     "tenant provisioned",
