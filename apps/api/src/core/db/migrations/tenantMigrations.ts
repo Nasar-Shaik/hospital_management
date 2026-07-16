@@ -609,4 +609,76 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0014-billing",
+    description: "Tariff, charge ledger and invoices (Doc 02 F-group)",
+    up: async (db) => {
+      for (const name of ["serviceItems", "charges", "invoices"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      // One tariff entry per code. A price list with two `CBC` rows silently charges
+      // whichever one the query happened to reach first.
+      await db
+        .collection("serviceItems")
+        .createIndex({ tenantId: 1, code: 1 }, { unique: true, background: true });
+      await db
+        .collection("serviceItems")
+        .createIndex({ tenantId: 1, category: 1, name: 1 }, { background: true });
+
+      /**
+       * ── THE DOUBLE-BILLING INVARIANT ────────────────────────────────────────
+       * The outbox is at-least-once BY DESIGN, so the consumer that charges for a lab
+       * order WILL run twice. Without this index the patient pays for two blood tests
+       * and only had one — and they find out at the counter, in front of a queue.
+       *
+       * PARTIAL, because a manual charge has no `sourceId` and a cashier must be able
+       * to post two identical items (two dressings, same visit) on purpose.
+       */
+      await db.collection("charges").createIndex(
+        { tenantId: 1, sourceId: 1, code: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { sourceId: { $exists: true } },
+          background: true,
+          name: "one_charge_per_cause",
+        },
+      );
+
+      // The bill: every charge on this visit, oldest first.
+      await db
+        .collection("charges")
+        .createIndex({ tenantId: 1, encounterId: 1, postedAt: 1 }, { background: true });
+      await db
+        .collection("charges")
+        .createIndex({ tenantId: 1, patientId: 1, postedAt: -1 }, { background: true });
+
+      // One live invoice per visit.
+      await db
+        .collection("invoices")
+        .createIndex({ tenantId: 1, encounterId: 1 }, { background: true });
+      // The invoice number is a statutory identifier: two bills numbered INV-2026-0042
+      // is a tax problem, not a display bug.
+      await db.collection("invoices").createIndex(
+        { tenantId: 1, number: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { number: { $exists: true } },
+          background: true,
+          name: "one_invoice_per_number",
+        },
+      );
+      await db
+        .collection("invoices")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["serviceItems", "charges", "invoices"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];

@@ -23,6 +23,7 @@ import { subscriptionRouter } from "./modules/subscriptions/index.js";
 import { patientRouter } from "./modules/patients/index.js";
 import { encounterRouter } from "./modules/encounters/index.js";
 import { orderRouter } from "./modules/orders/index.js";
+import { billingRouter } from "./modules/billing/index.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
 import { env } from "./config/env.js";
@@ -126,6 +127,7 @@ export function createApp(logger: Logger): Express {
   // Feature-gated: a hospital that never bought scheduling gets HMS-PLAN-002.
   v1Router.use(encounterRouter());
   v1Router.use(orderRouter());
+  v1Router.use(billingRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
   app.use("/api/v1", resolveTenant(), v1Router);

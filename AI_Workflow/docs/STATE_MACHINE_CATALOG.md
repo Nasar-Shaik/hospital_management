@@ -39,13 +39,39 @@ Guards: `occupied` only via admission/transfer transaction; concurrent allocatio
 
 ## 4. Invoice (Bill)
 
+**Implemented (F-group, 2026-07-16) — reduced to what shipped.** The full graph below it remains the target; the refund and credit-note arms land with the insurance/claims work and are NOT built.
+
 ```
-draft → pending_finalization → finalized → partially_paid → paid
+draft → finalized → paid
+draft|finalized → cancelled
+```
+
+Guards:
+
+- **`finalized` assigns the invoice number** from an atomic `counters` `$inc` and FREEZES the lines. An invoice that can still be edited once it is in a patient's hand is not a document, it is a suggestion. Two cashiers finalizing at the same instant must not both be handed `INV-2026-00042` — a duplicate invoice number is a tax problem, not a display bug.
+- **A ₹0 total finalizes straight to `paid`.** A government hospital must not accumulate "unpaid" invoices nobody will ever pay: it would make every outstanding-balance report meaningless, and the product would be blamed for a problem it invented.
+- **Payment is refused on a `draft`.** Taking money against a bill whose lines can still change is how a patient pays for a test they were never given. Overpayment is refused outright.
+- `partially_paid` is NOT a state — it is `finalized` with `paid > 0`. A separate state buys nothing that the number does not already say, and every consumer would have to know both.
+
+Not yet built: `pending_finalization`, discount approval thresholds, `cancelled_reversed` (credit notes), and the refund arm.
+
+```
+(target) draft → pending_finalization → finalized → partially_paid → paid
 finalized|partially_paid → cancelled_reversed      (credit-note reversal only, never delete)
 paid → refund_in_progress → refunded_partial|refunded_full
 ```
 
-Guards: `finalized` assigns invoice number from `counters` and is immutable after; discounts beyond threshold require `billing:discount:approve` before finalization. Terminal: **paid** (unless refund), **cancelled_reversed, refunded_full**.
+Terminal: **paid, cancelled**.
+
+## 4b. Charge (tenant DB) — the ledger line
+
+Not a state machine; a ledger. Charges are POSTED and may be VOIDED, never deleted — money that vanishes cannot be audited. A charge already attached to a finalized invoice cannot be voided; reversing it is a credit note, which is a different document.
+
+Guards:
+
+- **One charge per cause.** Unique on `(sourceId, code)` where `sourceId` exists. The outbox is at-least-once BY DESIGN, so the consumer that bills a lab order WILL run twice; without the index the patient pays for two blood tests and had one, and finds out at the counter in front of a queue. Partial, because a manual charge has no `sourceId` and a cashier must be able to post two identical dressings on purpose.
+- **`listPrice` and `amount` are different numbers.** `listPrice` is what the care is worth; `amount` is what the patient owes. Under `zero_tariff` `amount` is 0 and `listPrice` is intact — free to the patient is not free to the state, which still has to cost the encounter and report drug consumption.
+- **A missing tariff entry never blocks a clinical action.** The charge posts at ₹0 with a loud log. A biller's data-entry backlog must not be able to stop a doctor investigating a patient.
 
 ## 5. Payment
 

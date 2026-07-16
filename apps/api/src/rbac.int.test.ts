@@ -360,6 +360,45 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/orders/64b7f0000000000000000001/cancel",
     body: { reason: "matrix probe" },
   },
+  /**
+   * Billing (F-group). The row that matters: a DOCTOR cannot see a bill and cannot
+   * take money — clinical judgement must not be shaped by what the patient can pay,
+   * and the person who prices the care should never be the one pocketing it.
+   */
+  "GET /api/v1/services": { method: "get", url: "/api/v1/services" },
+  "GET /api/v1/encounters/:id/bill": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/bill",
+  },
+  "POST /api/v1/charges": {
+    method: "post",
+    url: "/api/v1/charges",
+    body: {
+      encounterId: "64b7f0000000000000000001",
+      code: "DRESS",
+      category: "procedure",
+      quantity: 1,
+    },
+  },
+  "POST /api/v1/charges/:id/void": {
+    method: "post",
+    url: "/api/v1/charges/64b7f0000000000000000001/void",
+    body: { reason: "matrix probe" },
+  },
+  "POST /api/v1/encounters/:id/bill/finalize": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/bill/finalize",
+  },
+  "GET /api/v1/invoices": { method: "get", url: "/api/v1/invoices" },
+  "GET /api/v1/invoices/:id": {
+    method: "get",
+    url: "/api/v1/invoices/64b7f0000000000000000001",
+  },
+  "POST /api/v1/invoices/:id/payments": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/payments",
+    body: { amount: 50000, method: "cash" },
+  },
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",

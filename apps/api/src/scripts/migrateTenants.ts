@@ -24,6 +24,7 @@ import { closeRedis } from "../core/redis/redis.js";
 import { migrateTenant, getBySlug, type TenantRegistryEntry } from "../modules/tenants/index.js";
 import { seedRbac } from "../modules/rbac/index.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
+import { seedTariff } from "../seed/tariff.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
 
 const logger = createLogger({ service: "migrate-cli" });
@@ -57,6 +58,7 @@ interface Outcome {
   permissionsAdded: number;
   roles: number;
   templatesAdded: number;
+  tariffAdded: number;
   error?: string;
 }
 
@@ -87,6 +89,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
   //    hospitals that were provisioned BEFORE it existed, or they silently lose a
   //    message. It never overwrites wording a hospital has edited.
   const templatesAdded = await seedNotificationTemplates(tenant.id, tenant.slug, connection);
+  const tariffAdded = await seedTariff(tenant.id, tenant.slug, connection);
 
   return {
     slug: tenant.slug,
@@ -94,6 +97,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     permissionsAdded: seeded.permissionsAdded,
     roles: seeded.roles.length,
     templatesAdded,
+    tariffAdded,
   };
 }
 
@@ -134,6 +138,7 @@ async function main(): Promise<void> {
         permissionsAdded: 0,
         roles: 0,
         templatesAdded: 0,
+        tariffAdded: 0,
         error: err instanceof Error ? err.message : String(err),
       });
     }

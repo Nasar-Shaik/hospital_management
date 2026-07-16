@@ -684,6 +684,11 @@ export const DEFAULT_ROLES = [
       // claim of ADR-0013 §3, and this line is where it either holds or does not.
       CLINICAL.ORDER_READ,
       CLINICAL.ORDER_PERFORM,
+      // A pharmacy counter hands over drugs AND takes the money for them. Without
+      // `billing:read` the pharmacist cannot answer "what do I owe?" — which is the
+      // question every single patient asks them.
+      FINANCE.BILLING_READ,
+      FINANCE.PAYMENT_COLLECT,
       CLINICAL.EMR_READ,
     ),
   },
@@ -747,6 +752,9 @@ export const DEFAULT_ROLES = [
       PLATFORM.AUDIT_EXPORT,
       PLATFORM.USER_READ,
       PATIENT.MRD_REGISTER_VIEW,
+      // Bills are what an auditor actually reads. READ only — this role is defined by
+      // what it cannot do, and it cannot post, finalize, discount or take a payment.
+      FINANCE.BILLING_READ,
     ),
   },
   {

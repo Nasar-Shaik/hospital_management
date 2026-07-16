@@ -158,10 +158,16 @@ export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
 export const EVENT_QUEUE = "events";
 
 /**
- * The notifications queue, consumed IN-PROCESS by the API (core/events/eventConsumer.ts).
- * Its own queue and its own concurrency budget — exactly as this file promised
- * when it said "when notifications (A6) arrives it gets its own queue", so a
- * backlog of welcome emails can never delay a panic-value alert.
+ * The IN-PROCESS REACTION queue, consumed by the API (core/events/eventConsumer.ts).
+ *
+ * Its own queue and its own concurrency budget, so a backlog of welcome emails can
+ * never delay a panic-value alert.
+ *
+ * The queue's wire name is still `notifications` — historical, from A6 when messaging
+ * was its only consumer. It now also carries **billing** (a charge is posted when an
+ * encounter starts or an order is placed). Renaming the string would orphan every job
+ * already queued in Redis for the sake of tidiness, which is a bad trade; the constant
+ * says what it is, and this comment says why they differ.
  */
 export const NOTIFICATION_QUEUE = "notifications";
 
@@ -183,7 +189,7 @@ export const NOTIFICATION_QUEUE = "notifications";
  * The same `eventId` is used as the BullMQ job id in each queue, so redelivery is
  * still collapsed per queue, and consumers still dedupe (at-least-once, always).
  */
-const NOTIFYING_EVENTS = new Set<string>([
+const IN_PROCESS_EVENTS = new Set<string>([
   EVENTS.PATIENT_REGISTERED,
   EVENTS.APPOINTMENT_BOOKED,
   EVENTS.APPOINTMENT_CANCELLED,
@@ -192,8 +198,17 @@ const NOTIFYING_EVENTS = new Set<string>([
   // time it is published, and routing it through a queue as well would make the
   // warning arrive twice while teaching us to believe the queue was fast enough.
   EVENTS.RESULT_RELEASED,
+
+  // ── Billing listens; the clinical modules do not know money exists ──────────
+  // A patient arriving earns a consultation fee; a placed order earns the cost of the
+  // test; a cancelled order un-bills it. Routing these here is what makes billing a
+  // CONSUMER of care rather than a dependency of it — so a bad tariff can never fail
+  // a registration.
+  EVENTS.ENCOUNTER_STARTED,
+  EVENTS.ORDER_PLACED,
+  EVENTS.ORDER_CANCELLED,
 ]);
 
 export function queuesFor(name: string): string[] {
-  return NOTIFYING_EVENTS.has(name) ? [EVENT_QUEUE, NOTIFICATION_QUEUE] : [EVENT_QUEUE];
+  return IN_PROCESS_EVENTS.has(name) ? [EVENT_QUEUE, NOTIFICATION_QUEUE] : [EVENT_QUEUE];
 }

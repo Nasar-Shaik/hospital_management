@@ -19,6 +19,7 @@ import { env } from "../config/env.js";
 import { provisionTenant, policyOf } from "../modules/tenants/index.js";
 import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
+import { seedTariff } from "../seed/tariff.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
@@ -111,6 +112,11 @@ async function main(): Promise<void> {
     connection,
   );
   logger.info({ templates }, "notification templates seeded");
+
+  // The price list. Seeded at birth for the same reason: an order for a test with no
+  // tariff entry posts at 0, which looks like it works right up until a bill is read.
+  const tariff = await seedTariff(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ tariff }, "tariff seeded");
 
   if (admin.generatedPassword) {
     // Deliberately on stdout, not through the logger: logs are shipped, indexed

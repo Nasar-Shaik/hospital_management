@@ -35,6 +35,7 @@ import { recordAudit } from "../../core/audit/auditWriter.js";
 import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import { seedTenantAdmin } from "../../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../../seed/notificationTemplates.js";
+import { seedTariff } from "../../seed/tariff.js";
 import {
   provisionTenant,
   transitionStatus,
@@ -315,6 +316,9 @@ export async function createHospital(
    * existing hospital so the ones already provisioned are healed on the next migrate.
    */
   await seedNotificationTemplates(tenant.id, tenant.slug, connection);
+  // Same reason, same trap: a hospital with no tariff posts every charge at 0 and
+  // looks like it works right up until someone reads a bill.
+  await seedTariff(tenant.id, tenant.slug, connection);
 
   // OUR trail.
   await repo.recordPlatformAudit({
