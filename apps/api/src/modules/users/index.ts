@@ -27,4 +27,10 @@ export type {
   ListUsersFilter,
   UserPage,
 } from "./user.repository.js";
-export { USER_STATUSES, type UserStatus } from "./user.model.js";
+export {
+  USER_STATUSES,
+  STAFF_GENDERS,
+  type UserStatus,
+  type StaffGender,
+  type StaffProfile,
+} from "./user.model.js";

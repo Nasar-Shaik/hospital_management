@@ -669,3 +669,32 @@ Not bugs — **not built**, each for a stated reason. The reasons are recorded i
   password from **Staff** today.)
 - **A role editor.** You can assign an existing role; you cannot yet build a new one from a
   permission matrix.
+
+---
+
+## 12. Manual Verification — enhancement tracks (2026-07-16)
+
+Short, hands-on checks for the admin/clinical enhancements. Log in at `sunrise.localhost:3000`; every dev account is `123456` (the demo admin `admin@sunrise.test` is now `123456` too — a seed bug that left it on the provisioning password is fixed).
+
+### A1 · Roles & permissions guide (admin)
+
+- **Preconditions:** logged in as `admin@sunrise.test`.
+- **Steps:** open **Roles & permissions** in the left nav.
+- **Expected:**
+  - A **Your plan** card at the top (plan name + staff-login count, e.g. `9 / 250`).
+  - A **"Which login do I need?"** table mapping a job to a role — e.g. "See a doctor's appointments and consult patients → Doctor", "Run blood tests and enter diagnoses → Lab Technician".
+  - One card per role with a plain-language summary, a green **"When to create this login"** note, a **What they do** list, and the **screens it opens**.
+- **Edge cases:** log in as a non-admin (e.g. `drrao@sunrise.test`) and open the same URL — you should get "You do not have permission to manage roles", not a blank page or a crash.
+
+### A2 · Staff management (admin)
+
+- **Preconditions:** logged in as `admin@sunrise.test`. Open **Staff**.
+- **Steps & expected:**
+  - The list is a **professional table**: Name + email, Role, Department / specialty, Phone, Status, and per-row **View · Edit · Reset password · Disable** actions. Your own admin row has no Disable (you cannot lock yourself out).
+  - **Filter** by All / Active / Disabled, and search by name or email.
+  - **Add staff → pick a role.** The form ADAPTS: choose **Doctor** and you get Specialty, Qualification and Registration/licence fields; choose **Cashier** and those disappear. Fill some fields, create — a **temporary password shows once**.
+  - **Edit** a member: the form pre-fills; change the department/specialty and save; the table reflects it. (Email is read-only — it is the login.)
+  - **View** shows the full profile read-only, including MFA state and last sign-in.
+  - **Disable** a login (confirm the prompt) → status flips to `disabled` and their sessions end immediately; **Enable** restores it.
+  - **Reset password** issues a new temporary password (shown once) and ends their sessions.
+- **Edge cases:** every professional field is optional — create a doctor with only name/email/role and it still saves. A non-admin has no Add/Edit/Disable actions.

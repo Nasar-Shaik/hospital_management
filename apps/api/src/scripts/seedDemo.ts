@@ -148,7 +148,25 @@ async function seedHospital(h: DemoHospital): Promise<void> {
         // already there. A demo script you are afraid to re-run is a demo script nobody
         // runs.
         const already = await getByEmail(email);
-        if (already) continue;
+        if (already) {
+          /**
+           * The admin is the one account provisioning creates BEFORE this loop — with its
+           * own generated password, not ours. So `continue` here left exactly one dev login
+           * (`admin@<slug>.test`) that was NOT `123456`, silently breaking the rule that every
+           * demo account shares that password. Re-set it so the promise holds for everyone.
+           *
+           * If it is ALREADY `123456`, the password-history guard rejects "reusing" it —
+           * which is exactly the state we wanted, so that one validation error is success,
+           * not a failure. Anything else still throws. This keeps the seed re-runnable.
+           */
+          try {
+            await setPassword(already.id, PASSWORD, { mustChangePassword: false });
+          } catch (err) {
+            const code = (err as { code?: string }).code;
+            if (code !== "HMS-VAL-001") throw err;
+          }
+          continue;
+        }
 
         const user = await createUser({ email, name: person.name, status: "invited" });
         await setPassword(user.id, PASSWORD, { mustChangePassword: false });

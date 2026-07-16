@@ -26,7 +26,9 @@ import * as auth from "../auth/index.js";
 import * as rbac from "../rbac/index.js";
 import * as users from "../users/index.js";
 import { assertWithinLimit } from "../subscriptions/index.js";
-import type { User, UserStatus } from "../users/index.js";
+import type { StaffProfile, User, UserStatus } from "../users/index.js";
+
+export type { StaffProfile } from "../users/index.js";
 
 export interface StaffMember extends User {
   roles: string[];
@@ -38,6 +40,7 @@ export interface CreateStaffInput {
   name: string;
   phone?: string;
   employeeId?: string;
+  profile?: StaffProfile;
   roles?: string[];
   branchIds?: string[];
   /** Omit to generate a temporary password, returned ONCE and never recoverable. */
@@ -83,6 +86,7 @@ export async function createStaff(input: CreateStaffInput): Promise<CreateStaffR
     name: input.name,
     ...(input.phone ? { phone: input.phone } : {}),
     ...(input.employeeId ? { employeeId: input.employeeId } : {}),
+    ...(input.profile && Object.keys(input.profile).length > 0 ? { profile: input.profile } : {}),
     status: "invited",
   });
 
@@ -184,9 +188,21 @@ export async function listDoctors(): Promise<DoctorRef[]> {
 
 export async function updateStaff(
   userId: string,
-  input: { name?: string; phone?: string; employeeId?: string },
+  input: { name?: string; phone?: string; employeeId?: string; profile?: StaffProfile },
 ): Promise<StaffMember> {
-  const updated = await users.updateUser(userId, input);
+  /**
+   * The profile is MERGED, not replaced. An admin editing just the phone number must not
+   * wipe the specialty and registration number they are not touching. The edit form does
+   * send the whole profile today, but the service is the right place to make partial updates
+   * safe regardless of what the caller sends.
+   */
+  let merged = input;
+  if (input.profile) {
+    const current = await users.getById(userId);
+    merged = { ...input, profile: { ...current?.profile, ...input.profile } };
+  }
+
+  const updated = await users.updateUser(userId, merged);
   if (!updated) throw new AppError("HMS-GEN-404", 404, "User not found", { userId });
   return getStaff(userId);
 }

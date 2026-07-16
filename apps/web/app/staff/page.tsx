@@ -1,17 +1,29 @@
 "use client";
 
 /**
- * Staff directory (Doc 02 A3 "Staff Directory" page).
+ * Staff directory (Doc 02 A3) — where an administrator runs the hospital's logins.
  *
- * The screen where RBAC becomes real: add a colleague, give them a role, and the
- * permissions apply on their very next request.
+ * The screen where RBAC becomes real: add a colleague, give them a role, and the permissions
+ * apply on their very next request. It also carries the account's whole life — edit the
+ * profile, disable a login the moment someone leaves (which ends their sessions instantly),
+ * re-enable it, and reset a forgotten password.
  *
- * The temporary password is shown ONCE, in a panel that says so. We store only
- * its hash, so there is no "show it again" — pretending otherwise would be a lie
- * we could not honour.
+ * The registration form ADAPTS to the role: a doctor is asked for specialty and medical-council
+ * registration; a cashier is not. Every professional field is optional, because a form that
+ * refuses to save an urgently-hired doctor until every box is ticked is a form that gets
+ * bypassed on paper.
+ *
+ * A temporary password is shown ONCE, in a panel that says so. We store only its hash, so
+ * there is no "show it again" — pretending otherwise would be a lie we could not honour.
  */
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ApiClientError, type Role, type StaffMember } from "@medicore/api-client";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  ApiClientError,
+  STAFF_GENDERS,
+  type Role,
+  type StaffMember,
+  type StaffProfile,
+} from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
@@ -22,25 +34,427 @@ function statusTone(status: StaffMember["status"]): "success" | "danger" | "neut
   return "neutral";
 }
 
+/** Roles that see patients or run diagnostics — the ones a qualification and registration apply to. */
+const CLINICAL_ROLES = new Set([
+  "DOCTOR",
+  "NURSE",
+  "LAB_TECHNICIAN",
+  "PATHOLOGIST",
+  "RADIOLOGIST",
+  "PHARMACIST",
+]);
+/** Roles that carry a clinical specialty (drives the per-doctor consultation fee later). */
+const SPECIALTY_ROLES = new Set(["DOCTOR", "PATHOLOGIST", "RADIOLOGIST"]);
+
+interface FormState {
+  name: string;
+  email: string;
+  role: string;
+  phone: string;
+  employeeId: string;
+  designation: string;
+  department: string;
+  specialty: string;
+  qualification: string;
+  registrationNo: string;
+  gender: string;
+  dateOfBirth: string;
+  joiningDate: string;
+  address: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+}
+
+const EMPTY_FORM: FormState = {
+  name: "",
+  email: "",
+  role: "",
+  phone: "",
+  employeeId: "",
+  designation: "",
+  department: "",
+  specialty: "",
+  qualification: "",
+  registrationNo: "",
+  gender: "",
+  dateOfBirth: "",
+  joiningDate: "",
+  address: "",
+  emergencyContactName: "",
+  emergencyContactPhone: "",
+};
+
+function formFromMember(m: StaffMember): FormState {
+  const p = m.profile ?? {};
+  return {
+    name: m.name,
+    email: m.email,
+    role: m.roles[0] ?? "",
+    phone: m.phone ?? "",
+    employeeId: m.employeeId ?? "",
+    designation: p.designation ?? "",
+    department: p.department ?? "",
+    specialty: p.specialty ?? "",
+    qualification: p.qualification ?? "",
+    registrationNo: p.registrationNo ?? "",
+    gender: p.gender ?? "",
+    dateOfBirth: p.dateOfBirth ?? "",
+    joiningDate: p.joiningDate ?? "",
+    address: p.address ?? "",
+    emergencyContactName: p.emergencyContactName ?? "",
+    emergencyContactPhone: p.emergencyContactPhone ?? "",
+  };
+}
+
+/** Only send fields that were filled — an empty string is "not provided", not a value. */
+function profileFromForm(f: FormState): StaffProfile {
+  const out: StaffProfile = {};
+  const put = (k: keyof StaffProfile, v: string) => {
+    if (v.trim()) (out[k] as string) = v.trim();
+  };
+  put("designation", f.designation);
+  put("department", f.department);
+  put("specialty", f.specialty);
+  put("qualification", f.qualification);
+  put("registrationNo", f.registrationNo);
+  if (f.gender) out.gender = f.gender as StaffProfile["gender"];
+  put("dateOfBirth", f.dateOfBirth);
+  put("joiningDate", f.joiningDate);
+  put("address", f.address);
+  put("emergencyContactName", f.emergencyContactName);
+  put("emergencyContactPhone", f.emergencyContactPhone);
+  return out;
+}
+
+/** A simple centred dialog — the app has no modal primitive, and this is the one screen that needs one. */
+function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-2xl rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+          <h2 className="text-sm font-semibold text-[var(--color-fg)]">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function labelledSelect(
+  label: string,
+  value: string,
+  onChange: (v: string) => void,
+  options: { value: string; label: string }[],
+  placeholder = "Choose…",
+) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm text-[var(--color-fg)]"
+      >
+        <option value="">{placeholder}</option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** The create/edit form. Adapts its professional fields to the chosen role. */
+function StaffForm({
+  mode,
+  initial,
+  roles,
+  onSubmit,
+  saving,
+  fieldErrors,
+}: {
+  mode: "create" | "edit";
+  initial: FormState;
+  roles: Role[];
+  onSubmit: (f: FormState) => void;
+  saving: boolean;
+  fieldErrors: Record<string, string[]>;
+}) {
+  const [form, setForm] = useState<FormState>(initial);
+  const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+  const isClinical = CLINICAL_ROLES.has(form.role);
+  const hasSpecialty = SPECIALTY_ROLES.has(form.role);
+
+  return (
+    <form
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        onSubmit(form);
+      }}
+      className="space-y-5"
+    >
+      <div>
+        <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+          Account
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Full name"
+            name="name"
+            value={form.name}
+            onChange={(e) => set({ name: e.target.value })}
+            error={fieldErrors.name?.[0]}
+            required
+          />
+          <Field
+            label="Email"
+            name="email"
+            type="email"
+            value={form.email}
+            onChange={(e) => set({ email: e.target.value })}
+            error={fieldErrors.email?.[0]}
+            required
+            disabled={mode === "edit"}
+            hint={mode === "edit" ? "Email is the login and cannot be changed here." : undefined}
+          />
+          {labelledSelect(
+            "Role",
+            form.role,
+            (v) => set({ role: v }),
+            roles.map((r) => ({ value: r.code, label: r.name })),
+            "No role (can sign in, can do nothing)",
+          )}
+          <Field
+            label="Employee ID"
+            name="employeeId"
+            value={form.employeeId}
+            onChange={(e) => set({ employeeId: e.target.value })}
+          />
+        </div>
+        {mode === "edit" && (
+          <p className="mt-2 text-xs text-[var(--color-fg-muted)]">
+            Changing the role here is not yet supported — use the role tools. This form edits the
+            profile.
+          </p>
+        )}
+      </div>
+
+      <div>
+        <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+          Professional details
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Designation"
+            name="designation"
+            value={form.designation}
+            onChange={(e) => set({ designation: e.target.value })}
+            hint="e.g. Senior Consultant, Staff Nurse"
+          />
+          <Field
+            label="Department"
+            name="department"
+            value={form.department}
+            onChange={(e) => set({ department: e.target.value })}
+            hint="e.g. Cardiology, Radiology"
+          />
+          {hasSpecialty && (
+            <Field
+              label="Specialty"
+              name="specialty"
+              value={form.specialty}
+              onChange={(e) => set({ specialty: e.target.value })}
+              hint="Drives this doctor's consultation fee"
+            />
+          )}
+          {isClinical && (
+            <Field
+              label="Qualification"
+              name="qualification"
+              value={form.qualification}
+              onChange={(e) => set({ qualification: e.target.value })}
+              hint="e.g. MBBS, MD"
+            />
+          )}
+          {isClinical && (
+            <Field
+              label="Registration / licence no."
+              name="registrationNo"
+              value={form.registrationNo}
+              onChange={(e) => set({ registrationNo: e.target.value })}
+              hint="Medical council / professional registration"
+            />
+          )}
+          <Field
+            label="Phone"
+            name="phone"
+            value={form.phone}
+            onChange={(e) => set({ phone: e.target.value })}
+          />
+          {labelledSelect(
+            "Gender",
+            form.gender,
+            (v) => set({ gender: v }),
+            STAFF_GENDERS.map((g) => ({ value: g, label: g })),
+          )}
+          <Field
+            label="Date of birth"
+            name="dateOfBirth"
+            type="date"
+            value={form.dateOfBirth}
+            onChange={(e) => set({ dateOfBirth: e.target.value })}
+          />
+          <Field
+            label="Joining date"
+            name="joiningDate"
+            type="date"
+            value={form.joiningDate}
+            onChange={(e) => set({ joiningDate: e.target.value })}
+          />
+          <Field
+            label="Emergency contact name"
+            name="emergencyContactName"
+            value={form.emergencyContactName}
+            onChange={(e) => set({ emergencyContactName: e.target.value })}
+          />
+          <Field
+            label="Emergency contact phone"
+            name="emergencyContactPhone"
+            value={form.emergencyContactPhone}
+            onChange={(e) => set({ emergencyContactPhone: e.target.value })}
+          />
+        </div>
+        <div className="mt-4">
+          <Field
+            label="Address"
+            name="address"
+            value={form.address}
+            onChange={(e) => set({ address: e.target.value })}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <Button type="submit" loading={saving}>
+          {mode === "create" ? "Create account" : "Save changes"}
+        </Button>
+        {mode === "create" && (
+          <span className="text-xs text-[var(--color-fg-muted)]">
+            A temporary password is generated and shown once.
+          </span>
+        )}
+      </div>
+    </form>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value?: string }) {
+  if (!value) return null;
+  return (
+    <div className="flex justify-between gap-4 border-b border-[var(--color-border)] py-2 last:border-0">
+      <span className="text-sm text-[var(--color-fg-muted)]">{label}</span>
+      <span className="text-right text-sm font-medium text-[var(--color-fg)]">{value}</span>
+    </div>
+  );
+}
+
+function StaffDetail({ member }: { member: StaffMember }) {
+  const p = member.profile ?? {};
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-brand-600)] text-lg font-semibold text-[var(--color-on-accent)]">
+          {member.name.charAt(0).toUpperCase()}
+        </div>
+        <div>
+          <p className="font-semibold text-[var(--color-fg)]">{member.name}</p>
+          <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
+        </div>
+        <div className="ml-auto flex gap-1.5">
+          {member.roles.map((r) => (
+            <Badge key={r} tone="brand">
+              {r}
+            </Badge>
+          ))}
+          <Badge tone={statusTone(member.status)}>{member.status}</Badge>
+        </div>
+      </div>
+      <div>
+        <DetailRow label="Employee ID" value={member.employeeId} />
+        <DetailRow label="Designation" value={p.designation} />
+        <DetailRow label="Department" value={p.department} />
+        <DetailRow label="Specialty" value={p.specialty} />
+        <DetailRow label="Qualification" value={p.qualification} />
+        <DetailRow label="Registration / licence" value={p.registrationNo} />
+        <DetailRow label="Phone" value={member.phone} />
+        <DetailRow label="Gender" value={p.gender} />
+        <DetailRow label="Date of birth" value={p.dateOfBirth} />
+        <DetailRow label="Joining date" value={p.joiningDate} />
+        <DetailRow label="Address" value={p.address} />
+        <DetailRow label="Emergency contact" value={p.emergencyContactName} />
+        <DetailRow label="Emergency phone" value={p.emergencyContactPhone} />
+        <DetailRow label="Two-step verification" value={member.mfaEnabled ? "On" : "Off"} />
+        <DetailRow
+          label="Last sign-in"
+          value={member.lastLoginAt ? new Date(member.lastLoginAt).toLocaleString() : "Never"}
+        />
+      </div>
+    </div>
+  );
+}
+
+type StatusFilter = "all" | "active" | "disabled";
+
 function StaffDirectory() {
   const { api, can, user } = useAuth();
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", role: "" });
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+  const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [created, setCreated] = useState<{ email: string; password?: string } | null>(null);
+
+  const [viewing, setViewing] = useState<StaffMember | null>(null);
+  const [editing, setEditing] = useState<StaffMember | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const page = await api.listStaff({ limit: 50, ...(query ? { q: query } : {}) });
+      const page = await api.listStaff({
+        limit: 100,
+        ...(query ? { q: query } : {}),
+        ...(statusFilter !== "all" ? { status: statusFilter } : {}),
+      });
       setStaff(page.items);
       setError(null);
     } catch (err) {
@@ -48,14 +462,13 @@ function StaffDirectory() {
     } finally {
       setLoading(false);
     }
-  }, [api, query]);
+  }, [api, query, statusFilter]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    // Only an admin can read the role list; a plain viewer simply gets no dropdown.
     if (!can("role:manage")) return;
     void api
       .listRoles()
@@ -63,23 +476,25 @@ function StaffDirectory() {
       .catch(() => setRoles([]));
   }, [api, can]);
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function create(f: FormState) {
     setSaving(true);
     setFieldErrors({});
     setError(null);
     try {
+      const profile = profileFromForm(f);
       const result = await api.createStaff({
-        name: form.name,
-        email: form.email,
-        ...(form.role ? { roles: [form.role] } : {}),
+        name: f.name,
+        email: f.email,
+        ...(f.role ? { roles: [f.role] } : {}),
+        ...(f.phone.trim() ? { phone: f.phone.trim() } : {}),
+        ...(f.employeeId.trim() ? { employeeId: f.employeeId.trim() } : {}),
+        ...(Object.keys(profile).length ? { profile } : {}),
       });
       setCreated({
         email: result.user.email,
         ...(result.temporaryPassword ? { password: result.temporaryPassword } : {}),
       });
-      setForm({ name: "", email: "", role: "" });
-      setShowForm(false);
+      setShowCreate(false);
       await load();
     } catch (err) {
       if (err instanceof ApiClientError) {
@@ -93,8 +508,38 @@ function StaffDirectory() {
     }
   }
 
+  async function saveEdit(f: FormState) {
+    if (!editing) return;
+    setSaving(true);
+    setFieldErrors({});
+    try {
+      await api.updateStaff(editing.id, {
+        name: f.name,
+        ...(f.phone.trim() ? { phone: f.phone.trim() } : {}),
+        ...(f.employeeId.trim() ? { employeeId: f.employeeId.trim() } : {}),
+        profile: profileFromForm(f),
+      });
+      setEditing(null);
+      await load();
+    } catch (err) {
+      if (err instanceof ApiClientError) {
+        setFieldErrors(err.fieldErrors);
+        if (Object.keys(err.fieldErrors).length === 0) setError(err.message);
+      } else {
+        setError("Could not save changes.");
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function toggleStatus(member: StaffMember) {
     const next = member.status === "active" ? "disabled" : "active";
+    if (
+      next === "disabled" &&
+      !window.confirm(`Disable ${member.name}'s login? Their sessions end immediately.`)
+    )
+      return;
     try {
       await api.setStaffStatus(member.id, next);
       await load();
@@ -103,24 +548,38 @@ function StaffDirectory() {
     }
   }
 
+  async function resetPassword(member: StaffMember) {
+    if (!window.confirm(`Reset ${member.name}'s password? Their current sessions end.`)) return;
+    try {
+      const res = await api.resetStaffPassword(member.id);
+      setCreated({
+        email: member.email,
+        ...(res.temporaryPassword ? { password: res.temporaryPassword } : {}),
+      });
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not reset the password.");
+    }
+  }
+
+  const roleName = useMemo(() => new Map(roles.map((r) => [r.code, r.name])), [roles]);
+
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Staff</h1>
           <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-            Everyone with an account at this hospital.
+            Everyone with a login at this hospital. Add someone, edit their details, or disable a
+            login the moment they leave.
           </p>
         </div>
         <PermissionGate can={can} permission="user:create">
-          <Button onClick={() => setShowForm((s) => !s)}>
-            {showForm ? "Cancel" : "Add someone"}
-          </Button>
+          <Button onClick={() => setShowCreate(true)}>Add staff</Button>
         </PermissionGate>
       </div>
 
       {created && (
-        <Alert tone="success" title="Account created">
+        <Alert tone="success" title="Account ready">
           <p>
             <strong>{created.email}</strong> can sign in now.
           </p>
@@ -143,62 +602,30 @@ function StaffDirectory() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      {showForm && (
-        <Card className="p-6">
-          <h2 className="mb-4 text-sm font-semibold">New staff account</h2>
-          <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="Full name"
-              name="name"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              error={fieldErrors.name?.[0]}
-              required
-            />
-            <Field
-              label="Email"
-              name="email"
-              type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              error={fieldErrors.email?.[0]}
-              required
-            />
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium">Role</span>
-              <select
-                value={form.role}
-                onChange={(e) => setForm({ ...form, role: e.target.value })}
-                className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm"
-              >
-                <option value="">No role (can sign in, can do nothing)</option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.code}>
-                    {role.name}
-                  </option>
-                ))}
-              </select>
-              <span className="mt-1.5 block text-xs text-[var(--color-fg-muted)]">
-                A password is generated and shown once.
-              </span>
-            </label>
-            <div className="flex items-end">
-              <Button type="submit" loading={saving}>
-                Create account
-              </Button>
-            </div>
-          </form>
-        </Card>
-      )}
-
       <Card>
-        <div className="border-b border-[var(--color-border)] p-4">
+        <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] p-4">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by name or email…"
-            className="w-full max-w-xs rounded-lg border border-[var(--color-border-strong)] px-3.5 py-2 text-sm outline-none focus:border-[var(--color-brand-500)]"
+            className="w-full max-w-xs rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
           />
+          <div className="flex gap-1">
+            {(["all", "active", "disabled"] as StatusFilter[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setStatusFilter(s)}
+                className={`rounded-lg px-3 py-1.5 text-sm capitalize transition-colors ${
+                  statusFilter === s
+                    ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                    : "text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -206,70 +633,137 @@ function StaffDirectory() {
             <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
               <tr>
                 <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Roles</th>
+                <th className="px-4 py-3 font-medium">Role</th>
+                <th className="px-4 py-3 font-medium">Department / specialty</th>
+                <th className="px-4 py-3 font-medium">Phone</th>
                 <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3" />
+                <th className="px-4 py-3 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border)]">
               {loading && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
+                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
                     Loading…
                   </td>
                 </tr>
               )}
-
               {!loading && staff.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                    Nobody matches that search.
+                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
+                    Nobody matches.
                   </td>
                 </tr>
               )}
-
-              {staff.map((member) => (
-                <tr key={member.id} className="hover:bg-[var(--color-bg-subtle)]">
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-[var(--color-fg)]">{member.name}</p>
-                    <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {member.roles.length > 0 ? (
-                        member.roles.map((role) => (
-                          <Badge key={role} tone="brand">
-                            {role}
-                          </Badge>
-                        ))
-                      ) : (
-                        <span className="text-xs text-[var(--color-fg-subtle)]">none</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge tone={statusTone(member.status)}>{member.status}</Badge>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <PermissionGate can={can} permission="user:deactivate">
-                      {/* You cannot lock yourself out of your own hospital. */}
-                      {member.id !== user?.id && (
+              {staff.map((member) => {
+                const p = member.profile ?? {};
+                const deptSpec = [p.specialty, p.department].filter(Boolean).join(" · ");
+                return (
+                  <tr key={member.id} className="hover:bg-[var(--color-bg-subtle)]">
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-[var(--color-fg)]">{member.name}</p>
+                      <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {member.roles.length > 0 ? (
+                          member.roles.map((r) => (
+                            <Badge key={r} tone="brand">
+                              {roleName.get(r) ?? r}
+                            </Badge>
+                          ))
+                        ) : (
+                          <span className="text-xs text-[var(--color-fg-subtle)]">none</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-[var(--color-fg-muted)]">{deptSpec || "—"}</td>
+                    <td className="px-4 py-3 text-[var(--color-fg-muted)]">
+                      {member.phone ?? "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge tone={statusTone(member.status)}>{member.status}</Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-1">
                         <Button
                           variant="ghost"
-                          onClick={() => void toggleStatus(member)}
                           className="text-xs"
+                          onClick={() => setViewing(member)}
                         >
-                          {member.status === "active" ? "Disable" : "Enable"}
+                          View
                         </Button>
-                      )}
-                    </PermissionGate>
-                  </td>
-                </tr>
-              ))}
+                        <PermissionGate can={can} permission="user:update">
+                          <Button
+                            variant="ghost"
+                            className="text-xs"
+                            onClick={() => {
+                              setFieldErrors({});
+                              setEditing(member);
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="text-xs"
+                            onClick={() => void resetPassword(member)}
+                          >
+                            Reset password
+                          </Button>
+                        </PermissionGate>
+                        <PermissionGate can={can} permission="user:deactivate">
+                          {member.id !== user?.id && (
+                            <Button
+                              variant="ghost"
+                              className={`text-xs ${member.status === "active" ? "text-[var(--color-danger)]" : ""}`}
+                              onClick={() => void toggleStatus(member)}
+                            >
+                              {member.status === "active" ? "Disable" : "Enable"}
+                            </Button>
+                          )}
+                        </PermissionGate>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {showCreate && (
+        <Modal title="Add staff" onClose={() => setShowCreate(false)}>
+          <StaffForm
+            mode="create"
+            initial={EMPTY_FORM}
+            roles={roles}
+            onSubmit={(f) => void create(f)}
+            saving={saving}
+            fieldErrors={fieldErrors}
+          />
+        </Modal>
+      )}
+
+      {editing && (
+        <Modal title={`Edit ${editing.name}`} onClose={() => setEditing(null)}>
+          <StaffForm
+            mode="edit"
+            initial={formFromMember(editing)}
+            roles={roles}
+            onSubmit={(f) => void saveEdit(f)}
+            saving={saving}
+            fieldErrors={fieldErrors}
+          />
+        </Modal>
+      )}
+
+      {viewing && (
+        <Modal title="Staff profile" onClose={() => setViewing(null)}>
+          <StaffDetail member={viewing} />
+        </Modal>
+      )}
     </div>
   );
 }

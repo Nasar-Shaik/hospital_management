@@ -4,12 +4,40 @@
 import { z } from "@medicore/validation";
 import { env } from "../../config/env.js";
 
+/**
+ * The professional / HR profile. Every field optional — a form that refuses to save an
+ * urgently-hired doctor until every box is filled is a form that gets bypassed on paper.
+ * `YYYY-MM-DD` dates are coerced to Date at the controller edge, never parsed in a service.
+ */
+export const staffProfileSchema = z
+  .object({
+    designation: z.string().max(120).optional(),
+    department: z.string().max(120).optional(),
+    specialty: z.string().max(120).optional(),
+    qualification: z.string().max(200).optional(),
+    registrationNo: z.string().max(80).optional(),
+    gender: z.enum(["male", "female", "other"]).optional(),
+    dateOfBirth: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
+    joiningDate: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
+    address: z.string().max(500).optional(),
+    emergencyContactName: z.string().max(120).optional(),
+    emergencyContactPhone: z.string().max(20).optional(),
+  })
+  .strict();
+
 export const createUserSchema = z
   .object({
     email: z.string().email().max(254),
     name: z.string().min(2).max(120),
     phone: z.string().max(20).optional(),
     employeeId: z.string().max(40).optional(),
+    profile: staffProfileSchema.optional(),
     /**
      * Roles granted at creation. Optional — a user with no role can log in and
      * do nothing, which is a safe default: an over-privileged account created by
@@ -31,8 +59,11 @@ export const updateUserSchema = z
     name: z.string().min(2).max(120).optional(),
     phone: z.string().max(20).optional(),
     employeeId: z.string().max(40).optional(),
+    profile: staffProfileSchema.optional(),
   })
   .strict();
+
+export type StaffProfileBody = z.infer<typeof staffProfileSchema>;
 
 export const listUsersQuerySchema = z
   .object({

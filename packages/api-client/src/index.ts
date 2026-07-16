@@ -108,6 +108,28 @@ export interface Session {
   createdAt: string;
 }
 
+export const STAFF_GENDERS = ["male", "female", "other"] as const;
+export type StaffGender = (typeof STAFF_GENDERS)[number];
+
+/**
+ * Professional / HR details for a staff member. Every field optional. Dates are
+ * `YYYY-MM-DD` strings on the wire. The registration form captures the fields relevant to
+ * the chosen role; the shape is one flexible object so a role change never loses data.
+ */
+export interface StaffProfile {
+  designation?: string;
+  department?: string;
+  specialty?: string;
+  qualification?: string;
+  registrationNo?: string;
+  gender?: StaffGender;
+  dateOfBirth?: string;
+  joiningDate?: string;
+  address?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+}
+
 export interface StaffMember {
   id: string;
   email: string;
@@ -115,6 +137,7 @@ export interface StaffMember {
   status: "invited" | "active" | "locked" | "disabled" | "archived";
   phone?: string;
   employeeId?: string;
+  profile?: StaffProfile;
   roles: string[];
   branchIds: string[];
   mfaEnabled: boolean;
@@ -857,23 +880,42 @@ export class ApiClient {
   /* ── staff directory ── */
 
   listStaff(
-    params: { page?: number; limit?: number; q?: string } = {},
+    params: {
+      page?: number;
+      limit?: number;
+      q?: string;
+      status?: StaffMember["status"];
+    } = {},
   ): Promise<Paged<StaffMember>> {
     const query = new URLSearchParams();
     if (params.page) query.set("page", String(params.page));
     if (params.limit) query.set("limit", String(params.limit));
     if (params.q) query.set("q", params.q);
+    if (params.status) query.set("status", params.status);
     const qs = query.toString();
     return this.paged<StaffMember>(`/api/v1/users${qs ? `?${qs}` : ""}`);
+  }
+
+  getStaff(id: string): Promise<StaffMember> {
+    return this.request<StaffMember>("GET", `/api/v1/users/${id}`);
   }
 
   createStaff(input: {
     email: string;
     name: string;
     phone?: string;
+    employeeId?: string;
     roles?: string[];
+    profile?: StaffProfile;
   }): Promise<CreateStaffResult> {
     return this.request<CreateStaffResult>("POST", "/api/v1/users", input);
+  }
+
+  updateStaff(
+    id: string,
+    input: { name?: string; phone?: string; employeeId?: string; profile?: StaffProfile },
+  ): Promise<StaffMember> {
+    return this.request<StaffMember>("PATCH", `/api/v1/users/${id}`, input);
   }
 
   /**

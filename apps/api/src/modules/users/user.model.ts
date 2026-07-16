@@ -22,6 +22,38 @@ import { auditPlugin } from "../../core/db/plugins/auditPlugin.js";
 export const USER_STATUSES = ["invited", "active", "locked", "disabled", "archived"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 
+export const STAFF_GENDERS = ["male", "female", "other"] as const;
+export type StaffGender = (typeof STAFF_GENDERS)[number];
+
+/**
+ * The professional / HR record for a staff member. Every field is optional — a hospital
+ * registers a doctor in a hurry and fills the rest in later, and a registration form that
+ * refuses to save until every box is ticked is a form that gets bypassed on paper.
+ *
+ * Which fields the UI ASKS for depends on the role (a doctor is prompted for specialty and
+ * medical-council registration; a cashier is not), but the storage is one flexible shape so
+ * a person who changes role does not lose the fields that still apply. `specialty` also drives
+ * the per-doctor consultation fee (Track D).
+ */
+export interface StaffProfile {
+  /** "Senior Consultant", "Staff Nurse". */
+  designation?: string;
+  /** "Cardiology", "Radiology". */
+  department?: string;
+  /** Doctors: their clinical specialty. Distinct from department. */
+  specialty?: string;
+  /** "MBBS, MD", "B.Sc MLT". */
+  qualification?: string;
+  /** Medical-council / professional registration or licence number. */
+  registrationNo?: string;
+  gender?: StaffGender;
+  dateOfBirth?: Date;
+  joiningDate?: Date;
+  address?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+}
+
 export interface UserDoc {
   _id: Types.ObjectId;
   tenantId: string;
@@ -31,6 +63,8 @@ export interface UserDoc {
   phone?: string;
   /** Set when the user is also a staff member (module F1). */
   employeeId?: string;
+  /** Professional / HR details, captured for staff. See `StaffProfile`. */
+  profile?: StaffProfile;
   /** Set for patient-portal identities — scope `self` only (ADR-0009). */
   patientId?: string;
   /** True only once a TOTP secret has been CONFIRMED, never at setup time. */
@@ -49,6 +83,25 @@ const userSchema = new Schema<UserDoc>(
     status: { type: String, enum: USER_STATUSES, required: true, default: "invited" },
     phone: { type: String, trim: true },
     employeeId: { type: String },
+    profile: {
+      type: {
+        designation: { type: String, trim: true, maxlength: 120 },
+        department: { type: String, trim: true, maxlength: 120 },
+        specialty: { type: String, trim: true, maxlength: 120 },
+        qualification: { type: String, trim: true, maxlength: 200 },
+        registrationNo: { type: String, trim: true, maxlength: 80 },
+        gender: { type: String, enum: STAFF_GENDERS },
+        dateOfBirth: { type: Date },
+        joiningDate: { type: Date },
+        address: { type: String, trim: true, maxlength: 500 },
+        emergencyContactName: { type: String, trim: true, maxlength: 120 },
+        emergencyContactPhone: { type: String, trim: true, maxlength: 20 },
+      },
+      // `default: undefined`, never `{}` — an empty object would make the audit hash-chain
+      // see a "profile changed" diff on an untouched record (the trap on duplicateOverride).
+      default: undefined,
+      _id: false,
+    },
     patientId: { type: String },
     mfaEnabled: { type: Boolean, default: false },
     lastLoginAt: { type: Date },

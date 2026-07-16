@@ -5,7 +5,7 @@
  * Every query runs on the request-scoped tenant connection, so a user lookup is
  * physically incapable of crossing hospitals.
  */
-import type { UserDoc, UserStatus } from "./user.model.js";
+import type { StaffProfile, UserDoc, UserStatus } from "./user.model.js";
 import { getUserModel } from "./user.model.js";
 import { getTenantDb } from "../../core/context/requestContext.js";
 
@@ -18,6 +18,7 @@ export interface User {
   mfaEnabled: boolean;
   phone?: string;
   employeeId?: string;
+  profile?: StaffProfile;
   patientId?: string;
   lastLoginAt?: Date;
   lockedUntil?: Date;
@@ -32,6 +33,7 @@ function toUser(doc: UserDoc): User {
     mfaEnabled: doc.mfaEnabled,
     ...(doc.phone ? { phone: doc.phone } : {}),
     ...(doc.employeeId ? { employeeId: doc.employeeId } : {}),
+    ...(doc.profile ? { profile: doc.profile } : {}),
     ...(doc.patientId ? { patientId: doc.patientId } : {}),
     ...(doc.lastLoginAt ? { lastLoginAt: doc.lastLoginAt } : {}),
     ...(doc.lockedUntil ? { lockedUntil: doc.lockedUntil } : {}),
@@ -54,6 +56,7 @@ export interface CreateUserInput {
   status?: UserStatus;
   phone?: string;
   employeeId?: string;
+  profile?: StaffProfile;
   patientId?: string;
 }
 
@@ -94,9 +97,16 @@ export interface UpdateUserInput {
   name?: string;
   phone?: string;
   employeeId?: string;
+  profile?: StaffProfile;
 }
 
 export async function update(userId: string, input: UpdateUserInput): Promise<User | undefined> {
+  /**
+   * `profile` is set as a whole. The controller merges the incoming fields onto the
+   * existing profile before calling this, so a partial edit never silently drops the
+   * fields it did not include — a lesson worth stating because "PATCH replaced my whole
+   * profile with two fields" is the classic partial-update bug.
+   */
   const doc = await getUserModel(getTenantDb()).findOneAndUpdate({ _id: userId }, input, {
     new: true,
   });
