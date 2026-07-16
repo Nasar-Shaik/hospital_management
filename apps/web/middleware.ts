@@ -30,8 +30,25 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Already signed in and staring at the login page — go somewhere useful.
-  if (hasSession && pathname === "/login") {
+  /**
+   * Already signed in and staring at the login page — go somewhere useful.
+   *
+   * ── UNLESS THE CLIENT SAYS THE SESSION IS DEAD ───────────────────────────────
+   * A cookie is not a session, and this middleware cannot tell the difference: it
+   * sees presence, never validity. The client CAN tell — it just tried to exchange
+   * the thing and got a 401 — and it says so with `?reason=`.
+   *
+   * Without this hatch a stale cookie is a trap with no exit, which is exactly how
+   * it reached a user: /dashboard renders, its refresh 401s, the app redirects to
+   * /login, and this rule sends it back to /dashboard, where it stops on a blank
+   * page. The login form becomes unreachable, and the cookie is httpOnly so they
+   * cannot clear it themselves.
+   *
+   * The API now clears a rejected cookie, which closes the trap at its root. This
+   * stays anyway: it costs one condition, and it means no future cookie bug can
+   * ever cost a user their way back in.
+   */
+  if (hasSession && pathname === "/login" && !req.nextUrl.searchParams.has("reason")) {
     const url = req.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";

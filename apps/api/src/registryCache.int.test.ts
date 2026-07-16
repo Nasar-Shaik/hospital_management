@@ -21,13 +21,13 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
-import { assertRedisReachable, flushTestCache, TEST_REDIS_URL } from "./test/redisTestEnv.js";
+import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
 
 process.env.MONGO_URI = TEST_MONGO_URI;
 process.env.MONGO_MASTER_DB = "test_regcache_master";
 process.env.TENANT_BASE_DOMAIN = "medicore.test";
 // The point of this suite: a REAL cache.
-process.env.REDIS_URL = TEST_REDIS_URL;
+process.env.REDIS_URL = testRedisUrl("registryCache");
 
 const { provisionTenant } = await import("./modules/tenants/index.js");
 const { resolveTenantFromHost } = await import("./middleware/resolveTenant.js");
@@ -42,7 +42,7 @@ beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
   await dropDatabases(["test_regcache_master", DB]);
-  await flushTestCache();
+  await flushTestCache("registryCache");
 
   await provisionTenant({
     hospitalName: "Registry Cache Hospital",

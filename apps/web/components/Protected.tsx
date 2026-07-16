@@ -7,17 +7,30 @@
  * where we find out, by actually exchanging it.
  */
 import { useEffect, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./AuthProvider";
 import { AppShell } from "./AppShell";
 
 export function Protected({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/login");
-  }, [loading, user, router]);
+    if (loading || user) return;
+
+    /**
+     * `reason=expired` is not decoration. The middleware sees only that a cookie
+     * EXISTS, so without this it sends us back to the page we just failed to load
+     * and the two of us bounce the user between them forever. We are the only one
+     * who knows the cookie is dead — we just tried it. Saying so is what lets them
+     * reach the login form at all, and it is why they get told their session ended
+     * instead of silently landing on a blank sign-in page.
+     */
+    const params = new URLSearchParams({ reason: "expired" });
+    if (pathname && pathname !== "/") params.set("next", pathname);
+    router.replace(`/login?${params.toString()}`);
+  }, [loading, user, router, pathname]);
 
   if (loading) {
     return (

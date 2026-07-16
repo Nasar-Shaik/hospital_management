@@ -103,11 +103,29 @@ export function Alert({
       "bg-[var(--color-warning-bg)] text-[var(--color-warning)] border-[var(--color-warning)]/20",
     success:
       "bg-[var(--color-success-bg)] text-[var(--color-success)] border-[var(--color-success)]/20",
-    info: "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)] border-[var(--color-border)]",
+    /**
+     * `--color-info`, not `bg-subtle` + `fg-muted`. The token ramp has carried an
+     * info blue (re-picked for dark) all along; painting this one tone in the PAGE
+     * background and muted grey made every informational message look disabled —
+     * the same styling the UI uses for text that is switched off. Three tones spoke
+     * semantic colour and the fourth mumbled.
+     */
+    info: "bg-[var(--color-info-bg)] text-[var(--color-info)] border-[var(--color-info)]/20",
   };
 
+  /**
+   * `role="alert"` is ASSERTIVE: it interrupts a screen reader mid-sentence. That is
+   * right for "your password is wrong" and rude for "your session ended" — the latter
+   * is a status, announced when the user gets there. Reserving interruption for the
+   * tones that demand action is what keeps the interruption meaningful.
+   */
+  const urgent = tone === "danger" || tone === "warning";
+
   return (
-    <div role="alert" className={`rounded-lg border px-4 py-3 text-sm ${tones[tone]}`}>
+    <div
+      role={urgent ? "alert" : "status"}
+      className={`rounded-lg border px-4 py-3 text-sm ${tones[tone]}`}
+    >
       {title && <p className="mb-0.5 font-semibold">{title}</p>}
       {children}
     </div>

@@ -20,11 +20,11 @@ import request from "supertest";
 import { TOTP, Secret } from "otpauth";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
-import { assertRedisReachable, flushTestCache, TEST_REDIS_URL } from "./test/redisTestEnv.js";
+import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
 
 // Point config at the test infrastructure BEFORE any module reads env.
 process.env.MONGO_URI = TEST_MONGO_URI;
-process.env.REDIS_URL = TEST_REDIS_URL;
+process.env.REDIS_URL = testRedisUrl("auth");
 process.env.MONGO_MASTER_DB = "test_auth_master";
 process.env.TENANT_BASE_DOMAIN = "medicore.test";
 process.env.LOGIN_MAX_ATTEMPTS = "5";
@@ -92,7 +92,7 @@ beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
   await dropDatabases(["test_auth_master", DB_A, DB_B]);
-  await flushTestCache(); // the registry is cached — see flushTestCache()
+  await flushTestCache("auth"); // the registry is cached — see flushTestCache()
 
   const a = await provisionTenant({ hospitalName: "Apollo Auth", slug: SLUG_A });
   const b = await provisionTenant({ hospitalName: "Sunshine Auth", slug: SLUG_B });
@@ -319,6 +319,84 @@ describe("refresh rotation and reuse detection (ADR-0009)", () => {
 
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe("HMS-AUTH-002");
+  });
+
+  /**
+   * A REAL BUG, found by a user staring at a blank dashboard they could not escape.
+   *
+   * A rejected cookie left in the browser is worse than no cookie. It is httpOnly, so
+   * no client code can remove it, and the web app's route guard reads its PRESENCE as
+   * "signed in". So /dashboard let them in, the refresh 401'd, the app sent them to
+   * /login, the guard saw the cookie and sent them back to /dashboard — forever. They
+   * could not sign in, could not sign out, and restarting the server changed nothing,
+   * because the broken state was in their cookie jar.
+   *
+   * The fix belongs HERE and not only in the browser: we are the only party that knows
+   * the token is dead, and we are the only party allowed to remove it.
+   */
+  const clearsTheCookie = (res: { headers: Record<string, unknown> }): boolean => {
+    const setCookie = (res.headers["set-cookie"] as string[] | undefined) ?? [];
+    // Expressing a deletion = same name, empty value, an expiry in the past.
+    return setCookie.some((c) => c.startsWith("hms_refresh=;") || /hms_refresh=;/.test(c));
+  };
+
+  it("clears the refresh cookie when it rejects the token, so the browser cannot get stuck", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Host", HOST_A)
+      .set("Cookie", "hms_refresh=stale-token-from-a-session-that-ended-long-ago");
+
+    expect(res.status).toBe(401);
+    expect(clearsTheCookie(res)).toBe(true);
+  });
+
+  it("clears the refresh cookie after reuse burns the family", async () => {
+    const login = await loginAs(HOST_A, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const stolen = login.body.data.refreshToken;
+
+    await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Host", HOST_A)
+      .send({ refreshToken: stolen });
+
+    const replay = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Host", HOST_A)
+      .set("Cookie", `hms_refresh=${String(stolen)}`);
+
+    expect(replay.status).toBe(401);
+    expect(replay.body.error.code).toBe("HMS-AUTH-003");
+    expect(clearsTheCookie(replay)).toBe(true);
+  });
+
+  it("clears the refresh cookie when none was presented at all", async () => {
+    const res = await request(app).post("/api/v1/auth/refresh").set("Host", HOST_A).send({});
+
+    expect(res.status).toBe(401);
+    expect(clearsTheCookie(res)).toBe(true);
+  });
+
+  /**
+   * The other half of the rule. A 500 from a database blip means "ask me again", not
+   * "you are logged out" — clearing on ANY failure would sign out every user in the
+   * hospital the moment Mongo hiccuped, which is a far worse outage than the one that
+   * caused it. Only a 401 is proof the token itself is dead.
+   */
+  it("does NOT clear the cookie on a valid refresh", async () => {
+    const login = await loginAs(HOST_A, ADMIN_EMAIL, ADMIN_PASSWORD);
+
+    const res = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("Host", HOST_A)
+      .set("Cookie", `hms_refresh=${String(login.body.data.refreshToken)}`);
+
+    expect(res.status).toBe(200);
+    expect(clearsTheCookie(res)).toBe(false);
+    // It replaced it with a live one instead.
+    const setCookie = (res.headers["set-cookie"] as unknown as string[]) ?? [];
+    expect(setCookie.some((c) => c.includes("hms_refresh=") && !c.includes("hms_refresh=;"))).toBe(
+      true,
+    );
   });
 });
 

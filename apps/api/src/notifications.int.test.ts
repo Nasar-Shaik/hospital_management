@@ -21,7 +21,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
-import { assertRedisReachable, flushTestCache, TEST_REDIS_URL } from "./test/redisTestEnv.js";
+import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
 import {
   assertMailhogReachable,
   clearMailbox,
@@ -31,7 +31,7 @@ import {
 } from "./test/mailTestEnv.js";
 
 process.env.MONGO_URI = TEST_MONGO_URI;
-process.env.REDIS_URL = TEST_REDIS_URL;
+process.env.REDIS_URL = testRedisUrl("notifications");
 process.env.MONGO_MASTER_DB = "test_notify_master";
 process.env.TENANT_BASE_DOMAIN = "medicore.test";
 // Set BEFORE the app is imported: env is parsed once, at module load.
@@ -115,7 +115,7 @@ beforeAll(async () => {
   await assertRedisReachable();
   await assertMailhogReachable();
   await dropDatabases(["test_notify_master", DB]);
-  await flushTestCache();
+  await flushTestCache("notifications");
 
   const t = await provisionTenant({
     hospitalName: "Apollo Notify",

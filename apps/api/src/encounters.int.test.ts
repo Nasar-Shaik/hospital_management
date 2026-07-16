@@ -19,10 +19,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
-import { assertRedisReachable, flushTestCache, TEST_REDIS_URL } from "./test/redisTestEnv.js";
+import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
 
 process.env.MONGO_URI = TEST_MONGO_URI;
-process.env.REDIS_URL = TEST_REDIS_URL;
+process.env.REDIS_URL = testRedisUrl("encounters");
 process.env.MONGO_MASTER_DB = "test_enc_master";
 process.env.TENANT_BASE_DOMAIN = "medicore.test";
 
@@ -131,7 +131,7 @@ beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
   await dropDatabases(["test_enc_master", `hms_${GOV}`, `hms_${PVT}`]);
-  await flushTestCache();
+  await flushTestCache("encounters");
 
   Object.assign(gov, await setupHospital(GOV, "government_hospital"));
   Object.assign(pvt, await setupHospital(PVT, "private_hospital"));

@@ -14,7 +14,7 @@ import type { Request, RequestHandler, Response } from "express";
 import type { ApiEnvelope } from "@medicore/types";
 import { env } from "../../config/env.js";
 import { requireAuth } from "../../middleware/authenticate.js";
-import { SessionExpiredError } from "../../core/errors/appError.js";
+import { AppError, SessionExpiredError } from "../../core/errors/appError.js";
 import * as authService from "./auth.service.js";
 import type { DeviceInfo, LoginResult, TokenPair } from "./auth.service.js";
 
@@ -90,13 +90,40 @@ export const login: RequestHandler = async (req, res) => {
   respondWithTokens(res, result);
 };
 
+/**
+ * ── WHY A REJECTED REFRESH MUST CLEAR THE COOKIE ─────────────────────────────
+ * A token we have just declared dead is not merely useless — left in place it is
+ * ACTIVELY HARMFUL, and it locked a real user out of the application entirely.
+ *
+ * The cookie is httpOnly, so no client code can remove it, and the Next.js route
+ * guard reads its PRESENCE as "signed in". So: /dashboard is allowed to render,
+ * its refresh 401s, the app redirects to /login, and the guard — still seeing the
+ * cookie — sends the browser straight back to /dashboard, where it STOPS. Not a
+ * spinning loop; something quieter and harder to diagnose. A permanently blank
+ * page at a URL that looks correct, with no way to reach the login form.
+ *
+ * The user cannot sign in, cannot sign out, and cannot fix it by restarting the
+ * server — the broken state is in their cookie jar, not ours. We are the only
+ * party who knows the token is dead, and the only party able to remove it.
+ *
+ * Only on 401. A 500 from a database blip means "ask me again", not "you are
+ * logged out" — clearing on any error would sign out every user in the hospital
+ * the moment Mongo hiccuped, turning a blip into an outage.
+ */
 export const refresh: RequestHandler = async (req, res) => {
   const token = presentedRefreshToken(req);
   if (!token) {
+    clearRefreshCookie(res);
     // Same error a bad token gets — an absent cookie is not more informative.
     throw new SessionExpiredError({ reason: "no refresh token presented" });
   }
-  respondWithTokens(res, await authService.refresh(token, deviceInfo(req)));
+
+  try {
+    respondWithTokens(res, await authService.refresh(token, deviceInfo(req)));
+  } catch (err) {
+    if (err instanceof AppError && err.httpStatus === 401) clearRefreshCookie(res);
+    throw err;
+  }
 };
 
 export const logout: RequestHandler = async (req, res) => {

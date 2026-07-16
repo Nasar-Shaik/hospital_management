@@ -28,10 +28,17 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [mfaToken, setMfaToken] = useState<string | null>(null);
   const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(
-    params.get("reason") === "expired" ? "Your session expired. Please sign in again." : null,
-  );
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /**
+   * An ended session is NOT an error, and painting it red says the user did
+   * something wrong when they did nothing at all — they walked away for an hour.
+   * Red is reserved for "you must act": a wrong password, an unreachable server.
+   * It also outranks the real error: once they submit and get the password wrong,
+   * that message replaces this one rather than sitting in a stack of two alerts.
+   */
+  const expired = params.get("reason") === "expired";
 
   const destination = params.get("next") ?? "/dashboard";
 
@@ -126,10 +133,17 @@ function LoginForm() {
         </div>
 
         <Card className="p-6 shadow-sm">
-          {error && (
+          {error ? (
             <div className="mb-4">
               <Alert tone="danger">{error}</Alert>
             </div>
+          ) : (
+            expired &&
+            !mfaToken && (
+              <div className="mb-4">
+                <Alert tone="info">Your session ended. Please sign in again.</Alert>
+              </div>
+            )
           )}
 
           {mfaToken ? (
