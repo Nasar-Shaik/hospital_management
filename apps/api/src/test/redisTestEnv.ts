@@ -55,7 +55,7 @@ const SUITE_DB = {
   rbac: 8,
   admissions: 9,
   registryCache: 10,
-  tenants: 11,
+  allergies: 11,
   users: 12,
   patients: 13,
   lab: 14,

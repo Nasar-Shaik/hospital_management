@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiClientError,
+  type Allergy,
   type Dispense,
   type Order,
   type Patient,
@@ -184,6 +185,7 @@ function Pharmacy() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [prescription, setPrescription] = useState<Prescription | null>(null);
+  const [allergies, setAllergies] = useState<Allergy[]>([]);
   const [bill, setBill] = useState<{ total: number } | null>(null);
 
   const [error, setError] = useState<string | null>(null);
@@ -274,6 +276,22 @@ function Pharmacy() {
     else setPrescription(null);
   }, [selected, loadPrescription]);
 
+  // The pharmacist is the LAST check before a drug is handed over. Allergies are the
+  // patient's, read hospital-wide — an allergy recorded at any branch shows here.
+  const selectedPatientId = selected?.patientId ?? null;
+  useEffect(() => {
+    if (!selectedPatientId) {
+      setAllergies([]);
+      return;
+    }
+    void api
+      .listAllergies(selectedPatientId)
+      .then(setAllergies)
+      .catch(() => setAllergies([]));
+  }, [selectedPatientId, api]);
+
+  const activeAllergies = allergies.filter((a) => a.status === "active");
+
   const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
   const uhidOf = (id: string): string => patients.find((p) => p.id === id)?.uhid ?? "";
 
@@ -355,6 +373,26 @@ function Pharmacy() {
                     </div>
                   )}
                 </div>
+
+                {activeAllergies.length > 0 && (
+                  <div className="mt-3">
+                    <Alert tone="danger" title="Allergies">
+                      <div className="flex flex-wrap gap-1.5">
+                        {activeAllergies.map((a) => (
+                          <span
+                            key={a.id}
+                            className="rounded border border-[var(--color-danger)]/30 px-1.5 py-0.5 text-xs font-medium"
+                          >
+                            {a.label}
+                            {a.severity === "anaphylaxis" || a.severity === "severe"
+                              ? ` (${a.severity})`
+                              : ""}
+                          </span>
+                        ))}
+                      </div>
+                    </Alert>
+                  </div>
+                )}
               </Card>
 
               <Card className="p-5">

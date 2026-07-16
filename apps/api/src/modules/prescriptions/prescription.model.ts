@@ -201,6 +201,23 @@ export interface PrescriptionDoc {
   cancelReason?: string;
   notes?: string;
 
+  /**
+   * Recorded ONLY when a prescriber signed THROUGH a blocking safety alert — an allergy
+   * contraindication (`drugSafety.screen`). This is the medicolegal record of an informed
+   * override: what the machine warned, who chose to proceed anyway, and why. Absent on the
+   * ordinary case where nothing blocked, which is the overwhelming majority.
+   *
+   * The alerts are snapshotted, not re-derived: the reference data can change, and the
+   * question at a review is "what was this doctor shown at the moment they signed", not
+   * "what would we show today".
+   */
+  safetyOverride?: {
+    reason: string;
+    by: string;
+    at: Date;
+    alerts: { kind: string; severity: string; allergen?: string; message: string }[];
+  };
+
   history: PrescriptionHistoryEntry[];
   createdAt: Date;
   updatedAt: Date;
@@ -247,6 +264,30 @@ const prescriptionSchema = new Schema<PrescriptionDoc>(
     cancelReason: { type: String, trim: true, maxlength: 500 },
     notes: { type: String, trim: true, maxlength: 1000 },
 
+    safetyOverride: {
+      type: {
+        reason: { type: String, required: true },
+        by: { type: String, required: true },
+        at: { type: Date, required: true },
+        alerts: {
+          type: [
+            {
+              _id: false,
+              kind: { type: String, required: true },
+              severity: { type: String, required: true },
+              allergen: { type: String },
+              message: { type: String, required: true },
+            },
+          ],
+          // `default: undefined` — never [], which the audit hash-chain reads as tampering
+          // on an untouched trail (see the same trap on patient.duplicateOverride).
+          default: undefined,
+        },
+      },
+      default: undefined,
+      _id: false,
+    },
+
     history: [
       {
         _id: false,
@@ -274,7 +315,10 @@ prescriptionSchema.plugin(tenantScopePlugin);
 prescriptionSchema.plugin(auditPlugin, {
   resource: "prescription",
   category: "phi",
-  ignore: ["lines", "history"],
+  // `safetyOverride` joins `lines` and `history`: its alert snapshot names drugs and
+  // allergens, and a drug name is a diagnosis. The audit records THAT the prescription was
+  // signed; the override detail lives on the document, not as a second PHI copy in the log.
+  ignore: ["lines", "history", "safetyOverride"],
 });
 
 export function getPrescriptionModel(conn: Connection): Model<PrescriptionDoc> {

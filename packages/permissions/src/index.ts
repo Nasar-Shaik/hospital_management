@@ -178,6 +178,15 @@ const CLINICAL = {
   TEMPLATE_MANAGE: p("template:manage", "Clinical templates"),
 
   VITALS_RECORD: p("vitals:record", "Record vitals", "branch"),
+  /**
+   * Reading a patient's allergies is TENANT-wide, not branch-scoped — and the difference
+   * is a safety property, not a preference. An allergy recorded when the patient was seen
+   * at one branch must be visible when they are prescribed for at another, or the check
+   * that exists to stop a fatal dose silently sees an empty list. The repository keys these
+   * reads on the patient and never on the branch (see allergy.repository.ts); the scope here
+   * says so out loud rather than leaving a `branch` label the repo quietly disobeys.
+   */
+  ALLERGY_READ: p("allergy:read", "Read the allergy list", "tenant"),
   ALLERGY_MANAGE: p("allergy:manage", "Maintain the allergy list", "branch"),
 
   DOCTOR_MANAGE: p("doctor:manage", "Manage doctors"),
@@ -636,6 +645,7 @@ export const DEFAULT_ROLES = [
       CLINICAL.EMR_READ,
       CLINICAL.EMR_WRITE,
       CLINICAL.EMR_SIGN,
+      CLINICAL.ALLERGY_READ,
       CLINICAL.ALLERGY_MANAGE,
       CLINICAL.CONSULTATION_MANAGE,
       CLINICAL.PRESCRIPTION_CREATE,
@@ -668,6 +678,7 @@ export const DEFAULT_ROLES = [
       PATIENT.RECORD_READ,
       CLINICAL.EMR_READ,
       CLINICAL.VITALS_RECORD,
+      CLINICAL.ALLERGY_READ,
       CLINICAL.ALLERGY_MANAGE,
       CLINICAL.NURSING_MANAGE,
       CLINICAL.MAR_ADMINISTER,
@@ -738,6 +749,9 @@ export const DEFAULT_ROLES = [
       FINANCE.BILLING_READ,
       FINANCE.PAYMENT_COLLECT,
       CLINICAL.EMR_READ,
+      // A pharmacist about to hand over a drug is the LAST person who can catch an
+      // allergy the prescriber missed. They read the list; they do not edit it.
+      CLINICAL.ALLERGY_READ,
     ),
   },
   {

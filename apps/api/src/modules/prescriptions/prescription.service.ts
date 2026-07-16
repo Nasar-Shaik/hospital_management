@@ -8,14 +8,19 @@
  * states, because the quantities that drive them are recorded at the counter. What lives
  * here is the doctor's half — writing it, signing it, amending it, stopping it.
  *
- * ── WHAT THIS MODULE DELIBERATELY DOES NOT DO ───────────────────────────────
- * It does not check allergies, interactions, duplicate therapy, renal dosing or
- * paediatric weight bands. Not because those do not matter — they are the single highest
- * clinical value a prescribing system can add — but because a HALF-implemented allergy
- * check is worse than none at all: it teaches a doctor the machine is watching, and then
- * one day it isn't. There is no allergy store yet (`allergy:manage` exists as a
- * permission and nothing writes it). This is recorded as debt in PROJECT_MEMORY, and it
- * is the first thing the EMR slice must bring.
+ * ── SAFETY SCREENING AT THE SIGNATURE ───────────────────────────────────────
+ * Signing runs the prescription through `drugSafety.screen()` against the patient's active
+ * allergies. An allergy CONTRAINDICATION blocks the signature: it is refused (HMS-RX-001)
+ * unless the prescriber supplies an override reason, which is then recorded on the
+ * prescription as a medicolegal fact (`safetyOverride`). Lesser findings — cross-sensitivity,
+ * a drug interaction, duplicate therapy — are returned by the screen endpoint and shown on
+ * the pad, but do NOT block: a hard block on every warning is how prescribers learn to click
+ * past the one that matters.
+ *
+ * ── WHAT THIS MODULE STILL DOES NOT DO ──────────────────────────────────────
+ * Renal dosing, paediatric weight bands, pregnancy category, dose ceilings. `drugSafety` is
+ * a curated net over fifteen demo drugs, not a formulary — see its header. The SHAPE is the
+ * shipping one; the data is not.
  */
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
@@ -24,6 +29,14 @@ import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { getEncounter, isOpen } from "../encounters/index.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
+import { activeAllergies } from "../allergies/index.js";
+import {
+  screen,
+  isBlocking,
+  isAllergen,
+  type SafetyAlert,
+  type ScreenAllergy,
+} from "../drugSafety/index.js";
 import * as repo from "./prescription.repository.js";
 import {
   canTransition,
@@ -150,8 +163,58 @@ export async function updateDraft(
   return updated;
 }
 
+/** The safety screen for a prescription — its alerts, and whether any of them blocks. */
+export interface PrescriptionScreening {
+  prescriptionId: string;
+  alerts: SafetyAlert[];
+  /** True when at least one alert is a contraindication (see `drugSafety.isBlocking`). */
+  blocking: boolean;
+}
+
+/**
+ * Screens a prescription against the patient's active allergies WITHOUT signing it.
+ *
+ * The pad calls this as the doctor composes, so the alerts appear before the signature, not
+ * as a refusal at the end. It reads the SAME facts and runs the SAME pure function the
+ * signature does, so what the doctor is shown and what the signature enforces cannot drift.
+ *
+ * The allergen read is patient-wide, never branch-scoped (allergy.repository.ts) — an
+ * allergy from another branch must still fire here, or the screen is a comforting lie.
+ */
+export async function screenPrescription(id: string): Promise<PrescriptionScreening> {
+  const rx = await repo.findById(id);
+  if (!rx) throw notFound(id);
+
+  const allergies = await activeAllergies(rx.patientId);
+  const screenAllergies: ScreenAllergy[] = allergies
+    // Defensive: only catalogued allergens can match a drug. A stray free-text row (there
+    // should be none — the DTO forbids it) is ignored rather than silently breaking the map.
+    .filter((a) => isAllergen(a.allergen))
+    .map((a) => ({ allergen: a.allergen as ScreenAllergy["allergen"], severity: a.severity }));
+
+  const alerts = screen(
+    rx.lines.map((l) => ({ drugCode: l.drugCode, drugName: l.drugName })),
+    screenAllergies,
+  );
+
+  return { prescriptionId: rx.id, alerts, blocking: alerts.some(isBlocking) };
+}
+
+export interface SignOptions {
+  /** The prescriber's justification for signing THROUGH a blocking alert. Required to override. */
+  overrideReason?: string;
+}
+
 /**
  * The signature. This is the moment the document becomes real.
+ *
+ * ── THE SAFETY BLOCK ────────────────────────────────────────────────────────
+ * Before anything is committed, the prescription is screened. A blocking alert (an allergy
+ * contraindication) refuses the signature with HMS-RX-001 and the alerts attached — UNLESS
+ * the caller supplies `overrideReason`, in which case the signature proceeds and the override
+ * is written onto the prescription as a permanent record of who decided what, and why. The
+ * screen runs server-side here regardless of what the pad showed: the enforcement point must
+ * never trust the client to have checked.
  *
  * ── WHY THE PHARMACY ORDER IS NOT PLACED HERE ───────────────────────────────
  * `placeOrder` opens its own transaction and `withTransaction` is not re-entrant, so
@@ -163,7 +226,10 @@ export async function updateDraft(
  * `prescription.consumers.ts` places the order from it. The hand-off becomes durable
  * rather than merely probable, and it is idempotent on `rx:<id>`.
  */
-export async function signPrescription(id: string): Promise<repo.Prescription> {
+export async function signPrescription(
+  id: string,
+  options: SignOptions = {},
+): Promise<repo.Prescription> {
   const ctx = getContext();
 
   const existing = await repo.findById(id);
@@ -186,6 +252,39 @@ export async function signPrescription(id: string): Promise<repo.Prescription> {
   // because a draft can sit on screen while the encounter closes underneath it.
   await requireOpenEncounter(existing.encounterId);
 
+  /**
+   * ── THE SAFETY GATE ─────────────────────────────────────────────────────────
+   * Re-screen at the signature, server-side, whatever the pad displayed. A blocking alert
+   * refuses the signature unless the prescriber has justified overriding it — and when they
+   * have, the justification and the exact alerts they saw are recorded on the prescription.
+   */
+  const screening = await screenPrescription(id);
+  const blockingAlerts = screening.alerts.filter(isBlocking);
+
+  if (blockingAlerts.length > 0 && !options.overrideReason?.trim()) {
+    throw new AppError("HMS-RX-001", 422, "This prescription is blocked by a safety alert", {
+      alerts: screening.alerts,
+      hint: "a contraindication must be acknowledged with an override reason before signing",
+    });
+  }
+
+  const safetyOverride =
+    blockingAlerts.length > 0 && options.overrideReason?.trim()
+      ? {
+          reason: options.overrideReason.trim(),
+          by: ctx.userId ?? "system",
+          at: new Date(),
+          // Snapshot ALL alerts shown, not only the blocking ones — the record is "what was
+          // this prescriber looking at when they decided", and a warning informs that too.
+          alerts: screening.alerts.map((a) => ({
+            kind: a.kind,
+            severity: a.severity,
+            message: a.message,
+            ...(a.allergen ? { allergen: a.allergen } : {}),
+          })),
+        }
+      : undefined;
+
   return withTransaction(async (session) => {
     const signed = await repo.setStatus(
       id,
@@ -196,9 +295,14 @@ export async function signPrescription(id: string): Promise<repo.Prescription> {
         to: "signed",
         at: new Date(),
         ...(ctx.userId ? { by: ctx.userId } : {}),
+        ...(safetyOverride ? { reason: `safety override: ${safetyOverride.reason}` } : {}),
       },
       session,
-      { signedAt: new Date(), ...(ctx.userId ? { signedBy: ctx.userId } : {}) },
+      {
+        signedAt: new Date(),
+        ...(ctx.userId ? { signedBy: ctx.userId } : {}),
+        ...(safetyOverride ? { safetyOverride } : {}),
+      },
     );
 
     // The repository matched on `status: draft`, so a miss is a lost race, not a lost row.

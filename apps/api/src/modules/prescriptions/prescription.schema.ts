@@ -80,6 +80,16 @@ export const listPrescriptionsQuerySchema = z
 
 export const idParamSchema = z.object({ id: objectId }).strict();
 
+/**
+ * The sign body. Empty on the ordinary path; `overrideReason` is present only when the
+ * prescriber is signing THROUGH a blocking safety alert. The service refuses the override
+ * unless a blocking alert actually exists, so this cannot be used to pre-emptively silence
+ * a check that has not fired.
+ */
+export const signPrescriptionSchema = z
+  .object({ overrideReason: z.string().min(3).max(1000).optional() })
+  .strict();
+
 /** Stopping a drug REQUIRES a reason. "Cancelled" with no why is useless to the next doctor. */
 export const cancelPrescriptionSchema = z.object({ reason: z.string().min(3).max(500) }).strict();
 

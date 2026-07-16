@@ -35,6 +35,12 @@ export interface Prescription {
   supersededById?: string;
   cancelReason?: string;
   notes?: string;
+  safetyOverride?: {
+    reason: string;
+    by: string;
+    at: Date;
+    alerts: { kind: string; severity: string; allergen?: string; message: string }[];
+  };
   branchId?: string;
   history: PrescriptionHistoryEntry[];
   createdAt: Date;
@@ -63,6 +69,7 @@ function toPrescription(doc: PrescriptionDoc): Prescription {
     ...(doc.supersededById ? { supersededById: doc.supersededById.toString() } : {}),
     ...(doc.cancelReason ? { cancelReason: doc.cancelReason } : {}),
     ...(doc.notes ? { notes: doc.notes } : {}),
+    ...(doc.safetyOverride ? { safetyOverride: doc.safetyOverride } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
   };
 }

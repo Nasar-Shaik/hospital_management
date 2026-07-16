@@ -22,6 +22,7 @@ export {
   createPrescription,
   updateDraft,
   signPrescription,
+  screenPrescription,
   cancelPrescription,
   discardPrescription,
   amendPrescription,
@@ -31,6 +32,8 @@ export {
   type Prescription,
   type CreatePrescriptionInput,
   type PrescriptionLineInput,
+  type PrescriptionScreening,
+  type SignOptions,
 } from "./prescription.service.js";
 
 export {

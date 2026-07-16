@@ -23,8 +23,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiClientError,
+  ALLERGENS,
+  ALLERGY_SEVERITIES,
   DRUG_FREQUENCIES,
   DRUG_ROUTES,
+  type Allergy,
+  type AllergySeverity,
   type DrugFrequency,
   type DrugRoute,
   type Encounter,
@@ -34,6 +38,7 @@ import {
   type Patient,
   type Prescription,
   type PrescriptionLineInput,
+  type SafetyAlert,
   type DoctorRef,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
@@ -255,13 +260,216 @@ function OrdersForVisit({ orders }: { orders: Order[] }) {
  *
  * No prices here either — this is the same price-free catalogue the order pad uses.
  */
+/**
+ * The tone a safety alert is drawn in. `contraindicated` is the block — it must look
+ * different from a warning, because the whole point of the severity ladder is that a doctor
+ * can tell at a glance which one they are allowed to click past.
+ */
+function alertTone(severity: SafetyAlert["severity"]): "danger" | "warning" {
+  return severity === "contraindicated" ? "danger" : "warning";
+}
+
+function SafetyAlertList({ alerts }: { alerts: SafetyAlert[] }) {
+  return (
+    <div className="space-y-2">
+      {alerts.map((a, i) => (
+        <Alert key={`${a.kind}-${String(i)}`} tone={alertTone(a.severity)}>
+          <span className="font-semibold uppercase tracking-wide" style={{ fontSize: "0.65rem" }}>
+            {a.severity === "contraindicated" ? "Contraindicated" : a.kind.replace(/_/g, " ")}
+          </span>
+          <span className="ml-2">{a.message}</span>
+        </Alert>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A patient's known allergies, at the top of the prescribing pad — because the safest place
+ * for this information is directly in front of the person about to prescribe. The server
+ * screen is the real gate; this is so the doctor is never surprised by it.
+ */
+function AllergyBanner({ allergies }: { allergies: Allergy[] }) {
+  const active = allergies.filter((a) => a.status === "active");
+  if (active.length === 0) {
+    return (
+      <p className="text-xs text-[var(--color-fg-subtle)]">No known drug allergies recorded.</p>
+    );
+  }
+  return (
+    <Alert tone="danger" title="Allergies">
+      <div className="flex flex-wrap gap-1.5">
+        {active.map((a) => (
+          <span
+            key={a.id}
+            className="rounded border border-[var(--color-danger)]/30 px-1.5 py-0.5 text-xs font-medium"
+          >
+            {a.label}
+            {a.severity === "anaphylaxis" || a.severity === "severe" ? ` (${a.severity})` : ""}
+          </span>
+        ))}
+      </div>
+    </Alert>
+  );
+}
+
+/**
+ * Record and rule out allergies. Recording is against a CATALOGUE code, never free text —
+ * the `<select>` is not a convenience, it is the guarantee that what is stored is what the
+ * prescribing check screens against. A typed "penicilin" would be a check that never fires.
+ */
+function AllergyPanel({
+  patientId,
+  allergies,
+  canManage,
+  onChange,
+}: {
+  patientId: string;
+  allergies: Allergy[];
+  canManage: boolean;
+  onChange: () => void;
+}) {
+  const { api } = useAuth();
+  const [allergen, setAllergen] = useState("");
+  const [severity, setSeverity] = useState<AllergySeverity>("moderate");
+  const [reaction, setReaction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const active = allergies.filter((a) => a.status === "active");
+  const refuted = allergies.filter((a) => a.status === "refuted");
+
+  async function record() {
+    if (!allergen) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordAllergy(patientId, {
+        allergen,
+        severity,
+        ...(reaction.trim() ? { reaction: reaction.trim() } : {}),
+      });
+      setAllergen("");
+      setReaction("");
+      setSeverity("moderate");
+      onChange();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not record the allergy.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refute(id: string) {
+    const reason = window.prompt("Why is this allergy being ruled out? (kept on the record)");
+    if (!reason?.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.refuteAllergy(id, reason.trim());
+      onChange();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not rule out the allergy.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      {active.length === 0 ? (
+        <p className="text-xs text-[var(--color-fg-subtle)]">No known drug allergies recorded.</p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {active.map((a) => (
+            <span
+              key={a.id}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-danger)]/40 bg-[var(--color-danger-bg)] px-2 py-1 text-xs text-[var(--color-danger)]"
+            >
+              <span className="font-medium">{a.label}</span>
+              <span className="opacity-70">· {a.severity}</span>
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => void refute(a.id)}
+                  disabled={busy}
+                  className="opacity-60 hover:opacity-100"
+                  title="Rule this out"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {refuted.length > 0 && (
+        <p className="text-xs text-[var(--color-fg-subtle)]">
+          Ruled out: {refuted.map((a) => a.label).join(", ")}
+        </p>
+      )}
+
+      {canManage && (
+        <div className="flex flex-wrap items-end gap-2 border-t border-[var(--color-border)] pt-3">
+          <label className="text-xs text-[var(--color-fg-muted)]">
+            Allergen
+            <select
+              value={allergen}
+              onChange={(e) => setAllergen(e.target.value)}
+              className="mt-0.5 block w-40 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+            >
+              <option value="">Choose…</option>
+              {Object.entries(ALLERGENS).map(([code, label]) => (
+                <option key={code} value={code}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-[var(--color-fg-muted)]">
+            Severity
+            <select
+              value={severity}
+              onChange={(e) => setSeverity(e.target.value as AllergySeverity)}
+              className="mt-0.5 block rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+            >
+              {ALLERGY_SEVERITIES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex-1 text-xs text-[var(--color-fg-muted)]">
+            Reaction (optional)
+            <input
+              value={reaction}
+              onChange={(e) => setReaction(e.target.value)}
+              placeholder="rash, throat swelling…"
+              className="mt-0.5 block w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+            />
+          </label>
+          <Button variant="secondary" disabled={busy || !allergen} onClick={() => void record()}>
+            Add
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RxPad({
   encounter,
   drugs,
+  allergies,
   onSigned,
 }: {
   encounter: Encounter;
   drugs: CatalogueItem[];
+  allergies: Allergy[];
   onSigned: () => void;
 }) {
   const { api } = useAuth();
@@ -269,13 +477,34 @@ function RxPad({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  /** After a screen finds something, we hold the draft and its alerts here for confirmation. */
+  const [review, setReview] = useState<{
+    draftId: string;
+    alerts: SafetyAlert[];
+    blocking: boolean;
+  } | null>(null);
+  const [override, setOverride] = useState("");
 
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return q ? drugs.filter((d) => d.name.toLowerCase().includes(q)) : drugs;
   }, [drugs, filter]);
 
+  /**
+   * Editing the lines invalidates any pending safety review — it was screened against
+   * different drugs. The draft created for that review is discarded so it does not linger
+   * as an unsigned orphan.
+   */
+  function invalidateReview() {
+    if (review) {
+      void api.discardPrescription(review.draftId).catch(() => undefined);
+      setReview(null);
+      setOverride("");
+    }
+  }
+
   function add(drug: CatalogueItem) {
+    invalidateReview();
     setLines((prev) => [
       ...prev,
       {
@@ -294,23 +523,54 @@ function RxPad({
   }
 
   function update(index: number, patch: Partial<PrescriptionLineInput>) {
+    invalidateReview();
     setLines((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)));
   }
 
   function remove(index: number) {
+    invalidateReview();
     setLines((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function sign() {
+  /**
+   * First press: draft the prescription and SCREEN it. If nothing fires, it signs straight
+   * away — the check is invisible when there is nothing to say. If something fires, we stop
+   * and show it: a contraindication demands a written override, a warning just wants a
+   * second look. The screen re-runs server-side at the signature regardless, so this is the
+   * doctor's early warning, not the enforcement.
+   */
+  async function reviewAndSign() {
     setBusy(true);
     setError(null);
     try {
-      // Draft, then sign. Two calls because they are two acts: the second is the one that
-      // binds, and the server refuses to sign an empty one.
       const rx = await api.createPrescription({ encounterId: encounter.id, lines });
-      await api.signPrescription(rx.id);
-      setLines([]);
-      onSigned();
+      const screening = await api.screenPrescription(rx.id);
+
+      if (screening.alerts.length === 0) {
+        await api.signPrescription(rx.id);
+        finish();
+        return;
+      }
+      setReview({ draftId: rx.id, alerts: screening.alerts, blocking: screening.blocking });
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not prepare the prescription.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Second press: sign the reviewed draft, carrying the override reason if it was blocked. */
+  async function confirmSign() {
+    if (!review) return;
+    if (review.blocking && !override.trim()) {
+      setError("A contraindication must be acknowledged with a reason before signing.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.signPrescription(review.draftId, review.blocking ? override.trim() : undefined);
+      finish();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not sign the prescription.");
     } finally {
@@ -318,9 +578,24 @@ function RxPad({
     }
   }
 
+  function cancelReview() {
+    if (review) void api.discardPrescription(review.draftId).catch(() => undefined);
+    setReview(null);
+    setOverride("");
+  }
+
+  function finish() {
+    setLines([]);
+    setReview(null);
+    setOverride("");
+    onSigned();
+  }
+
   return (
     <div className="space-y-4">
       {error && <Alert tone="danger">{error}</Alert>}
+
+      <AllergyBanner allergies={allergies} />
 
       <input
         type="search"
@@ -425,13 +700,50 @@ function RxPad({
             </div>
           ))}
 
-          <Button disabled={busy} onClick={() => void sign()}>
-            {busy ? "Signing…" : `Sign prescription (${String(lines.length)})`}
-          </Button>
-          <p className="text-xs text-[var(--color-fg-subtle)]">
-            Signing sends it to the pharmacy straight away. After that it cannot be edited —
-            changing a dose creates a new version.
-          </p>
+          {!review ? (
+            <>
+              <Button disabled={busy} onClick={() => void reviewAndSign()}>
+                {busy ? "Checking…" : `Sign prescription (${String(lines.length)})`}
+              </Button>
+              <p className="text-xs text-[var(--color-fg-subtle)]">
+                Signing checks the patient&apos;s allergies, then sends it to the pharmacy. After
+                that it cannot be edited — changing a dose creates a new version.
+              </p>
+            </>
+          ) : (
+            <div className="space-y-3 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-subtle)] p-3">
+              <p className="text-sm font-semibold text-[var(--color-fg)]">
+                {review.blocking ? "Safety alert — review before signing" : "Please review"}
+              </p>
+              <SafetyAlertList alerts={review.alerts} />
+
+              {review.blocking && (
+                <label className="block text-xs text-[var(--color-fg-muted)]">
+                  Reason for overriding (required — this is recorded on the prescription)
+                  <textarea
+                    value={override}
+                    onChange={(e) => setOverride(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. prior reaction was a mild childhood rash; benefit outweighs risk, will monitor"
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs text-[var(--color-fg)]"
+                  />
+                </label>
+              )}
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant={review.blocking ? "danger" : "primary"}
+                  disabled={busy || (review.blocking && !override.trim())}
+                  onClick={() => void confirmSign()}
+                >
+                  {busy ? "Signing…" : review.blocking ? "Override and sign" : "Sign anyway"}
+                </Button>
+                <Button variant="secondary" disabled={busy} onClick={cancelReview}>
+                  Go back
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -686,6 +998,7 @@ function MyPatients() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
+  const [allergies, setAllergies] = useState<Allergy[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
   const [error, setError] = useState<string | null>(null);
@@ -776,6 +1089,20 @@ function MyPatients() {
     [api],
   );
 
+  /** Allergies are the PATIENT'S, not the visit's — keyed on patientId, read hospital-wide. */
+  const loadAllergies = useCallback(
+    (patientId: string) => {
+      void api
+        .listAllergies(patientId)
+        .then(setAllergies)
+        .catch(() => setAllergies([]));
+    },
+    [api],
+  );
+
+  const selected = waiting.find((e) => e.id === selectedId) ?? null;
+  const selectedPatientId = selected?.patientId ?? null;
+
   useEffect(() => {
     if (selectedId) {
       loadOrders(selectedId);
@@ -783,7 +1110,9 @@ function MyPatients() {
     }
   }, [selectedId, loadOrders, loadPrescriptions]);
 
-  const selected = waiting.find((e) => e.id === selectedId) ?? null;
+  useEffect(() => {
+    if (selectedPatientId) loadAllergies(selectedPatientId);
+  }, [selectedPatientId, loadAllergies]);
 
   async function act(action: string) {
     if (!selected) return;
@@ -988,6 +1317,22 @@ function MyPatients() {
                 </Card>
               </PermissionGate>
 
+              <PermissionGate can={can} permission="allergy:read">
+                <Card className="p-5">
+                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Allergies</h3>
+                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                    Recorded against the patient, seen at every branch. The prescribing check
+                    screens against this list.
+                  </p>
+                  <AllergyPanel
+                    patientId={selected.patientId}
+                    allergies={allergies}
+                    canManage={can("allergy:manage")}
+                    onChange={() => loadAllergies(selected.patientId)}
+                  />
+                </Card>
+              </PermissionGate>
+
               <PermissionGate can={can} permission="prescription:sign">
                 <Card className="p-5">
                   <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Prescribe</h3>
@@ -998,6 +1343,7 @@ function MyPatients() {
                   <RxPad
                     encounter={selected}
                     drugs={drugs}
+                    allergies={allergies}
                     onSigned={() => {
                       setNotice("Prescription signed — it is on the pharmacy counter now.");
                       loadPrescriptions(selected.id);

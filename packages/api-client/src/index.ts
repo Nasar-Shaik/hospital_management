@@ -213,6 +213,46 @@ export interface Patient {
   updatedAt: string;
 }
 
+/**
+ * The allergen catalogue the UI offers, mirrored from the API's `ALLERGENS`. An allergy is
+ * recorded against a CODE from this list, never free text — a typed allergen a machine cannot
+ * match is a safety check that silently never fires. Keep in step with drugSafety.ts.
+ */
+export const ALLERGENS: Record<string, string> = {
+  penicillins: "Penicillins",
+  cephalosporins: "Cephalosporins",
+  sulfonamides: "Sulfonamides (sulfa drugs)",
+  macrolides: "Macrolides",
+  nsaids: "NSAIDs",
+  salicylates: "Salicylates (aspirin)",
+  opioids: "Opioids",
+  paracetamol: "Paracetamol",
+  ondansetron: "Ondansetron",
+  latex: "Latex",
+  peanuts: "Peanuts",
+  eggs: "Eggs",
+};
+
+export const ALLERGY_SEVERITIES = ["mild", "moderate", "severe", "anaphylaxis"] as const;
+export type AllergySeverity = (typeof ALLERGY_SEVERITIES)[number];
+export type AllergyStatus = "active" | "refuted";
+
+export interface Allergy {
+  id: string;
+  patientId: string;
+  allergen: string;
+  /** Human label for `allergen`, resolved by the API from the catalogue. */
+  label: string;
+  severity: AllergySeverity;
+  reaction?: string;
+  status: AllergyStatus;
+  notedBy: string;
+  notedAt: string;
+  refutedBy?: string;
+  refutedAt?: string;
+  refutedReason?: string;
+}
+
 export interface RegisterPatientInput {
   name: string;
   gender?: Gender;
@@ -533,6 +573,32 @@ export interface Prescription {
   supersededById?: string;
   cancelReason?: string;
   notes?: string;
+  /** Present only when the prescriber signed THROUGH a blocking safety alert. */
+  safetyOverride?: {
+    reason: string;
+    by: string;
+    at: string;
+    alerts: SafetyAlert[];
+  };
+}
+
+export type SafetyAlertKind = "allergy" | "cross_sensitivity" | "duplicate_therapy" | "interaction";
+export type SafetyAlertSeverity = "contraindicated" | "major" | "moderate";
+
+/** One finding from the prescribing safety screen. `contraindicated` is the only one that blocks. */
+export interface SafetyAlert {
+  kind: SafetyAlertKind;
+  severity: SafetyAlertSeverity;
+  drugCodes: string[];
+  allergen?: string;
+  message: string;
+}
+
+export interface PrescriptionScreening {
+  prescriptionId: string;
+  alerts: SafetyAlert[];
+  /** True when at least one alert is a contraindication — signing needs an override reason. */
+  blocking: boolean;
 }
 
 /** What the doctor types. No `dispensedQty` — only the pharmacy may move that. */
@@ -859,6 +925,23 @@ export class ApiClient {
 
   updatePatient(id: string, input: Partial<RegisterPatientInput>): Promise<Patient> {
     return this.request<Patient>("PATCH", `/api/v1/patients/${id}`, input);
+  }
+
+  /** A patient's allergies — active and refuted. Read hospital-wide, never branch-scoped. */
+  listAllergies(patientId: string): Promise<Allergy[]> {
+    return this.request<Allergy[]>("GET", `/api/v1/patients/${patientId}/allergies`);
+  }
+
+  recordAllergy(
+    patientId: string,
+    input: { allergen: string; severity?: AllergySeverity; reaction?: string },
+  ): Promise<Allergy> {
+    return this.request<Allergy>("POST", `/api/v1/patients/${patientId}/allergies`, input);
+  }
+
+  /** Rules an allergy out. It stops firing the prescribing check but stays on the record. */
+  refuteAllergy(id: string, reason: string): Promise<Allergy> {
+    return this.request<Allergy>("POST", `/api/v1/allergies/${id}/refute`, { reason });
   }
 
   /** The as-you-type duplicate check. POST because the body carries PHI. */
@@ -1267,9 +1350,24 @@ export class ApiClient {
     return this.request<Prescription>("PATCH", `/api/v1/prescriptions/${id}`, input);
   }
 
-  /** The signature. The pharmacy hears about it without anyone telling them. */
-  signPrescription(id: string): Promise<Prescription> {
-    return this.request<Prescription>("POST", `/api/v1/prescriptions/${id}/sign`);
+  /** The live safety screen — allergies, interactions, duplicate therapy. Signs nothing. */
+  screenPrescription(id: string): Promise<PrescriptionScreening> {
+    return this.request<PrescriptionScreening>("GET", `/api/v1/prescriptions/${id}/screen`);
+  }
+
+  /**
+   * The signature. The pharmacy hears about it without anyone telling them.
+   *
+   * `overrideReason` is required ONLY to sign through a blocking safety alert (an allergy
+   * contraindication); on the ordinary path it is omitted. Signing through a block without
+   * one is refused server-side with HMS-RX-001.
+   */
+  signPrescription(id: string, overrideReason?: string): Promise<Prescription> {
+    return this.request<Prescription>(
+      "POST",
+      `/api/v1/prescriptions/${id}/sign`,
+      overrideReason ? { overrideReason } : undefined,
+    );
   }
 
   /** Stopping a drug. Doses already dispensed are unaffected — see §6. */

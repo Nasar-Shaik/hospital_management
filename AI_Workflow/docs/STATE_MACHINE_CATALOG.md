@@ -115,6 +115,7 @@ Guards:
 - **The dispensing states are DERIVED, never chosen.** Nobody clicks "partially dispensed": it is what is true when some lines are handed over and some are not, computed from the quantities in `pharmacy.service.ts`. A status set by hand is a status that will eventually disagree with the quantities it claims to summarise.
 - **Nobody gets more than was prescribed**, and the guard is in the QUERY (`$expr` + `$arrayElemAt`, `prescription.repository.ts`), not an `if`. A read-then-check lets two pharmacists both see "2 left", both pass, and both hand over 2 — the patient walks out with 12 tablets of a drug they were prescribed 10 of, and the ledger says it never happened.
 - **There is no `dispensed → cancelled`.** Once everything is handed over there is nothing left to stop; telling the patient to stop taking it is a clinical instruction, not a state change on a document that has already been fully executed.
+- **`draft → signed` passes through a SAFETY GATE.** The transition re-screens the prescription against the patient's active allergies server-side (`drugSafety.screen`, §6c). An allergy contraindication REFUSES the signature (HMS-RX-001) unless the caller supplies an override reason, which is recorded on the prescription as `safetyOverride` — a snapshot of the alerts, who overrode, and why. Lesser findings (cross-sensitivity, interaction, duplicate therapy) are returned to the pad but do NOT block the transition. The screen re-runs at the signature regardless of what the pad displayed: the enforcement point never trusts the client to have checked.
 
 **NOT implemented: "dispensing decrements batch stock transactionally".** There are no batches — no inventory, no expiry, no purchasing. `pharmacy:stock` exists as a permission and nothing writes it. This module is a counter without a warehouse and says so: it will let you dispense a drug the shelf does not have. That is recorded as debt in PROJECT_MEMORY rather than papered over, because a stock number that is only sometimes decremented is worse than no stock number — people believe it.
 
@@ -127,6 +128,21 @@ Not a state machine — a LEDGER, and that is the point. "Was it dispensed" is n
 There is no update path and no delete path. A handover that turns out to be wrong is corrected by a return, which is another row — never by editing history so that it says the drug was never given. The tablets are in the patient either way.
 
 **Why each handover is separately chargeable:** billing keys the drug charge on the DISPENSE id. Keyed on the prescription, `one_charge_per_cause` (migration 0014) would take the first charge and silently swallow the second — ten tablets given, six paid for, no error anywhere.
+
+### 6c. Allergy (tenant DB) — what the prescribing gate screens against
+
+**Implemented** — `modules/allergies/allergy.model.ts`.
+
+```
+active → refuted     (a clinician rules it out; reason required; kept on the record)
+```
+
+- **`active → refuted`, never delete.** "The patient is allergic to penicillin" and "we later established they are not" are two different facts, and the second does not erase the first — a reaction was observed or reported, and that it was later ruled out is itself part of the record. A refuted allergy stops firing the prescribing check but stays visible with who ruled it out and why. There is no hard-delete path.
+- **The allergen is a CATALOGUE code, never free text** (`drugSafety.ALLERGENS`). A typed "penicilin" is a note a human reads and a machine can never match — and a safety check that silently never fires is the exact failure this feature exists to prevent. The DTO enforces the enum at the edge.
+- **`one_active_allergy_per_allergen`** (migration 0017) — unique partial index on `status: "active"`. The same allergy entered twice is one fact, not two, and two active rows would fire the alert in duplicate. PARTIAL on active, so a REFUTED row does not block a later, genuine re-recording of the same class.
+- **Read keyed on the PATIENT, never the branch.** An allergy follows the person across every branch of the hospital; a branch-scoped read would hide one recorded elsewhere and hand the check an empty list. `allergy:read` is `tenant`-scoped to say so, and the repository deliberately does not apply the row-scope filter.
+
+The CHECK itself (`drugSafety.screen`) is not a state machine — it is a pure function over the signed lines and the active allergies. Its severity ladder (`contraindicated` blocks; `major`/`moderate` warn) is the whole design: a system that blocks every warning trains the prescriber to dismiss all of them.
 
 ## 7. Specimen (was "Lab Order" — SUPERSEDED by §15)
 

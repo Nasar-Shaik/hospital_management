@@ -33,6 +33,7 @@ import {
   createPrescriptionSchema,
   idParamSchema,
   listPrescriptionsQuerySchema,
+  signPrescriptionSchema,
   updatePrescriptionSchema,
 } from "./prescription.schema.js";
 
@@ -82,12 +83,27 @@ export function prescriptionRouter(): Router {
     asyncHandler(controller.updatePrescription),
   );
 
+  /**
+   * The live safety screen: the pad's read-only "is this safe to sign?" check.
+   *
+   * `emr:read`, not `prescription:sign` — a nurse or pharmacist looking at the chart may see
+   * the same alerts the prescriber does. It signs nothing; it only reports.
+   */
+  router.get(
+    "/prescriptions/:id/screen",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_READ, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.screenPrescription),
+  );
+
   /** The moment the document becomes real, and the pharmacy hears about it. */
   router.post(
     "/prescriptions/:id/sign",
     authenticate(),
     authorize(PERMISSIONS.PRESCRIPTION_SIGN, FEATURE),
     validate(idParamSchema, "params"),
+    validate(signPrescriptionSchema),
     asyncHandler(controller.signPrescription),
   );
 

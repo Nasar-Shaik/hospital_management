@@ -817,4 +817,45 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0017-allergies",
+    description: "The allergy list — what the prescribing safety check screens against",
+    up: async (db) => {
+      /**
+       * A patient's allergies, most recent first — the read behind both the management
+       * screen and the prescribing check. Keyed on the patient and NOT the branch, because
+       * an allergy follows the person across every branch of the hospital (allergy.model.ts).
+       */
+      await db
+        .collection("allergies")
+        .createIndex({ tenantId: 1, patientId: 1, notedAt: -1 }, { background: true });
+
+      /**
+       * ── ONE ACTIVE ROW PER ALLERGEN, PER PATIENT ────────────────────────────
+       * Two "active penicillin allergy" rows are not more information; they are one fact
+       * entered twice, and they would make the prescribing alert fire in duplicate and clutter
+       * the list a clinician has to read in a hurry.
+       *
+       * PARTIAL on `status: "active"`, so a REFUTED penicillin allergy does not block a later,
+       * correctly re-recorded active one — the patient's history can hold both "was thought
+       * allergic, ruled out" and a fresh finding, which is exactly the record a real allergy
+       * work-up produces.
+       */
+      await db.collection("allergies").createIndex(
+        { tenantId: 1, patientId: 1, allergen: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { status: "active" },
+          background: true,
+          name: "one_active_allergy_per_allergen",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("allergies")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

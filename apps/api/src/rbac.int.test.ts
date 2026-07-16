@@ -474,6 +474,10 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/prescriptions/64b7f0000000000000000001",
     body: { lines: [] },
   },
+  "GET /api/v1/prescriptions/:id/screen": {
+    method: "get",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/screen",
+  },
   "POST /api/v1/prescriptions/:id/sign": {
     method: "post",
     url: "/api/v1/prescriptions/64b7f0000000000000000001/sign",
@@ -505,6 +509,26 @@ const PROBES: Record<string, Probe> = {
   "GET /api/v1/prescriptions/:id/dispenses": {
     method: "get",
     url: "/api/v1/prescriptions/64b7f0000000000000000001/dispenses",
+  },
+
+  /* ── Allergies ──────────────────────────────────────────────────────────────
+   * `allergy:read` — everyone clinical, INCLUDING the pharmacist (the last check before a
+   * drug is handed over). `allergy:manage` — doctors and nurses record a finding; a
+   * pharmacist reads it but does not edit it.
+   */
+  "GET /api/v1/patients/:patientId/allergies": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/allergies",
+  },
+  "POST /api/v1/patients/:patientId/allergies": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/allergies",
+    body: { allergen: "penicillins" },
+  },
+  "POST /api/v1/allergies/:id/refute": {
+    method: "post",
+    url: "/api/v1/allergies/64b7f0000000000000000001/refute",
+    body: { reason: "matrix probe" },
   },
 
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },

@@ -65,6 +65,9 @@ docker ps
 pnpm docker:dev     # terminal 1 — infrastructure
 pnpm dev            # terminal 2 — the apps
 pnpm verify         # terminal 3 — is it actually working?
+
+lsof -nP -iTCP:3000,3001,4000,4100 -sTCP:LISTEN   # we can check the processes later we can kill those using
+kill -9 37477 73596 79705 79706
 ```
 
 **`pnpm verify` is the answer to "why isn't it working".** It checks the containers, DNS, the API _on the address the browser will use_, the web app, CORS, and then performs a real login — and prints the fix, not the symptom:
@@ -266,17 +269,36 @@ is the feature.
 
 All of these are enforced by the **database or the state machine**, not by a hopeful `if`:
 
-| Try this                                            | What happens                            | Why                                                                                |
-| --------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------- |
-| Dispense 11 of 10 tablets                           | **Refused**                             | The guard is in the query — two pharmacists both seeing "2 left" can't both give 2 |
-| Dispense against an unsigned draft                  | **Refused**                             | A draft is a doctor thinking out loud                                              |
-| Doctor stops the drug, then dispense                | **Refused**                             | They may have stopped it for an allergy. Already-given doses stay on the record    |
-| Edit a signed prescription                          | **Refused**, and it names the way out   | It is a legal instrument the moment it is signed                                   |
-| Double-click Order or Dispense                      | **One** order, **one** handover         | Idempotency key + unique index — the case a disabled button cannot save you from   |
-| Sign an empty prescription                          | **Refused**                             | A legal instrument authorising nothing                                             |
-| As reception, open the order book or a prescription | Not in the nav; **403** if you force it | A drug name is a diagnosis: lithium says bipolar, tenofovir says HIV               |
-| As the pharmacist, try to write a prescription      | **403**                                 | They are the second pair of eyes, not the first                                    |
-| As a doctor, try to verify your own lab result      | **403**                                 | You would be the only pair of eyes on it                                           |
+| Try this                                            | What happens                                 | Why                                                                                |
+| --------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Dispense 11 of 10 tablets                           | **Refused**                                  | The guard is in the query — two pharmacists both seeing "2 left" can't both give 2 |
+| Dispense against an unsigned draft                  | **Refused**                                  | A draft is a doctor thinking out loud                                              |
+| Doctor stops the drug, then dispense                | **Refused**                                  | They may have stopped it for an allergy. Already-given doses stay on the record    |
+| Edit a signed prescription                          | **Refused**, and it names the way out        | It is a legal instrument the moment it is signed                                   |
+| Double-click Order or Dispense                      | **One** order, **one** handover              | Idempotency key + unique index — the case a disabled button cannot save you from   |
+| Sign an empty prescription                          | **Refused**                                  | A legal instrument authorising nothing                                             |
+| As reception, open the order book or a prescription | Not in the nav; **403** if you force it      | A drug name is a diagnosis: lithium says bipolar, tenofovir says HIV               |
+| As the pharmacist, try to write a prescription      | **403**                                      | They are the second pair of eyes, not the first                                    |
+| As a doctor, try to verify your own lab result      | **403**                                      | You would be the only pair of eyes on it                                           |
+| Prescribe a drug the patient is allergic to         | **Blocked** until you override with a reason | See "Allergy safety" below — the reason is recorded on the prescription            |
+
+### Allergy safety — the newest thing to try (added 2026-07-16)
+
+The prescribing pad now checks the patient's allergies before it will sign. To see it end to end:
+
+1. As **Dr Rao** (`drrao@sunrise.test`), call a patient in and open their card. There is now an **Allergies** panel.
+2. Record **Penicillins**, severity **severe**. It appears as a red badge, and a red "Allergies" banner appears on the Prescribe pad directly above the drug search — the information is in front of you before you prescribe.
+3. Add **Amoxicillin** to the pad and press **Sign prescription**. Instead of signing, it stops and shows a red **CONTRAINDICATED** alert naming the drug and the allergy, with a box demanding a reason.
+4. Type a reason and press **Override and sign**. It signs — and the reason, plus a snapshot of exactly what you were shown, is recorded on the prescription as a medicolegal fact. (Without a reason, the button stays disabled; the server refuses it too, so you cannot get past it by tampering with the page.)
+5. As the **pharmacist** (`pharmacy@sunrise.test`), open that prescription on `/pharmacy`. The same red allergy banner is there — the last check before the drug leaves the shelf.
+
+Things worth trying:
+
+- **Rule the allergy out** (the ✕ on the badge, with a reason). Prescribing amoxicillin now signs with no block — a refuted allergy stays on the record but stops firing the check.
+- **Prescribe two NSAIDs** (Ibuprofen + Diclofenac), or **Azithromycin + Ondansetron**. These WARN ("duplicate therapy", a QT-interaction) but do **not** block — only a direct allergy contraindication stops a signature. That severity ladder is deliberate: a system that blocks every warning teaches you to click past the one that matters.
+- An allergy recorded at one branch is visible at another — it follows the patient, not the visit.
+
+**What it is NOT:** a drug database. It is a curated net over the 15 demo drugs — no renal dosing, weight bands, pregnancy category or dose ceilings. The shape is real; the coverage is a demo. Do not present it to a hospital as a formulary.
 
 ### Known rough edges (real, not bugs to report)
 
@@ -627,10 +649,12 @@ Not bugs — **not built**, each for a stated reason. The reasons are recorded i
 - **Pharmacy stock.** No batches, no expiry, no purchasing. The counter **will let you dispense a
   drug the shelf does not have.** A half-built stock number is worse than none — people believe
   it, and a number that is only sometimes decremented is trusted right up until it matters.
-- **Allergy, interaction and duplicate-therapy checking.** _Nothing_ checks them. This is the
-  single highest clinical value a prescribing system can add, and it is absent. A
-  half-implemented allergy check is worse than none: it teaches a doctor the machine is
-  watching, and then one day it isn't. **The first thing the EMR slice must bring.**
+- **Allergy, interaction and duplicate-therapy checking — now BUILT (2026-07-16).** See §1d "Allergy
+  safety" for how to test it. The remaining gap is coverage, not existence: it is a curated net over
+  the 15 demo drugs, not a formulary — no renal/hepatic dosing, weight bands, pregnancy category or
+  dose ceilings. **Do not present it to a hospital as a drug database.** Widening the drug list without
+  widening the allergen/interaction data behind it would recreate exactly the "half-implemented check
+  is worse than none" trap this was careful to avoid.
 - **Specimen tracking** — the tube's own life (collected → in transit → haemolysed → recollect).
   Orders carry lab work today without it, which is exactly what a hospital using an outside lab
   needs.

@@ -53,10 +53,22 @@ export const getPrescription: RequestHandler = async (req, res) => {
   ok(res, rx);
 };
 
+/** The live safety screen the pad calls as the doctor composes — read-only, signs nothing. */
+export const screenPrescription: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await prescriptions.screenPrescription(id));
+};
+
 /** The signature. After this the document is immutable — see `prescription.model.ts`. */
 export const signPrescription: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
-  ok(res, await prescriptions.signPrescription(id));
+  const body = (req.body ?? {}) as { overrideReason?: string };
+  ok(
+    res,
+    await prescriptions.signPrescription(id, {
+      ...(body.overrideReason ? { overrideReason: body.overrideReason } : {}),
+    }),
+  );
 };
 
 export const cancelPrescription: RequestHandler = async (req, res) => {

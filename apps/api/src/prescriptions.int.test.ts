@@ -829,3 +829,121 @@ describe("who gave what, when", () => {
     expect(ledger.body.data[0].dispensedBy).toBeTruthy();
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * ALLERGY SAFETY — the block, and the informed override.
+ *
+ * The pure screener has its own exhaustive unit test (drugSafety.test.ts). What is proved
+ * HERE is that the SIGNATURE enforces it end to end: a contraindicated drug cannot be signed
+ * without an explicit override, the override is recorded as a medicolegal fact, and a warning
+ * that is not a contraindication does not stand in the way.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Records an active allergy on a patient, as the DOCTOR (who holds `allergy:manage`). */
+async function recordAllergy(
+  h: Hospital,
+  patientId: string,
+  allergen: string,
+  severity = "severe",
+): Promise<void> {
+  await auth(request(app).post(`/api/v1/patients/${patientId}/allergies`), h, h.doctorToken)
+    .send({ allergen, severity })
+    .expect(201);
+}
+
+const rawSign = (h: Hospital, id: string, body: Record<string, unknown> = {}) =>
+  auth(request(app).post(`/api/v1/prescriptions/${id}/sign`), h, h.doctorToken).send(body);
+
+describe("an allergy blocks the signature until it is acknowledged", () => {
+  it("refuses to sign a penicillin for a penicillin-allergic patient", async () => {
+    const encounterId = await arrive(pvt, "Blocked Patient", "9400100001");
+    const rx = await draft(pvt, encounterId, [AMOXICILLIN]);
+    await recordAllergy(pvt, rx.patientId, "penicillins");
+
+    const res = await rawSign(pvt, rx.id);
+
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("HMS-RX-001");
+    const alerts = res.body.error.details.alerts as { kind: string; severity: string }[];
+    expect(alerts.some((a) => a.kind === "allergy" && a.severity === "contraindicated")).toBe(true);
+
+    // It really did NOT sign — the document is still a draft.
+    const after = await auth(request(app).get(`/api/v1/prescriptions/${rx.id}`), pvt).expect(200);
+    expect(after.body.data.status).toBe("draft");
+  });
+
+  it("the live screen shows the block before the doctor ever presses sign", async () => {
+    const encounterId = await arrive(pvt, "Screened Patient", "9400100002");
+    const rx = await draft(pvt, encounterId, [AMOXICILLIN]);
+    await recordAllergy(pvt, rx.patientId, "penicillins");
+
+    const res = await auth(request(app).get(`/api/v1/prescriptions/${rx.id}/screen`), pvt).expect(
+      200,
+    );
+
+    expect(res.body.data.blocking).toBe(true);
+    expect(res.body.data.alerts[0].allergen).toBe("penicillins");
+  });
+
+  it("signs THROUGH the block with an override reason, and records it as a medicolegal fact", async () => {
+    const encounterId = await arrive(pvt, "Override Patient", "9400100003");
+    const rx = await draft(pvt, encounterId, [AMOXICILLIN]);
+    await recordAllergy(pvt, rx.patientId, "penicillins");
+
+    const res = await rawSign(pvt, rx.id, {
+      overrideReason:
+        "Prior reaction was a mild rash in childhood; benefit outweighs risk, will monitor.",
+    }).expect(200);
+
+    expect(res.body.data.status).toBe("signed");
+    expect(res.body.data.safetyOverride).toBeTruthy();
+    expect(res.body.data.safetyOverride.reason).toContain("mild rash");
+    expect(res.body.data.safetyOverride.by).toBe(res.body.data.signedBy);
+    // The alerts the prescriber saw are snapshotted onto the record, not left to be re-derived.
+    expect(res.body.data.safetyOverride.alerts[0].kind).toBe("allergy");
+  });
+
+  it("an ordinary signature carries NO override — the field is absent when nothing blocked", async () => {
+    const encounterId = await arrive(pvt, "Clean Patient", "9400100004");
+    const rx = await draft(pvt, encounterId, [PARACETAMOL]);
+
+    const res = await rawSign(pvt, rx.id).expect(200);
+    expect(res.body.data.status).toBe("signed");
+    expect(res.body.data.safetyOverride).toBeUndefined();
+  });
+
+  it("a refuted allergy does NOT block — ruling it out is what turns the check off", async () => {
+    const encounterId = await arrive(pvt, "Refuted Patient", "9400100005");
+    const rx = await draft(pvt, encounterId, [AMOXICILLIN]);
+
+    // Record it, then rule it out. The check must now see nothing.
+    const created = await auth(
+      request(app).post(`/api/v1/patients/${rx.patientId}/allergies`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .send({ allergen: "penicillins" })
+      .expect(201);
+    await auth(
+      request(app).post(`/api/v1/allergies/${created.body.data.id}/refute`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .send({ reason: "Formal penicillin allergy testing negative" })
+      .expect(200);
+
+    const res = await rawSign(pvt, rx.id).expect(200);
+    expect(res.body.data.status).toBe("signed");
+    expect(res.body.data.safetyOverride).toBeUndefined();
+  });
+
+  it("an override reason on a prescription that does NOT block is ignored, not recorded", async () => {
+    const encounterId = await arrive(pvt, "Spurious Override", "9400100006");
+    const rx = await draft(pvt, encounterId, [PARACETAMOL]);
+
+    // No allergy exists — an override supplied anyway must not manufacture a fake record of
+    // one, or the log would show overrides that never overrode anything.
+    const res = await rawSign(pvt, rx.id, { overrideReason: "just in case" }).expect(200);
+    expect(res.body.data.safetyOverride).toBeUndefined();
+  });
+});
