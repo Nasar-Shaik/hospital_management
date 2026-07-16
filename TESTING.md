@@ -144,6 +144,129 @@ api listening  profile=local  hospitalHosts=*.localhost  apiBind=:: (dual-stack)
 
 ---
 
+## 1d. THE CLINICAL DEMO — what you can actually test (updated 2026-07-16)
+
+**This is the section to read if you want to see the product.** Everything here has been driven
+in a real browser as the actual role. If it is not listed in this section, assume it is not
+built — and check §11, which says so explicitly.
+
+```bash
+pnpm --filter @medicore/api migrate --all   # safe to re-run; never overwrites a hospital's prices
+pnpm --filter @medicore/api seed:demo       # two staffed hospitals, 9 logins each
+pnpm dev
+```
+
+Then open **http://sunrise.localhost:3000**.
+
+### The two hospitals — the whole demo in one comparison
+
+Both run the **same code**. The only difference is `organizationType`, which selects a preset of
+five policy switches. **There is no `if (government)` anywhere in the codebase** — a test greps
+the source and fails if anyone ever writes one.
+
+|          | **Sunrise Multispeciality**  | **District General**      |
+| -------- | ---------------------------- | ------------------------- |
+| URL      | `sunrise.localhost:3000`     | `district.localhost:3000` |
+| Type     | Private hospital             | Government hospital       |
+| Billing  | `prepaid` — the patient pays | `zero_tariff` — **₹0**    |
+| Entry    | appointment or walk-in       | walk-in                   |
+| Routing  | named doctor                 | department                |
+| Pharmacy | in-house                     | in-house                  |
+
+Run the identical flow at both. Sunrise bills **₹589.00**; District General bills **₹0.00**, with
+the real prices still shown **struck through**. The patient pays nothing; the state still sees
+what the care was worth. Free to the patient is not free to the exchequer.
+
+### The nine logins (password `123456`, same at both hospitals)
+
+| Login                      | Who                       | What they can do                         |
+| -------------------------- | ------------------------- | ---------------------------------------- |
+| `admin@sunrise.test`       | Hospital admin            | Everything except the 3 superadmin codes |
+| `reception@sunrise.test`   | Front desk                | Register, queue, see the bill            |
+| `drrao@sunrise.test`       | Dr Rao (General Medicine) | Consult, order, **prescribe**            |
+| `drkhan@sunrise.test`      | Dr Khan (Surgery)         | Same, a different list                   |
+| `labtech@sunrise.test`     | Lab technician            | Run tests. **Cannot verify**             |
+| `pathologist@sunrise.test` | Pathologist               | **Verify + release** blood results       |
+| `radiologist@sunrise.test` | Radiologist               | Verify + release **imaging**             |
+| `pharmacy@sunrise.test`    | Nisha (Pharmacy)          | **Dispense**, see the bill               |
+| `cashier@sunrise.test`     | Billing counter           | Finalize, take payment                   |
+
+### The screens
+
+| Screen            | Who sees it (permission)    | What it does                                                  |
+| ----------------- | --------------------------- | ------------------------------------------------------------- |
+| `/reception`      | `encounter:create`          | Walk-in intake, the day's register by date, the running bill  |
+| `/my-patients`    | `order:create`              | Waiting list, call in, **order pad**, **Rx pad**, close visit |
+| `/worklist`       | `order:read`                | Lab/imaging: accept → start → result → verify → release       |
+| `/pharmacy`       | `pharmacy:dispense`         | The counter: what was prescribed, dispense (partial allowed)  |
+| `/billing`        | `billing:read`              | Invoices, finalize, take payment                              |
+| `/patients`       | `patient:read`              | The patient index                                             |
+| `/appointments`   | `appointment:read`          | The appointment book                                          |
+| `/staff`,`/roles` | `user:read` / `role:manage` | Staff directory and role grants                               |
+| Activity trail    | `audit:read`                | Who did what, when, from where — append-only                  |
+
+### The 5-minute flow — log in as each person in turn
+
+**The point is that nobody ever "sends" anything anywhere.** Work appears in the next department
+the instant it is committed. There is no "send to lab" button in this product, and that absence
+is the feature.
+
+1. **Reception** (`reception@…` → **Reception**) — register a walk-in, pick a doctor,
+   **Add to queue**. The ₹500 consultation is on the bill immediately, posted on arrival.
+   The date picker resolves in the _hospital's_ timezone.
+2. **Doctor** (`drrao@…` → **My patients**) — your list only (filtered by the server).
+   **Call in** → **Order** a CBC → **Prescribe**: pick a drug, set dose / route / frequency /
+   days / quantity, **Sign**. Then **Send for tests**.
+   - **No prices anywhere on this screen.** A doctor who can see what a patient owes may treat
+     them differently. The order pad reads a price-free catalogue: _the rate card is not the bill._
+   - `route` and `frequency` are dropdowns, not free text. A drug given by the wrong route kills
+     people, and it has — repeatedly.
+   - Signing makes it **immutable**. Changing a dose means **amend**: a new version supersedes it
+     and the original survives exactly as signed.
+3. **Lab tech** (`labtech@…` → **Worklist**) — the CBC is **already there**. Accept → Start →
+   record the result (tick **critical** to see the panic path — the alert is sent synchronously,
+   before verification). The tech sees _"Awaiting verification — not yet visible to the doctor"_.
+   **They cannot verify their own work.**
+4. **Pathologist** (`pathologist@…`) — **Verify** → **Release**. Only now can the doctor see the
+   number. The patient returns to the doctor's list **automatically**, but only when _every_
+   result is back. A pathologist **cannot** sign off an X-ray, and a radiologist cannot sign off blood.
+5. **Pharmacy** (`pharmacy@…` → **Pharmacy**) — the prescription is **already at the counter**
+   (the same object and the same query the lab uses). Set paracetamol to **6** of 10 and
+   **Dispense**: the badge becomes `6/10 given`, "of 4 still owed", and **the patient is billed
+   for 6, not 10**. Dispense the rest later and it bills again, correctly, as a _second_ charge.
+   "Already handed over" is the ledger — who gave what, when.
+6. **Cashier** (`cashier@…` → **Billing**) — consultation + tests + **only the drugs actually
+   handed over**. **Finalize** (freezes it, assigns a number) → take payment. Overpayment is
+   refused; a draft bill cannot be paid.
+7. **Do it all again at `district.localhost:3000`.** Same clicks, same code, **every line ₹0.00**
+   with the real price struck through. A ₹0 invoice is marked paid the moment it is finalized —
+   a government hospital must not accrue a pile of "unpaid" bills nobody will ever pay.
+
+### Try to break it
+
+All of these are enforced by the **database or the state machine**, not by a hopeful `if`:
+
+| Try this                                            | What happens                            | Why                                                                                |
+| --------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------- |
+| Dispense 11 of 10 tablets                           | **Refused**                             | The guard is in the query — two pharmacists both seeing "2 left" can't both give 2 |
+| Dispense against an unsigned draft                  | **Refused**                             | A draft is a doctor thinking out loud                                              |
+| Doctor stops the drug, then dispense                | **Refused**                             | They may have stopped it for an allergy. Already-given doses stay on the record    |
+| Edit a signed prescription                          | **Refused**, and it names the way out   | It is a legal instrument the moment it is signed                                   |
+| Double-click Order or Dispense                      | **One** order, **one** handover         | Idempotency key + unique index — the case a disabled button cannot save you from   |
+| Sign an empty prescription                          | **Refused**                             | A legal instrument authorising nothing                                             |
+| As reception, open the order book or a prescription | Not in the nav; **403** if you force it | A drug name is a diagnosis: lithium says bipolar, tenofovir says HIV               |
+| As the pharmacist, try to write a prescription      | **403**                                 | They are the second pair of eyes, not the first                                    |
+| As a doctor, try to verify your own lab result      | **403**                                 | You would be the only pair of eyes on it                                           |
+
+### Known rough edges (real, not bugs to report)
+
+- **The pharmacist's "this visit owes" lags ~1.5s** after dispensing. Billing _listens_ — the
+  drug charge is posted once the relay delivers the event. It converges; it is not instant.
+  **Do not take payment off that number yet.**
+- **A new hospital's Rx pad is empty** until you run `migrate --all` — the drug tariff seeds there.
+
+---
+
 ## 2. First-time setup (once)
 
 ```bash
@@ -418,10 +541,14 @@ That `traceId` is the same one on the HTTP request that created the account — 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build   # full quality gate
 pnpm boundaries                                          # module boundary rules
-pnpm --filter @medicore/api test:int                     # 175 integration tests (isolation + auth + RBAC matrix)
+pnpm --filter @medicore/api test:int                     # 602 integration tests (isolation, auth, RBAC matrix, encounters, orders, billing, prescriptions + pharmacy)
 ```
 
-`test:int` needs `pnpm docker:dev` running. It covers 17 tenant-isolation tests and 29 authentication tests against a **real** MongoDB and Redis, and it **fails rather than skips** if either is missing — a silently skipped isolation suite looks exactly like a passing one.
+`test:int` needs `pnpm docker:dev` running. **602 tests across 13 suites** against a **real** MongoDB and Redis, and it **fails rather than skips** if either is missing — a silently skipped isolation suite looks exactly like a passing one.
+
+All gates, as of **2026-07-16**: integration **602 passing**, typecheck 17/17, lint 17/17, build 11/11, module boundaries **0 violations** across 629 modules, **111 API routes** — every one carrying a permission that a test asserts, because the route nobody thought about is the one that answers everybody.
+
+**Known flake:** one run once showed `1 failed | 437 passed` and the test was not captured; it has not reproduced since. Suspected the Mailhog timing suite under load. Recorded as debt in `PROJECT_MEMORY` §5. **It must not be "fixed" by deleting the assertion.**
 
 ---
 
@@ -452,12 +579,41 @@ pnpm dev
 
 ---
 
-## 11. What you cannot test yet
+## 11. What you cannot test yet (updated 2026-07-16)
 
-Not bugs — not built:
+Not bugs — **not built**, each for a stated reason. The reasons are recorded in
+`AI_Workflow/PROJECT_MEMORY.md` §4 and §5. Do not demo anything in this list.
 
-- **Any business feature** (patients, appointments, billing…). Phase 2+.
-- **Permission enforcement.** Roles exist and ride inside the token, but the `authorize` middleware lands in Phase 1C, so a logged-in admin is not yet _restricted_ by permissions.
-- **Forgot/reset password.** Deliberately postponed until the notification channel exists — a reset flow that cannot deliver a reset is worse than none.
-- **Anything a real event consumer would do** (welcome emails, cache fan-out). The outbox delivers events today; the worker acknowledges them and logs. Consumers arrive with A6.
-- **Permission enforcement in the UI beyond menus.** The sidebar hides what you cannot do and the server refuses it — but there is no role _editor_ yet (you assign an existing role, you cannot yet build a new one from a permission matrix).
+> Everything this section used to say was **out of date and wrong**: patients, appointments,
+> encounters, orders, billing, prescriptions and pharmacy all ship today, and `authorize`
+> enforces all three layers (entitlement → permission → row scope). §1d is the current truth.
+
+**Next up — Slice 4:**
+
+- **Admission / IPD** — admit from a consultation, daily notes, discharge summary, bed-day charges.
+  The bed tariff is already seeded and the state machine is specified; the module is not written.
+- **Transfer a case to another doctor.**
+
+**Deliberately absent, and dangerous to pretend otherwise:**
+
+- **Pharmacy stock.** No batches, no expiry, no purchasing. The counter **will let you dispense a
+  drug the shelf does not have.** A half-built stock number is worse than none — people believe
+  it, and a number that is only sometimes decremented is trusted right up until it matters.
+- **Allergy, interaction and duplicate-therapy checking.** _Nothing_ checks them. This is the
+  single highest clinical value a prescribing system can add, and it is absent. A
+  half-implemented allergy check is worse than none: it teaches a doctor the machine is
+  watching, and then one day it isn't. **The first thing the EMR slice must bring.**
+- **Specimen tracking** — the tube's own life (collected → in transit → haemolysed → recollect).
+  Orders carry lab work today without it, which is exactly what a hospital using an outside lab
+  needs.
+
+**Not started:**
+
+- **Staff chat** (WhatsApp-style, wanted), the **mobile app**, insurance / claims / pre-auth /
+  refunds, the licence-expiry gate, OpenAPI docs (111 routes), the universal work queue
+  (ADR-0014), the `patients.merged` consumer.
+- **Forgot/reset password.** Postponed until the notification channel is wired to a real
+  provider — a reset flow that cannot deliver a reset is worse than none. (An admin can reset a
+  password from **Staff** today.)
+- **A role editor.** You can assign an existing role; you cannot yet build a new one from a
+  permission matrix.

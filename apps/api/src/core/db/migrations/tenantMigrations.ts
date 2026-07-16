@@ -681,4 +681,76 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+
+  {
+    id: "0015-prescriptions",
+    description: "Prescriptions + dispensing — what the doctor ordered and what was handed over",
+    up: async (db) => {
+      /**
+       * The chart's view: every prescription on this visit, newest first. This is what the
+       * doctor's Rx pad and the pharmacist's screen both read.
+       */
+      await db
+        .collection("prescriptions")
+        .createIndex({ tenantId: 1, encounterId: 1, prescribedAt: -1 }, { background: true });
+
+      // The patient's medication history across every visit (ADR-0013 §4: the episode's
+      // timeline is a read model, and this is one of the queries behind it).
+      await db
+        .collection("prescriptions")
+        .createIndex({ tenantId: 1, patientId: 1, prescribedAt: -1 }, { background: true });
+
+      // Resolving the pharmacy worklist entry back to the drugs it carries. One
+      // prescription raises at most one `pharmacy` order (`requestId: rx:<id>`), so this
+      // is a lookup, not a scan.
+      await db
+        .collection("prescriptions")
+        .createIndex(
+          { tenantId: 1, orderId: 1 },
+          { background: true, partialFilterExpression: { orderId: { $exists: true } } },
+        );
+
+      /**
+       * ── THE DOUBLE-HANDOVER INVARIANT ───────────────────────────────────────
+       * A pharmacist double-clicking "Dispense", or a client retrying after a timeout on a
+       * request that had already succeeded, must not hand over — and bill for — a second
+       * lot of the same drugs. With a controlled substance that is not a billing error, it
+       * is a diversion, and the ledger would show it never happened.
+       *
+       * PARTIAL, because `requestId` is optional: a handover recorded by an internal
+       * caller with no client to generate a key is still a legitimate handover, and a
+       * plain unique index would collapse every one of those onto a single null.
+       */
+      await db.collection("dispenses").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_dispense_per_request_id",
+        },
+      );
+
+      // The handover ledger for one prescription, oldest first — "who gave what, when".
+      // The `dispensedQty` on each line is a SUM of these rows, and this index is what
+      // makes that sum re-derivable rather than merely asserted.
+      await db
+        .collection("dispenses")
+        .createIndex({ tenantId: 1, prescriptionId: 1, dispensedAt: 1 }, { background: true });
+
+      // What this patient has actually been given, across visits. The question a
+      // pharmacist asks when somebody says they lost their tablets.
+      await db
+        .collection("dispenses")
+        .createIndex({ tenantId: 1, patientId: 1, dispensedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["prescriptions", "dispenses"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];

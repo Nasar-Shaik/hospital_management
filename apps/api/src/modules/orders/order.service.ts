@@ -52,6 +52,23 @@ export interface PlaceOrderInput {
   departmentId?: string;
   requestId?: string;
   branchId?: string;
+  /**
+   * Who asked for this. Defaults to the authenticated caller, which is what every HTTP
+   * request wants and the only thing an HTTP request can get.
+   *
+   * ── THIS IS SERVICE-ONLY, AND IT MUST STAY THAT WAY ─────────────────────────
+   * `placeOrderSchema` does not declare this field, and `validate()` replaces `req.body`
+   * with Zod's output — which strips undeclared keys. So a client cannot set it, and the
+   * "the orderer is the authenticated caller, never the body" rule still holds for every
+   * route. If anyone ever adds `orderedBy` to that schema, they hand any doctor the
+   * ability to order tests in a colleague's name and receive none of the results.
+   *
+   * The one legitimate caller is a CONSUMER, which has no user of its own: the pharmacy
+   * order raised from `prescription.signed` belongs to the doctor who signed it, and
+   * without this it would decay to "system" — losing the prescriber on the very object
+   * the pharmacist uses to check who authorised the drugs.
+   */
+  orderedBy?: string;
 }
 
 export interface PlaceOrderResult {
@@ -118,6 +135,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
           ...(input.notes ? { notes: input.notes } : {}),
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
+          ...(input.orderedBy ? { orderedBy: input.orderedBy } : {}),
           ...((input.branchId ?? encounter.branchId)
             ? { branchId: (input.branchId ?? encounter.branchId) as string }
             : {}),
@@ -469,4 +487,4 @@ export const cancelOrder = (id: string, reason: string): Promise<repo.Order> =>
 
 export const getOrder = (id: string): Promise<repo.Order | undefined> => repo.findById(id);
 export const listOrders = repo.list;
-export const hasOutstandingOrders = repo.hasOutstandingOrders;
+export const isWaitingOnResults = repo.isWaitingOnResults;

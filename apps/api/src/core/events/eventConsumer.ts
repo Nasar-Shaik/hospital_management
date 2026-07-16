@@ -39,6 +39,7 @@ import { getById } from "../../modules/tenants/index.js";
 import { appointmentConsumers } from "../../modules/appointments/index.js";
 import { orderConsumers } from "../../modules/orders/index.js";
 import { billingConsumers } from "../../modules/billing/index.js";
+import { prescriptionConsumers } from "../../modules/prescriptions/index.js";
 import { patientConsumers } from "../../modules/patients/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
@@ -64,6 +65,7 @@ const MODULES: ModuleConsumers[] = [
   patientConsumers,
   orderConsumers,
   billingConsumers,
+  prescriptionConsumers,
 ];
 
 function mergeHandlers(): {

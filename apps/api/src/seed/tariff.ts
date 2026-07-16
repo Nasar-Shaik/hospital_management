@@ -73,6 +73,48 @@ export const DEFAULT_TARIFF: TariffSeed[] = [
   { code: "INJ", name: "Injection Administration", category: "procedure", price: 10_000 },
   { code: "NEB", name: "Nebulisation", category: "procedure", price: 15_000 },
 
+  /**
+   * Drugs — priced PER UNIT (per tablet, per ml, per vial).
+   *
+   * ── PER UNIT, BECAUSE THE PHARMACY BILLS WHAT IT HANDED OVER ────────────────
+   * The charge posted at dispense multiplies this by the quantity that actually crossed
+   * the counter (`billing.consumers.ts`), so a patient given 6 of their 10 prescribed
+   * tablets pays for 6. A price per strip or per box could not express that, and the
+   * partial handover — the pharmacy has run out, come back Thursday — is the normal case,
+   * not the edge one.
+   *
+   * ── THIS IS A DEMO DRUG LIST, NOT A DRUG MASTER ─────────────────────────────
+   * A real one carries generic and brand names, strengths, forms, schedules (H/H1/X),
+   * batches, expiry and HSN codes for GST. This is fifteen common Indian OPD drugs so the
+   * counter can be demonstrated the same afternoon. The codes are what `orders.code` and
+   * `charges.code` join on, so they are stable even though the list is not.
+   */
+  { code: "DRUG_PARA_500", name: "Paracetamol 500mg Tablet", category: "pharmacy", price: 150 },
+  { code: "DRUG_AMOX_500", name: "Amoxicillin 500mg Capsule", category: "pharmacy", price: 800 },
+  { code: "DRUG_AZITH_500", name: "Azithromycin 500mg Tablet", category: "pharmacy", price: 2_500 },
+  { code: "DRUG_PAN_40", name: "Pantoprazole 40mg Tablet", category: "pharmacy", price: 700 },
+  { code: "DRUG_CETI_10", name: "Cetirizine 10mg Tablet", category: "pharmacy", price: 200 },
+  { code: "DRUG_ORS", name: "ORS Sachet", category: "pharmacy", price: 1_800 },
+  { code: "DRUG_METF_500", name: "Metformin 500mg Tablet", category: "pharmacy", price: 250 },
+  { code: "DRUG_AMLO_5", name: "Amlodipine 5mg Tablet", category: "pharmacy", price: 180 },
+  { code: "DRUG_ATOR_10", name: "Atorvastatin 10mg Tablet", category: "pharmacy", price: 400 },
+  { code: "DRUG_IBU_400", name: "Ibuprofen 400mg Tablet", category: "pharmacy", price: 220 },
+  { code: "DRUG_ONDAN_4", name: "Ondansetron 4mg Tablet", category: "pharmacy", price: 600 },
+  {
+    code: "DRUG_SALB_INH",
+    name: "Salbutamol Inhaler (200 doses)",
+    category: "pharmacy",
+    price: 18_000,
+  },
+  { code: "DRUG_INJ_DICLO", name: "Diclofenac 75mg Injection", category: "pharmacy", price: 2_200 },
+  { code: "DRUG_INJ_CEFT", name: "Ceftriaxone 1g Injection", category: "pharmacy", price: 4_500 },
+  {
+    code: "DRUG_IVFLUID_NS",
+    name: "Normal Saline 500ml IV Fluid",
+    category: "pharmacy",
+    price: 4_000,
+  },
+
   // Beds — priced per DAY. The admission module posts one of these each night.
   { code: "BED_GEN", name: "General Ward (per day)", category: "bed", price: 150_000 },
   { code: "BED_SEMI", name: "Semi-private Room (per day)", category: "bed", price: 300_000 },

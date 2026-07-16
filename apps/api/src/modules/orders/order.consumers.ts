@@ -20,8 +20,9 @@ import { getPatient } from "../patients/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getById as getTenant } from "../tenants/index.js";
 import { getEncounter, startConsultation } from "../encounters/index.js";
-import { hasOutstandingOrders } from "./order.repository.js";
+import { isWaitingOnResults } from "./order.repository.js";
 import { getOrder } from "./order.service.js";
+import { AWAITED_CATEGORIES } from "./order.model.js";
 
 const logger = createLogger({ service: "order-consumers" });
 
@@ -41,7 +42,28 @@ async function onResultReleased(event: DomainEvent): Promise<void> {
     return;
   }
 
-  await tellTheOrderingDoctor(order.id, order.orderedBy, order.patientId, order.name, event);
+  /**
+   * ── NOT EVERY RELEASED ORDER HAS A RESULT TO TELL ANYONE ABOUT ──────────────
+   * The pharmacy clears its worklist by walking the same state machine to `released`
+   * (`pharmacy.service.ts`), because there is one machine and pharmacy work is order work
+   * (ADR-0013 §3). But "released" there means *the patient has their tablets*, not *a
+   * report is ready* — and mailing a doctor "your result is available: Prescription — 2
+   * items" is a message about nothing, sent to somebody who never asked a question.
+   *
+   * A channel that sends noise gets ignored, and this is the same channel that carries a
+   * critical potassium. So the notification is scoped to the categories that actually
+   * answer a question (`AWAITED_CATEGORIES`), while the patient-flow half below runs for
+   * everything — it has its own, separate reason to be careful.
+   */
+  if (AWAITED_CATEGORIES.includes(order.category)) {
+    await tellTheOrderingDoctor(order.id, order.orderedBy, order.patientId, order.name, event);
+  } else {
+    logger.debug(
+      { orderId: order.id, category: order.category },
+      "released order carries no result — the ordering doctor is not mailed about it",
+    );
+  }
+
   await bringThePatientBack(order.encounterId);
 }
 
@@ -117,7 +139,7 @@ async function bringThePatientBack(encounterId: string): Promise<void> {
    */
   if (encounter.status !== "awaiting_results") return;
 
-  if (await hasOutstandingOrders(encounterId)) {
+  if (await isWaitingOnResults(encounterId)) {
     logger.debug({ encounterId }, "result released, but other orders are still outstanding");
     return;
   }

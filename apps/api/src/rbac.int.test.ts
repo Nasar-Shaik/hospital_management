@@ -410,6 +410,72 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/invoices/64b7f0000000000000000001/payments",
     body: { amount: 50000, method: "cash" },
   },
+  /* ── Prescriptions (STATE_MACHINE_CATALOG §6) ───────────────────────────────
+   * Reading is `emr:read` — a pharmacist and a nurse must read what the patient is on,
+   * and must never be able to write it. Composing is `prescription:create`; the SIGNATURE
+   * is `prescription:sign`, separately, because signing is what makes a document the
+   * authority for a drug to leave a shelf.
+   */
+  "POST /api/v1/prescriptions": {
+    method: "post",
+    url: "/api/v1/prescriptions",
+    body: {
+      encounterId: "64b7f0000000000000000001",
+      lines: [
+        {
+          drugCode: "DRUG_PARA_500",
+          drugName: "Paracetamol 500mg Tablet",
+          dose: "500 mg",
+          route: "oral",
+          frequency: "TDS",
+          quantity: 15,
+        },
+      ],
+    },
+  },
+  "GET /api/v1/prescriptions": { method: "get", url: "/api/v1/prescriptions" },
+  "GET /api/v1/prescriptions/:id": {
+    method: "get",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001",
+  },
+  "PATCH /api/v1/prescriptions/:id": {
+    method: "patch",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001",
+    body: { lines: [] },
+  },
+  "POST /api/v1/prescriptions/:id/sign": {
+    method: "post",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/sign",
+  },
+  "POST /api/v1/prescriptions/:id/cancel": {
+    method: "post",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/cancel",
+    body: { reason: "matrix probe" },
+  },
+  "POST /api/v1/prescriptions/:id/discard": {
+    method: "post",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/discard",
+  },
+  "POST /api/v1/prescriptions/:id/amend": {
+    method: "post",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/amend",
+  },
+
+  /* ── Pharmacy ───────────────────────────────────────────────────────────────
+   * `pharmacy:dispense` — the authority to hand a drug over against somebody ELSE's
+   * signature. Deliberately held by no clinical role: a doctor who could dispense their
+   * own prescription would erase the second pair of eyes the pharmacy exists to be.
+   */
+  "POST /api/v1/prescriptions/:id/dispense": {
+    method: "post",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/dispense",
+    body: { items: [{ lineIndex: 0, quantity: 1 }] },
+  },
+  "GET /api/v1/prescriptions/:id/dispenses": {
+    method: "get",
+    url: "/api/v1/prescriptions/64b7f0000000000000000001/dispenses",
+  },
+
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",
@@ -442,7 +508,13 @@ const PROBES: Record<string, Probe> = {
 };
 
 /** The roles under test. Chosen to span the privilege range, not to be exhaustive. */
-const ROLES_UNDER_TEST = ["TENANT_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST"] as const;
+/**
+ * PHARMACIST is here because it is the only role that may hand a controlled drug to a
+ * human being, and until the pharmacy shipped it had never had a single route tested.
+ * The matrix is derived from `DEFAULT_ROLES`, so adding the name is enough — every route
+ * is now probed against it.
+ */
+const ROLES_UNDER_TEST = ["TENANT_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST"] as const;
 type TestedRole = (typeof ROLES_UNDER_TEST)[number];
 
 /** Permission codes each role holds — read from the catalog the app itself seeds from. */
@@ -528,12 +600,30 @@ beforeAll(async () => {
   await dropDatabases(["test_rbac_master", DB_A, DB_B]);
   await flushTestCache();
 
-  // Apollo BUYS scheduling; Sunshine has no plan at all. That difference is what
-  // makes layer 1 (entitlement) testable — see the entitlement suite at the bottom.
+  /**
+   * Apollo buys EVERYTHING; Sunshine has no plan at all. That difference is what makes
+   * layer 1 (entitlement) testable — see the entitlement suite at the bottom.
+   *
+   * ── WHY THE MATRIX TENANT MUST HOLD EVERY FEATURE ─────────────────────────
+   * This suite tests LAYER 2 — may this role call this route. It can only do that if
+   * layer 1 never interferes, because `authorize` checks entitlement FIRST and both
+   * layers answer 403.
+   *
+   * Apollo was on PLAN_CLINIC, which was fine for exactly as long as every route's
+   * feature happened to be in CLINIC_FLAGS. The pharmacy routes gate on
+   * `module.pharmacy.dispensing`, which a clinic correctly does NOT buy — so every
+   * pharmacy probe started failing with "denied but holds pharmacy:dispense".
+   *
+   * The dangerous half is the one that did NOT fail: a "may NOT" probe against an
+   * unentitled route PASSES, because the route 403s for the wrong reason. The role could
+   * have held the permission all along and this suite would have called it denied. On the
+   * fullest plan, a 403 is always a permission decision — which is the only thing that
+   * makes this matrix mean what it says.
+   */
   const a = await provisionTenant({
     hospitalName: "Apollo RBAC",
     slug: SLUG_A,
-    planCode: "PLAN_CLINIC",
+    planCode: "PLAN_ENTERPRISE",
   });
   const b = await provisionTenant({ hospitalName: "Sunshine RBAC", slug: SLUG_B });
   tenantA = { id: a.tenant.id, slug: SLUG_A, databaseName: a.tenant.databaseName };
@@ -802,6 +892,61 @@ describe("privilege boundaries that must never move", () => {
     }
   });
 
+  it("a PHARMACIST cannot write or sign a prescription — they are the second pair of eyes, not the first", async () => {
+    /**
+     * The whole reason a pharmacy is a safety check and not a hatch is that the person
+     * handing the drugs over did not choose them. A pharmacist who could write or amend
+     * the prescription they are about to dispense is just a doctor with worse training and
+     * no patient in front of them.
+     *
+     * They hold `emr:read` and can READ it — they must, to dispense it safely.
+     */
+    const writes: [string, string, object][] = [
+      ["post", "/api/v1/prescriptions", { encounterId: "64b7f0000000000000000001", lines: [] }],
+      ["patch", "/api/v1/prescriptions/64b7f0000000000000000001", { lines: [] }],
+      ["post", "/api/v1/prescriptions/64b7f0000000000000000001/sign", {}],
+      ["post", "/api/v1/prescriptions/64b7f0000000000000000001/amend", {}],
+    ];
+
+    for (const [method, url, body] of writes) {
+      const res = await (request(app) as unknown as Record<string, (u: string) => request.Test>)
+        [method](url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.PHARMACIST}`)
+        .send(body);
+
+      expect(res.status, `PHARMACIST must not be able to ${method} ${url}`).toBe(403);
+      expect(res.body.error.code).toBe("HMS-AUTH-005");
+    }
+  });
+
+  it("a DOCTOR cannot dispense their own prescription", async () => {
+    // Prescribing and dispensing are two people on purpose. A doctor who could do both
+    // removes the only check between a slip of the pen and a patient swallowing it —
+    // which is exactly the check `pharmacy:dispense` exists to be.
+    const res = await request(app)
+      .post("/api/v1/prescriptions/64b7f0000000000000000001/dispense")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.DOCTOR}`)
+      .send({ items: [{ lineIndex: 0, quantity: 1 }] });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("a RECEPTIONIST cannot read a prescription — a drug name is a diagnosis", async () => {
+    // Lithium says bipolar; tenofovir says HIV; methotrexate says cancer. The front desk
+    // books and bills, and the prescription leaks the condition even when no diagnosis was
+    // ever written down. They hold no `emr:read`, and this is why.
+    const res = await request(app)
+      .get("/api/v1/prescriptions")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.RECEPTIONIST}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
   it("a RECEPTIONIST cannot see the order book — what was ordered is a diagnosis not yet written down", async () => {
     // An order list leaks the SUSPICION even when the result is negative: an HIV test,
     // a beta-hCG, a psychiatric referral. The front desk books and bills; it does not
@@ -939,7 +1084,7 @@ describe("row scope: branch confinement (the P2 bug, pinned)", () => {
 
 describe("entitlement (layer 1): a hospital cannot use what it did not buy", () => {
   it("an entitled hospital reaches the appointment book", async () => {
-    // Apollo is on PLAN_CLINIC, which includes module.ops.appointments.
+    // Apollo is on PLAN_ENTERPRISE, which includes module.ops.appointments.
     const res = await request(app)
       .get("/api/v1/appointments")
       .set("Host", HOST_A)

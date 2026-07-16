@@ -86,13 +86,33 @@ Guards: idempotency key mandatory at `initiated`; `captured` posts to journal ex
 
 ## 6. Prescription
 
+**Implemented** — `modules/prescriptions/prescription.model.ts`, with one guard deliberately NOT built (stock; see below).
+
 ```
-draft → signed → (dispensing: partially_dispensed → dispensed)
+draft → signed → partially_dispensed → dispensed
 draft → discarded
-signed → cancelled          (doctor only; reason; already-administered doses unaffected)
+signed → cancelled                  (doctor only; reason; already-dispensed doses unaffected)
+partially_dispensed → cancelled     (same; the tablets already given remain given)
 ```
 
-Guards: `signed` is immutable (changes = new version); dispensing decrements batch stock transactionally. Terminal: **dispensed, discarded, cancelled**.
+Guards:
+
+- **`signed` is immutable.** Editing one is refused, and the refusal names the way out (`POST /prescriptions/:id/amend`) — a new DRAFT at `version + 1` that supersedes the original, leaving it exactly as it was signed. Without an amend path, "immutable" would mean a doctor who typed 500mg for 50mg could only cancel and start again, and the fact that one was a CORRECTION OF THE OTHER — the most interesting thing about it six months later — would be lost.
+- **The dispensing states are DERIVED, never chosen.** Nobody clicks "partially dispensed": it is what is true when some lines are handed over and some are not, computed from the quantities in `pharmacy.service.ts`. A status set by hand is a status that will eventually disagree with the quantities it claims to summarise.
+- **Nobody gets more than was prescribed**, and the guard is in the QUERY (`$expr` + `$arrayElemAt`, `prescription.repository.ts`), not an `if`. A read-then-check lets two pharmacists both see "2 left", both pass, and both hand over 2 — the patient walks out with 12 tablets of a drug they were prescribed 10 of, and the ledger says it never happened.
+- **There is no `dispensed → cancelled`.** Once everything is handed over there is nothing left to stop; telling the patient to stop taking it is a clinical instruction, not a state change on a document that has already been fully executed.
+
+**NOT implemented: "dispensing decrements batch stock transactionally".** There are no batches — no inventory, no expiry, no purchasing. `pharmacy:stock` exists as a permission and nothing writes it. This module is a counter without a warehouse and says so: it will let you dispense a drug the shelf does not have. That is recorded as debt in PROJECT_MEMORY rather than papered over, because a stock number that is only sometimes decremented is worse than no stock number — people believe it.
+
+Terminal: **dispensed, discarded, cancelled**.
+
+### 6b. Dispense (append-only ledger)
+
+Not a state machine — a LEDGER, and that is the point. "Was it dispensed" is not a boolean on the prescription: a prescription for 10 can be handed over as 6 today and 4 on Thursday, which is every pharmacy in the country by mid-afternoon. Each handover is its own immutable row (`dispenses`) carrying its own quantity, time and pharmacist. `dispensedQty` on a prescription line is a SUM of these rows — a total you can rebuild is a total you can audit; a total you can only increment is a total you have to trust.
+
+There is no update path and no delete path. A handover that turns out to be wrong is corrected by a return, which is another row — never by editing history so that it says the drug was never given. The tablets are in the patient either way.
+
+**Why each handover is separately chargeable:** billing keys the drug charge on the DISPENSE id. Keyed on the prescription, `one_charge_per_cause` (migration 0014) would take the first charge and silently swallow the second — ten tablets given, six paid for, no error anywhere.
 
 ## 7. Specimen (was "Lab Order" — SUPERSEDED by §15)
 

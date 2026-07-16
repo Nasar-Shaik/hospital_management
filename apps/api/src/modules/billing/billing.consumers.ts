@@ -95,6 +95,31 @@ async function onOrderPlaced(event: DomainEvent): Promise<void> {
     return;
   }
 
+  /**
+   * ── A PRESCRIPTION IS A REQUEST; ONLY A DISPENSE IS A CONSUMPTION ───────────
+   * Pharmacy orders are the one category NOT charged at placement, and the exception is
+   * not a special case — it is the rule applied honestly. Placing a lab order commits the
+   * reagent; signing a prescription commits nothing. The drugs are still on the shelf.
+   *
+   * Charging here would bill the patient the moment the doctor signed, which is wrong in
+   * three ordinary situations: they never walk to the counter, the pharmacy has only six
+   * of the ten tablets, or they take the prescription to a chemist down the road and buy
+   * it from somebody else entirely. In all three the hospital has supplied nothing.
+   *
+   * So the drug is charged by `onMedicationDispensed`, for the quantity that actually
+   * crossed the counter. This early return is load-bearing: the `RX` order carries no
+   * drug code and has no tariff entry, so without it every signed prescription would post
+   * a silent ₹0 charge (`postCharge` prices an unknown code at zero) — a line item on a
+   * private hospital's bill, for nothing, at the wrong time.
+   */
+  if (event.payload.category === "pharmacy") {
+    logger.debug(
+      { orderId },
+      "pharmacy order — not charged at placement; the drugs are charged when they are dispensed",
+    );
+    return;
+  }
+
   await postCharge({
     encounterId,
     patientId,
@@ -132,11 +157,88 @@ async function onOrderCancelled(event: DomainEvent): Promise<void> {
   if (voided > 0) logger.info({ orderId, voided }, "charges reversed for a cancelled order");
 }
 
+/** One handed-over drug, as `medication.dispensed` carries it. */
+interface DispensedLine {
+  drugCode: string;
+  drugName: string;
+  quantity: number;
+}
+
+function toDispensedLines(raw: unknown): DispensedLine[] {
+  if (!Array.isArray(raw)) return [];
+
+  return raw.flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const line = entry as Record<string, unknown>;
+
+    const drugCode = String(line.drugCode ?? "");
+    const quantity = Number(line.quantity ?? 0);
+    // A line with no code cannot be priced, and a line with no quantity is not a
+    // handover. Skipping is right: the drugs are already with the patient, and throwing
+    // would retry this event forever over a payload that will never improve.
+    if (!drugCode || !Number.isFinite(quantity) || quantity <= 0) return [];
+
+    return [{ drugCode, drugName: String(line.drugName ?? drugCode), quantity }];
+  });
+}
+
+/**
+ * Drugs left the counter → charge for what was actually handed over.
+ *
+ * ── THE CHARGE IS KEYED ON THE DISPENSE, NEVER ON THE PRESCRIPTION ──────────
+ * `one_charge_per_cause` (migration 0014) is unique on `(sourceId, code)`. A prescription
+ * dispensed in two visits — six tablets today, four on Thursday, which is every pharmacy
+ * that has ever run out of anything — produces two chargeable events for the SAME drug
+ * code. Keyed on the prescription, the index would accept the first and silently swallow
+ * the second: the patient receives ten tablets, pays for six, and no error is reported
+ * anywhere. Keyed on the dispense, each handover is its own cause and each is billed once,
+ * however many times the event is redelivered.
+ *
+ * A government hospital posts all of this at ₹0 with `listPrice` intact, through the same
+ * single line in `postCharge` — free to the patient, and still costed for the state.
+ */
+async function onMedicationDispensed(event: DomainEvent): Promise<void> {
+  const dispenseId = String(event.payload.dispenseId ?? "");
+  const encounterId = String(event.payload.encounterId ?? "");
+  const patientId = String(event.payload.patientId ?? "");
+  const episodeId = String(event.payload.episodeId ?? "");
+  const lines = toDispensedLines(event.payload.lines);
+
+  if (!dispenseId || !encounterId || lines.length === 0) {
+    logger.warn(
+      { event: event.eventId, dispenseId },
+      "medication.dispensed carries no billable lines — nothing charged",
+    );
+    return;
+  }
+
+  for (const line of lines) {
+    await postCharge({
+      encounterId,
+      patientId,
+      episodeId,
+      code: line.drugCode,
+      description: line.drugName,
+      category: "pharmacy",
+      // What crossed the counter — NOT what was prescribed. The gap between those two is
+      // the patient who was given six of their ten tablets.
+      quantity: line.quantity,
+      source: "pharmacy",
+      // THE DISPENSE is the cause. See above for why this must not be the prescription.
+      sourceId: dispenseId,
+      ...(typeof event.branchId === "string" ? { branchId: event.branchId } : {}),
+    });
+  }
+
+  logger.info({ dispenseId, lines: lines.length }, "dispensed drugs charged to the visit");
+}
+
 export const billingConsumers: ModuleConsumers = {
   events: {
     [EVENTS.ENCOUNTER_STARTED]: onEncounterStarted,
     [EVENTS.ORDER_PLACED]: onOrderPlaced,
     [EVENTS.ORDER_CANCELLED]: onOrderCancelled,
+    [EVENTS.MEDICATION_DISPENSED]: onMedicationDispensed,
   },
   tasks: {},
 };

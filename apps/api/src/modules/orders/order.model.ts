@@ -132,6 +132,30 @@ export function isOutstanding(status: OrderStatus): boolean {
   return !SETTLED.includes(status);
 }
 
+/**
+ * The categories whose completion the ORDERING DOCTOR IS WAITING FOR.
+ *
+ * ── WHY THIS IS NOT "ALL OF THEM" ───────────────────────────────────────────
+ * A patient parked in `awaiting_results` is called back in when nothing is outstanding
+ * (`order.consumers.ts`). "Outstanding" cannot mean every category, because the pharmacy
+ * is DOWNSTREAM of the consultation ending: the patient collects their drugs on the way
+ * out, and if an uncollected prescription counted as outstanding, then the CBC coming back
+ * would never bring the patient back to the doctor. They would sit in the corridor until
+ * somebody noticed, and the cause — a prescription — would be the last place anyone
+ * looked.
+ *
+ * The same is true of `referral`, `admission` and `diet`: each of them IS an outcome of
+ * the consultation, not something the consultation is waiting on. A doctor does not sit
+ * with a blank in front of them waiting for a diet order to be actioned.
+ *
+ * `procedure` IS included. A dressing or a nebulisation is a thing the patient goes away
+ * and comes back from, and the doctor may well be waiting to see the result of it. Where
+ * a category is genuinely ambiguous, include it: calling the patient in too early sends
+ * them back out to wait again, and a waiting room that gets called twice stops believing
+ * the queue.
+ */
+export const AWAITED_CATEGORIES: readonly OrderCategory[] = ["lab", "radiology", "procedure"];
+
 export interface OrderResultValue {
   code: string;
   label: string;

@@ -143,6 +143,53 @@ export const EVENTS = {
    * else who cares. It is not the path the warning travels down.
    */
   CRITICAL_RESULT_FLAGGED: "order.result.criticalFlagged",
+
+  /* ── Prescriptions & pharmacy (STATE_MACHINE_CATALOG §6) ─────────────────── */
+
+  /**
+   * A doctor signed a prescription. It is now a legal instrument and immutable.
+   *
+   * ── THIS EVENT IS WHAT PUTS THE Rx ON THE PHARMACY COUNTER ──────────────────
+   * Consumer (`prescriptions/prescription.consumers.ts`): place the `pharmacy` ORDER —
+   * but ONLY when the hospital dispenses in-house (`encounterPolicy.pharmacy`). A clinic
+   * that sends patients to the chemist next door produces this event too, and correctly
+   * produces no order: there is no work for a pharmacy it does not have.
+   *
+   * ── WHY THE ORDER IS PLACED BY A CONSUMER AND NOT BY `signPrescription` ─────
+   * `placeOrder` opens its own transaction, and `withTransaction` is not re-entrant, so
+   * calling it from inside the signing transaction would commit the order SEPARATELY
+   * from the signature it belongs to. Then a crash in the wrong microsecond leaves either
+   * a signed prescription no pharmacy can see, or pharmacy work for a prescription nobody
+   * signed. The second is the dangerous one.
+   *
+   * Publishing in the signing transaction and placing the order from the consumer makes
+   * the hand-off durable instead of merely likely: the order is idempotent on
+   * `requestId = rx:<prescriptionId>`, so at-least-once delivery places exactly one.
+   */
+  PRESCRIPTION_SIGNED: "prescription.prescription.signed",
+  /**
+   * The doctor stopped it. Consumers: the pharmacy (cancel the order — do not hand it
+   * over), notifications.
+   *
+   * Doses ALREADY DISPENSED are unaffected (STATE_MACHINE_CATALOG §6). Cancellation stops
+   * the future; it does not un-swallow a tablet, and it must not un-bill one either.
+   */
+  PRESCRIPTION_CANCELLED: "prescription.prescription.cancelled",
+  /**
+   * Drugs physically left the counter and went to the patient.
+   *
+   * ── THIS, NOT `prescription.signed`, IS WHAT COSTS MONEY ────────────────────
+   * Consumer (billing): charge for what was HANDED OVER, at the quantity handed over.
+   * A prescription is a request; a dispense is a consumption. The patient who is
+   * prescribed ten tablets, given six, and told to come back for the rest owes for six —
+   * and the one who takes their prescription to a chemist down the road owes for none.
+   *
+   * Idempotent on the DISPENSE id, never on the prescription id: a partial dispense
+   * followed by another is two chargeable events for the same drug on the same
+   * prescription, and keying the charge on the prescription would silently swallow the
+   * second one (`one_charge_per_cause`, migration 0014).
+   */
+  MEDICATION_DISPENSED: "pharmacy.medication.dispensed",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
@@ -207,6 +254,17 @@ const IN_PROCESS_EVENTS = new Set<string>([
   EVENTS.ENCOUNTER_STARTED,
   EVENTS.ORDER_PLACED,
   EVENTS.ORDER_CANCELLED,
+  // Drugs that actually left the counter. NOT `PRESCRIPTION_SIGNED` — see the catalog
+  // entry: prescribing is a request, dispensing is a consumption, and only one of them
+  // is something the patient can be asked to pay for.
+  EVENTS.MEDICATION_DISPENSED,
+
+  // ── The Rx reaching the pharmacy counter ────────────────────────────────────
+  // Consumed IN-PROCESS (not by the workers) because this is the hand-off itself: it
+  // places the `pharmacy` order that makes the prescription appear on the pharmacist's
+  // worklist. A patient standing at the counter is waiting on this.
+  EVENTS.PRESCRIPTION_SIGNED,
+  EVENTS.PRESCRIPTION_CANCELLED,
 ]);
 
 export function queuesFor(name: string): string[] {

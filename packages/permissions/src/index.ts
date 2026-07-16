@@ -185,8 +185,26 @@ const CLINICAL = {
   DOCTOR_PERFORMANCE_VIEW: p("doctor:performance:view", "Doctor performance and revenue"),
 
   CONSULTATION_MANAGE: p("consultation:manage", "Conduct consultations", "own"),
-  PRESCRIPTION_CREATE: p("prescription:create", "Compose a prescription", "own"),
-  PRESCRIPTION_SIGN: p("prescription:sign", "Sign a prescription (licensed)", "own"),
+  /**
+   * ── `branch`, NOT `own` — AND THE DIFFERENCE IS NOT COSMETIC ────────────────
+   * These were `own`, matching the intuition "a doctor sees the prescriptions they
+   * wrote". That intuition is right about prescriptions and wrong about everything else
+   * in the request, because ROW SCOPE IS PER-REQUEST, NOT PER-COLLECTION: `authorize`
+   * publishes ONE scope, taken from the route's permission, and every repository read in
+   * that request obeys it (`middleware/authorize.ts`, `scopeFilter`).
+   *
+   * So under `own`, composing a prescription looked up the encounter with
+   * `{ createdBy: <the doctor> }` — and the encounter was created by RECEPTION. Every
+   * doctor in the country got "Encounter not found". The permission that was supposed to
+   * protect prescriptions made it impossible to write one.
+   *
+   * `branch` is also what `order:create` has always been, and a prescription is the same
+   * kind of act: a clinical decision taken inside a branch. Own-ness is not what protects
+   * it — a doctor covering a colleague's list must be able to see the drugs their patient
+   * is already on, and `own` would hide exactly that from exactly them.
+   */
+  PRESCRIPTION_CREATE: p("prescription:create", "Compose a prescription", "branch"),
+  PRESCRIPTION_SIGN: p("prescription:sign", "Sign a prescription (licensed)", "branch"),
   /**
    * The Order lifecycle (ADR-0013 §3, STATE_MACHINE_CATALOG §15).
    *
@@ -448,6 +466,20 @@ const HOSPITAL_FLAGS: FeatureFlag[] = [
   F.CLINICAL_RIS,
   F.CLINICAL_OT,
   F.CLINICAL_EMERGENCY,
+  /**
+   * BOTH pharmacy flags, and the pair is not redundant.
+   *
+   * `PHARMACY_FULL` is the department — stock, batches, expiry, purchasing. `DISPENSING`
+   * is the counter: handing drugs to a patient against a prescription. A hospital that
+   * bought the full pharmacy and could not dispense from it would be a product with a
+   * warehouse and no shop, so the edition grants both.
+   *
+   * They stay SEPARATE FLAGS because Clinic Plus buys exactly one of them: it dispenses
+   * against prescriptions and keeps no inventory. Collapsing them would either force a
+   * clinic to buy a stock system it will never open, or hand every dispensing hospital an
+   * inventory module for free. The routes gate on the narrower one it needs.
+   */
+  F.PHARMACY_DISPENSING,
   F.PHARMACY_FULL,
   F.FINANCE_IP_BILLING,
   F.FINANCE_INSURANCE,

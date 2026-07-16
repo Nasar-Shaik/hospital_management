@@ -64,6 +64,12 @@ const NAVIGATION: NavSection[] = [
       { label: "Reception", href: "/reception", permission: "encounter:create" },
       { label: "My patients", href: "/my-patients", permission: "order:create" },
       { label: "Worklist", href: "/worklist", permission: "order:read" },
+      /**
+       * `pharmacy:dispense`, not `order:read` — the pharmacist holds both, but this screen
+       * is for the person who HANDS THE DRUGS OVER. Gating it on the read permission would
+       * show a dispensing counter to every nurse and pathologist in the building.
+       */
+      { label: "Pharmacy", href: "/pharmacy", permission: "pharmacy:dispense" },
       { label: "Patients", href: "/patients", permission: "patient:read" },
       { label: "Appointments", href: "/appointments", permission: "appointment:read" },
       { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },

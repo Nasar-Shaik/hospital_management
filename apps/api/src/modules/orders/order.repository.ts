@@ -10,6 +10,7 @@ import {
   getOrderModel,
   isOutstanding,
   rankOf,
+  AWAITED_CATEGORIES,
   ORDER_STATUSES,
   type OrderCategory,
   type OrderDoc,
@@ -93,6 +94,8 @@ export interface CreateOrderInput {
   departmentId?: string;
   requestId?: string;
   branchId?: string;
+  /** Service-only; defaults to the caller. See `PlaceOrderInput.orderedBy` for why. */
+  orderedBy?: string;
 }
 
 /**
@@ -122,9 +125,17 @@ export async function create(input: CreateOrderInput, session: ClientSession): P
         // priority it claims to represent.
         priorityRank: rankOf(input.priority),
         status: "placed",
-        // The doctor who asked. This is who the result comes back to, so it is taken
-        // from the authenticated caller and never from the request body.
-        orderedBy: ctx.userId ?? "system",
+        /**
+         * The doctor who asked. This is who the result comes back to, so it is taken
+         * from the authenticated caller and never from the request body — `orderedBy`
+         * is absent from `placeOrderSchema`, and `validate()` strips what a schema does
+         * not declare, so an HTTP client cannot reach this line.
+         *
+         * A CONSUMER may pass it, because a consumer has no authenticated caller: the
+         * pharmacy order raised from `prescription.signed` belongs to the doctor who
+         * signed it, not to the relay that delivered the event.
+         */
+        orderedBy: input.orderedBy ?? ctx.userId ?? "system",
         orderedAt: new Date(),
         history: [],
         ...(input.notes ? { notes: input.notes } : {}),
@@ -178,16 +189,23 @@ export async function setStatus(
 }
 
 /**
- * Is anything still owed on this encounter?
+ * Is the doctor still waiting on a result for this encounter?
  *
  * This is the question that decides whether a patient sitting in `awaiting_results`
  * can be called back in to the doctor. Getting it wrong in one direction strands the
  * patient in the waiting room; getting it wrong in the other calls them in before
  * their results exist.
+ *
+ * ── SCOPED TO THE CATEGORIES A DOCTOR ACTUALLY WAITS ON ─────────────────────
+ * Not every outstanding order is something the consultation is blocked on. A prescription
+ * is collected on the way OUT — counting it here would mean the CBC coming back never
+ * brings the patient in, because the pharmacy order stays open until they wander over to
+ * the counter. See `AWAITED_CATEGORIES` for why each category is in or out.
  */
-export async function hasOutstandingOrders(encounterId: string): Promise<boolean> {
+export async function isWaitingOnResults(encounterId: string): Promise<boolean> {
   const count = await getOrderModel(getTenantDb()).countDocuments({
     encounterId: new Types.ObjectId(encounterId),
+    category: { $in: AWAITED_CATEGORIES },
     status: { $in: OUTSTANDING },
   });
 

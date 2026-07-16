@@ -23,11 +23,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiClientError,
+  DRUG_FREQUENCIES,
+  DRUG_ROUTES,
+  type DrugFrequency,
+  type DrugRoute,
   type Encounter,
   type Order,
   type OrderPriority,
   type CatalogueItem,
   type Patient,
+  type Prescription,
+  type PrescriptionLineInput,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
@@ -232,6 +238,264 @@ function OrdersForVisit({ orders }: { orders: Order[] }) {
   );
 }
 
+/**
+ * The prescription pad.
+ *
+ * ── COMPOSE, THEN SIGN — AND THE TWO ARE NOT THE SAME CLICK ─────────────────
+ * Lines are gathered here and nothing exists on the server until "Sign". The signature is
+ * what makes the document an authority for drugs to leave a shelf, and after it the
+ * prescription is IMMUTABLE (STATE_MACHINE_CATALOG §6) — which is exactly why the editing
+ * happens before it and not after.
+ *
+ * ── DOSE, ROUTE AND FREQUENCY ARE THE WHOLE PRESCRIPTION ────────────────────
+ * `route` and `frequency` are pickers rather than text boxes on purpose: a drug given by
+ * the wrong route kills people, and it has. A picker cannot stop a doctor choosing wrongly;
+ * it can stop them choosing something nobody has ever thought about.
+ *
+ * No prices here either — this is the same price-free catalogue the order pad uses.
+ */
+function RxPad({
+  encounter,
+  drugs,
+  onSigned,
+}: {
+  encounter: Encounter;
+  drugs: CatalogueItem[];
+  onSigned: () => void;
+}) {
+  const { api } = useAuth();
+  const [lines, setLines] = useState<PrescriptionLineInput[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return q ? drugs.filter((d) => d.name.toLowerCase().includes(q)) : drugs;
+  }, [drugs, filter]);
+
+  function add(drug: CatalogueItem) {
+    setLines((prev) => [
+      ...prev,
+      {
+        drugCode: drug.code,
+        drugName: drug.name,
+        // Sensible starting points a doctor overrides — never a default that pretends to
+        // be a clinical decision. The quantity is the thing the pharmacy counts, so it
+        // starts at a number the doctor must look at rather than one they might not.
+        dose: "1 unit",
+        route: "oral",
+        frequency: "BD",
+        durationDays: 5,
+        quantity: 10,
+      },
+    ]);
+  }
+
+  function update(index: number, patch: Partial<PrescriptionLineInput>) {
+    setLines((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)));
+  }
+
+  function remove(index: number) {
+    setLines((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function sign() {
+    setBusy(true);
+    setError(null);
+    try {
+      // Draft, then sign. Two calls because they are two acts: the second is the one that
+      // binds, and the server refuses to sign an empty one.
+      const rx = await api.createPrescription({ encounterId: encounter.id, lines });
+      await api.signPrescription(rx.id);
+      setLines([]);
+      onSigned();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not sign the prescription.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      <input
+        type="search"
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        placeholder="Search drugs…"
+        className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+      />
+
+      <div className="flex flex-wrap gap-1.5">
+        {shown.map((d) => (
+          <button
+            key={d.code}
+            type="button"
+            onClick={() => add(d)}
+            className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] hover:bg-[var(--color-brand-50)]"
+          >
+            {d.name}
+          </button>
+        ))}
+        {shown.length === 0 && (
+          <p className="text-xs text-[var(--color-fg-subtle)]">No drugs match.</p>
+        )}
+      </div>
+
+      {lines.length > 0 && (
+        <div className="space-y-2">
+          {lines.map((l, i) => (
+            <div
+              key={`${l.drugCode}-${String(i)}`}
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-2.5"
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-sm font-medium text-[var(--color-fg)]">{l.drugName}</span>
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  className="text-xs text-[var(--color-danger)] hover:underline"
+                >
+                  Remove
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Dose
+                  <input
+                    value={l.dose}
+                    onChange={(e) => update(i, { dose: e.target.value })}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+                  />
+                </label>
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Route
+                  <select
+                    value={l.route}
+                    onChange={(e) => update(i, { route: e.target.value as DrugRoute })}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+                  >
+                    {DRUG_ROUTES.map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Frequency
+                  <select
+                    value={l.frequency}
+                    onChange={(e) => update(i, { frequency: e.target.value as DrugFrequency })}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+                  >
+                    {DRUG_FREQUENCIES.map((f) => (
+                      <option key={f} value={f}>
+                        {f}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Days
+                  <input
+                    type="number"
+                    min={1}
+                    value={l.durationDays ?? 1}
+                    onChange={(e) => update(i, { durationDays: Number(e.target.value) })}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+                  />
+                </label>
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Quantity
+                  <input
+                    type="number"
+                    min={1}
+                    value={l.quantity}
+                    onChange={(e) => update(i, { quantity: Number(e.target.value) })}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-1.5 py-1 text-xs text-[var(--color-fg)]"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+
+          <Button disabled={busy} onClick={() => void sign()}>
+            {busy ? "Signing…" : `Sign prescription (${String(lines.length)})`}
+          </Button>
+          <p className="text-xs text-[var(--color-fg-subtle)]">
+            Signing sends it to the pharmacy straight away. After that it cannot be edited —
+            changing a dose creates a new version.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What this patient has been put on, and how much of it they have actually been given. */
+function PrescriptionsForVisit({
+  prescriptions,
+  onCancel,
+}: {
+  prescriptions: Prescription[];
+  onCancel: (id: string) => void;
+}) {
+  if (prescriptions.length === 0) {
+    return (
+      <p className="text-xs text-[var(--color-fg-subtle)]">Nothing prescribed on this visit.</p>
+    );
+  }
+
+  return (
+    <ul className="space-y-2">
+      {prescriptions.map((rx) => (
+        <li
+          key={rx.id}
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-2.5"
+        >
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <Badge tone={rx.status === "dispensed" ? "success" : "neutral"}>
+              {rx.status.replace("_", " ")}
+            </Badge>
+            {rx.version > 1 && <Badge tone="brand">v{rx.version}</Badge>}
+            {rx.status === "signed" && (
+              <button
+                type="button"
+                onClick={() => onCancel(rx.id)}
+                className="ml-auto text-xs text-[var(--color-danger)] hover:underline"
+              >
+                Stop
+              </button>
+            )}
+          </div>
+
+          <ul className="space-y-0.5">
+            {rx.lines.map((l, i) => (
+              <li key={`${l.drugCode}-${String(i)}`} className="text-xs text-[var(--color-fg)]">
+                {l.drugName} — {l.dose} {l.route} {l.frequency}
+                {l.durationDays ? ` × ${String(l.durationDays)}d` : ""}
+                {/*
+                 * The gap between what was authorised and what the patient actually has.
+                 * This is the whole of `partially_dispensed`, and the doctor is the person
+                 * who most needs to know the pharmacy only had six of the ten.
+                 */}
+                <span className="ml-1.5 text-[var(--color-fg-subtle)]">
+                  ({l.dispensedQty}/{l.quantity} given)
+                </span>
+              </li>
+            ))}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function MyPatients() {
   const { api, user, can } = useAuth();
 
@@ -240,6 +504,7 @@ function MyPatients() {
   const [services, setServices] = useState<CatalogueItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -311,9 +576,23 @@ function MyPatients() {
     [api],
   );
 
+  /** `current: true` — a chart shows what is in force, not the versions it replaced. */
+  const loadPrescriptions = useCallback(
+    (encounterId: string) => {
+      void api
+        .listPrescriptions({ encounterId, current: true, limit: 50 })
+        .then(setPrescriptions)
+        .catch(() => setPrescriptions([]));
+    },
+    [api],
+  );
+
   useEffect(() => {
-    if (selectedId) loadOrders(selectedId);
-  }, [selectedId, loadOrders]);
+    if (selectedId) {
+      loadOrders(selectedId);
+      loadPrescriptions(selectedId);
+    }
+  }, [selectedId, loadOrders, loadPrescriptions]);
 
   const selected = waiting.find((e) => e.id === selectedId) ?? null;
 
@@ -341,6 +620,20 @@ function MyPatients() {
       setError(err instanceof ApiClientError ? err.message : "Could not update the visit.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** The pharmacy half of the same price-free catalogue the order pad reads. */
+  const drugs = useMemo(() => services.filter((s) => s.category === "pharmacy"), [services]);
+
+  async function stopPrescription(id: string) {
+    setError(null);
+    try {
+      await api.cancelPrescription(id, "stopped by the prescriber");
+      setNotice("Prescription stopped. Anything already dispensed stays on the record.");
+      if (selectedId) loadPrescriptions(selectedId);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not stop the prescription.");
     }
   }
 
@@ -495,6 +788,34 @@ function MyPatients() {
                   />
                 </Card>
               </PermissionGate>
+
+              <PermissionGate can={can} permission="prescription:sign">
+                <Card className="p-5">
+                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Prescribe</h3>
+                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                    Signing puts it on the pharmacy counter immediately. Nothing is charged until
+                    the drugs are actually handed over.
+                  </p>
+                  <RxPad
+                    encounter={selected}
+                    drugs={drugs}
+                    onSigned={() => {
+                      setNotice("Prescription signed — it is on the pharmacy counter now.");
+                      loadPrescriptions(selected.id);
+                    }}
+                  />
+                </Card>
+              </PermissionGate>
+
+              <Card className="p-5">
+                <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
+                  Prescribed on this visit
+                </h3>
+                <PrescriptionsForVisit
+                  prescriptions={prescriptions}
+                  onCancel={(id) => void stopPrescription(id)}
+                />
+              </Card>
 
               <Card className="p-5">
                 <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">

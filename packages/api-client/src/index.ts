@@ -459,6 +459,113 @@ export interface CatalogueItem {
   category: ChargeCategory;
 }
 
+/* ── Prescriptions & pharmacy (STATE_MACHINE_CATALOG §6) ──────────────────── */
+
+export const DRUG_ROUTES = [
+  "oral",
+  "iv",
+  "im",
+  "sc",
+  "sublingual",
+  "topical",
+  "inhaled",
+  "rectal",
+  "ophthalmic",
+  "otic",
+  "nasal",
+] as const;
+export type DrugRoute = (typeof DRUG_ROUTES)[number];
+
+export const DRUG_FREQUENCIES = [
+  "OD",
+  "BD",
+  "TDS",
+  "QID",
+  "HS",
+  "SOS",
+  "STAT",
+  "Q4H",
+  "Q6H",
+  "Q8H",
+  "WEEKLY",
+] as const;
+export type DrugFrequency = (typeof DRUG_FREQUENCIES)[number];
+
+export type PrescriptionStatus =
+  "draft" | "signed" | "partially_dispensed" | "dispensed" | "discarded" | "cancelled";
+
+export interface PrescriptionLine {
+  drugCode: string;
+  drugName: string;
+  dose: string;
+  route: DrugRoute;
+  frequency: DrugFrequency;
+  durationDays?: number;
+  /** How many units the doctor authorised. */
+  quantity: number;
+  /** How many have actually been handed over. The gap is what the pharmacy still owes. */
+  dispensedQty: number;
+  instructions?: string;
+}
+
+export interface Prescription {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  status: PrescriptionStatus;
+  lines: PrescriptionLine[];
+  prescribedBy: string;
+  prescribedAt: string;
+  signedBy?: string;
+  signedAt?: string;
+  /** The `pharmacy` order this raised. Absent when the hospital dispenses externally. */
+  orderId?: string;
+  version: number;
+  supersedesId?: string;
+  supersededById?: string;
+  cancelReason?: string;
+  notes?: string;
+}
+
+/** What the doctor types. No `dispensedQty` — only the pharmacy may move that. */
+export interface PrescriptionLineInput {
+  drugCode: string;
+  drugName: string;
+  dose: string;
+  route: DrugRoute;
+  frequency: DrugFrequency;
+  durationDays?: number;
+  quantity: number;
+  instructions?: string;
+}
+
+export interface DispenseLine {
+  lineIndex: number;
+  drugCode: string;
+  drugName: string;
+  quantity: number;
+}
+
+export interface Dispense {
+  id: string;
+  prescriptionId: string;
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  orderId?: string;
+  lines: DispenseLine[];
+  dispensedBy: string;
+  dispensedAt: string;
+}
+
+export interface DispenseResult {
+  dispense: Dispense;
+  prescription: Prescription;
+  /** True when this `requestId` had already handed the drugs over. */
+  duplicate: boolean;
+}
+
 export interface OperatorSession {
   accessToken: string;
   expiresIn: number;
@@ -1024,6 +1131,93 @@ export class ApiClient {
     unitPrice?: number;
   }): Promise<unknown> {
     return this.request("POST", "/api/v1/charges", input);
+  }
+
+  /* ── Prescriptions ────────────────────────────────────────────────────────
+   * The doctor's half. A draft binds nobody; `sign` is what makes it an authority
+   * for drugs to leave a shelf, and after that it is immutable — `amend` supersedes.
+   */
+
+  createPrescription(input: {
+    encounterId: string;
+    lines: PrescriptionLineInput[];
+    notes?: string;
+  }): Promise<Prescription> {
+    return this.request<Prescription>("POST", "/api/v1/prescriptions", input);
+  }
+
+  listPrescriptions(
+    params: {
+      encounterId?: string;
+      patientId?: string;
+      status?: PrescriptionStatus;
+      /** Hide superseded versions — a chart shows what is in force. */
+      current?: boolean;
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<Prescription[]> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.request<Prescription[]>("GET", `/api/v1/prescriptions${qs ? `?${qs}` : ""}`);
+  }
+
+  getPrescription(id: string): Promise<Prescription> {
+    return this.request<Prescription>("GET", `/api/v1/prescriptions/${id}`);
+  }
+
+  /** Drafts only. A signed prescription is changed by `amendPrescription`. */
+  updatePrescription(
+    id: string,
+    input: { lines: PrescriptionLineInput[]; notes?: string },
+  ): Promise<Prescription> {
+    return this.request<Prescription>("PATCH", `/api/v1/prescriptions/${id}`, input);
+  }
+
+  /** The signature. The pharmacy hears about it without anyone telling them. */
+  signPrescription(id: string): Promise<Prescription> {
+    return this.request<Prescription>("POST", `/api/v1/prescriptions/${id}/sign`);
+  }
+
+  /** Stopping a drug. Doses already dispensed are unaffected — see §6. */
+  cancelPrescription(id: string, reason: string): Promise<Prescription> {
+    return this.request<Prescription>("POST", `/api/v1/prescriptions/${id}/cancel`, { reason });
+  }
+
+  discardPrescription(id: string): Promise<Prescription> {
+    return this.request<Prescription>("POST", `/api/v1/prescriptions/${id}/discard`);
+  }
+
+  /** A new DRAFT superseding a signed one. The original survives as it was signed. */
+  amendPrescription(id: string): Promise<Prescription> {
+    return this.request<Prescription>("POST", `/api/v1/prescriptions/${id}/amend`);
+  }
+
+  /* ── Pharmacy ─────────────────────────────────────────────────────────────── */
+
+  /**
+   * Hands the drugs over.
+   *
+   * ALWAYS send a `requestId`. A pharmacist double-clicking must not hand over — and
+   * bill for — two lots of the same drug, and a retry after a timeout must not either.
+   */
+  dispense(
+    prescriptionId: string,
+    input: { items: { lineIndex: number; quantity: number }[]; requestId?: string },
+  ): Promise<DispenseResult> {
+    return this.request<DispenseResult>(
+      "POST",
+      `/api/v1/prescriptions/${prescriptionId}/dispense`,
+      input,
+    );
+  }
+
+  /** The handover ledger — who gave what, when. */
+  listDispenses(prescriptionId: string): Promise<Dispense[]> {
+    return this.request<Dispense[]>("GET", `/api/v1/prescriptions/${prescriptionId}/dispenses`);
   }
 
   listInvoices(
