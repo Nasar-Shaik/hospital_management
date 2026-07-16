@@ -121,6 +121,12 @@ export interface StaffMember {
   lastLoginAt?: string;
 }
 
+/** A doctor, as a dropdown needs them. Names only — see `listDoctors`. */
+export interface DoctorRef {
+  id: string;
+  name: string;
+}
+
 export interface CreateStaffResult {
   user: StaffMember;
   temporaryPassword?: string;
@@ -282,6 +288,175 @@ export interface DoctorSchedule {
   endMinute: number;
   slotMinutes: number;
   active: boolean;
+}
+
+/* ── encounters (ADR-0013) — THE CENTRAL CLINICAL OBJECT ──────────────────── */
+
+export type EncounterStatus =
+  | "planned"
+  | "arrived"
+  | "in_queue"
+  | "in_progress"
+  | "awaiting_results"
+  | "closed"
+  | "cancelled"
+  | "left_without_being_seen"
+  | "admitted";
+
+export type EncounterOrigin =
+  | "appointment"
+  | "walk_in"
+  | "emergency"
+  | "referral"
+  | "camp"
+  | "telemedicine"
+  | "corporate"
+  | "transfer";
+
+/**
+ * One visit. Everything clinical hangs off this — notes, orders, charges.
+ *
+ * An Appointment is one ORIGIN of an encounter, never the other way round: a walk-in
+ * has a token and no appointment, and in a government hospital that is every patient.
+ */
+export interface Encounter {
+  id: string;
+  patientId: string;
+  episodeId: string;
+  origin: EncounterOrigin;
+  class: "OP" | "IP" | "ER" | "TELE" | "HOME";
+  status: EncounterStatus;
+  appointmentId?: string;
+  doctorId?: string;
+  departmentId?: string;
+  /** The number the patient is called by. Lives HERE, not on the appointment. */
+  token?: number;
+  reason?: string;
+  branchId?: string;
+  arrivedAt: string;
+  closedAt?: string;
+}
+
+export interface StartEncounterResult {
+  encounter: Encounter;
+  /** True when the patient was already here and we handed back their open visit. */
+  resumed: boolean;
+}
+
+/* ── orders (ADR-0013 §3) — the spine between departments ─────────────────── */
+
+export type OrderCategory =
+  "lab" | "radiology" | "pharmacy" | "procedure" | "referral" | "admission" | "diet";
+
+export type OrderPriority = "routine" | "urgent" | "stat" | "emergency";
+
+export type OrderStatus =
+  "placed" | "accepted" | "in_progress" | "completed" | "verified" | "released" | "cancelled";
+
+export interface OrderResultValue {
+  code: string;
+  label: string;
+  value: string;
+  unit?: string;
+  referenceRange?: string;
+  flag?: string;
+}
+
+export interface Order {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  category: OrderCategory;
+  code: string;
+  name: string;
+  priority: OrderPriority;
+  status: OrderStatus;
+  notes?: string;
+  orderedBy: string;
+  orderedAt: string;
+  performedBy?: string;
+  verifiedBy?: string;
+  releasedAt?: string;
+  result?: { summary?: string; values?: OrderResultValue[]; critical?: boolean };
+  cancelReason?: string;
+}
+
+export interface PlaceOrderResult {
+  order: Order;
+  /** True when this `requestId` had already placed it — a retry, not a new order. */
+  duplicate: boolean;
+}
+
+/* ── billing (F-group) ────────────────────────────────────────────────────── */
+
+export type ChargeCategory =
+  "consultation" | "lab" | "radiology" | "pharmacy" | "procedure" | "bed" | "other";
+
+export type InvoiceStatus = "draft" | "finalized" | "paid" | "cancelled";
+
+/**
+ * ── EVERY AMOUNT IS AN INTEGER NUMBER OF PAISE ──────────────────────────────
+ * ₹150.50 is 15050. Only the very edge of the UI divides by 100; nothing computes on
+ * the divided number. Floats lose money, and a hospital that cannot reconcile its
+ * takings to the rupee stops trusting the software.
+ */
+export interface InvoiceLine {
+  code: string;
+  description: string;
+  category: ChargeCategory;
+  quantity: number;
+  /** Paise. What the care is WORTH — populated even when the patient owes nothing. */
+  listPrice: number;
+  /** Paise. What is OWED. Zero at a government hospital (`zero_tariff`). */
+  amount: number;
+}
+
+export interface Invoice {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  number?: string;
+  status: InvoiceStatus;
+  lines: InvoiceLine[];
+  subtotal: number;
+  discount: number;
+  total: number;
+  paid: number;
+  payments: { amount: number; method: string; reference?: string; at: string }[];
+  finalizedAt?: string;
+}
+
+/** The running bill for a visit — computed from the ledger until it is finalized. */
+export interface Bill {
+  lines: InvoiceLine[];
+  subtotal: number;
+  total: number;
+  /** Present once a bill has been frozen into a document. */
+  invoice?: Invoice;
+}
+
+export interface ServiceItem {
+  id: string;
+  code: string;
+  name: string;
+  category: ChargeCategory;
+  /** Paise. */
+  price: number;
+  active: boolean;
+}
+
+/**
+ * What the hospital can DO — the order pad's view. No price, deliberately.
+ *
+ * A separate type rather than `Partial<ServiceItem>` so a screen cannot reach for a
+ * price that was never sent: the field does not exist, and the compiler says so.
+ */
+export interface CatalogueItem {
+  id: string;
+  code: string;
+  name: string;
+  category: ChargeCategory;
 }
 
 export interface OperatorSession {
@@ -489,6 +664,17 @@ export class ApiClient {
     return this.request<CreateStaffResult>("POST", "/api/v1/users", input);
   }
 
+  /**
+   * Who a patient can be sent to. Needs `encounter:read`, NOT `user:read`.
+   *
+   * The front desk must be able to pick a doctor without being handed every
+   * colleague's email and MFA status. Use this for any doctor picker; `listStaff` is
+   * for the staff-administration screen and nothing else.
+   */
+  listDoctors(): Promise<DoctorRef[]> {
+    return this.request<DoctorRef[]>("GET", "/api/v1/doctors");
+  }
+
   setStaffStatus(id: string, status: "active" | "disabled"): Promise<StaffMember> {
     return this.request<StaffMember>("POST", `/api/v1/users/${id}/status`, { status });
   }
@@ -639,6 +825,224 @@ export class ApiClient {
     slotMinutes: number;
   }): Promise<DoctorSchedule> {
     return this.request<DoctorSchedule>("PUT", "/api/v1/doctors/schedule", input);
+  }
+
+  /* ── encounters (ADR-0013) — the front door of the whole product ────────────
+   *
+   * `startEncounter` is what a walk-in IS. It needs no appointment, and in five of
+   * our six target organization types that is every patient of the day.
+   */
+
+  /**
+   * Starts a visit.
+   *
+   * Returns `resumed: true` when the patient already had an open visit — NOT an
+   * error. A clerk facing a patient who has come back from the lab wants their visit
+   * and their token, not a rejection they will work around with a duplicate record.
+   */
+  startEncounter(input: {
+    patientId: string;
+    origin?: EncounterOrigin;
+    doctorId?: string;
+    departmentId?: string;
+    reason?: string;
+  }): Promise<StartEncounterResult> {
+    return this.request<StartEncounterResult>("POST", "/api/v1/encounters", input);
+  }
+
+  /**
+   * The register, the queue board and the doctor's list — one endpoint.
+   *
+   * `date` is `YYYY-MM-DD` and is resolved in the HOSPITAL's timezone by the server.
+   * `queued` returns everyone waiting or being seen, in token order.
+   */
+  listEncounters(
+    params: {
+      date?: string;
+      status?: EncounterStatus;
+      doctorId?: string;
+      departmentId?: string;
+      patientId?: string;
+      queued?: boolean;
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<Paged<Encounter>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<Encounter>(`/api/v1/encounters${qs ? `?${qs}` : ""}`);
+  }
+
+  getEncounter(id: string): Promise<Encounter> {
+    return this.request<Encounter>("GET", `/api/v1/encounters/${id}`);
+  }
+
+  /** Every encounter in one care story, oldest first (ADR-0013 §4). */
+  getEpisodeTimeline(episodeId: string): Promise<Encounter[]> {
+    return this.request<Encounter[]>("GET", `/api/v1/episodes/${episodeId}/timeline`);
+  }
+
+  queueEncounter(id: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/queue`, {});
+  }
+
+  /** The patient is called in from the waiting room. */
+  startEncounterConsultation(id: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/start`, {});
+  }
+
+  /** Sent for tests. They KEEP this encounter — that is the point of the state. */
+  sendForInvestigations(id: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/investigations`, {});
+  }
+
+  closeEncounter(id: string, reason?: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/close`, { reason });
+  }
+
+  cancelEncounter(id: string, reason: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/cancel`, { reason });
+  }
+
+  /** They waited and left. Distinct from cancelled — a rising LWBS is a slow queue. */
+  markLeftWithoutBeingSeen(id: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/left`, {});
+  }
+
+  /* ── orders (ADR-0013 §3) ── */
+
+  /**
+   * Places an order. `requestId` is optional idempotency — send one: a doctor
+   * double-clicking must not draw two tubes of blood, and a retry after a timeout is
+   * the case a disabled button cannot save you from.
+   */
+  placeOrder(input: {
+    encounterId: string;
+    category: OrderCategory;
+    code: string;
+    name: string;
+    priority?: OrderPriority;
+    notes?: string;
+    requestId?: string;
+  }): Promise<PlaceOrderResult> {
+    return this.request<PlaceOrderResult>("POST", "/api/v1/orders", input);
+  }
+
+  /** `{ category: "lab", outstanding: true }` IS the lab's worklist. */
+  listOrders(
+    params: {
+      category?: OrderCategory;
+      status?: OrderStatus;
+      priority?: OrderPriority;
+      encounterId?: string;
+      patientId?: string;
+      outstanding?: boolean;
+      page?: number;
+      limit?: number;
+    } = {},
+  ): Promise<Paged<Order>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<Order>(`/api/v1/orders${qs ? `?${qs}` : ""}`);
+  }
+
+  getOrder(id: string): Promise<Order> {
+    return this.request<Order>("GET", `/api/v1/orders/${id}`);
+  }
+
+  acceptOrder(id: string): Promise<Order> {
+    return this.request<Order>("POST", `/api/v1/orders/${id}/accept`, {});
+  }
+
+  startOrder(id: string): Promise<Order> {
+    return this.request<Order>("POST", `/api/v1/orders/${id}/start`, {});
+  }
+
+  /** Records the result. `critical: true` alerts the doctor SYNCHRONOUSLY. */
+  completeOrder(
+    id: string,
+    result: { summary?: string; values?: OrderResultValue[]; critical?: boolean },
+  ): Promise<Order> {
+    return this.request<Order>("POST", `/api/v1/orders/${id}/complete`, result);
+  }
+
+  /** The second pair of eyes. Needs authority over the CATEGORY, not just the verb. */
+  verifyOrder(id: string): Promise<Order> {
+    return this.request<Order>("POST", `/api/v1/orders/${id}/verify`, {});
+  }
+
+  releaseOrder(id: string): Promise<Order> {
+    return this.request<Order>("POST", `/api/v1/orders/${id}/release`, {});
+  }
+
+  cancelOrder(id: string, reason: string): Promise<Order> {
+    return this.request<Order>("POST", `/api/v1/orders/${id}/cancel`, { reason });
+  }
+
+  /* ── billing (F-group) — every amount is PAISE ── */
+
+  /** The running bill for a visit. THE endpoint every login uses. */
+  getBill(encounterId: string): Promise<Bill> {
+    return this.request<Bill>("GET", `/api/v1/encounters/${encounterId}/bill`);
+  }
+
+  /** Freezes the bill and assigns its number. After this the lines cannot move. */
+  finalizeBill(encounterId: string): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/encounters/${encounterId}/bill/finalize`, {});
+  }
+
+  /** The tariff, WITH prices. Needs `billing:read` — the counter's view. */
+  listServices(params: { category?: ChargeCategory } = {}): Promise<ServiceItem[]> {
+    const qs = params.category ? `?category=${params.category}` : "";
+    return this.request<ServiceItem[]>("GET", `/api/v1/services${qs}`);
+  }
+
+  /**
+   * What can be ordered. NO prices, and needs `order:create` — the doctor's view.
+   *
+   * The rate card is not the bill: a doctor should know a chest X-ray is available
+   * without being shown its price while the patient is in front of them.
+   */
+  listCatalogue(params: { category?: ChargeCategory } = {}): Promise<CatalogueItem[]> {
+    const qs = params.category ? `?category=${params.category}` : "";
+    return this.request<CatalogueItem[]>("GET", `/api/v1/services/catalogue${qs}`);
+  }
+
+  postCharge(input: {
+    encounterId: string;
+    code: string;
+    category: ChargeCategory;
+    description?: string;
+    quantity?: number;
+    /** Paise. Overrides the tariff. */
+    unitPrice?: number;
+  }): Promise<unknown> {
+    return this.request("POST", "/api/v1/charges", input);
+  }
+
+  listInvoices(
+    params: { status?: InvoiceStatus; patientId?: string; page?: number; limit?: number } = {},
+  ): Promise<Paged<Invoice>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<Invoice>(`/api/v1/invoices${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Takes money. `amount` is PAISE. Refused on a draft; overpayment is refused. */
+  recordPayment(
+    invoiceId: string,
+    input: { amount: number; method: string; reference?: string },
+  ): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, input);
   }
 
   /* ── rbac ── */

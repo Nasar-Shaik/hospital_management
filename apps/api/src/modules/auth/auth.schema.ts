@@ -17,8 +17,28 @@ export const loginSchema = z
     // password is SET. Validating it here would reject legitimate legacy
     // passwords and leak the policy to unauthenticated callers.
     password: z.string().min(1).max(512),
-    /** Optional human-readable device label for the sessions screen. */
-    device: z.string().max(120).optional(),
+    /**
+     * A human-readable device label for the sessions screen. Cosmetic, and treated
+     * as such.
+     *
+     * ── IT IS TRUNCATED, NEVER REJECTED ─────────────────────────────────────
+     * This was `.max(120)`, three lines under a comment warning against exactly this
+     * ("no max-length trap on login"). Browsers send `navigator.userAgent`, which is
+     * ~117 characters in desktop Chrome — UNDER the cap by a hair, and over it for
+     * headless Chrome, many mobile browsers, and anything with an extra token in the
+     * string. So a correct email and a correct password produced
+     * `HMS-VAL-001: device — String must contain at most 120 character(s)`, and the
+     * user is told their login failed with no idea why.
+     *
+     * Nobody may be locked out of their hospital because their browser is chatty. The
+     * outer bound stays (an unbounded string is a payload someone will abuse) but it
+     * is generous, and what exceeds the label length is cut rather than refused.
+     */
+    device: z
+      .string()
+      .max(1024)
+      .transform((s) => s.slice(0, 120))
+      .optional(),
   })
   .strict();
 

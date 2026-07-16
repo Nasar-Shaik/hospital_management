@@ -365,7 +365,18 @@ const PROBES: Record<string, Probe> = {
    * take money — clinical judgement must not be shaped by what the patient can pay,
    * and the person who prices the care should never be the one pocketing it.
    */
+  /**
+   * The doctors directory. Gated on `encounter:read`, NOT `user:read` — the front
+   * desk must be able to pick a doctor without being handed a personnel file.
+   */
+  "GET /api/v1/doctors": { method: "get", url: "/api/v1/doctors" },
   "GET /api/v1/services": { method: "get", url: "/api/v1/services" },
+  /**
+   * The catalogue is the DOCTOR's view of the same collection, price-free. It is
+   * gated on `order:create` precisely so a doctor can see what is orderable without
+   * `billing:read` — the rate card is not the bill.
+   */
+  "GET /api/v1/services/catalogue": { method: "get", url: "/api/v1/services/catalogue" },
   "GET /api/v1/encounters/:id/bill": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/bill",

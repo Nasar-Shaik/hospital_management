@@ -37,13 +37,28 @@ const FEATURE = { feature: FEATURE_FLAGS.OPS_OPD } as const;
 export function billingRouter(): Router {
   const router = Router();
 
-  /** The price list. */
+  /** The price list — the counter's view. */
   router.get(
     "/services",
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(listServicesQuerySchema, "query"),
     asyncHandler(controller.listServices),
+  );
+
+  /**
+   * The catalogue — the order pad's view. Same collection, NO prices, and gated on
+   * `order:create` rather than `billing:read`.
+   *
+   * A doctor must be able to see that a chest X-ray exists here without being shown
+   * what it costs while the patient is sitting in front of them. See the controller.
+   */
+  router.get(
+    "/services/catalogue",
+    authenticate(),
+    authorize(PERMISSIONS.ORDER_CREATE, FEATURE),
+    validate(listServicesQuerySchema, "query"),
+    asyncHandler(controller.listCatalogue),
   );
 
   /**

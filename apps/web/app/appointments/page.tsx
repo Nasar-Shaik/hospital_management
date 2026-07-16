@@ -25,8 +25,8 @@ import {
   type Appointment,
   type AppointmentStatus,
   type Patient,
+  type DoctorRef,
   type Slot,
-  type StaffMember,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
@@ -230,7 +230,7 @@ function ClinicHours({ doctorId, onSaved }: { doctorId: string; onSaved: () => v
 function Appointments() {
   const { api, can } = useAuth();
 
-  const [doctors, setDoctors] = useState<StaffMember[]>([]);
+  const [doctors, setDoctors] = useState<DoctorRef[]>([]);
   const [doctorId, setDoctorId] = useState("");
   const [day, setDay] = useState(toDateInput(new Date()));
 
@@ -246,14 +246,18 @@ function Appointments() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
-  // Doctors are staff who hold the DOCTOR role — there is no separate doctor
-  // directory yet (D2 profiles are pending), and inventing one here would create
-  // a second source of truth about who works at this hospital.
+  /**
+   * The doctors directory (`GET /doctors`, `encounter:read`).
+   *
+   * This used to call `listStaff`, which needs `user:read` — a permission the
+   * RECEPTIONIST does not hold. So this screen's doctor picker was permanently empty
+   * for the one person who uses it most, and the page was unusable for them. It is
+   * still one source of truth about who works here; it just asks the smaller question.
+   */
   useEffect(() => {
     void api
-      .listStaff({ limit: 100 })
-      .then((page) => {
-        const docs = page.items.filter((s) => s.roles.includes("DOCTOR") && s.status === "active");
+      .listDoctors()
+      .then((docs) => {
         setDoctors(docs);
         setDoctorId((current) => current || (docs[0]?.id ?? ""));
       })

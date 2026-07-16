@@ -13,10 +13,36 @@ function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
   res.status(status).json(body);
 }
 
-/** The tariff — what this hospital charges for things. */
+/** The tariff — what this hospital charges for things. Prices included. */
 export const listServices: RequestHandler = async (req, res) => {
   const { category } = req.query as { category?: never };
   ok(res, await billing.listServices(category));
+};
+
+/**
+ * The CATALOGUE — what this hospital can do. Deliberately price-free.
+ *
+ * ── THE RATE CARD IS NOT THE BILL, AND THIS IS THE DIFFERENCE ───────────────
+ * A doctor needs to know a chest X-ray can be ordered here. They do not need the
+ * price on the screen while a patient is in front of them — `billing:read` is not in
+ * the DOCTOR grant precisely so that what a patient can afford cannot shape what they
+ * are offered.
+ *
+ * That is why this is a second route rather than a flag on the first: the order pad
+ * asks "what can I order?", the counter asks "what does it cost?", and they are
+ * different questions from different people with different permissions. One endpoint
+ * serving both would have to hand the price to whoever asked, or lie about it.
+ */
+export const listCatalogue: RequestHandler = async (req, res) => {
+  const { category } = req.query as { category?: never };
+  const services = await billing.listServices(category);
+
+  // Price stripped at the edge, not filtered in the UI. A price that reaches the
+  // browser has been disclosed, whatever the screen chooses to render.
+  ok(
+    res,
+    services.map((s) => ({ id: s.id, code: s.code, name: s.name, category: s.category })),
+  );
 };
 
 /**

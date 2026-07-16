@@ -147,6 +147,40 @@ describe("login", () => {
     expect(JSON.stringify(res.body)).not.toContain("argon2");
   });
 
+  /**
+   * A REGRESSION. `device` was `.max(120)`; browsers send `navigator.userAgent`, which
+   * is ~117 characters in desktop Chrome — under the cap by a hair, and OVER it for
+   * headless Chrome and plenty of real browsers. A correct email and a correct
+   * password produced "Validation failed", and the user was told nothing useful.
+   *
+   * Nobody may be locked out of their hospital because their browser is chatty. The
+   * label is cosmetic; it is truncated, never a reason to refuse a login.
+   */
+  it("does not refuse a valid login because the browser's user-agent is long", async () => {
+    const chattyUserAgent =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) " +
+      "HeadlessChrome/141.0.0.0 Safari/537.36 SomeCorporateProxy/9.9 AnotherExtension/1.2.3";
+    expect(chattyUserAgent.length).toBeGreaterThan(120);
+
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .set("Host", HOST_A)
+      .send({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD, device: chattyUserAgent });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.accessToken).toBeTruthy();
+  });
+
+  it("still refuses an absurd device string rather than storing it unbounded", async () => {
+    // The label is cosmetic, not a free-form dumping ground: the outer bound stays.
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .set("Host", HOST_A)
+      .send({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD, device: "x".repeat(2000) });
+
+    expect(res.status).toBe(400);
+  });
+
   it("rejects a wrong password with HMS-AUTH-001", async () => {
     const res = await loginAs(HOST_A, ADMIN_EMAIL, "wrong-password-entirely");
     expect(res.status).toBe(401);

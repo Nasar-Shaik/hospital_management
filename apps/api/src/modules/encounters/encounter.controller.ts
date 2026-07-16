@@ -4,6 +4,8 @@
 import type { RequestHandler, Response } from "express";
 import type { ApiEnvelope, PageMeta } from "@medicore/types";
 import { AppError } from "../../core/errors/appError.js";
+import { env } from "../../config/env.js";
+import { dayRangeInZone } from "../../core/time/day.js";
 import * as encounters from "./encounter.service.js";
 import type { ListEncountersQuery, StartEncounterBody } from "./encounter.schema.js";
 
@@ -30,6 +32,15 @@ export const startEncounter: RequestHandler = async (req, res) => {
 export const listEncounters: RequestHandler = async (req, res) => {
   const query = req.query as unknown as ListEncountersQuery;
 
+  /**
+   * `?date=2026-07-16` — the front desk's register for one day.
+   *
+   * Resolved in the HOSPITAL's timezone, not UTC and not the browser's: a clerk in
+   * Kolkata asking for today means today there. See `core/time/day.ts` for why this
+   * is not `new Date(query.date)`.
+   */
+  const day = query.date ? dayRangeInZone(query.date, env.DEFAULT_TIMEZONE) : undefined;
+
   const { items, total } = await encounters.listEncounters({
     limit: query.limit,
     skip: (query.page - 1) * query.limit,
@@ -38,6 +49,7 @@ export const listEncounters: RequestHandler = async (req, res) => {
     ...(query.departmentId ? { departmentId: query.departmentId } : {}),
     ...(query.patientId ? { patientId: query.patientId } : {}),
     ...(query.queued ? { queuedOnly: true } : {}),
+    ...(day ? { arrivedFrom: day.from, arrivedBefore: day.before } : {}),
   });
 
   ok(res, items, 200, {

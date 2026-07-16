@@ -37,6 +37,18 @@ export function staffRouter(): Router {
     asyncHandler(controller.listStaff),
   );
 
+  /**
+   * The doctors directory — names only, gated on `encounter:read` rather than
+   * `user:read`. The front desk must be able to choose a doctor without being handed
+   * a personnel file. See the controller.
+   */
+  router.get(
+    "/doctors",
+    authenticate(),
+    authorize(PERMISSIONS.ENCOUNTER_READ),
+    asyncHandler(controller.listDoctors),
+  );
+
   router.get(
     "/users/:id",
     authenticate(),

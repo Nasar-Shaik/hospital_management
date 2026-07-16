@@ -51,9 +51,19 @@ const NAVIGATION: NavSection[] = [
       { label: "Branches", href: "/branches", permission: "branch:manage", soon: true },
     ],
   },
+  /**
+   * The clinical day, in the order it happens: the desk, the doctor, the lab.
+   *
+   * Each is gated on the permission that role actually holds, so the nav IS the job
+   * description — a receptionist sees "Reception", a pathologist sees "Worklist", and
+   * neither is offered a screen that would 403 on arrival.
+   */
   {
     title: "Clinical",
     items: [
+      { label: "Reception", href: "/reception", permission: "encounter:create" },
+      { label: "My patients", href: "/my-patients", permission: "order:create" },
+      { label: "Worklist", href: "/worklist", permission: "order:read" },
       { label: "Patients", href: "/patients", permission: "patient:read" },
       { label: "Appointments", href: "/appointments", permission: "appointment:read" },
       { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },
@@ -61,7 +71,7 @@ const NAVIGATION: NavSection[] = [
   },
   {
     title: "Finance",
-    items: [{ label: "Billing", href: "/billing", permission: "billing:read", soon: true }],
+    items: [{ label: "Billing", href: "/billing", permission: "billing:read" }],
   },
 ];
 

@@ -217,6 +217,9 @@ export interface ListEncountersFilter {
   patientId?: string;
   /** The queue board: everyone currently waiting or being seen. */
   queuedOnly?: boolean;
+  /** Arrived on or after. Half-open with `arrivedBefore` — see the service. */
+  arrivedFrom?: Date;
+  arrivedBefore?: Date;
   limit: number;
   skip: number;
 }
@@ -234,6 +237,20 @@ export async function list(
     ...(filter.patientId ? { patientId: new Types.ObjectId(filter.patientId) } : {}),
     ...(filter.queuedOnly
       ? { status: { $in: ["in_queue", "in_progress", "awaiting_results"] } }
+      : {}),
+    /**
+     * HALF-OPEN: `>= start` and `< next midnight`. Never `<= end of day`, because the
+     * "end" of a day is 23:59:59.999 and a patient who arrives in that last
+     * millisecond vanishes from the register — a bug that is invisible for years and
+     * then loses exactly one record.
+     */
+    ...(filter.arrivedFrom || filter.arrivedBefore
+      ? {
+          arrivedAt: {
+            ...(filter.arrivedFrom ? { $gte: filter.arrivedFrom } : {}),
+            ...(filter.arrivedBefore ? { $lt: filter.arrivedBefore } : {}),
+          },
+        }
       : {}),
   };
 

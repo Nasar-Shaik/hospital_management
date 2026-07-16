@@ -149,6 +149,39 @@ export async function getStaff(userId: string): Promise<StaffMember> {
   return { ...user, roles: claims.roles, branchIds: claims.branchIds };
 }
 
+/** A doctor, as a dropdown needs them. Nothing else about them. */
+export interface DoctorRef {
+  id: string;
+  name: string;
+}
+
+/**
+ * Who a patient can be sent to.
+ *
+ * Deliberately NOT `listStaff` with a filter: this returns two fields, and that is
+ * the whole point. The front desk needs a name to put in a dropdown, not a colleague's
+ * email, MFA status and last login — and the permission it is gated on
+ * (`encounter:read`) reflects the smaller question (staff.controller.ts).
+ *
+ * `active` only: a doctor who has left must not still be collecting patients.
+ */
+export async function listDoctors(): Promise<DoctorRef[]> {
+  // Directory scale. A hospital with more than a few hundred doctors is a chain, and
+  // by then this is a branch-scoped query rather than a bigger page.
+  const page = await users.listUsers({ page: 1, limit: 500, status: "active" });
+
+  const doctors = await Promise.all(
+    page.users.map(async (user) => {
+      const claims = await rbac.getRoleClaims(user.id);
+      return claims.roles.includes("DOCTOR") ? { id: user.id, name: user.name } : undefined;
+    }),
+  );
+
+  return doctors
+    .filter((d): d is DoctorRef => d !== undefined)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function updateStaff(
   userId: string,
   input: { name?: string; phone?: string; employeeId?: string },

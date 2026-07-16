@@ -33,6 +33,29 @@ export const getStaff: RequestHandler = async (req, res) => {
   ok(res, await staff.getStaff(id));
 };
 
+/**
+ * The doctors directory: who can a patient be sent to. NAMES ONLY.
+ *
+ * ── WHY THIS EXISTS RATHER THAN REUSING `GET /users` ────────────────────────
+ * A receptionist cannot register a walk-in without choosing a doctor, so they must be
+ * able to list doctors. But `GET /users` needs `user:read` — the staff-ADMIN
+ * permission, which also discloses every colleague's email, MFA status and last
+ * login. Handing the front desk a personnel file so they can populate a dropdown is
+ * exactly the kind of over-grant that makes an RBAC model decorative.
+ *
+ * So: a different question gets a different endpoint. This returns `{id, name}` and
+ * nothing else, for active doctors only, and is gated on `encounter:read` — which
+ * every clinical and front-desk role already holds, because they all need to know who
+ * the patient is waiting for.
+ *
+ * (This also fixes the appointments screen, which populated its doctor picker from
+ * `GET /users` and was therefore broken for the receptionist — the one person who
+ * uses it most.)
+ */
+export const listDoctors: RequestHandler = async (_req, res) => {
+  ok(res, await staff.listDoctors());
+};
+
 export const updateStaff: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await staff.updateStaff(id, req.body as { name?: string }));
