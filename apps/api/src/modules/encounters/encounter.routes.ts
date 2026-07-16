@@ -28,6 +28,8 @@ import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import * as controller from "./encounter.controller.js";
 import {
+  admitSchema,
+  transferSchema,
   cancelEncounterSchema,
   closeEncounterSchema,
   idParamSchema,
@@ -36,6 +38,13 @@ import {
 } from "./encounter.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_OPD } as const;
+/**
+ * Beds are a separate purchase. A clinic and a diagnostic centre have no wards, and their
+ * editions do not carry this — so the admit routes answer "not in your edition"
+ * (HMS-PLAN-002), which is the truth and has a remedy, rather than a permission error that
+ * no amount of role editing could ever fix.
+ */
+const IPD_FEATURE = { feature: FEATURE_FLAGS.OPS_IPD } as const;
 
 export function encounterRouter(): Router {
   const router = Router();
@@ -83,7 +92,57 @@ export function encounterRouter(): Router {
     asyncHandler(controller.getEpisodeTimeline),
   );
 
+  /**
+   * Everyone in a bed right now. Gated on `module.ops.ipd` — a clinic has no wards, and
+   * the honest answer to a clinic asking for its ward list is "you did not buy one".
+   */
+  router.get(
+    "/inpatients",
+    authenticate(),
+    authorize(PERMISSIONS.ENCOUNTER_READ, IPD_FEATURE),
+    asyncHandler(controller.listInpatients),
+  );
+
   /* ── the state machine (STATE_MACHINE_CATALOG §14) ───────────────────────── */
+
+  /**
+   * Admit: the OP encounter closes (`admitted`) and an INPATIENT one opens in the same
+   * Episode of Care (ADR-0013 §4).
+   *
+   * `admission:create`, not `encounter:update` — deciding a patient needs a bed is a
+   * clinical judgement, and it is the DOCTOR's. Held by nobody at all until this slice,
+   * which is why every admit route would have 403'd for every human in the building.
+   *
+   * Gated on `module.ops.ipd`: a clinic with no beds gets "not in your edition", which is
+   * the truth, rather than a permission error that no role edit could ever fix.
+   */
+  router.post(
+    "/encounters/:id/admit",
+    authenticate(),
+    authorize(PERMISSIONS.ADMISSION_CREATE, IPD_FEATURE),
+    validate(idParamSchema, "params"),
+    validate(admitSchema),
+    asyncHandler(controller.admitPatient),
+  );
+
+  /**
+   * Hand the patient to another doctor.
+   *
+   * `encounter:update` — the same permission that moves a patient through the queue, and
+   * for the same reason: this changes who the patient is waiting for, not what has been
+   * decided about them. A nurse re-routing a mis-assigned walk-in is doing their job.
+   *
+   * Gated on OPD (the base flag), not IPD: transferring a case is an outpatient act far
+   * more often than an inpatient one.
+   */
+  router.post(
+    "/encounters/:id/transfer",
+    authenticate(),
+    authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(transferSchema),
+    asyncHandler(controller.transferDoctor),
+  );
 
   router.post(
     "/encounters/:id/queue",

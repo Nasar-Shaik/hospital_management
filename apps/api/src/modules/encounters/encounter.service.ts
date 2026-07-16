@@ -27,6 +27,7 @@ import { getById as getTenant, policyOf } from "../tenants/index.js";
 import * as repo from "./encounter.repository.js";
 import {
   canTransition,
+  isOpen,
   isQueued,
   type EncounterClass,
   type EncounterOrigin,
@@ -270,6 +271,319 @@ async function transition(
     return updated;
   });
 }
+
+export interface AdmitInput {
+  /** `General Ward`, `ICU` — what a human calls the place. */
+  ward: string;
+  /** `A-12`. Free text: there is no bed inventory to validate against (see the model). */
+  bedCode: string;
+  /** The tariff code the bed-day is billed at — `BED_GEN`, `BED_ICU`. */
+  tariffCode: string;
+  /** The consultant who owns the patient on the ward. Defaults to the OP doctor. */
+  doctorId?: string;
+  reason?: string;
+}
+
+export interface AdmitResult {
+  /** The OP encounter, now `admitted`. Terminal — it will never reopen. */
+  outpatient: repo.Encounter;
+  /** The new INPATIENT encounter, in the same Episode of Care. */
+  inpatient: repo.Encounter;
+}
+
+/**
+ * The patient is admitted to a bed.
+ *
+ * ── TWO ENCOUNTERS, ONE EPISODE. THIS IS ADR-0013 §4, AND IT IS NOT NEGOTIABLE ─
+ * The OP encounter CLOSES (`admitted`, terminal). An INPATIENT encounter OPENS, in the
+ * SAME `episodeId`. We do not extend the outpatient encounter across the admission, and
+ * the reasons are the hospital's own, not the architecture's:
+ *
+ *   BILLING     — OP and IP tariffs differ, and bed charges accrue per DAY against the IP
+ *                 encounter. A merged encounter cannot be billed correctly.
+ *   REPORTING   — midnight census, ALOS, admission counts and NABH all count ENCOUNTERS.
+ *                 A merged object corrupts every one of those numbers.
+ *   IRREVERSIBLE— two encounters can always be JOINED into a timeline. One encounter can
+ *                 never be SPLIT back apart once notes, orders and charges have piled up
+ *                 on it.
+ *
+ * The doctor still sees one unbroken history, because the timeline is a read model over
+ * the EPISODE (`getEpisodeTimeline`) — not a storage decision. **Continuity is a read
+ * concern; separation is a billing and statutory concern. Never trade the second away to
+ * buy the first.**
+ *
+ * ── WHY BOTH HALVES ARE IN ONE TRANSACTION ──────────────────────────────────
+ * `one_open_encounter_per_patient` (migration 0012) is a unique partial index on
+ * `open: true`. The OP encounter must stop being open BEFORE the IP one starts, or the
+ * index rejects the admission. In one transaction that ordering is guaranteed; in two,
+ * a crash in between leaves a patient who has been discharged from the OPD and admitted
+ * to nothing — standing in a corridor, invisible to every screen in the hospital.
+ */
+export async function admitPatient(id: string, input: AdmitInput): Promise<AdmitResult> {
+  const ctx = getContext();
+
+  return withTransaction(async (session) => {
+    const current = await repo.findById(id);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+    if (!canTransition(current.status, "admitted")) {
+      throw invalidTransition(current.status, "admitted");
+    }
+
+    /**
+     * Admitting an INPATIENT would be admitting someone who is already in a bed. The
+     * state machine cannot catch this on its own — an IP encounter sits at `in_progress`
+     * like any other, and `in_progress → admitted` is a legal edge. Without this the
+     * ward could admit the same patient twice a day, each time abandoning the previous
+     * stay's bed charges on an encounter nobody will ever close.
+     */
+    if (current.class === "IP") {
+      throw new AppError("HMS-STATE-001", 422, "This patient is already admitted", {
+        id,
+        hint: "to move them to another bed, transfer the bed — do not admit them again",
+      });
+    }
+
+    const admittedAt = new Date();
+
+    const outpatient = await repo.setStatus(
+      id,
+      "admitted",
+      {
+        from: current.status,
+        to: "admitted",
+        at: admittedAt,
+        ...(ctx.userId ? { by: ctx.userId } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+      session,
+    );
+    if (!outpatient) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+    const inpatient = await repo.create(
+      {
+        patientId: current.patientId,
+        // THE SAME EPISODE. This one line is what makes the admission part of the care
+        // story rather than a new one — and what lets the ward see the OP consultation
+        // and its results without anything being copied.
+        episodeId: current.episodeId,
+        // The patient came from inside the building. `transfer` is the ADR-0013 §2 origin
+        // for exactly this: an encounter that begins where another one ended.
+        origin: "transfer",
+        class: "IP",
+        // Straight to `in_progress`: there is no queue for a bed. The patient is not
+        // waiting to be seen — they are in the ward, and somebody is responsible for them
+        // from this second.
+        status: "in_progress",
+        bed: { ward: input.ward, bedCode: input.bedCode, tariffCode: input.tariffCode },
+        admittedAt,
+        admittedFrom: current.id,
+        ...((input.doctorId ?? current.doctorId)
+          ? { doctorId: (input.doctorId ?? current.doctorId) as string }
+          : {}),
+        ...(current.departmentId ? { departmentId: current.departmentId } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+        ...(current.branchId ? { branchId: current.branchId } : {}),
+      },
+      session,
+    );
+
+    /**
+     * Billing listens for this and posts the first bed-day. Published in the SAME
+     * transaction as the admission, so a bed can never be occupied without the charge
+     * being raised, nor charged for an admission that rolled back.
+     */
+    await publish(
+      {
+        name: EVENTS.PATIENT_ADMITTED,
+        payload: {
+          encounterId: inpatient.id,
+          outpatientEncounterId: outpatient.id,
+          episodeId: inpatient.episodeId,
+          patientId: inpatient.patientId,
+          ward: input.ward,
+          bedCode: input.bedCode,
+          tariffCode: input.tariffCode,
+          admittedAt: admittedAt.toISOString(),
+          ...(inpatient.doctorId ? { doctorId: inpatient.doctorId } : {}),
+        },
+        ...(inpatient.branchId ? { branchId: inpatient.branchId } : {}),
+      },
+      session,
+    );
+
+    return { outpatient, inpatient };
+  });
+}
+
+/**
+ * Hands the patient to another doctor.
+ *
+ * ── A TRANSFER IS A CLINICAL HANDOVER, NOT AN EDIT ──────────────────────────
+ * The naive version of this is `PATCH /encounters/:id { doctorId }`, and it is wrong in a
+ * way that only shows up at an inquest: the patient silently moves off one doctor's list
+ * and onto another's, with nothing recording that a handover happened, who decided it, or
+ * why. "Who was responsible for this patient at 4pm?" then has no answer.
+ *
+ * So it is its own act, it REQUIRES a reason, and it lands in the history. The reason is
+ * the handover note — "needs surgical opinion", "my shift ends" — and it is the only
+ * thing the receiving doctor has to go on.
+ *
+ * The ENCOUNTER moves; the episode, the orders, the results and the prescriptions do not
+ * budge, because they all hang off the encounter and the episode rather than the doctor.
+ * That is the whole return on ADR-0013: handing over a patient is one field, not a
+ * migration.
+ */
+export async function transferDoctor(
+  id: string,
+  toDoctorId: string,
+  reason: string,
+): Promise<repo.Encounter> {
+  const ctx = getContext();
+
+  return withTransaction(async (session) => {
+    const current = await repo.findById(id);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+    /**
+     * A closed visit has no responsible doctor to hand over. Transferring one would move
+     * a finished patient onto a colleague's list — they would call a name that is not
+     * coming, because that patient went home hours ago.
+     */
+    if (!isOpen(current.status)) {
+      throw new AppError("HMS-STATE-001", 422, "Cannot transfer a visit that is over", {
+        id,
+        status: current.status,
+        hint: "the patient has left — if they are back, that is a new encounter in the same episode",
+      });
+    }
+
+    if (current.doctorId === toDoctorId) {
+      throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+        doctorId: ["this patient is already with that doctor"],
+      });
+    }
+
+    const from = current.doctorId;
+
+    const updated = await repo.setDoctor(
+      id,
+      toDoctorId,
+      {
+        from: current.status,
+        // The status does not change — the patient is exactly as waiting as they were.
+        // What changed is WHO they are waiting for, and the history says so in words.
+        to: current.status,
+        at: new Date(),
+        ...(ctx.userId ? { by: ctx.userId } : {}),
+        reason: `transferred to another doctor: ${reason}`,
+      },
+      session,
+    );
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+    await publish(
+      {
+        name: EVENTS.ENCOUNTER_TRANSFERRED,
+        payload: {
+          encounterId: updated.id,
+          patientId: updated.patientId,
+          episodeId: updated.episodeId,
+          toDoctorId,
+          reason,
+          ...(from ? { fromDoctorId: from } : {}),
+        },
+        ...(updated.branchId ? { branchId: updated.branchId } : {}),
+      },
+      session,
+    );
+
+    return updated;
+  });
+}
+
+/**
+ * The patient goes home.
+ *
+ * ── DISCHARGE IS NOT "CLOSING A VISIT" ──────────────────────────────────────
+ * It closes the inpatient encounter, so mechanically it is one transition. But it also
+ * emits `patient.discharged`, and that event is what ALOS, the midnight census and every
+ * bed-occupancy figure in the hospital are counted from. `encounter.closed` fires for
+ * every OP consultation too — a consumer trying to count discharges from it would count
+ * the entire outpatient department.
+ *
+ * The bed-day charges land from that event, for every night not yet billed. They are
+ * posted from `dischargedAt` as recorded HERE, not from the consumer's clock: a
+ * redelivery an hour later must bill the same stay, not a longer one.
+ */
+export async function dischargePatient(id: string, reason?: string): Promise<repo.Encounter> {
+  const ctx = getContext();
+
+  return withTransaction(async (session) => {
+    const current = await repo.findById(id);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+    /**
+     * Only an inpatient can be discharged. An OP consultation ENDS — it is closed, and
+     * `closeEncounter` is that. Letting this run on an OP encounter would emit
+     * `patient.discharged` for somebody who never had a bed, and every occupancy number
+     * downstream would count them as a stay.
+     */
+    if (current.class !== "IP") {
+      throw new AppError("HMS-STATE-001", 422, "This patient is not admitted", {
+        id,
+        class: current.class,
+        hint: "an outpatient visit is CLOSED, not discharged — POST /encounters/:id/close",
+      });
+    }
+    if (!canTransition(current.status, "closed")) throw invalidTransition(current.status, "closed");
+
+    const dischargedAt = new Date();
+
+    const updated = await repo.setStatus(
+      id,
+      "closed",
+      {
+        from: current.status,
+        to: "closed",
+        at: dischargedAt,
+        ...(ctx.userId ? { by: ctx.userId } : {}),
+        ...(reason ? { reason } : {}),
+      },
+      session,
+      { dischargedAt },
+    );
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+    await publish(
+      {
+        name: EVENTS.PATIENT_DISCHARGED,
+        payload: {
+          encounterId: updated.id,
+          episodeId: updated.episodeId,
+          patientId: updated.patientId,
+          admittedAt: (updated.admittedAt ?? updated.arrivedAt).toISOString(),
+          dischargedAt: dischargedAt.toISOString(),
+          ...(updated.bed
+            ? {
+                ward: updated.bed.ward,
+                bedCode: updated.bed.bedCode,
+                tariffCode: updated.bed.tariffCode,
+              }
+            : {}),
+          ...(reason ? { reason } : {}),
+        },
+        ...(updated.branchId ? { branchId: updated.branchId } : {}),
+      },
+      session,
+    );
+
+    return updated;
+  });
+}
+
+/** Everyone currently in a bed. The ward round's list. */
+export const listInpatients = repo.listInpatients;
 
 /** The patient is called in from the waiting room. */
 export const startConsultation = (id: string): Promise<repo.Encounter> =>

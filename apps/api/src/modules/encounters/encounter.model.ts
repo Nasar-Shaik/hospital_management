@@ -184,8 +184,42 @@ export interface EncounterDoc {
    */
   open?: true;
 
+  /**
+   * The bed, when `class` is `IP`.
+   *
+   * ── THE IP ENCOUNTER *IS* THE ADMISSION ─────────────────────────────────────
+   * There is no `admissions` collection, and that is ADR-0013 §1 talking: the four
+   * clinical objects are Encounter, EpisodeOfCare, Order and Result. An `Admission`
+   * object would be a second thing meaning "this patient is here", and the blueprint's
+   * version of exactly that — `admissions` hanging off `patients` as a parallel root —
+   * is the structure ADR-0013 was written to kill. Admission is a CLASS of encounter.
+   *
+   * ── AND THIS IS NOT A BED INVENTORY ─────────────────────────────────────────
+   * It records which bed the patient is in so the stay can be billed and the ward round
+   * knows where to go. It does NOT reserve one: there are no wards, no rooms, no
+   * occupancy map, so nothing stops two patients being recorded in bed `A-12`.
+   * `bed:manage` exists as a permission and nothing writes it. That gap is real and is
+   * written down (PROJECT_MEMORY §5) rather than half-closed — a bed board that is only
+   * sometimes right is worse than a wall chart, because people stop checking the wall.
+   */
+  bed?: {
+    /** `General Ward`, `ICU` — what a human calls it. */
+    ward: string;
+    /** `A-12`. Free text: without an inventory there is nothing to validate against. */
+    bedCode: string;
+    /** The tariff code the bed-day charge is posted against — `BED_GEN`, `BED_ICU`. */
+    tariffCode: string;
+  };
+
   arrivedAt: Date;
   closedAt?: Date;
+
+  /** Set on the IP encounter at admission; the clock the bed-day charge counts from. */
+  admittedAt?: Date;
+  /** Set when the patient actually leaves. The other end of that clock. */
+  dischargedAt?: Date;
+  /** The OP encounter this admission came out of, so the story can be walked backwards. */
+  admittedFrom?: Types.ObjectId;
 
   createdBy?: string;
   history: EncounterHistoryEntry[];
@@ -217,8 +251,22 @@ const encounterSchema = new Schema<EncounterDoc>(
     // would sit in the unique index and lock the patient out of ever returning.
     open: { type: Boolean, default: undefined },
 
+    bed: {
+      _id: false,
+      type: {
+        ward: { type: String, required: true, trim: true, maxlength: 100 },
+        bedCode: { type: String, required: true, trim: true, maxlength: 32 },
+        tariffCode: { type: String, required: true, trim: true, maxlength: 64 },
+      },
+      required: false,
+    },
+
     arrivedAt: { type: Date, required: true },
     closedAt: { type: Date },
+
+    admittedAt: { type: Date },
+    dischargedAt: { type: Date },
+    admittedFrom: { type: Schema.Types.ObjectId },
 
     createdBy: { type: String },
     history: [

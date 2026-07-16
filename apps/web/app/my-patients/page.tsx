@@ -34,6 +34,7 @@ import {
   type Patient,
   type Prescription,
   type PrescriptionLineInput,
+  type DoctorRef,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
@@ -496,6 +497,186 @@ function PrescriptionsForVisit({
   );
 }
 
+/**
+ * Admit, or hand over.
+ *
+ * ── ADMITTING ENDS THIS VISIT AND STARTS ANOTHER ────────────────────────────
+ * The wording says so out loud, because the doctor is about to do something irreversible:
+ * the OP encounter closes forever and an inpatient one opens in the same care story
+ * (ADR-0013 §4). Two encounters can always be read as one timeline; one encounter can
+ * never be split back apart once notes, orders and charges have piled onto it.
+ *
+ * ── THE BED CLASS IS A PRICE, SO THE DOCTOR PICKS IT DELIBERATELY ───────────
+ * `General Ward` and `ICU` differ by a factor of eight on the bill. The tariff code is
+ * chosen here rather than derived from a ward name, because a hospital that renames a ward
+ * must not silently re-price every bed in it.
+ */
+function AdmitOrTransfer({
+  encounter,
+  doctors,
+  onDone,
+}: {
+  encounter: Encounter;
+  doctors: DoctorRef[];
+  onDone: (message: string) => void;
+}) {
+  const { api, user, can } = useAuth();
+  const [mode, setMode] = useState<"none" | "admit" | "transfer">("none");
+  const [ward, setWard] = useState("General Ward");
+  const [bedCode, setBedCode] = useState("");
+  const [tariffCode, setTariffCode] = useState("BED_GEN");
+  const [toDoctor, setToDoctor] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const BEDS = [
+    { code: "BED_GEN", ward: "General Ward" },
+    { code: "BED_SEMI", ward: "Semi-private Room" },
+    { code: "BED_PVT", ward: "Private Room" },
+    { code: "BED_ICU", ward: "ICU" },
+  ];
+
+  async function admit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.admitPatient(encounter.id, { ward, bedCode, tariffCode });
+      onDone("Admitted. This visit is closed and the stay is on the ward list.");
+      setMode("none");
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not admit the patient.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function transfer() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.transferDoctor(encounter.id, toDoctor, reason);
+      onDone("Handed over. The patient is on their list now.");
+      setMode("none");
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not transfer the patient.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const others = doctors.filter((d) => d.id !== (user?.id ?? ""));
+
+  return (
+    <div className="space-y-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      {mode === "none" && (
+        <div className="flex flex-wrap gap-2">
+          <PermissionGate can={can} permission="admission:create">
+            <Button variant="secondary" onClick={() => setMode("admit")}>
+              Admit to a bed
+            </Button>
+          </PermissionGate>
+          <PermissionGate can={can} permission="encounter:update">
+            <Button variant="secondary" onClick={() => setMode("transfer")}>
+              Transfer to another doctor
+            </Button>
+          </PermissionGate>
+        </div>
+      )}
+
+      {mode === "admit" && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-[var(--color-fg-muted)]">
+              Bed class
+              <select
+                value={tariffCode}
+                onChange={(e) => {
+                  const bed = BEDS.find((b) => b.code === e.target.value);
+                  setTariffCode(e.target.value);
+                  if (bed) setWard(bed.ward);
+                }}
+                className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              >
+                {BEDS.map((b) => (
+                  <option key={b.code} value={b.code}>
+                    {b.ward}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-[var(--color-fg-muted)]">
+              Bed number
+              <input
+                value={bedCode}
+                onChange={(e) => setBedCode(e.target.value)}
+                placeholder="A-12"
+                className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+          </div>
+          <p className="text-xs text-[var(--color-fg-subtle)]">
+            Admitting CLOSES this visit and opens an inpatient stay in the same care story. The bed
+            is billed for every day the patient is here, starting today.
+          </p>
+          <div className="flex gap-2">
+            <Button disabled={busy || bedCode.trim().length === 0} onClick={() => void admit()}>
+              {busy ? "Admitting…" : "Admit"}
+            </Button>
+            <Button variant="secondary" onClick={() => setMode("none")}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {mode === "transfer" && (
+        <div className="space-y-2">
+          <label className="block text-xs text-[var(--color-fg-muted)]">
+            To
+            <select
+              value={toDoctor}
+              onChange={(e) => setToDoctor(e.target.value)}
+              className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+            >
+              <option value="">Choose a doctor…</option>
+              {others.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs text-[var(--color-fg-muted)]">
+            Why (the receiving doctor sees this)
+            <input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="needs a surgical opinion"
+              className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+            />
+          </label>
+          {/* The reason is the handover note, and it is the only thing the receiving
+              doctor has to go on. The server refuses a transfer without one. */}
+          <div className="flex gap-2">
+            <Button
+              disabled={busy || !toDoctor || reason.trim().length < 3}
+              onClick={() => void transfer()}
+            >
+              {busy ? "Transferring…" : "Transfer"}
+            </Button>
+            <Button variant="secondary" onClick={() => setMode("none")}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MyPatients() {
   const { api, user, can } = useAuth();
 
@@ -505,6 +686,7 @@ function MyPatients() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
+  const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -534,6 +716,13 @@ function MyPatients() {
     void api
       .listCatalogue()
       .then(setServices)
+      .catch(() => undefined);
+
+    // Who a patient can be handed to. Names only, gated on `encounter:read` — the front
+    // desk and every clinician hold it, and none of them get a personnel file for it.
+    void api
+      .listDoctors()
+      .then(setDoctors)
       .catch(() => undefined);
   }, [api]);
 
@@ -765,6 +954,16 @@ function MyPatients() {
                       )}
                   </div>
                 </div>
+
+                <AdmitOrTransfer
+                  encounter={selected}
+                  doctors={doctors}
+                  onDone={(message) => {
+                    setNotice(message);
+                    setSelectedId(null);
+                    void load();
+                  }}
+                />
 
                 {selected.status === "awaiting_results" && (
                   <Alert tone="info">

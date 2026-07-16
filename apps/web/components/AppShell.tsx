@@ -70,8 +70,16 @@ const NAVIGATION: NavSection[] = [
        * show a dispensing counter to every nurse and pathologist in the building.
        */
       { label: "Pharmacy", href: "/pharmacy", permission: "pharmacy:dispense" },
+      /**
+       * `emr:read`, not `bed:allocate`: the ward round is a doctor's list of PATIENTS,
+       * not a bed-allocation tool. Gating it on the bed permission would hide the chart
+       * from the doctor who writes it and show it to whoever moves people between beds.
+       */
+      { label: "Ward", href: "/ward", permission: "emr:read" },
       { label: "Patients", href: "/patients", permission: "patient:read" },
       { label: "Appointments", href: "/appointments", permission: "appointment:read" },
+      // The BED BOARD (which beds are free) is still `soon` — there is no bed inventory.
+      // `/ward` shows who is admitted; it cannot tell you where there is space.
       { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },
     ],
   },

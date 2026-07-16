@@ -19,23 +19,37 @@ Guards: `checked_in` only on appointment day; `cancelled` after `checked_in` req
 
 > **An Appointment is a promise of an Encounter, not the Encounter (ADR-0013).** `checked_in` is the moment the promise is kept: it **creates the Encounter** (origin `appointment`) and hands the patient to §14. The appointment's own remaining states then merely mirror the encounter's — the clinical truth lives on the Encounter. A hospital with no appointment book skips this machine entirely and starts at §14.
 
-## 2. Admission
+## 2. Admission (SUPERSEDED by §14 — there is no Admission object)
+
+> **The IP ENCOUNTER is the admission (ADR-0013 §1/§4), and its lifecycle is §14.** This section described a separate `admissions` machine, and building it would have meant two objects both meaning "this patient is here", kept in step forever by hand. That is the shape ADR-0013 was written to kill: the four clinical objects are Encounter, EpisodeOfCare, Order and Result, and admission is a **class** of encounter, not a fifth object.
+>
+> Two competing machines in this catalog would be a defect by its own opening rule, since code must implement _exactly_ these states. So this one is retired, and what genuinely belonged to it moves:
+>
+> | Was here                           | Now                                                                                                                                                                                                                                                                          |
+> | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | `requested`                        | Dropped. A request to admit is a clinical decision, not a state — the OP encounter is `in_progress` until the doctor admits. If a hospital ever needs an admission REQUEST queue, that is an Order (`category: admission`, §15), which is exactly what that category is for. |
+> | `admitted`                         | §14 — the IP encounter, open at `in_progress`.                                                                                                                                                                                                                               |
+> | `discharge_initiated → discharged` | §14 `closed` + `patient.discharged`. See below on why the two-step is not built.                                                                                                                                                                                             |
+> | `transferred ⇄ admitted`           | **Not built.** A bed-to-bed move needs a bed inventory, which does not exist.                                                                                                                                                                                                |
+> | `lama`, `absconded`, `deceased`    | **Not built** — and they are NOT cosmetic. See below.                                                                                                                                                                                                                        |
+
+**Implemented (2026-07-16):** admit, ward notes, discharge. **What is deliberately missing, and why it matters:**
+
+- **`discharge_initiated` is not built.** It exists in real hospitals to hold the patient while the bill is settled — "discharge requires bill finalized or approved credit". We discharge and bill the stay in one act instead. A private hospital that needs to stop a patient leaving before payment needs this state; **do not add it by putting a payment check inside `dischargePatient`** — that would make billing upstream of a clinical act, which is the one thing `billing.consumers` exists to prevent.
+- **`lama` (left against medical advice), `absconded` and `deceased` are not built, and this is the most consequential gap in this section.** All three currently have to be recorded as an ordinary discharge, which is a lie in the record: a patient who walked out against advice, one who vanished, and one who died are three different clinical, legal and statutory events, and the summary that says "discharged" for any of them is wrong in a way that matters at an inquest. `deceased` additionally has a mortuary flow behind it. **Anyone building IPD properly must land these before the module is called finished.**
+
+## 3. Bed (NOT built — and the ward screen says so)
+
+**Nothing implements this.** `bed:manage` is a permission with nothing behind it: there are no wards, no rooms, no occupancy and no reservation. `encounters.bed` RECORDS which bed a patient was put in (`{ward, bedCode, tariffCode}`) so the stay can be billed and the round knows where to go — it does not reserve one, and **nothing stops two patients being recorded in bed A-12**.
+
+That gap is deliberate and written down (PROJECT_MEMORY §5) rather than half-closed. The guard below — "concurrent allocation prevented by optimistic lock (double-allocation is the classic HIS bug)" — is exactly right, and it is precisely why a HALF-built bed board is worse than none: an occupancy map that is only sometimes true is one people stop checking, and then the wall chart stops being maintained too.
 
 ```
-requested → admitted → (transferred ⇄ admitted) → discharge_initiated → discharged
-admitted → lama | absconded | deceased
-```
-
-Guards: `admitted` requires bed allocation in same transaction; `discharged` requires bill finalized or approved credit + discharge summary signed; `deceased` requires death summary → mortuary flow. Terminal: **discharged, lama, absconded, deceased**.
-
-## 3. Bed
-
-```
-available → reserved → occupied → vacated_dirty → cleaning → available
+(target) available → reserved → occupied → vacated_dirty → cleaning → available
 available|reserved → blocked → available          (maintenance; reason required)
 ```
 
-Guards: `occupied` only via admission/transfer transaction; concurrent allocation prevented by optimistic lock (double-allocation is the classic HIS bug). No terminal state (decommission = soft delete).
+Guards (for whoever builds it): `occupied` only via admission/transfer transaction; concurrent allocation prevented by optimistic lock (double-allocation is the classic HIS bug). No terminal state (decommission = soft delete).
 
 ## 4. Invoice (Bill)
 
@@ -237,6 +251,19 @@ Guards:
 - `admitted` does **NOT** end the care story: it closes this encounter and opens an inpatient one in the **same Episode of Care** (ADR-0013 §4). Continuity is a read model; separation is billing and statutory reality.
 
 Terminal: **closed, cancelled, left_without_being_seen, admitted**.
+
+**Implemented (2026-07-16)** — `admitPatient`, `dischargePatient` and `transferDoctor` in `modules/encounters`. Notes on what shipped:
+
+- **`admitted` is terminal and the admission is a SECOND encounter**, class `IP`, in the same `episodeId`, created in the SAME transaction. `one_open_encounter_per_patient` is a unique partial index on `open`, so the OP encounter must stop being open before the IP one starts — in two transactions a crash between them leaves a patient discharged from the OPD and admitted to nothing.
+- **An IP encounter cannot be admitted again.** The state machine alone cannot catch this: an IP encounter sits at `in_progress` like any other and `in_progress → admitted` is a legal edge, so a ward could admit the same patient twice a day, abandoning each stay's bed charges on an encounter nobody closes. There is an explicit `class === "IP"` guard.
+- **Discharge is `IP → closed` PLUS `patient.discharged`.** It is not the same act as closing an OP visit, and an outpatient cannot be discharged: that event is what ALOS, the midnight census and every occupancy figure are counted from, and firing it for somebody who never had a bed would count them as a stay.
+- **A transfer does not change `status`.** The patient is exactly as waiting as they were; what changes is who for. It appends a handover to `history` with the actor and a REQUIRED reason, and emits `encounter.transferred`. `PATCH { doctorId }` was rejected: a silent move has no answer to "who was responsible at 4pm".
+
+### 14b. Ward note (tenant DB) — append-only
+
+Not a state machine. `progress` notes accumulate during a stay; exactly ONE `discharge_summary` ends it (`one_discharge_summary_per_admission`, migration 0016). There is no update path and no delete path in the repository, deliberately: a contemporaneous record that can be rewritten afterwards is not evidence of anything, and the first question at an inquest is whether the notes were changed after the event. A correction is a NEW note that says so — which is how the paper chart works, and why it is still trusted.
+
+**The bed is billed per calendar day started, minimum one** (`core/time/day.ts` → `calendarDaysStarted`), in the hospital's timezone. Admitted 22:00 and discharged 09:00 is TWO days: the bed was unsellable on both, and counting whole 24-hour blocks would bill that stay ₹0 — which is not generosity, it is a hole the ward papers over by admitting people at one minute past midnight. Each night is its own charge, keyed `<encounterId>:night:<n>`; keyed on the encounter, `one_charge_per_cause` would post the first night and silently swallow the rest.
 
 ## 15. Order (tenant DB) — the spine that carries work between departments (ADR-0013 §3)
 

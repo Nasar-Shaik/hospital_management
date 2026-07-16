@@ -613,6 +613,22 @@ export const DEFAULT_ROLES = [
       OPERATIONS.ENCOUNTER_READ,
       OPERATIONS.ENCOUNTER_UPDATE,
       OPERATIONS.ENCOUNTER_CLOSE,
+      /**
+       * ── ADMITTING AND DISCHARGING ARE CLINICAL DECISIONS ────────────────────
+       * These were held by NOBODY — not the doctor, not the nurse, not the front desk.
+       * Every admit route would have answered 403 to every human in the building, which
+       * is the third time a permission defined in the catalog was never granted to the
+       * person whose job it is (see `user:read` for the receptionist, and
+       * `prescription:create`'s scope). **A permission nobody holds is a feature nobody
+       * has.**
+       *
+       * They belong to the DOCTOR because deciding a patient needs a bed — and deciding
+       * they are well enough to leave — is a clinical judgement, not paperwork. The ward
+       * clerk does the paperwork; the nurse allocates the bed (`bed:allocate`); neither
+       * of them decides.
+       */
+      PATIENT.ADMISSION_CREATE,
+      PATIENT.ADMISSION_DISCHARGE,
       PATIENT.RECORD_READ,
       PATIENT.RECORD_WRITE,
       PATIENT.DISCHARGE_CREATE,

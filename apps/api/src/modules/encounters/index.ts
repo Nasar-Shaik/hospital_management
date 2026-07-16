@@ -15,6 +15,10 @@
 export { encounterRouter } from "./encounter.routes.js";
 
 export {
+  admitPatient,
+  dischargePatient,
+  transferDoctor,
+  listInpatients,
   startEncounter,
   getEncounter,
   listEncounters,

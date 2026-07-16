@@ -59,5 +59,40 @@ export const cancelEncounterSchema = z.object({ reason: z.string().min(3).max(50
 
 export const closeEncounterSchema = z.object({ reason: z.string().max(500).optional() }).strict();
 
+/**
+ * Admitting a patient.
+ *
+ * `tariffCode` is what the bed-day is billed at, and it is chosen by the person admitting
+ * rather than derived from the ward name: "ICU" is not a price, and a hospital that renames
+ * a ward must not silently re-price every bed in it.
+ */
+export const admitSchema = z
+  .object({
+    ward: z.string().min(1).max(100),
+    /** `A-12`. Free text — there is no bed inventory to validate against (see the model). */
+    bedCode: z.string().min(1).max(32),
+    tariffCode: z.string().min(1).max(64),
+    /** The consultant on the ward. Defaults to the OP doctor when omitted. */
+    doctorId: objectId.optional(),
+    reason: z.string().max(500).optional(),
+  })
+  .strict();
+
+/**
+ * Handing the patient to another doctor.
+ *
+ * The reason is REQUIRED and is not bureaucracy: it is the handover note, and it is the
+ * only thing the receiving doctor has to go on. "Who was responsible for this patient at
+ * 4pm, and why did that change" is asked exactly once, in the worst circumstances.
+ */
+export const transferSchema = z
+  .object({
+    doctorId: objectId,
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+
 export type StartEncounterBody = z.infer<typeof startEncounterSchema>;
+export type AdmitBody = z.infer<typeof admitSchema>;
+export type TransferBody = z.infer<typeof transferSchema>;
 export type ListEncountersQuery = z.infer<typeof listEncountersQuerySchema>;

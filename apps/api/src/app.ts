@@ -26,6 +26,7 @@ import { orderRouter } from "./modules/orders/index.js";
 import { billingRouter } from "./modules/billing/index.js";
 import { prescriptionRouter } from "./modules/prescriptions/index.js";
 import { pharmacyRouter } from "./modules/pharmacy/index.js";
+import { admissionRouter } from "./modules/admissions/index.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
 import { env } from "./config/env.js";
@@ -132,6 +133,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(billingRouter());
   v1Router.use(prescriptionRouter());
   v1Router.use(pharmacyRouter());
+  v1Router.use(admissionRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
   app.use("/api/v1", resolveTenant(), v1Router);

@@ -410,6 +410,37 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/invoices/64b7f0000000000000000001/payments",
     body: { amount: 50000, method: "cash" },
   },
+  /* ── Admissions (ADR-0013 §4) ───────────────────────────────────────────────
+   * `admission:create` / `admission:discharge` — DOCTOR only: deciding a patient needs a
+   * bed, and deciding they are well enough to leave, are clinical judgements. Ward notes
+   * are `emr:write` because the ward round is nursing work as much as medical.
+   */
+  "GET /api/v1/inpatients": { method: "get", url: "/api/v1/inpatients" },
+  "POST /api/v1/encounters/:id/admit": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/admit",
+    body: { ward: "General Ward", bedCode: "A-1", tariffCode: "BED_GEN" },
+  },
+  "POST /api/v1/encounters/:id/transfer": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/transfer",
+    body: { doctorId: "64b7f0000000000000000002", reason: "matrix probe" },
+  },
+  "POST /api/v1/encounters/:id/notes": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/notes",
+    body: { text: "matrix probe" },
+  },
+  "GET /api/v1/encounters/:id/notes": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/notes",
+  },
+  "POST /api/v1/encounters/:id/discharge": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/discharge",
+    body: { text: "matrix probe" },
+  },
+
   /* ── Prescriptions (STATE_MACHINE_CATALOG §6) ───────────────────────────────
    * Reading is `emr:read` — a pharmacist and a nurse must read what the patient is on,
    * and must never be able to write it. Composing is `prescription:create`; the SIGNATURE
@@ -932,6 +963,31 @@ describe("privilege boundaries that must never move", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("a NURSE cannot admit or discharge — those are clinical judgements", async () => {
+    /**
+     * A nurse allocates the bed (`bed:allocate`) and writes the ward notes. Deciding that
+     * a patient needs a bed, and that they are well enough to go home, is the doctor's
+     * call. This is the separation that stops a busy ward discharging someone to free up
+     * a bed without a doctor ever seeing them.
+     */
+    for (const [url, body] of [
+      [
+        "/api/v1/encounters/64b7f0000000000000000001/admit",
+        { ward: "W", bedCode: "1", tariffCode: "BED_GEN" },
+      ],
+      ["/api/v1/encounters/64b7f0000000000000000001/discharge", { text: "nurse should not" }],
+    ] as [string, object][]) {
+      const res = await request(app)
+        .post(url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.NURSE}`)
+        .send(body);
+
+      expect(res.status, `NURSE must not be able to POST ${url}`).toBe(403);
+      expect(res.body.error.code).toBe("HMS-AUTH-005");
+    }
   });
 
   it("a RECEPTIONIST cannot read a prescription — a drug name is a diagnosis", async () => {

@@ -16,6 +16,8 @@
  * through the modules that own care.
  */
 import { createLogger } from "@medicore/logger";
+import { env } from "../../config/env.js";
+import { calendarDaysStarted } from "../../core/time/day.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
 import { postCharge, reverseChargesFor } from "./billing.service.js";
@@ -233,12 +235,132 @@ async function onMedicationDispensed(event: DomainEvent): Promise<void> {
   logger.info({ dispenseId, lines: lines.length }, "dispensed drugs charged to the visit");
 }
 
+/**
+ * The bed, billed by the day.
+ *
+ * ── ONE CHARGE PER NIGHT, KEYED ON THE NIGHT ────────────────────────────────
+ * `one_charge_per_cause` (migration 0014) is unique on `(sourceId, code)`. Keyed on the
+ * encounter, a five-day stay in `BED_GEN` could post exactly ONE bed-day: the first would
+ * succeed and the other four would be silently swallowed as duplicates. The hospital would
+ * bill ₹1,500 for a week in a ward and never see an error — the same trap that keying the
+ * drug charge on the prescription would have set, and it is here for the same reason.
+ *
+ * So the CAUSE is the night: `<encounterId>:night:3`. Each night is its own row, billed
+ * exactly once however many times this runs.
+ *
+ * ── WHICH MAKES THIS FUNCTION SAFE TO CALL AT ANY TIME, REPEATEDLY ──────────
+ * It posts every night from admission to `until` and lets the index reject the ones
+ * already there. So admission calls it (night 1 exists immediately — the family asking for
+ * an interim bill on day three must not be told the stay is free), discharge calls it (the
+ * rest land), and the nightly job this hospital does not have yet can call it too, with no
+ * new code and no reconciliation step. Re-running it is a no-op, which is the only
+ * property that makes an at-least-once queue survivable.
+ */
+async function chargeBedDays(input: {
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  tariffCode: string;
+  admittedAt: Date;
+  until: Date;
+  branchId?: string;
+}): Promise<void> {
+  const nights = calendarDaysStarted(input.admittedAt, input.until, env.DEFAULT_TIMEZONE);
+
+  for (let night = 1; night <= nights; night++) {
+    await postCharge({
+      encounterId: input.encounterId,
+      patientId: input.patientId,
+      episodeId: input.episodeId,
+      code: input.tariffCode,
+      category: "bed",
+      quantity: 1,
+      source: "bed",
+      // THE NIGHT is the cause. Never the encounter — see above.
+      sourceId: `${input.encounterId}:night:${String(night)}`,
+      ...(input.branchId ? { branchId: input.branchId } : {}),
+    });
+  }
+
+  logger.info(
+    { encounterId: input.encounterId, nights, code: input.tariffCode },
+    "bed-days charged up to date (already-posted nights are skipped by the index)",
+  );
+}
+
+/** Parses the ids and the bed off an admission/discharge event. */
+function bedContextOf(event: DomainEvent):
+  | {
+      encounterId: string;
+      patientId: string;
+      episodeId: string;
+      tariffCode: string;
+      admittedAt: Date;
+      branchId?: string;
+    }
+  | undefined {
+  const encounterId = String(event.payload.encounterId ?? "");
+  const patientId = String(event.payload.patientId ?? "");
+  const episodeId = String(event.payload.episodeId ?? "");
+  const tariffCode = String(event.payload.tariffCode ?? "");
+  const admittedAtRaw = String(event.payload.admittedAt ?? "");
+
+  if (!encounterId || !patientId || !tariffCode || !admittedAtRaw) return undefined;
+
+  const admittedAt = new Date(admittedAtRaw);
+  if (Number.isNaN(admittedAt.getTime())) return undefined;
+
+  return {
+    encounterId,
+    patientId,
+    episodeId,
+    tariffCode,
+    admittedAt,
+    ...(typeof event.branchId === "string" ? { branchId: event.branchId } : {}),
+  };
+}
+
+/** A patient took a bed → charge the first night, now. */
+async function onPatientAdmitted(event: DomainEvent): Promise<void> {
+  const ctx = bedContextOf(event);
+  if (!ctx) {
+    logger.warn({ event: event.eventId }, "patient.admitted missing bed context — not charged");
+    return;
+  }
+
+  await chargeBedDays({ ...ctx, until: ctx.admittedAt });
+}
+
+/**
+ * The patient went home → charge every night not yet charged.
+ *
+ * `dischargedAt` is the clock's other end, and it comes from the event rather than from
+ * `new Date()`: a redelivery an hour later must bill the same stay, not a longer one.
+ */
+async function onPatientDischarged(event: DomainEvent): Promise<void> {
+  const ctx = bedContextOf(event);
+  if (!ctx) {
+    logger.warn({ event: event.eventId }, "patient.discharged missing bed context — not charged");
+    return;
+  }
+
+  const dischargedAt = new Date(String(event.payload.dischargedAt ?? ""));
+  if (Number.isNaN(dischargedAt.getTime())) {
+    logger.warn({ event: event.eventId }, "patient.discharged has no valid dischargedAt");
+    return;
+  }
+
+  await chargeBedDays({ ...ctx, until: dischargedAt });
+}
+
 export const billingConsumers: ModuleConsumers = {
   events: {
     [EVENTS.ENCOUNTER_STARTED]: onEncounterStarted,
     [EVENTS.ORDER_PLACED]: onOrderPlaced,
     [EVENTS.ORDER_CANCELLED]: onOrderCancelled,
     [EVENTS.MEDICATION_DISPENSED]: onMedicationDispensed,
+    [EVENTS.PATIENT_ADMITTED]: onPatientAdmitted,
+    [EVENTS.PATIENT_DISCHARGED]: onPatientDischarged,
   },
   tasks: {},
 };

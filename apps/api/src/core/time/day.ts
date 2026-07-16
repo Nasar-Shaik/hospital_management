@@ -16,6 +16,64 @@
  */
 
 /**
+ * Which calendar day an instant falls on, in the hospital's zone. `2026-07-16`.
+ *
+ * `en-CA` because its short date format IS ISO `YYYY-MM-DD` — a documented locale
+ * behaviour, and cheaper than assembling parts by hand.
+ */
+export function dayKeyInZone(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
+
+/**
+ * How many calendar days a stay TOUCHES — the hospital's unit of bed billing.
+ *
+ * ── WHY "DAYS STARTED" AND NOT 24-HOUR BLOCKS ───────────────────────────────
+ * A patient admitted at 22:00 and discharged at 09:00 the next morning has been in the
+ * bed for eleven hours, and no hospital in India bills that as zero. The bed was made,
+ * occupied and turned over across two calendar days, and it could not be sold to anyone
+ * else on either of them. Counting whole 24-hour blocks would bill that stay ₹0 — which
+ * is not generosity, it is a hole in the ledger the ward will paper over by admitting
+ * people at one minute past midnight.
+ *
+ * So: **every calendar day the patient was in the bed for any part of, minimum one.**
+ * Admitted and discharged the same afternoon is one day. Admitted Monday 22:00,
+ * discharged Wednesday 09:00 is three (Mon, Tue, Wed).
+ *
+ * This is a POLICY, and it is the commonest Indian one — not a law of nature. A hospital
+ * that bills 24-hour blocks from the admission time needs a different function, and when
+ * one asks, it belongs here beside this one, chosen by config (ADR-0011). It does NOT
+ * belong inlined into billing with an `if`.
+ *
+ * In the hospital's ZONE, because "which day" is the entire question. Computed on day
+ * KEYS rather than by dividing milliseconds, so a DST transition — a 23-hour day — cannot
+ * round a stay down by one.
+ */
+export function calendarDaysStarted(from: Date, to: Date, timeZone: string): number {
+  if (to.getTime() < from.getTime()) {
+    throw new Error(
+      `calendarDaysStarted: discharge (${to.toISOString()}) precedes admission (${from.toISOString()})`,
+    );
+  }
+
+  const startKey = dayKeyInZone(from, timeZone);
+  const endKey = dayKeyInZone(to, timeZone);
+
+  // Both keys are wall-clock dates in the zone; parsing them as UTC midnights makes the
+  // difference a whole number of days with no offset arithmetic to get wrong.
+  const startUtc = Date.parse(`${startKey}T00:00:00.000Z`);
+  const endUtc = Date.parse(`${endKey}T00:00:00.000Z`);
+
+  const days = Math.round((endUtc - startUtc) / 86_400_000);
+  return days + 1;
+}
+
+/**
  * How far the zone is from UTC at a given instant, in milliseconds.
  *
  * Computed by asking Intl what the wall clock reads there and diffing — which is the

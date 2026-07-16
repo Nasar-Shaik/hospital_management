@@ -753,4 +753,68 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+
+  {
+    id: "0016-admissions",
+    description: "Ward notes + the discharge summary — the record of an inpatient stay",
+    up: async (db) => {
+      /**
+       * The ward round: this admission's chart, oldest first.
+       */
+      await db
+        .collection("wardNotes")
+        .createIndex({ tenantId: 1, encounterId: 1, at: 1 }, { background: true });
+
+      /**
+       * ── ONE ADMISSION, ONE DISCHARGE SUMMARY ────────────────────────────────
+       * Two summaries for one stay means the patient goes home holding one document while
+       * the hospital's record says another, and nothing anywhere says which is current.
+       * The next doctor reads whichever they happen to find.
+       *
+       * PARTIAL on the type, because there are MANY progress notes per admission and that
+       * is the entire point of them.
+       */
+      await db.collection("wardNotes").createIndex(
+        { tenantId: 1, encounterId: 1, type: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { type: "discharge_summary" },
+          background: true,
+          name: "one_discharge_summary_per_admission",
+        },
+      );
+
+      // The patient's notes across every stay — the question asked when somebody is
+      // readmitted and nobody can remember what happened last time.
+      await db
+        .collection("wardNotes")
+        .createIndex({ tenantId: 1, patientId: 1, at: -1 }, { background: true });
+
+      /**
+       * The ward round's list: everyone in a bed, in the order a doctor walks.
+       *
+       * PARTIAL on `open`, matching `one_open_encounter_per_patient` — a discharged
+       * encounter carries no `open` key at all, so it drops out of this index entirely
+       * rather than sitting in it forever making the ward list slower every year.
+       */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+        {
+          partialFilterExpression: { open: { $eq: true } },
+          background: true,
+          name: "ward_round",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("wardNotes")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("encounters")
+        .dropIndex("ward_round")
+        .catch(() => undefined);
+    },
+  },
 ];

@@ -144,7 +144,7 @@ api listening  profile=local  hospitalHosts=*.localhost  apiBind=:: (dual-stack)
 
 ---
 
-## 1d. THE CLINICAL DEMO — what you can actually test (updated 2026-07-16)
+## 1d. THE CLINICAL DEMO — what you can actually test (updated 2026-07-16, after Slice 4)
 
 **This is the section to read if you want to see the product.** Everything here has been driven
 in a real browser as the actual role. If it is not listed in this section, assume it is not
@@ -235,10 +235,30 @@ is the feature.
    **Dispense**: the badge becomes `6/10 given`, "of 4 still owed", and **the patient is billed
    for 6, not 10**. Dispense the rest later and it bills again, correctly, as a _second_ charge.
    "Already handed over" is the ledger — who gave what, when.
-6. **Cashier** (`cashier@…` → **Billing**) — consultation + tests + **only the drugs actually
-   handed over**. **Finalize** (freezes it, assigns a number) → take payment. Overpayment is
-   refused; a draft bill cannot be paid.
-7. **Do it all again at `district.localhost:3000`.** Same clicks, same code, **every line ₹0.00**
+6. **Admit them instead** (`drrao@…` → **My patients** → a patient who has been called in).
+   Two extra buttons live under the patient:
+   - **Transfer to another doctor** — pick Dr Khan, give a reason ("needs a surgical opinion").
+     The reason is required: it is the handover note, and the only thing the receiving doctor
+     has. Log in as `drkhan@…` and the patient is on **their** list, with the handover in the
+     history. The orders and prescriptions do not move — they hang off the encounter.
+   - **Admit to a bed** — pick a bed class (General Ward → ICU is 8× the price), type a bed
+     number, admit. **This CLOSES the OP visit and opens an inpatient stay in the same care
+     story.** Two encounters, one episode (ADR-0013 §4): OP and IP bill differently, and every
+     census and ALOS number counts encounters.
+7. **The ward** (`drrao@…`/`drkhan@…` → **Ward**) — everyone in a bed, with "day 1", "day 2".
+   - Add a **progress note**. It cannot be edited or deleted afterwards — a correction is a new
+     note. A record that can be rewritten is not evidence of anything.
+   - **Discharge with a summary.** There is no way to discharge without one: diagnosis, what
+     happened, advice. For a patient going back to a village clinic that document is the entire
+     medical record of the stay.
+   - The **bed-days land on the bill** at discharge — one charge per calendar day, from the day
+     they came in.
+8. **Cashier** (`cashier@…` → **Billing**) — consultation + tests + **only the drugs actually
+   handed over** + the bed-days. **Finalize** (freezes it, assigns a number) → take payment.
+   Overpayment is refused; a draft bill cannot be paid.
+   - The OP visit and the IP stay have **separate bills** — that separation is what makes both
+     of them billable at all.
+9. **Do it all again at `district.localhost:3000`.** Same clicks, same code, **every line ₹0.00**
    with the real price struck through. A ₹0 invoice is marked paid the moment it is finalized —
    a government hospital must not accrue a pile of "unpaid" bills nobody will ever pay.
 
@@ -264,6 +284,8 @@ All of these are enforced by the **database or the state machine**, not by a hop
   drug charge is posted once the relay delivers the event. It converges; it is not instant.
   **Do not take payment off that number yet.**
 - **A new hospital's Rx pad is empty** until you run `migrate --all` — the drug tariff seeds there.
+- **Two patients can be recorded in the same bed.** There is no bed inventory (see §11). The ward
+  list shows who is admitted and where they were RECORDED; it cannot tell you which beds are free.
 
 ---
 
@@ -541,14 +563,14 @@ That `traceId` is the same one on the HTTP request that created the account — 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build   # full quality gate
 pnpm boundaries                                          # module boundary rules
-pnpm --filter @medicore/api test:int                     # 602 integration tests (isolation, auth, RBAC matrix, encounters, orders, billing, prescriptions + pharmacy)
+pnpm --filter @medicore/api test:int                     # 658 integration tests (isolation, auth, RBAC matrix, encounters, orders, billing, prescriptions, pharmacy, admissions)
 ```
 
-`test:int` needs `pnpm docker:dev` running. **602 tests across 13 suites** against a **real** MongoDB and Redis, and it **fails rather than skips** if either is missing — a silently skipped isolation suite looks exactly like a passing one.
+`test:int` needs `pnpm docker:dev` running. **658 tests across 14 suites** against a **real** MongoDB and Redis, and it **fails rather than skips** if either is missing — a silently skipped isolation suite looks exactly like a passing one.
 
-All gates, as of **2026-07-16**: integration **602 passing**, typecheck 17/17, lint 17/17, build 11/11, module boundaries **0 violations** across 629 modules, **111 API routes** — every one carrying a permission that a test asserts, because the route nobody thought about is the one that answers everybody.
+All gates, as of **2026-07-16**: integration **658 passing**, typecheck 17/17, lint 17/17, build 11/11, module boundaries **0 violations** across 665 modules, **117 API routes** — every one carrying a permission that a test asserts, because the route nobody thought about is the one that answers everybody.
 
-**Known flake:** one run once showed `1 failed | 437 passed` and the test was not captured; it has not reproduced since. Suspected the Mailhog timing suite under load. Recorded as debt in `PROJECT_MEMORY` §5. **It must not be "fixed" by deleting the assertion.**
+**Known flake:** seen twice (`1 failed | 437 passed`, then `1 failed | 601 passed`), green on every re-run, and **the name was not captured either time** — which is the actual failure. Suspected the Mailhog timing suite under load, but that has never been confirmed. Recorded as debt in `PROJECT_MEMORY` §5. Next occurrence: pipe the full output to a file BEFORE filtering it. **It must not be "fixed" by deleting the assertion.**
 
 ---
 
@@ -588,13 +610,19 @@ Not bugs — **not built**, each for a stated reason. The reasons are recorded i
 > encounters, orders, billing, prescriptions and pharmacy all ship today, and `authorize`
 > enforces all three layers (entitlement → permission → row scope). §1d is the current truth.
 
-**Next up — Slice 4:**
-
-- **Admission / IPD** — admit from a consultation, daily notes, discharge summary, bed-day charges.
-  The bed tariff is already seeded and the state machine is specified; the module is not written.
-- **Transfer a case to another doctor.**
-
 **Deliberately absent, and dangerous to pretend otherwise:**
+
+- **There is NO BED INVENTORY.** No wards, no rooms, no occupancy, no "which beds are free" —
+  the **Bed board** in the nav is still greyed out as `soon`. `/ward` derives its list from where
+  patients ARE, and **nothing stops two patients being recorded in bed A-12**. A half-built
+  occupancy map is worse than none: one that is only sometimes true is one people stop checking,
+  and then the wall chart stops being maintained too.
+- **`lama` (left against medical advice), `absconded` and `deceased` are recorded as an ordinary
+  discharge.** This is a **lie in the record** — three clinically, legally and statutorily
+  different events, all saying "discharged". Nobody should demo IPD to a real hospital until this
+  is fixed (STATE_MACHINE_CATALOG §2).
+- **Nothing holds a patient until the bill is settled** (`discharge_initiated`). We discharge and
+  bill in one act.
 
 - **Pharmacy stock.** No batches, no expiry, no purchasing. The counter **will let you dispense a
   drug the shelf does not have.** A half-built stock number is worse than none — people believe

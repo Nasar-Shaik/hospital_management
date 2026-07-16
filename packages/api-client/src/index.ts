@@ -335,6 +335,13 @@ export interface Encounter {
   branchId?: string;
   arrivedAt: string;
   closedAt?: string;
+  /** Present when `class` is `IP`. The bed is RECORDED, not reserved — there is no
+   * bed inventory, so nothing stops two patients being recorded in the same bed. */
+  bed?: Bed;
+  admittedAt?: string;
+  dischargedAt?: string;
+  /** The OP encounter this admission came out of. */
+  admittedFrom?: string;
 }
 
 export interface StartEncounterResult {
@@ -564,6 +571,38 @@ export interface DispenseResult {
   prescription: Prescription;
   /** True when this `requestId` had already handed the drugs over. */
   duplicate: boolean;
+}
+
+/* ── Admissions (ADR-0013 §4) ─────────────────────────────────────────────── */
+
+export interface Bed {
+  ward: string;
+  bedCode: string;
+  /** The tariff the bed-day is billed at — `BED_GEN`, `BED_ICU`. */
+  tariffCode: string;
+}
+
+export type WardNoteType = "progress" | "discharge_summary";
+
+export interface WardNote {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  type: WardNoteType;
+  text: string;
+  diagnosis?: string;
+  advice?: string;
+  followUpOn?: string;
+  authorId: string;
+  at: string;
+}
+
+export interface AdmitResult {
+  /** The OP encounter, now `admitted` — terminal. */
+  outpatient: Encounter;
+  /** The new INPATIENT encounter, in the SAME episode. */
+  inpatient: Encounter;
 }
 
 export interface OperatorSession {
@@ -1131,6 +1170,57 @@ export class ApiClient {
     unitPrice?: number;
   }): Promise<unknown> {
     return this.request("POST", "/api/v1/charges", input);
+  }
+
+  /* ── Admissions ───────────────────────────────────────────────────────────
+   * The OP encounter closes and an IP one opens in the same Episode of Care. Two
+   * encounters, one care story (ADR-0013 §4).
+   */
+
+  admitPatient(
+    encounterId: string,
+    input: {
+      ward: string;
+      bedCode: string;
+      tariffCode: string;
+      doctorId?: string;
+      reason?: string;
+    },
+  ): Promise<AdmitResult> {
+    return this.request<AdmitResult>("POST", `/api/v1/encounters/${encounterId}/admit`, input);
+  }
+
+  /** Everyone in a bed right now — the ward round's list. */
+  listInpatients(): Promise<Encounter[]> {
+    return this.request<Encounter[]>("GET", "/api/v1/inpatients");
+  }
+
+  addWardNote(encounterId: string, text: string): Promise<WardNote> {
+    return this.request<WardNote>("POST", `/api/v1/encounters/${encounterId}/notes`, { text });
+  }
+
+  listWardNotes(encounterId: string, type?: WardNoteType): Promise<WardNote[]> {
+    const qs = type ? `?type=${type}` : "";
+    return this.request<WardNote[]>("GET", `/api/v1/encounters/${encounterId}/notes${qs}`);
+  }
+
+  /** Writes the summary AND ends the stay. There is no way to discharge without one. */
+  discharge(
+    encounterId: string,
+    input: { text: string; diagnosis?: string; advice?: string; followUpOn?: string },
+  ): Promise<{ summary: WardNote; encounterId: string }> {
+    return this.request("POST", `/api/v1/encounters/${encounterId}/discharge`, input);
+  }
+
+  /**
+   * Hands the patient to another doctor. A handover, not an edit — the reason is
+   * required, and it is the only thing the receiving doctor has to go on.
+   */
+  transferDoctor(encounterId: string, doctorId: string, reason: string): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${encounterId}/transfer`, {
+      doctorId,
+      reason,
+    });
   }
 
   /* ── Prescriptions ────────────────────────────────────────────────────────

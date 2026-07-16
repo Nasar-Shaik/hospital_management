@@ -77,6 +77,43 @@ export const EVENTS = {
    */
   ENCOUNTER_CLOSED: "encounter.encounter.closed",
 
+  /**
+   * The patient has a bed. The OP encounter is `admitted` (terminal) and an INPATIENT
+   * encounter is open in the SAME Episode of Care (ADR-0013 §4).
+   *
+   * Consumers: billing ✅ posts the FIRST bed-day immediately — a bed occupied at 2am is a
+   * bed the hospital cannot sell to anyone else, and the family asking for an interim bill
+   * on day three must not be told the stay has cost nothing so far.
+   *
+   * Published inside the admission's transaction, so a bed can never be occupied without
+   * the charge being raised, nor charged for an admission that rolled back.
+   */
+  PATIENT_ADMITTED: "encounter.patient.admitted",
+  /**
+   * The patient went home. The inpatient encounter is `closed`.
+   *
+   * Consumers: billing ✅ posts every bed-day not yet charged (idempotent per night — see
+   * `MEDICATION_DISPENSED` for why the key matters); later MRD and analytics.
+   *
+   * NOT the same as `encounter.closed`, which every OP visit emits. Discharge is the end
+   * of a STAY: it is what ALOS, the midnight census and every bed-occupancy number in the
+   * hospital are counted from, and collapsing it into "a visit ended" would make those
+   * numbers unrecoverable from the event stream.
+   */
+  PATIENT_DISCHARGED: "encounter.patient.discharged",
+  /**
+   * The patient was handed to another doctor.
+   *
+   * Consumers: notifications (tell the receiving doctor they have a new patient); later
+   * the work-queue projection (ADR-0014).
+   *
+   * A handover, not an edit. The payload carries `fromDoctorId`, `toDoctorId` and the
+   * REASON, because "who was responsible for this patient at 4pm" is a question that gets
+   * asked exactly once, in the worst circumstances, and the answer must survive the doctor
+   * leaving the hospital.
+   */
+  ENCOUNTER_TRANSFERRED: "encounter.encounter.transferred",
+
   /* ── Appointments (Doc 02 E1) ───────────────────────────────────────────── */
 
   /**
@@ -254,6 +291,11 @@ const IN_PROCESS_EVENTS = new Set<string>([
   EVENTS.ENCOUNTER_STARTED,
   EVENTS.ORDER_PLACED,
   EVENTS.ORDER_CANCELLED,
+  // The bed. Admission posts the first night; discharge posts every night not yet
+  // charged. Both are in-process because a family asking "what do we owe so far?" is
+  // standing at a counter, not waiting for a nightly batch.
+  EVENTS.PATIENT_ADMITTED,
+  EVENTS.PATIENT_DISCHARGED,
   // Drugs that actually left the counter. NOT `PRESCRIPTION_SIGNED` — see the catalog
   // entry: prescribing is a request, dispensing is a consumption, and only one of them
   // is something the patient can be asked to pay for.

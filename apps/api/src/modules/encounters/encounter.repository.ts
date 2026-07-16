@@ -36,6 +36,11 @@ export interface Encounter {
   branchId?: string;
   arrivedAt: Date;
   closedAt?: Date;
+  /** Present when `class` is `IP`. The bed is recorded, not reserved — see the model. */
+  bed?: { ward: string; bedCode: string; tariffCode: string };
+  admittedAt?: Date;
+  dischargedAt?: Date;
+  admittedFrom?: string;
   history: EncounterHistoryEntry[];
   createdAt: Date;
 }
@@ -58,6 +63,10 @@ function toEncounter(doc: EncounterDoc): Encounter {
     ...(doc.reason ? { reason: doc.reason } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
     ...(doc.closedAt ? { closedAt: doc.closedAt } : {}),
+    ...(doc.bed ? { bed: doc.bed } : {}),
+    ...(doc.admittedAt ? { admittedAt: doc.admittedAt } : {}),
+    ...(doc.dischargedAt ? { dischargedAt: doc.dischargedAt } : {}),
+    ...(doc.admittedFrom ? { admittedFrom: doc.admittedFrom.toString() } : {}),
   };
 }
 
@@ -109,6 +118,9 @@ export interface CreateEncounterInput {
   token?: number;
   reason?: string;
   branchId?: string;
+  bed?: { ward: string; bedCode: string; tariffCode: string };
+  admittedAt?: Date;
+  admittedFrom?: string;
 }
 
 /**
@@ -147,6 +159,9 @@ export async function create(
         ...(input.token !== undefined ? { token: input.token } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(input.bed ? { bed: input.bed } : {}),
+        ...(input.admittedAt ? { admittedAt: input.admittedAt } : {}),
+        ...(input.admittedFrom ? { admittedFrom: new Types.ObjectId(input.admittedFrom) } : {}),
         ...(ctx.userId ? { createdBy: ctx.userId } : {}),
       },
     ],
@@ -155,6 +170,59 @@ export async function create(
 
   if (!doc) throw new Error("encounter insert returned nothing");
   return toEncounter(doc);
+}
+
+/**
+ * Moves the patient to another doctor, and records the handover in the history.
+ *
+ * Deliberately NOT a generic `update(id, fields)`. A repository method that can set any
+ * field is a repository method that will eventually be used to set `status` behind the
+ * state machine's back — and the whole point of `setStatus` is that there is exactly one
+ * door. This one changes `doctorId`, appends the handover, and can do nothing else.
+ */
+export async function setDoctor(
+  id: string,
+  doctorId: string,
+  entry: EncounterHistoryEntry,
+  session?: ClientSession,
+): Promise<Encounter | undefined> {
+  const doc = await getEncounterModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: id },
+      { $set: { doctorId }, $push: { history: entry } },
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<EncounterDoc>();
+
+  return doc ? toEncounter(doc) : undefined;
+}
+
+/**
+ * Everyone currently in a bed — the ward round's list.
+ *
+ * `class: IP` + `open: true`. Not a "wards" query, because there are no wards: without a
+ * bed inventory this is the closest thing the hospital has to an occupancy list, and it is
+ * derived from where the patients actually are rather than from a map somebody maintains.
+ * Sorted by ward then bed, which is the order a doctor physically walks.
+ */
+export async function listInpatients(filter: { limit: number; skip: number }): Promise<{
+  items: Encounter[];
+  total: number;
+}> {
+  const model = getEncounterModel(getTenantDb());
+  const query = { ...scopeFilter(), class: "IP", open: true };
+
+  const [docs, total] = await Promise.all([
+    model
+      .find(query)
+      .sort({ "bed.ward": 1, "bed.bedCode": 1 })
+      .skip(filter.skip)
+      .limit(filter.limit)
+      .lean<EncounterDoc[]>(),
+    model.countDocuments(query),
+  ]);
+
+  return { items: docs.map(toEncounter), total };
 }
 
 /** The patient's currently-open encounter, if they are in the building. */

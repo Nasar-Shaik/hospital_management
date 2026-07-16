@@ -7,7 +7,12 @@ import { AppError } from "../../core/errors/appError.js";
 import { env } from "../../config/env.js";
 import { dayRangeInZone } from "../../core/time/day.js";
 import * as encounters from "./encounter.service.js";
-import type { ListEncountersQuery, StartEncounterBody } from "./encounter.schema.js";
+import type {
+  AdmitBody,
+  ListEncountersQuery,
+  StartEncounterBody,
+  TransferBody,
+} from "./encounter.schema.js";
 
 function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
   const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
@@ -109,4 +114,28 @@ export const cancelEncounter: RequestHandler = async (req, res) => {
 export const markLeftWithoutBeingSeen: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await encounters.markLeftWithoutBeingSeen(id));
+};
+
+/**
+ * Admits the patient. 201 — this CREATES an encounter (the inpatient one).
+ *
+ * Returns both halves, because the caller needs the new IP encounter's id and the screen
+ * needs to show that the OP visit is over. Two encounters, one episode (ADR-0013 §4).
+ */
+export const admitPatient: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await encounters.admitPatient(id, req.body as AdmitBody), 201);
+};
+
+/** Hands the patient to another doctor. A handover, not an edit — see the service. */
+export const transferDoctor: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as TransferBody;
+  ok(res, await encounters.transferDoctor(id, body.doctorId, body.reason));
+};
+
+/** Everyone in a bed right now — the ward round's list. */
+export const listInpatients: RequestHandler = async (_req, res) => {
+  const { items } = await encounters.listInpatients({ limit: 100, skip: 0 });
+  ok(res, items);
 };
