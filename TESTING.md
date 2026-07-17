@@ -717,3 +717,64 @@ Short, hands-on checks for the admin/clinical enhancements. Log in at `sunrise.l
   - Press **View** → the file opens in a new tab (PDF renders, image shows).
   - Reports from **previous visits** appear too — the list is the patient's whole history, not just today's visit.
 - **Edge cases:** only PDF/image types are accepted; a file over 10 MB is refused with a clear message; a lab technician cannot open the patient report list (no `emr:read`) — that is the doctor's/clinical view.
+
+## 13 · Track C — Pharmacy medicine master & stock
+
+The pharmacist runs the shelf: what the hospital stocks, what is left of each, and the ledger
+behind every number. Stock is **received**, **adjusted**, or **decremented by a dispense** — never
+typed in — so each figure has a history an auditor can read. Gated on the `module.pharmacy.full`
+edition flag and the `pharmacy:stock` permission (the PHARMACIST holds both).
+
+> Preconditions for every block: API and web dev servers running, migrations applied
+> (`pnpm --filter @medicore/api migrate -- --all` — brings in `0019-medicine-master`). Sign in as
+> `pharmacy@sunrise.test` (PHARMACIST) unless a step says otherwise. All dev passwords are `123456`.
+
+### C1 · Maintain the medicine master
+
+- **Preconditions:** signed in as the pharmacist. Open **Medicine master** in the left nav.
+- **Steps & expected:**
+  - Press **Add medicine.** Enter a code (e.g. `PARA_500`), brand name, manufacturer, generic/combination,
+    form, strength, tablets-per-strip, strips-per-pack and a reorder level. Save → it appears in the table.
+  - The table is professional: Medicine (brand + generic), Code, Form / strength, Pack (`units × strips`),
+    Stock, Status, and per-row **Receive · Adjust · History · Edit** actions.
+  - **Edit** a medicine — the code field is **frozen** (it is the key a dispense matches on); change the
+    reorder level or details and save; the row reflects it.
+  - **Search** by name, code or generic narrows the list live.
+- **Edge cases:** re-using an existing code is refused with "that medicine code is already in the master"
+  (409). A non-pharmacist has no **Medicine master** nav entry and the routes 403.
+
+### C2 · Receive and adjust stock (the ledger)
+
+- **Preconditions:** at least one medicine exists (C1).
+- **Steps & expected:**
+  - **Receive** → enter a quantity (optionally batch no. and expiry). Save → the **Stock** column rises by
+    exactly that amount and the status moves toward **In stock**.
+  - **Adjust** → enter a signed change (e.g. `-6`) and a reason (e.g. "breakage"). Save → stock falls by 6.
+  - **History** → the movement ledger opens: newest first, each row showing type (receipt / adjustment /
+    dispense), the signed change (green in, red out), the running balance after, and the note/batch.
+  - The summary strip at the top counts anything **to reconcile / out of stock / running low**, and the
+    **Low stock only** toggle filters the table to those at or below their reorder level.
+- **Edge cases:** a receipt of zero or a negative number is refused; an adjustment of zero is refused; a
+  reason is required on an adjustment. Stock is allowed to go **negative** — it shows as **Reconcile**
+  rather than being clamped, because a negative balance is a real fact (more went out than was booked in).
+
+### C3 · A dispense decrements the shelf — automatically, exactly once
+
+This is the load-bearing link: the pharmacy publishes `medication.dispensed` when drugs cross the
+counter, and the medicine module **consumes** that event to take them off the shelf — the same way
+billing consumes it to charge. The pharmacy never calls the stock system, so a stock fault can never
+block a patient's medicine.
+
+- **Preconditions:** a medicine in the master whose **code matches a prescribable drug** (e.g. add a
+  medicine with the same code the doctor's drug list uses), stocked via a receipt in C2. Note its stock.
+- **Steps & expected:**
+  - As a doctor, prescribe and **sign** that drug for a called-in patient (§ prescriptions flow).
+  - As the pharmacist, open **Pharmacy** and **dispense** the prescription (hand over, say, 6 units).
+  - Back in **Medicine master → History** for that medicine: a new **dispense** row appears, `−6`, with the
+    new balance; the **Stock** column has dropped by 6.
+- **Edge cases:**
+  - A dispensed drug that is **not** in the master produces **no** movement and **no** error — the master is
+    the set of drugs the hospital tracks stock for, and dispensing an untracked drug is legitimate.
+  - **Idempotency:** the dispense event is delivered at-least-once; a redelivery does **not** double-decrement
+    (the ledger carries a unique `dispenseId + code` key). A dispense with the same drug on two lines
+    (e.g. QID + SOS) records **one** movement for the summed quantity.

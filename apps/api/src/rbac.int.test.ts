@@ -549,6 +549,41 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/reports/64b7f0000000000000000001/file",
   },
 
+  /* ── Pharmacy medicine master & stock ───────────────────────────────────────
+   * `pharmacy:stock` throughout — maintaining the shelf, gated on module.pharmacy.full.
+   * Stock decrements from a dispense are an EVENT, not a route, so they are not probed here.
+   */
+  "GET /api/v1/medicines": { method: "get", url: "/api/v1/medicines" },
+  "GET /api/v1/medicines/stock-report": { method: "get", url: "/api/v1/medicines/stock-report" },
+  "GET /api/v1/medicines/:id": {
+    method: "get",
+    url: "/api/v1/medicines/64b7f0000000000000000001",
+  },
+  "GET /api/v1/medicines/:id/movements": {
+    method: "get",
+    url: "/api/v1/medicines/64b7f0000000000000000001/movements",
+  },
+  "POST /api/v1/medicines": {
+    method: "post",
+    url: "/api/v1/medicines",
+    body: { code: "PARA_500", name: "Paracetamol 500", form: "tablet" },
+  },
+  "PATCH /api/v1/medicines/:id": {
+    method: "patch",
+    url: "/api/v1/medicines/64b7f0000000000000000001",
+    body: { reorderLevel: 20 },
+  },
+  "POST /api/v1/medicines/:id/receive": {
+    method: "post",
+    url: "/api/v1/medicines/64b7f0000000000000000001/receive",
+    body: { quantity: 100 },
+  },
+  "POST /api/v1/medicines/:id/adjust": {
+    method: "post",
+    url: "/api/v1/medicines/64b7f0000000000000000001/adjust",
+    body: { delta: -6, reason: "breakage" },
+  },
+
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",

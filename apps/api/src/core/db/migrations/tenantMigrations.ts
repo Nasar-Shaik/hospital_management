@@ -878,4 +878,51 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0019-medicine-master",
+    description: "Pharmacy medicine master and its stock-movement ledger",
+    up: async (db) => {
+      // One medicine per code per hospital — the code is the key a dispense matches on, so a
+      // duplicate would make the decrement ambiguous. Unique per tenant.
+      await db
+        .collection("medicines")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_medicine_per_code", background: true },
+        );
+      // The master list, ordered by name (only the active ones, but the sort is the same).
+      await db.collection("medicines").createIndex({ tenantId: 1, name: 1 }, { background: true });
+      // The low-stock report scans stock against the reorder level.
+      await db
+        .collection("medicines")
+        .createIndex({ tenantId: 1, stockUnits: 1 }, { background: true });
+
+      // The movement history for one medicine, newest first.
+      await db
+        .collection("stockMovements")
+        .createIndex({ tenantId: 1, medicineId: 1, createdAt: -1 }, { background: true });
+      // IDEMPOTENCY: a dispense may move a medicine exactly once, however many times the
+      // `medication.dispensed` event is redelivered. Partial — only dispense rows carry a
+      // dispenseId, and receipts/adjustments must be free to repeat.
+      await db.collection("stockMovements").createIndex(
+        { tenantId: 1, dispenseId: 1, medicineCode: 1 },
+        {
+          unique: true,
+          name: "one_stock_move_per_dispense_line",
+          background: true,
+          partialFilterExpression: { dispenseId: { $exists: true } },
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("medicines")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("stockMovements")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

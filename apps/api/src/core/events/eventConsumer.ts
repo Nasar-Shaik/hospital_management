@@ -40,6 +40,7 @@ import { appointmentConsumers } from "../../modules/appointments/index.js";
 import { orderConsumers } from "../../modules/orders/index.js";
 import { billingConsumers } from "../../modules/billing/index.js";
 import { prescriptionConsumers } from "../../modules/prescriptions/index.js";
+import { medicineConsumers } from "../../modules/medicines/index.js";
 import { patientConsumers } from "../../modules/patients/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
@@ -66,6 +67,8 @@ const MODULES: ModuleConsumers[] = [
   orderConsumers,
   billingConsumers,
   prescriptionConsumers,
+  // Decrements the shelf when the pharmacy publishes a handover — see medicine.consumers.ts.
+  medicineConsumers,
 ];
 
 function mergeHandlers(): {

@@ -147,11 +147,12 @@ export function Badge({
   tone = "neutral",
 }: {
   children: ReactNode;
-  tone?: "neutral" | "success" | "danger" | "brand";
+  tone?: "neutral" | "success" | "warning" | "danger" | "brand";
 }) {
   const tones: Record<string, string> = {
     neutral: "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)]",
     success: "bg-[var(--color-success-bg)] text-[var(--color-success)]",
+    warning: "bg-[var(--color-warning-bg)] text-[var(--color-warning)]",
     danger: "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
     brand: "bg-[var(--color-brand-50)] text-[var(--color-brand-700)]",
   };

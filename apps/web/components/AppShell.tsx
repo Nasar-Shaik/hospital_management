@@ -71,6 +71,12 @@ const NAVIGATION: NavSection[] = [
        */
       { label: "Pharmacy", href: "/pharmacy", permission: "pharmacy:dispense" },
       /**
+       * `pharmacy:stock`, not `pharmacy:dispense`: the MASTER is inventory — what the pharmacy
+       * stocks and its stock ledger — which is the person who keeps the shelf, not the one
+       * handing a drug over. A clinic that bought only dispensing never sees it.
+       */
+      { label: "Medicine master", href: "/medicines", permission: "pharmacy:stock" },
+      /**
        * `emr:read`, not `bed:allocate`: the ward round is a doctor's list of PATIENTS,
        * not a bed-allocation tool. Gating it on the bed permission would hide the chart
        * from the doctor who writes it and show it to whoever moves people between beds.

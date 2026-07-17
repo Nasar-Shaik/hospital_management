@@ -679,6 +679,88 @@ export interface DispenseResult {
   duplicate: boolean;
 }
 
+/* ── Pharmacy medicine master & stock (module.pharmacy.full) ───────────────── */
+
+export const MEDICINE_FORMS = [
+  "tablet",
+  "capsule",
+  "syrup",
+  "injection",
+  "ointment",
+  "drops",
+  "inhaler",
+  "sachet",
+  "other",
+] as const;
+export type MedicineForm = (typeof MEDICINE_FORMS)[number];
+
+/** A medicine as the master holds it — the brand, what it is, how it is packed, what is left. */
+export interface Medicine {
+  id: string;
+  code: string;
+  name: string;
+  manufacturer?: string;
+  /** The salt / combination — what it clinically is. */
+  generic?: string;
+  form: MedicineForm;
+  strength?: string;
+  /** Tablets (or units) per strip. */
+  unitsPerSheet?: number;
+  /** Strips per pack. Reporting only — stock is always in base units. */
+  sheetsPerPack?: number;
+  /** Current balance in base units, mirrored from the stock ledger. */
+  stockUnits: number;
+  /** Below this the stock report calls it low. Zero means no alert. */
+  reorderLevel: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** How the stock report reads a medicine's position. */
+export type StockStatus = "ok" | "low" | "out" | "reconcile";
+export interface StockReportRow extends Medicine {
+  status: StockStatus;
+}
+
+export type StockMovementKind = "receipt" | "dispense" | "adjustment";
+
+/** One line of the stock ledger — a unit's worth of history. */
+export interface StockMovement {
+  id: string;
+  medicineId: string;
+  medicineCode: string;
+  kind: StockMovementKind;
+  /** Signed base units: + in, − out. */
+  delta: number;
+  balanceAfter: number;
+  batchNo?: string;
+  expiry?: string;
+  reason?: string;
+  dispenseId?: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CreateMedicineInput {
+  code: string;
+  name: string;
+  manufacturer?: string;
+  generic?: string;
+  form: MedicineForm;
+  strength?: string;
+  unitsPerSheet?: number;
+  sheetsPerPack?: number;
+  reorderLevel?: number;
+}
+
+export type UpdateMedicineInput = Partial<Omit<CreateMedicineInput, "code">> & { active?: boolean };
+
+export interface StockMoveResult {
+  medicine: Medicine;
+  movement: StockMovement;
+}
+
 /* ── Admissions (ADR-0013 §4) ─────────────────────────────────────────────── */
 
 export interface Bed {
@@ -1356,6 +1438,53 @@ export class ApiClient {
     return this.request("POST", "/api/v1/charges", input);
   }
 
+  /* ── Pharmacy medicine master & stock (needs pharmacy:stock) ──────────────── */
+
+  listMedicines(
+    params: { search?: string; lowStockOnly?: boolean; includeInactive?: boolean } = {},
+  ): Promise<Medicine[]> {
+    return this.request<Medicine[]>("GET", `/api/v1/medicines${medicineQuery(params)}`);
+  }
+
+  /** The stock report — every medicine with a plain-language position, worst first. */
+  stockReport(
+    params: { search?: string; lowStockOnly?: boolean; includeInactive?: boolean } = {},
+  ): Promise<StockReportRow[]> {
+    return this.request<StockReportRow[]>(
+      "GET",
+      `/api/v1/medicines/stock-report${medicineQuery(params)}`,
+    );
+  }
+
+  getMedicine(id: string): Promise<Medicine> {
+    return this.request<Medicine>("GET", `/api/v1/medicines/${id}`);
+  }
+
+  listStockMovements(id: string): Promise<StockMovement[]> {
+    return this.request<StockMovement[]>("GET", `/api/v1/medicines/${id}/movements`);
+  }
+
+  createMedicine(input: CreateMedicineInput): Promise<Medicine> {
+    return this.request<Medicine>("POST", "/api/v1/medicines", input);
+  }
+
+  updateMedicine(id: string, patch: UpdateMedicineInput): Promise<Medicine> {
+    return this.request<Medicine>("PATCH", `/api/v1/medicines/${id}`, patch);
+  }
+
+  /** Books stock in — a delivery received at the counter. */
+  receiveStock(
+    id: string,
+    input: { quantity: number; batchNo?: string; expiry?: string },
+  ): Promise<StockMoveResult> {
+    return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/receive`, input);
+  }
+
+  /** A manual correction — breakage, a write-off, a stock-take. `delta` is signed. */
+  adjustStock(id: string, input: { delta: number; reason: string }): Promise<StockMoveResult> {
+    return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/adjust`, input);
+  }
+
   /* ── Admissions ───────────────────────────────────────────────────────────
    * The OP encounter closes and an IP one opens in the same Episode of Care. Two
    * encounters, one care story (ADR-0013 §4).
@@ -1641,4 +1770,17 @@ export class ApiClient {
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
   return new ApiClient(options);
+}
+
+/** Builds the medicine-list query string, omitting anything not set. */
+function medicineQuery(params: {
+  search?: string;
+  lowStockOnly?: boolean;
+  includeInactive?: boolean;
+}): string {
+  const parts: string[] = [];
+  if (params.search) parts.push(`search=${encodeURIComponent(params.search)}`);
+  if (params.lowStockOnly) parts.push("lowStockOnly=true");
+  if (params.includeInactive) parts.push("includeInactive=true");
+  return parts.length ? `?${parts.join("&")}` : "";
 }
