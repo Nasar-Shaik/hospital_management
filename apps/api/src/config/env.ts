@@ -63,6 +63,18 @@ const envSchema = z.object({
    * routes fail loudly with HMS-TEN-004 when absent.
    */
   MONGO_URI: z.string().url().optional(),
+  /**
+   * Cross-cluster safety net (dev). The replica-set member the master connection
+   * MUST land on, e.g. `localhost:27018`. If set and the server we actually reach
+   * advertises a different member, the process refuses to start.
+   *
+   * WHY THIS EXISTS: replica sets are conventionally all named `rs0`, so a driver
+   * cannot tell it has crossed into ANOTHER project's Mongo — an SSH tunnel or a
+   * second container on the same host port is enough to silently redirect us onto
+   * a foreign cluster (see infra/docker/LOCAL_PORTS.md). A no-op unless set, so
+   * production — which reaches Mongo through real hostnames — is never affected.
+   */
+  MONGO_EXPECT_MEMBER: z.string().optional(),
   /** Master database — platform data ONLY, never PHI (Doc 03 §1.1). */
   MONGO_MASTER_DB: z.string().default("paperlesstech_master"),
   /** Tenant database naming: `hms_<slug>` (Doc 03 §1.1). */

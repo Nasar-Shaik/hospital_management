@@ -28,7 +28,15 @@ services:
       # Host 27018, not 27017: another project on this machine already binds the
       # default. Both sides must stay equal — see above. Overriding MONGO_PORT
       # breaks that equality, and then only `directConnection=true` saves you.
-      - "${MONGO_PORT:-27018}:27018"
+      #
+      # Bound to 127.0.0.1 ON PURPOSE, not the 0.0.0.0 wildcard. A wildcard bind
+      # lets a second listener (e.g. an SSH tunnel from another project) also grab
+      # 127.0.0.1:27018 on a more-specific address and silently win — clients then
+      # land on the WRONG Mongo (both replica sets are named rs0). Binding the
+      # specific loopback address means such a tunnel fails to bind and says so,
+      # turning a silent cross-cluster hazard into an obvious error. It also keeps
+      # the dev database off the LAN. See infra/docker/LOCAL_PORTS.md.
+      - "127.0.0.1:${MONGO_PORT:-27018}:27018"
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -58,7 +66,9 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       # Host 6380, not 6379 — same reason as mongo above. Override with REDIS_PORT.
-      - "${REDIS_PORT:-6380}:6379"
+      # 127.0.0.1, not the 0.0.0.0 wildcard — same reasoning as mongo: a specific
+      # loopback bind makes a colliding listener fail loudly and keeps it off the LAN.
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
