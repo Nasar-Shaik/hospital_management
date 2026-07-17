@@ -1029,9 +1029,21 @@ export class ApiClient {
     return this.request<TokenPair>("POST", "/api/v1/auth/mfa/verify", { mfaToken, code });
   }
 
-  /** Exchanges the httpOnly refresh cookie for a fresh access token. */
-  refresh(): Promise<TokenPair> {
-    return this.request<TokenPair>("POST", "/api/v1/auth/refresh", {});
+  /**
+   * Exchanges a refresh token for a fresh access token.
+   *
+   * With no argument it relies on the httpOnly refresh COOKIE — the production web flow, where
+   * the token is deliberately unreadable by JavaScript. When a `refreshToken` is passed it rides
+   * in the BODY instead, which the API prefers over the cookie: that is the native-client path,
+   * and it is also how the dev web app gives each browser TAB its own session (a cookie is shared
+   * across tabs; a body token held in that tab's sessionStorage is not).
+   */
+  refresh(refreshToken?: string): Promise<TokenPair> {
+    return this.request<TokenPair>(
+      "POST",
+      "/api/v1/auth/refresh",
+      refreshToken ? { refreshToken } : {},
+    );
   }
 
   logout(): Promise<{ loggedOut: boolean }> {

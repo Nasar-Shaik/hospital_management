@@ -12,12 +12,19 @@
  * helpful here — "no such user" — would turn this form into a way to discover who
  * works at the hospital.
  */
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiClientError, isMfaChallenge } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { apiTarget } from "../../lib/api";
 import { Alert, Button, Card, Field } from "../../components/ui";
+import {
+  DEV_MULTI_ACCOUNT,
+  DEV_PASSWORD,
+  listRememberedAccounts,
+  forgetAccount,
+  type RememberedAccount,
+} from "../../lib/devSession";
 
 function LoginForm() {
   const router = useRouter();
@@ -30,6 +37,13 @@ function LoginForm() {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Dev-only: accounts signed in on this hospital before, offered as one-click sign-in. Read on
+  // mount (localStorage is client-only). Empty and inert in production.
+  const [accounts, setAccounts] = useState<RememberedAccount[]>([]);
+  useEffect(() => {
+    setAccounts(listRememberedAccounts());
+  }, []);
 
   /**
    * An ended session is NOT an error, and painting it red says the user did
@@ -76,12 +90,11 @@ function LoginForm() {
     }
   }
 
-  async function submitPassword(e: FormEvent) {
-    e.preventDefault();
+  async function doLogin(emailArg: string, passwordArg: string) {
     setBusy(true);
     setError(null);
     try {
-      const result = await login(email, password);
+      const result = await login(emailArg, passwordArg);
       if (isMfaChallenge(result)) {
         setMfaToken(result.mfaToken);
       } else {
@@ -93,6 +106,11 @@ function LoginForm() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function submitPassword(e: FormEvent) {
+    e.preventDefault();
+    await doLogin(email, password);
   }
 
   async function submitMfa(e: FormEvent) {
@@ -202,6 +220,52 @@ function LoginForm() {
                 Sign in
               </Button>
             </form>
+          )}
+
+          {DEV_MULTI_ACCOUNT && !mfaToken && accounts.length > 0 && (
+            <div className="mt-5 border-t border-[var(--color-border)] pt-4">
+              <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+                Developer quick sign-in
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {accounts.map((a) => (
+                  <span
+                    key={a.email}
+                    className="group inline-flex items-center gap-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] pl-1 text-sm"
+                  >
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void doLogin(a.email, DEV_PASSWORD)}
+                      className="rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-bg-subtle)] disabled:opacity-50"
+                      title={a.email}
+                    >
+                      <span className="font-medium text-[var(--color-fg)]">{a.name}</span>
+                      {a.role && (
+                        <span className="ml-1.5 text-xs text-[var(--color-fg-muted)]">
+                          {a.role}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Forget ${a.email}`}
+                      onClick={() => {
+                        forgetAccount(a.email);
+                        setAccounts(listRememberedAccounts());
+                      }}
+                      className="px-1.5 text-[var(--color-fg-subtle)] hover:text-[var(--color-danger)]"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <p className="mt-3 text-xs text-[var(--color-fg-muted)]">
+                Each browser tab keeps its own account — open a new tab to sign in as someone else
+                and both stay logged in. (Local development only.)
+              </p>
+            </div>
           )}
         </Card>
 

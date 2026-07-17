@@ -35,8 +35,10 @@ import {
   type ApiClient,
   type AuthenticatedUser,
   type LoginResult,
+  type TokenPair,
 } from "@medicore/api-client";
 import { browserApi } from "../lib/api";
+import { devRefreshToken, setDevRefreshToken, rememberAccount } from "../lib/devSession";
 
 interface AuthState {
   user: AuthenticatedUser | null;
@@ -66,6 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // never re-render just because a token rotated.
   const accessToken = useRef<string | undefined>(undefined);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The bootstrap refresh, held so React 18 StrictMode's double-invoked mount effect SHARES one
+  // request instead of spending a rotating token twice — the second spend would look like token
+  // reuse and burn the whole family, logging the user out on every reload.
+  const bootstrap = useRef<Promise<TokenPair> | null>(null);
 
   const api = useMemo(() => browserApi(() => accessToken.current), []);
 
@@ -82,12 +88,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshTimer.current = setTimeout(() => {
         void (async () => {
           try {
-            const pair = await api.refresh();
+            // In dev, refresh from THIS tab's own token (body) so tabs don't share an account;
+            // in production `devRefreshToken()` is undefined and the httpOnly cookie is used.
+            const pair = await api.refresh(devRefreshToken());
             accessToken.current = pair.accessToken;
+            setDevRefreshToken(pair.refreshToken);
             scheduleRefresh(pair.expiresIn);
           } catch {
             // The family is gone (logout elsewhere, reuse detected, expiry).
             accessToken.current = undefined;
+            setDevRefreshToken(undefined);
             setState({ user: null, permissions: [], loading: false });
             router.replace("/login?reason=expired");
           }
@@ -98,14 +108,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const adopt = useCallback(
-    async (pair: { accessToken: string; expiresIn: number; user: AuthenticatedUser }) => {
+    async (pair: {
+      accessToken: string;
+      expiresIn: number;
+      user: AuthenticatedUser;
+      /** Present on login/refresh/mfa responses; used only for dev per-tab sessions. */
+      refreshToken?: string;
+    }) => {
       accessToken.current = pair.accessToken;
+      // Dev-only: this tab now owns this account's refresh token (no-op in production).
+      setDevRefreshToken(pair.refreshToken);
       scheduleRefresh(pair.expiresIn);
 
       // Only `/auth/me` carries the permission list the UI needs for menu gating —
       // it is deliberately absent from the login response and from the token.
       const me = await api.me().catch(() => pair.user);
       setState({ user: me, permissions: me.permissions ?? [], loading: false });
+      // Dev-only: offer this account as a one-click sign-in next time (no-op in production).
+      rememberAccount({ email: me.email, name: me.name, role: me.roles[0] });
     },
     [api, scheduleRefresh],
   );
@@ -116,9 +136,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
-        const pair = await api.refresh();
+        // Dev: revive THIS tab's own session from its stored token; production: the cookie.
+        // Reuse an in-flight bootstrap so a StrictMode remount does not fire a second refresh.
+        bootstrap.current ??= api.refresh(devRefreshToken());
+        const pair = await bootstrap.current;
         if (!cancelled) await adopt(pair);
       } catch {
+        bootstrap.current = null;
         if (!cancelled) setState({ user: null, permissions: [], loading: false });
       }
     })();
@@ -156,6 +180,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
       accessToken.current = undefined;
+      // Dev-only: drop THIS tab's stored session so a reload does not revive it.
+      setDevRefreshToken(undefined);
       setState({ user: null, permissions: [], loading: false });
       router.replace("/login");
     }

@@ -884,3 +884,45 @@ exports to CSV.
   gives the month-wise table in rupees.
 - **Edge cases:** on a government hospital every consultation/test is ₹0, so collections are ₹0 unless
   a manual charge was paid; a non-admin has no **Reports** nav entry and every `/reports/*` route 403s.
+
+## 16 · Multi-account testing — one account per browser tab (dev only)
+
+Testing a hospital means being several people at once. The blocker was that the refresh token is
+an httpOnly **cookie**, and a cookie is shared by every tab of one hostname — so the last login won
+and all tabs collapsed onto one account. In development each tab now keeps its **own** session (its
+refresh token in `sessionStorage`, refreshed from the request body), so tabs are independent.
+
+> This is **development only** (`NODE_ENV !== "production"`). In production the httpOnly-cookie flow
+> is unchanged — `sessionStorage` is readable by scripts, a trade only acceptable on a dev machine.
+
+### M1 · Two accounts, two tabs, both stay logged in
+
+- **Steps & expected:**
+  - Tab 1: open `http://sunrise.localhost:3000`, sign in as `admin@sunrise.test` / `123456`.
+  - Tab 2 (same window, new tab): open the same URL, sign in as `drrao@sunrise.test`.
+  - Switch back to **Tab 1 and reload** → still the admin (not the doctor). Reload Tab 2 → still the
+    doctor. Both sessions survive reloads independently.
+- **Edge cases:** a **duplicated** tab inherits the original's account (sessionStorage is copied) — that
+  is expected; a brand-new tries the last account until you sign in as someone else.
+
+### M2 · Quick sign-in chips
+
+- **Steps & expected:** after you have signed in as a few accounts on this hospital, the login page shows
+  a **Developer quick sign-in** row — one chip per account (name + role). Click one to sign in as that
+  account (password is the dev default). The **✕** on a chip forgets it. The list is per hospital
+  (`localStorage` is per hostname), so `sunrise` and `demo` keep separate lists.
+
+### M3 · Refresh + security still hold (verified end-to-end)
+
+The per-tab change rides on the existing rotation/reuse machinery; a script (`authflow.mjs`) proved,
+against the running API:
+
+- login returns the refresh token in the body; **body-token refresh rotates** and **chains** (a tab can
+  reload repeatedly);
+- two accounts refresh **independently** (neither disturbs the other — the two-tabs guarantee);
+- **reuse detection still burns the family**: replaying a spent token kills the live one too;
+- **multi-tenant isolation holds**: a `sunrise` refresh token is rejected on `demo` (401), and a
+  `sunrise` access token on `demo` is a tenant mismatch (403).
+
+To re-run by hand: sign in as two roles in two tabs, reload each, and confirm each keeps its own role;
+then sign out of one and confirm the other is unaffected.
