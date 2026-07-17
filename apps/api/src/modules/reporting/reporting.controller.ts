@@ -8,6 +8,7 @@
  */
 import type { RequestHandler, Response } from "express";
 import type { ApiEnvelope } from "@medicore/types";
+import { requireAuth } from "../../middleware/authenticate.js";
 import * as reporting from "./reporting.service.js";
 import type { ReportRangeQuery } from "./reporting.schema.js";
 
@@ -42,6 +43,15 @@ function sendCsv(
 
 /** Paise → rupees, two decimals, for a spreadsheet cell. */
 const rupees = (paise: number): string => (paise / 100).toFixed(2);
+
+/**
+ * A clinician's OWN activity for a period. Self-scoped to the caller — no `report:view`, because
+ * you can always see what you did. JSON only (it is a dashboard panel, not a spreadsheet export).
+ */
+export const myActivity: RequestHandler = async (req, res) => {
+  const { range } = rangeOf(req);
+  ok(res, await reporting.myActivity(requireAuth(req).userId, range));
+};
 
 export const stockRegister: RequestHandler = async (req, res) => {
   const { range, csv } = rangeOf(req);

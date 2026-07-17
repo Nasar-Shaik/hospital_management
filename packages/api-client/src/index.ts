@@ -684,6 +684,39 @@ export interface ReportRange {
   to: string;
 }
 
+/** A patient as a "my day" activity row shows them — enough to recognise and link to the chart. */
+export interface ActivityPatientRef {
+  id: string;
+  uhid: string;
+  name: string;
+}
+
+/** A clinician's OWN activity for a period (the dashboard "my day" panel). */
+export interface MyActivity {
+  patientsSeen: number;
+  visits: {
+    patient: ActivityPatientRef;
+    encounterId: string;
+    at: string;
+    class: string;
+    status: string;
+  }[];
+  tests: {
+    patient: ActivityPatientRef;
+    orderId: string;
+    name: string;
+    category: string;
+    status: string;
+    at: string;
+  }[];
+  prescriptions: {
+    patient: ActivityPatientRef;
+    prescriptionId: string;
+    drugs: string[];
+    at: string;
+  }[];
+}
+
 export interface StockRegisterRow {
   medicineId: string;
   code: string;
@@ -1673,6 +1706,11 @@ export class ApiClient {
   }
 
   /* ── Reports (need report:view) ──────────────────────────────────────────── */
+
+  /** The caller's OWN activity for a period — patients seen, tests ordered, meds prescribed. */
+  myActivity(range: ReportRange): Promise<MyActivity> {
+    return this.request<MyActivity>("GET", `/api/v1/reports/my-activity${rangeQs(range)}`);
+  }
 
   reportPharmacyStock(range: ReportRange): Promise<StockRegisterRow[]> {
     return this.request<StockRegisterRow[]>(

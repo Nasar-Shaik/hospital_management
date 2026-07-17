@@ -425,6 +425,30 @@ export async function doctorProductivity(from: Date, to: Date): Promise<DoctorLo
   return rows.map((r) => ({ doctorId: r._id, patients: r.patients }));
 }
 
+/**
+ * A doctor's own encounters in a period — the raw material for their "my day" activity panel.
+ *
+ * Keyed on `doctorId`, not on the caller's row scope: this is "what did I, this doctor, do?", so it
+ * is bounded by the doctor's own id rather than by `scopeFilter`. Cancelled and never-seen
+ * encounters are excluded — a doctor did not "see" a patient who left the waiting room. Tenant
+ * isolation still holds via the query hook.
+ */
+export async function encountersByDoctor(
+  doctorId: string,
+  from: Date,
+  to: Date,
+): Promise<Encounter[]> {
+  const docs = await getEncounterModel(getTenantDb())
+    .find({
+      doctorId,
+      arrivedAt: { $gte: from, $lt: to },
+      status: { $nin: ["cancelled", "left_without_being_seen"] },
+    })
+    .sort({ arrivedAt: -1 })
+    .lean<EncounterDoc[]>();
+  return docs.map(toEncounter);
+}
+
 export interface DischargeRegister {
   /** Inpatient stays that ENDED in the window, however they ended. */
   total: number;

@@ -39,6 +39,7 @@ export {
   type StartEncounterResult,
 } from "./encounter.service.js";
 export type { VisitReport, DoctorLoadRow, DischargeRegister } from "./encounter.repository.js";
+export { encountersByDoctor } from "./encounter.repository.js";
 
 export {
   ENCOUNTER_STATUSES,

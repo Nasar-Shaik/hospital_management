@@ -37,6 +37,15 @@ export function reportingRouter(): Router {
       asyncHandler(handler),
     );
 
+  // "My day" — the caller's OWN activity. Authenticated but NOT gated on report:view: a doctor
+  // seeing what they personally did is not the hospital-wide register the other reports are.
+  router.get(
+    "/reports/my-activity",
+    authenticate(),
+    validate(reportRangeSchema, "query"),
+    asyncHandler(controller.myActivity),
+  );
+
   report("/reports/pharmacy-stock", controller.stockRegister);
   report("/reports/patient-visits", controller.patientVisits);
   report("/reports/doctor-load", controller.doctorLoad);

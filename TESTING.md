@@ -1207,3 +1207,33 @@ the spine the later dashboard drill-downs link into.
 - A brand-new patient with no history shows clean empty states per tab and "No known allergies".
 - Clicking the **Dues** pill jumps to the **Bills** tab; the outstanding figure = sum of unpaid
   finalized invoices.
+
+## 24 · Role-aware dashboard & "my day" activity (⏳ eyeball)
+
+**Why:** the dashboard used to show the same thin card to everyone. Now it is role-aware — a doctor
+lands on their own day, an administrator on the hospital's numbers, everyone on the quick actions
+their permissions allow. The **"My activity"** panel answers the question the user asked for directly:
+"today I treated this many patients, sent this many to tests, prescribed this many medicines" — each a
+click into the underlying list, each row a link to the patient chart. It is **self-scoped**: the
+`GET /reports/my-activity` endpoint returns only what the caller personally did (keyed on
+doctorId / orderedBy / prescribedBy), so it needs no `report:view` — you can always see your own work.
+Verified live (2026-07-18): the endpoint answers `{ patientsSeen, tests, prescriptions }` for the
+authenticated user over a half-open date range.
+
+### D1 · A doctor's day
+
+- Sign in as a **doctor** → the dashboard shows **My activity** with **Today / 7 days / 30 days**.
+- Three cards: **Patients seen · Tests ordered · Prescriptions**. Click one → an inline list drops
+  down; each row shows the patient (name + UHID) and the detail (test/status, or drugs), and links to
+  that patient's profile. Switch the date range → the numbers and lists update.
+- A day with no activity shows a plain "Nothing in today." rather than a broken panel.
+
+### D2 · An administrator's view
+
+- Sign in as an **admin** (has `report:view`) → below (or instead of) My activity, a **Today,
+  hospital-wide** strip shows **patient visits** and **collected** (₹), with **All reports →**.
+
+### D3 · Quick actions are permission-driven
+
+- The **Quick actions** grid lists only what your roles allow (a receptionist sees Register / Reception
+  / Billing; a lab tech sees Worklist; etc.). A role with none shows no grid.

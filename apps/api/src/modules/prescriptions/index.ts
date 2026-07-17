@@ -39,6 +39,7 @@ export {
 export {
   findByOrderId,
   addDispensedQty,
+  prescriptionsByUser,
   setStatus as setPrescriptionStatus,
 } from "./prescription.repository.js";
 

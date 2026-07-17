@@ -6,7 +6,7 @@
  * on top of that via `scopeFilter()` — two different boundaries, both enforced
  * here rather than trusted to callers.
  */
-import type { ClientSession } from "mongoose";
+import { Types, type ClientSession } from "mongoose";
 import { getTenantDb, getContext } from "../../core/context/requestContext.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import { getPatientModel, nameKeyOf } from "./patient.model.js";
@@ -273,4 +273,27 @@ export async function list(
 /** Live count — never stored (the A2 lesson: a drifted counter locks a hospital out). */
 export async function count(): Promise<number> {
   return getPatientModel(getTenantDb()).countDocuments({ status: "active" });
+}
+
+/**
+ * Resolve a set of patient ids to their display identity (UHID + name) in ONE query.
+ *
+ * For reports and activity panels that hold a list of patient ids and need to show who they are,
+ * without N round-trips or dragging back the whole chart. Unknown or invalid ids are simply
+ * absent from the result. Tenant-isolated by the query hook; no row scope, because a report is a
+ * hospital-wide read (its caller is gated by the report permission, not this lookup).
+ */
+export async function namesByIds(
+  ids: string[],
+): Promise<{ id: string; uhid: string; name: string }[]> {
+  const objectIds = ids
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (objectIds.length === 0) return [];
+
+  const docs = await getPatientModel(getTenantDb())
+    .find({ _id: { $in: objectIds } }, { uhid: 1, name: 1 })
+    .lean<{ _id: Types.ObjectId; uhid: string; name: string }[]>();
+
+  return docs.map((d) => ({ id: d._id.toString(), uhid: d.uhid, name: d.name }));
 }

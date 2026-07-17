@@ -311,3 +311,19 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
     objectId: true,
   });
 }
+
+/**
+ * The prescriptions a user WROTE in a period — for their "my day" activity ("meds I prescribed").
+ * Keyed on `prescribedBy`, not on row scope. Tenant-isolated by the hook.
+ */
+export async function prescriptionsByUser(
+  userId: string,
+  from: Date,
+  to: Date,
+): Promise<Prescription[]> {
+  const docs = await getPrescriptionModel(getTenantDb())
+    .find({ prescribedBy: userId, prescribedAt: { $gte: from, $lt: to } })
+    .sort({ prescribedAt: -1 })
+    .lean<PrescriptionDoc[]>();
+  return docs.map(toPrescription);
+}

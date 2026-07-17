@@ -23,6 +23,10 @@ import {
 import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
 import { collectionsReport, type CollectionsReport } from "../billing/index.js";
 import { getById as getUser } from "../users/index.js";
+import { encountersByDoctor } from "../encounters/index.js";
+import { ordersByUser } from "../orders/index.js";
+import { prescriptionsByUser } from "../prescriptions/index.js";
+import { namesByIds } from "../patients/index.js";
 
 export type {
   StockRegisterRow,
@@ -98,6 +102,89 @@ export async function diagnostics(range: DateRange): Promise<DiagnosticsReportNa
       performedBy: p.performedBy,
       performerName: names.get(p.performedBy) ?? p.performedBy,
       performed: p.performed,
+    })),
+  };
+}
+
+/* ── "My day" — a clinician's OWN activity ──────────────────────────────────────
+ * Not a hospital-wide register but a personal one: "what did I do in this period?".
+ * Composed the same way — each figure summed by the module that owns the collection — but keyed
+ * on the CALLER's id, so it needs no `report:view`; you can always see your own work. Patient
+ * ids are resolved to a name/UHID here (one batch) so each drill-down row links to a real chart. */
+
+/** A patient as an activity row shows them — enough to recognise and to link to the profile. */
+export interface ActivityPatientRef {
+  id: string;
+  uhid: string;
+  name: string;
+}
+
+export interface MyActivity {
+  /** Distinct patients seen (encounters), not visit count — a returning patient is one person. */
+  patientsSeen: number;
+  visits: {
+    patient: ActivityPatientRef;
+    encounterId: string;
+    at: string;
+    class: string;
+    status: string;
+  }[];
+  tests: {
+    patient: ActivityPatientRef;
+    orderId: string;
+    name: string;
+    category: string;
+    status: string;
+    at: string;
+  }[];
+  prescriptions: {
+    patient: ActivityPatientRef;
+    prescriptionId: string;
+    drugs: string[];
+    at: string;
+  }[];
+}
+
+export async function myActivity(userId: string, range: DateRange): Promise<MyActivity> {
+  const [encs, ords, rxs] = await Promise.all([
+    encountersByDoctor(userId, range.from, range.to),
+    ordersByUser(userId, range.from, range.to),
+    prescriptionsByUser(userId, range.from, range.to),
+  ]);
+
+  const patientIds = [
+    ...new Set([
+      ...encs.map((e) => e.patientId),
+      ...ords.map((o) => o.patientId),
+      ...rxs.map((r) => r.patientId),
+    ]),
+  ];
+  const names = new Map((await namesByIds(patientIds)).map((n) => [n.id, n]));
+  const ref = (id: string): ActivityPatientRef =>
+    names.get(id) ?? { id, uhid: "—", name: "Unknown patient" };
+
+  return {
+    patientsSeen: new Set(encs.map((e) => e.patientId)).size,
+    visits: encs.map((e) => ({
+      patient: ref(e.patientId),
+      encounterId: e.id,
+      at: e.arrivedAt.toISOString(),
+      class: e.class,
+      status: e.status,
+    })),
+    tests: ords.map((o) => ({
+      patient: ref(o.patientId),
+      orderId: o.id,
+      name: o.name,
+      category: o.category,
+      status: o.status,
+      at: o.orderedAt.toISOString(),
+    })),
+    prescriptions: rxs.map((r) => ({
+      patient: ref(r.patientId),
+      prescriptionId: r.id,
+      drugs: r.lines.map((l) => l.drugName),
+      at: (r.signedAt ?? r.prescribedAt).toISOString(),
     })),
   };
 }

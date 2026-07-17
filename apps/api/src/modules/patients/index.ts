@@ -35,6 +35,9 @@ export {
  */
 export { patientConsumers } from "./patient.consumers.js";
 
+/** Batch id → {uhid,name} resolver for reports/activity panels. */
+export { namesByIds } from "./patient.repository.js";
+
 export { PATIENT_STATUSES, GENDERS, BLOOD_GROUPS } from "./patient.model.js";
 export type { PatientStatus, Gender, BloodGroup } from "./patient.model.js";
 export { DUPLICATE_THRESHOLD, type DuplicateCandidate } from "./mpi.js";

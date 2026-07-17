@@ -33,6 +33,7 @@ export {
   type CompleteOrderInput,
 } from "./order.service.js";
 export type { DiagnosticsReport } from "./order.repository.js";
+export { ordersByUser } from "./order.repository.js";
 
 export {
   ORDER_CATEGORIES,

@@ -348,3 +348,15 @@ export async function list(filter: ListOrdersFilter): Promise<{ items: Order[]; 
 export async function repointPatient(ref: PatientMergeRef): Promise<number> {
   return repointPatientId(getOrderModel(getTenantDb()), "patientId", ref, { objectId: true });
 }
+
+/**
+ * The orders a user PLACED in a period — for their "my day" activity ("tests I sent").
+ * Keyed on `orderedBy` (the ordering doctor), not on row scope. Tenant-isolated by the hook.
+ */
+export async function ordersByUser(userId: string, from: Date, to: Date): Promise<Order[]> {
+  const docs = await getOrderModel(getTenantDb())
+    .find({ orderedBy: userId, orderedAt: { $gte: from, $lt: to } })
+    .sort({ orderedAt: -1 })
+    .lean<OrderDoc[]>();
+  return docs.map(toOrder);
+}
