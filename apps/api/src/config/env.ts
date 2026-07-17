@@ -65,14 +65,16 @@ const envSchema = z.object({
   MONGO_URI: z.string().url().optional(),
   /**
    * Cross-cluster safety net (dev). The replica-set member the master connection
-   * MUST land on, e.g. `localhost:27018`. If set and the server we actually reach
+   * MUST land on, e.g. `localhost:37018`. If set and the server we actually reach
    * advertises a different member, the process refuses to start.
    *
    * WHY THIS EXISTS: replica sets are conventionally all named `rs0`, so a driver
    * cannot tell it has crossed into ANOTHER project's Mongo — an SSH tunnel or a
    * second container on the same host port is enough to silently redirect us onto
-   * a foreign cluster (see infra/docker/LOCAL_PORTS.md). A no-op unless set, so
-   * production — which reaches Mongo through real hostnames — is never affected.
+   * a foreign cluster. This project sidesteps that by owning a dedicated port
+   * (37018) and naming its set `hms0`, and this check is the backstop (see
+   * infra/docker/LOCAL_PORTS.md). A no-op unless set, so production — which reaches
+   * Mongo through real hostnames — is never affected.
    */
   MONGO_EXPECT_MEMBER: z.string().optional(),
   /** Master database — platform data ONLY, never PHI (Doc 03 §1.1). */

@@ -6,55 +6,52 @@ name: medicore-hms
 services:
   mongo:
     image: mongo:7
-    # ── WHY MONGOD RUNS ON 27018 *INSIDE* THE CONTAINER TOO ──────────────────────
-    # Not cosmetic. A replica-set client does not talk to the server you named: it
-    # asks that server who the members are, then connects to THOSE addresses. So
-    # whatever we put in the RS config is an address the *client* must be able to
-    # resolve — and the client is usually on the host, not in this network.
+    # ── WHY THIS PROJECT OWNS ITS OWN PORT AND REPLICA-SET NAME ──────────────────
+    # A replica-set client does not talk to the server you named: it asks that
+    # server who the members are, then connects to THOSE addresses. So the RS config
+    # host must be an address the *client* (usually on the host, not this network)
+    # can resolve. Two failure modes have to be designed out on a machine that runs
+    # more than one Mongo:
     #
-    # With mongod on 27017 internally, the honest RS config is `localhost:27017`,
-    # which from the host means "port 27017 on my Mac" — i.e. WHATEVER ELSE THE
-    # DEVELOPER IS RUNNING. Replica sets are conventionally all named `rs0`, so the
-    # driver cannot tell it has crossed into another project's database; it thinks
-    # it found the primary. That is a silent cross-project write, not an error.
+    #   1. PORT. The conventional 27017 is "whatever else the developer is running."
+    #      This project therefore owns 37018 — an address nothing else on the box
+    #      uses — and runs mongod on 37018 *inside* the container too, publishing
+    #      37018:37018. That makes ONE address true from both sides: `localhost:37018`
+    #      is this server from the host AND from inside the container, so discovery
+    #      is self-consistent even without `directConnection=true`.
     #
-    # Running mongod on 27018 and publishing 27018:27018 makes ONE address true
-    # from both sides: `localhost:27018` is this server from the host, and this
-    # server from inside the container. Discovery becomes self-consistent, so a
-    # client that forgets `directConnection=true` still lands here — safe by
-    # construction rather than safe by remembering a query parameter.
-    command: ["mongod", "--replSet", "rs0", "--port", "27018", "--bind_ip_all"]
+    #   2. NAME. Replica sets are conventionally ALL named `rs0`, so a driver that
+    #      does reach a neighbour cannot tell it has crossed projects — it just sees
+    #      an `rs0` primary and writes. This set is named `hms0`. A client that pins
+    #      `replicaSet=hms0` will REFUSE any server that answers `rs0`, turning a
+    #      silent cross-project write into a loud connection error.
+    #
+    # Registry of who owns which port on this machine: infra/docker/LOCAL_PORTS.md.
+    command: ["mongod", "--replSet", "hms0", "--port", "37018", "--bind_ip_all"]
     ports:
-      # Host 27018, not 27017: another project on this machine already binds the
-      # default. Both sides must stay equal — see above. Overriding MONGO_PORT
-      # breaks that equality, and then only `directConnection=true` saves you.
-      #
       # Bound to 127.0.0.1 ON PURPOSE, not the 0.0.0.0 wildcard. A wildcard bind
       # lets a second listener (e.g. an SSH tunnel from another project) also grab
-      # 127.0.0.1:27018 on a more-specific address and silently win — clients then
-      # land on the WRONG Mongo (both replica sets are named rs0). Binding the
-      # specific loopback address means such a tunnel fails to bind and says so,
-      # turning a silent cross-cluster hazard into an obvious error. It also keeps
-      # the dev database off the LAN. See infra/docker/LOCAL_PORTS.md.
-      - "127.0.0.1:${MONGO_PORT:-27018}:27018"
+      # this port on a more-specific loopback address and silently win. Binding the
+      # specific loopback address means such a listener fails to bind and says so,
+      # and keeps the dev database off the LAN. Keep host port == container port
+      # (37018) — overriding MONGO_PORT breaks the discovery equality described above.
+      - "127.0.0.1:${MONGO_PORT:-37018}:37018"
     volumes:
       - mongo-data:/data/db
     healthcheck:
       # Initiates the single-node replica set on first check (transactions and
-      # change streams need one). SELF-HEALING: an existing volume from before the
-      # port change still carries `localhost:27017` in its RS config, which would
-      # keep pointing clients at the wrong server forever. If the advertised host
-      # is not what we require, force-reconfigure it. Idempotent, and it costs one
-      # comparison per health check.
+      # change streams need one). SELF-HEALING: if an existing volume advertises a
+      # different member host, force-reconfigure it to the address we require.
+      # Idempotent, and it costs one comparison per health check.
       test: |
-        mongosh --quiet --port 27018 --eval "
-          const want = 'localhost:27018';
+        mongosh --quiet --port 37018 --eval "
+          const want = 'localhost:37018';
           try {
             const c = rs.conf();
             if (c.members[0].host !== want) { c.members[0].host = want; c.version++; rs.reconfig(c, {force: true}); }
             rs.status().ok;
           } catch (e) {
-            rs.initiate({_id:'rs0',members:[{_id:0,host:want}]}).ok;
+            rs.initiate({_id:'hms0',members:[{_id:0,host:want}]}).ok;
           }"
       interval: 10s
       timeout: 10s
@@ -112,10 +109,10 @@ services:
       # so the production default would make the API unreachable. Docker's network
       # provides the isolation here instead of the bind address.
       API_BIND: 0.0.0.0
-      # Port 27018 inside the network too — mongod listens there now (see the mongo
+      # Port 37018 inside the network too — mongod listens there now (see the mongo
       # service). `directConnection=true` is still required: from THIS container,
-      # the advertised `localhost:27018` would mean the api container itself.
-      MONGO_URI: mongodb://mongo:27018/?directConnection=true
+      # the advertised `localhost:37018` would mean the api container itself.
+      MONGO_URI: mongodb://mongo:37018/?directConnection=true
       REDIS_URL: redis://redis:6379
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001
       # Local-compose secrets only. Real environments inject these from the secret

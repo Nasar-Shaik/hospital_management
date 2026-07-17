@@ -139,18 +139,18 @@ The full path is worth knowing when something does not arrive: `publish()` → `
 ## Inspecting the database (MongoDB Compass)
 
 ```
-mongodb://localhost:27018/?directConnection=true
+mongodb://localhost:37018/?directConnection=true
 ```
 
-Paste that into Compass and connect. No username, no password — the dev container runs open, and the integration harness _refuses to run_ against a server that has auth (that check is what tells local Mongo apart from a real one).
+Paste that into Compass and connect. No username, no password — the dev container runs open, and the integration harness _refuses to run_ against a server that has auth (that check is what tells local Mongo apart from a real one). If you also inspect another project's Mongo in Compass, save this as its own named connection — this one is on port `37018`, nothing else is.
 
-**Why the port is 27018 on both sides — and why that is a safety property, not a preference**
+**Why the port is 37018 on both sides, and the set is named `hms0` — a safety property, not a preference**
 
 Mongo runs as a single-node replica set, because transactions and change streams do not exist without one. A replica-set client does not keep talking to the server you named: it asks that server _who the members are_, throws your address away, and reconnects to the address the server reports. So the address in the RS config must be true **for the client**, and the client is usually on your Mac — outside the container.
 
-That is where a second project's Mongo becomes reachable. If mongod listened on 27017 inside the container, the only honest thing it could call itself is `localhost:27017` — true in there, but on your Mac that address is _whatever else you happen to be running_. The driver would follow it straight out of our container and into the other project. Docker isolation is not violated: both servers publish a port to your Mac on purpose, and the client simply walks from one to the other. Worse, replica sets are named `rs0` by default on both sides, so the driver cannot tell it has crossed projects — it thinks it found its own primary.
+That is where a second project's Mongo becomes reachable. If mongod listened on the conventional 27017 inside the container, the only honest thing it could call itself is `localhost:27017` — true in there, but on your Mac that address is _whatever else you happen to be running_. The driver would follow it straight out of our container and into the other project. Docker isolation is not violated: both servers publish a port to your Mac on purpose, and the client simply walks from one to the other. Worse, replica sets are named `rs0` by default on both sides, so the driver cannot tell it has crossed projects — it thinks it found its own primary.
 
-So mongod listens on **27018 inside the container too**, published `27018:27018`, and advertises `localhost:27018`. One address that is true from both sides. Discovery now resolves to the same server you typed, and a client that forgets `directConnection=true` still lands here. Keep the flag anyway — it skips discovery altogether, and it is what makes the URI correct from _inside_ another container (where `localhost` means that container).
+So HMS owns a **dedicated port, `37018`** (nothing else on the machine uses it — see [infra/docker/LOCAL_PORTS.md](infra/docker/LOCAL_PORTS.md)), runs mongod on 37018 _inside_ the container too, published `37018:37018`, and advertises `localhost:37018`. One address that is true from both sides. Discovery now resolves to the same server you typed. The replica set is also named **`hms0`**, not `rs0`, so a client that pins `replicaSet=hms0` refuses a stranger's `rs0` outright. Keep `directConnection=true` in the URI anyway — it skips discovery altogether, and it is what makes the URI correct from _inside_ another container (where `localhost` means that container). As a final backstop the API checks, on boot, that the server it reached advertises `localhost:37018` and refuses to start otherwise (`MONGO_EXPECT_MEMBER`).
 
 This is the same problem Kafka solves with `advertised.listeners`: a containerized server must announce an address that means the same thing to the outside.
 

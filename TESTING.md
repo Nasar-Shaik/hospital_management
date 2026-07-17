@@ -24,34 +24,34 @@ Run both, in that order, in two terminals.
 | Workers (BullMQ)        | `4100`  | http://localhost:4100/health                       | `pnpm dev`        |
 | Web (Next.js)           | `3000`  | http://localhost:3000                              | `pnpm dev`        |
 | Admin console (Next.js) | `3001`  | http://localhost:3001                              | `pnpm dev`        |
-| MongoDB                 | `27018` | `mongodb://127.0.0.1:27018/?directConnection=true` | `pnpm docker:dev` |
+| MongoDB                 | `37018` | `mongodb://127.0.0.1:37018/?directConnection=true` | `pnpm docker:dev` |
 | Redis                   | `6380`  | `redis://127.0.0.1:6380`                           | `pnpm docker:dev` |
 | Mailhog (fake inbox)    | `8025`  | http://localhost:8025                              | `pnpm docker:dev` |
 | MinIO console (S3)      | `9001`  | http://localhost:9001 (`minioadmin`/`minioadmin`)  | `pnpm docker:dev` |
 
-**Mongo is on 27018 and Redis on 6380, not their defaults.** Another project on this machine (the School ERP containers) already binds 27017/6379. Do not "fix" these back.
+**Mongo is on 37018 and Redis on 6380, not their defaults.** Another project on this machine (the School ERP) uses 27017 for its local Mongo and 27018 for an SSH tunnel to its VPS. HMS owns `37018`, which nothing else touches — see [infra/docker/LOCAL_PORTS.md](infra/docker/LOCAL_PORTS.md). Do not "fix" these back.
 
-**Mongo is 27018 on _both_ sides of the container — that one is load-bearing, not cosmetic.** A replica-set client follows the address the server advertises rather than the one you typed. If mongod listened on 27017 internally it would have to advertise `localhost:27017`, which from the host is the _School ERP's_ Mongo — and since both replica sets are named `rs0`, the driver would have followed it there believing it had found our primary. Publishing `27018:27018` makes the advertised address true from inside and outside, so discovery resolves back to us. Changing the internal port re-opens that hole.
+**Mongo is 37018 on _both_ sides of the container — that one is load-bearing, not cosmetic.** A replica-set client follows the address the server advertises rather than the one you typed. If mongod listened on the conventional 27017 internally it would advertise `localhost:27017`, which from the host is the _School ERP's_ Mongo — and since replica sets are named `rs0` by default, the driver could follow it there believing it had found our primary. Publishing `37018:37018` makes the advertised address true from inside and outside, so discovery resolves back to us; naming the set **`hms0`** (not `rs0`) means a `replicaSet=hms0` client rejects a stranger's `rs0` outright. Changing the internal port re-opens the first hole.
 
 ### If a port is still taken
 
-Override it — never edit the compose file, because 27018/6380 are also baked into `.env.example`, CI and the docs:
+Override it — never edit the compose file, because 37018/6380 are also baked into `.env.example` and the docs:
 
 ```bash
-MONGO_PORT=27019 REDIS_PORT=6381 pnpm docker:dev
-# then point apps/api/.env at the same ports
+MONGO_PORT=37019 REDIS_PORT=6381 pnpm docker:dev
+# then point apps/api/.env at the same ports (MONGO_URI and MONGO_EXPECT_MEMBER)
 ```
 
-Overriding `MONGO_PORT` breaks the both-sides-equal property above: the host would publish 27019 while the replica set still advertises 27018, so topology discovery points at a port that has nothing on it. Every URI in this repo carries `directConnection=true`, which skips discovery, so this is survivable — but a bare URI in Compass will fail until you also map the container's 27018 to the same number.
+Overriding `MONGO_PORT` breaks the both-sides-equal property above: the host would publish 37019 while the replica set still advertises 37018, so topology discovery points at a port that has nothing on it. Every URI in this repo carries `directConnection=true`, which skips discovery, so this is survivable — but a bare URI in Compass will fail until you also map the container's 37018 to the same number.
 
 ### The port trap that nearly cost us a database
 
-**A loopback address does not prove the database is local.** An SSH tunnel like `ssh -L 27018:127.0.0.1:27017 user@remote` binds _our_ port on `127.0.0.1` and quietly wins the bind over Docker — after which everything connecting to `127.0.0.1:27018` is talking to a **remote** server. Our integration tests drop databases.
+**A loopback address does not prove the database is local.** An SSH tunnel like `ssh -L 37018:127.0.0.1:27017 user@remote` binds _our_ port on `127.0.0.1` and quietly wins the bind over Docker — after which everything connecting to `127.0.0.1:37018` is talking to a **remote** server. Our integration tests drop databases.
 
 The harness now refuses to run unless the target is loopback **and** has no authentication (the dev container runs open; real servers don't), and it will only ever drop databases named `test_*` or `hms_test-*`. If you see `REFUSING TO RUN`, something else has taken the port:
 
 ```bash
-lsof -nP -iTCP:27018 -sTCP:LISTEN     # an SSH tunnel? another container?
+lsof -nP -iTCP:37018 -sTCP:LISTEN     # an SSH tunnel? another container?
 docker ps
 ```
 
