@@ -70,6 +70,14 @@ const PLATFORM = {
   AUDIT_VIEW: p("audit:view", "Read the audit trail"),
   AUDIT_EXPORT: p("audit:export", "Export the audit trail"),
 
+  /**
+   * Read the operational + financial reports (the audit/register suite): stock, visits, doctor
+   * load, diagnostics, collections. Tenant-scoped — a report is a hospital-wide picture, and it
+   * is the administrator's/auditor's view, deliberately apart from the counter permissions that
+   * only touch one record at a time.
+   */
+  REPORT_VIEW: p("report:view", "View operational and financial reports"),
+
   NOTIFICATION_MANAGE: p("notification:manage", "Manage templates and channels"),
   NOTIFICATION_SEND: p("notification:send", "Send notifications"),
 

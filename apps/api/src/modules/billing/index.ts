@@ -29,11 +29,13 @@ export {
   listInvoices,
   listServices,
   getInvoice,
+  collectionsReport,
   type Charge,
   type Invoice,
   type ServiceItem,
   type PostChargeInput,
 } from "./billing.service.js";
+export type { CollectionsReport } from "./billing.repository.js";
 
 export {
   CHARGE_CATEGORIES,

@@ -261,6 +261,92 @@ export async function move(
   return { medicine: toMedicine(updated), movement: toMovement(row) };
 }
 
+/** One drug's line in the stock register — what an auditor reconciles a month against. */
+export interface StockRegisterRow {
+  medicineId: string;
+  code: string;
+  name: string;
+  /** Balance the period opened with (every movement strictly before `from`). */
+  opening: number;
+  /** Units booked IN during the period. */
+  received: number;
+  /** Units handed OUT during the period, as a positive number. */
+  dispensed: number;
+  /** Net of corrections during the period — signed. */
+  adjusted: number;
+  /** Balance the period closed with: opening + received − dispensed + adjusted. */
+  closing: number;
+}
+
+/**
+ * The stock register for a period — per drug: opening, received, dispensed, adjusted, closing.
+ *
+ * The whole point is that it RECONCILES: closing = opening + received − dispensed + adjusted, for
+ * every row, because all four come from the one ledger. `opening` is every movement strictly
+ * before the period; the three in-period figures are split by `kind`. The aggregation is tenant-
+ * scoped automatically (the model's `pre("aggregate")` hook prepends the tenant `$match`).
+ *
+ * The range is HALF-OPEN `[from, to)`: a movement at the very last millisecond of the period must
+ * not fall through the gap between "period" and "opening of the next" — the same convention the
+ * encounter register uses, for the same reason. Every medicine that had any movement in or before
+ * the period appears, retired ones included — an auditor reconciles what moved, not only what is
+ * on the shelf today.
+ */
+export async function stockRegister(from: Date, to: Date): Promise<StockRegisterRow[]> {
+  const inPeriod = (extra: Record<string, unknown>) => ({
+    $and: [{ $gte: ["$createdAt", from] }, { $lt: ["$createdAt", to] }, extra],
+  });
+  const rows = await getStockMovementModel(getTenantDb()).aggregate<{
+    _id: Types.ObjectId;
+    opening: number;
+    received: number;
+    dispensedDelta: number;
+    adjusted: number;
+  }>([
+    {
+      $group: {
+        _id: "$medicineId",
+        opening: { $sum: { $cond: [{ $lt: ["$createdAt", from] }, "$delta", 0] } },
+        received: {
+          $sum: { $cond: [inPeriod({ $eq: ["$kind", "receipt"] }), "$delta", 0] },
+        },
+        // Dispense deltas are stored negative; kept signed here and flipped to a positive "out".
+        dispensedDelta: {
+          $sum: { $cond: [inPeriod({ $eq: ["$kind", "dispense"] }), "$delta", 0] },
+        },
+        adjusted: {
+          $sum: { $cond: [inPeriod({ $eq: ["$kind", "adjustment"] }), "$delta", 0] },
+        },
+      },
+    },
+  ]);
+
+  const byId = new Map(rows.map((r) => [r._id.toString(), r]));
+  const medicines = await list({ includeInactive: true });
+  return (
+    medicines
+      .map((m) => {
+        const r = byId.get(m.id);
+        const opening = r?.opening ?? 0;
+        const received = r?.received ?? 0;
+        const dispensed = r ? -r.dispensedDelta : 0;
+        const adjusted = r?.adjusted ?? 0;
+        return {
+          medicineId: m.id,
+          code: m.code,
+          name: m.name,
+          opening,
+          received,
+          dispensed,
+          adjusted,
+          closing: opening + received - dispensed + adjusted,
+        };
+      })
+      // A drug with no opening balance and no movement in the period is not part of this register.
+      .filter((r) => r.opening !== 0 || r.received !== 0 || r.dispensed !== 0 || r.adjusted !== 0)
+  );
+}
+
 /** The movement history for one medicine, newest first — the "how did we get to 42" view. */
 export async function listMovements(medicineId: string, limit = 100): Promise<StockMovement[]> {
   if (!Types.ObjectId.isValid(medicineId)) return [];

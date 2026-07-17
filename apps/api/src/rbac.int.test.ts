@@ -599,6 +599,30 @@ const PROBES: Record<string, Probe> = {
     body: { delta: -6, reason: "breakage" },
   },
 
+  /* ── Reporting (the audit/register suite) ────────────────────────────────────
+   * `report:view` — a hospital-wide read. Each takes a from/to range.
+   */
+  "GET /api/v1/reports/pharmacy-stock": {
+    method: "get",
+    url: "/api/v1/reports/pharmacy-stock?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/patient-visits": {
+    method: "get",
+    url: "/api/v1/reports/patient-visits?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/doctor-load": {
+    method: "get",
+    url: "/api/v1/reports/doctor-load?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/diagnostics": {
+    method: "get",
+    url: "/api/v1/reports/diagnostics?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/collections": {
+    method: "get",
+    url: "/api/v1/reports/collections?from=2026-01-01&to=2026-02-01",
+  },
+
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",

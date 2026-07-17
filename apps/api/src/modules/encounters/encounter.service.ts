@@ -585,6 +585,10 @@ export async function dischargePatient(id: string, reason?: string): Promise<rep
 /** Everyone currently in a bed. The ward round's list. */
 export const listInpatients = repo.listInpatients;
 
+/* ── Reporting aggregations (used by the reporting module) ─────────────────── */
+export const visitReport = repo.visitReport;
+export const doctorProductivity = repo.doctorProductivity;
+
 /** The patient is called in from the waiting room. */
 export const startConsultation = (id: string): Promise<repo.Encounter> =>
   transition(id, "in_progress");

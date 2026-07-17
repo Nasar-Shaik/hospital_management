@@ -576,6 +576,54 @@ export interface UpdateTariffInput {
   active?: boolean;
 }
 
+/* ── Reporting: the audit/register suite (needs report:view) ────────────────── */
+
+/** A half-open period. `to` is the start of the day AFTER the chosen end date. */
+export interface ReportRange {
+  from: string;
+  to: string;
+}
+
+export interface StockRegisterRow {
+  medicineId: string;
+  code: string;
+  name: string;
+  opening: number;
+  received: number;
+  /** Units handed out in the period, as a positive number. */
+  dispensed: number;
+  adjusted: number;
+  closing: number;
+}
+
+export interface VisitReport {
+  total: number;
+  byClass: { key: string; count: number }[];
+  byOrigin: { key: string; count: number }[];
+  byMonth: { month: string; count: number }[];
+}
+
+export interface DoctorLoadRow {
+  doctorId: string;
+  doctorName: string;
+  patients: number;
+}
+
+export interface DiagnosticsReport {
+  total: number;
+  performed: number;
+  byCategory: { category: string; ordered: number; performed: number }[];
+  byPerformer: { performedBy: string; performerName: string; performed: number }[];
+}
+
+export interface CollectionsReport {
+  /** Paise. */
+  total: number;
+  count: number;
+  byMonth: { month: string; amount: number; count: number }[];
+  byMethod: { method: string; amount: number; count: number }[];
+}
+
 /* ── Prescriptions & pharmacy (STATE_MACHINE_CATALOG §6) ──────────────────── */
 
 export const DRUG_ROUTES = [
@@ -1471,6 +1519,56 @@ export class ApiClient {
     return this.request<TariffItem>("PATCH", `/api/v1/tariff/${id}`, patch);
   }
 
+  /* ── Reports (need report:view) ──────────────────────────────────────────── */
+
+  reportPharmacyStock(range: ReportRange): Promise<StockRegisterRow[]> {
+    return this.request<StockRegisterRow[]>(
+      "GET",
+      `/api/v1/reports/pharmacy-stock${rangeQs(range)}`,
+    );
+  }
+
+  reportPatientVisits(range: ReportRange): Promise<VisitReport> {
+    return this.request<VisitReport>("GET", `/api/v1/reports/patient-visits${rangeQs(range)}`);
+  }
+
+  reportDoctorLoad(range: ReportRange): Promise<DoctorLoadRow[]> {
+    return this.request<DoctorLoadRow[]>("GET", `/api/v1/reports/doctor-load${rangeQs(range)}`);
+  }
+
+  reportDiagnostics(range: ReportRange): Promise<DiagnosticsReport> {
+    return this.request<DiagnosticsReport>("GET", `/api/v1/reports/diagnostics${rangeQs(range)}`);
+  }
+
+  reportCollections(range: ReportRange): Promise<CollectionsReport> {
+    return this.request<CollectionsReport>("GET", `/api/v1/reports/collections${rangeQs(range)}`);
+  }
+
+  /**
+   * A report as a CSV blob — the same data the JSON endpoints return, in the shape a spreadsheet
+   * wants. `path` is a report slug, e.g. `pharmacy-stock`. Fetched WITH the auth header (not a bare
+   * `<a href>`, which carries no bearer token) so the caller can turn it into a download.
+   */
+  async fetchReportCsv(path: string, range: ReportRange): Promise<Blob> {
+    const token = this.getAccessToken?.();
+    const headers: Record<string, string> = {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (this.tenantHost) headers.host = this.tenantHost;
+
+    const res = await this.fetchImpl(
+      `${this.baseUrl}/api/v1/reports/${path}${rangeQs(range)}&format=csv`,
+      { method: "GET", headers, credentials: this.credentials, cache: "no-store" },
+    );
+    if (!res.ok) {
+      throw new ApiClientError(
+        res.status,
+        "HMS-GEN-500",
+        `Could not export the report (HTTP ${String(res.status)}).`,
+      );
+    }
+    return res.blob();
+  }
+
   postCharge(input: {
     encounterId: string;
     code: string;
@@ -1815,6 +1913,11 @@ export class ApiClient {
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
   return new ApiClient(options);
+}
+
+/** The from/to query string every report shares. */
+function rangeQs(range: { from: string; to: string }): string {
+  return `?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
 }
 
 /** Builds the medicine-list query string, omitting anything not set. */

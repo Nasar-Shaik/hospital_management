@@ -124,6 +124,9 @@ export const listServices = repo.listServices;
 export const listInvoices = repo.listInvoices;
 export const getInvoice = repo.findInvoiceById;
 
+/** The collections register for a period — used by the reporting module. */
+export const collectionsReport = repo.collectionsReport;
+
 /* ── Tariff management (the price list a hospital edits) ────────────────────── */
 
 export const listAllServices = repo.listAllServices;

@@ -17,6 +17,7 @@ export {
   adjustStock,
   listMovements,
   stockReport,
+  stockRegister,
   MEDICINE_FORMS,
   STOCK_MOVEMENT_KINDS,
 } from "./medicine.service.js";
@@ -27,4 +28,5 @@ export type {
   StockMovementKind,
   StockStatus,
   StockReportRow,
+  StockRegisterRow,
 } from "./medicine.service.js";

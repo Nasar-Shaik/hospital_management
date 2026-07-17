@@ -163,6 +163,84 @@ export async function findByRequestId(requestId: string): Promise<Order | undefi
   return doc ? toOrder(doc) : undefined;
 }
 
+/* ── Reporting: the diagnostics register (period on `orderedAt`, half-open) ──── */
+
+/** The order categories that ARE diagnostic tests — what "how many tests" means. */
+const DIAGNOSTIC_CATEGORIES = ["lab", "radiology"] as const;
+
+export interface DiagnosticsReport {
+  /** Diagnostic orders raised in the period (cancelled excluded). */
+  total: number;
+  /** How many of those were actually performed (carry a performer). */
+  performed: number;
+  byCategory: { category: string; ordered: number; performed: number }[];
+  /** Who performed the tests, busiest first. Only orders that were performed appear here. */
+  byPerformer: { performedBy: string; performed: number }[];
+}
+
+/**
+ * The diagnostics register: how many tests were ordered and performed in a period, by category
+ * and by who ran them.
+ *
+ * The period is on `orderedAt` (when the test was requested — there is no separate performed
+ * clock), half-open `[from, to)`, cancelled orders excluded. "Performed" means the order carries
+ * a `performedBy`: the person the register credits with running the test, which is exactly the
+ * "by who" an auditor asks for. Tenant-scoped by the aggregate hook.
+ */
+export async function diagnosticsReport(from: Date, to: Date): Promise<DiagnosticsReport> {
+  const model = getOrderModel(getTenantDb());
+  const match = {
+    orderedAt: { $gte: from, $lt: to },
+    category: { $in: DIAGNOSTIC_CATEGORIES },
+    status: { $ne: "cancelled" },
+  };
+  const facet = await model.aggregate<{
+    total: { count: number }[];
+    performed: { count: number }[];
+    byCategory: { _id: string; ordered: number; performed: number }[];
+    byPerformer: { _id: string; performed: number }[];
+  }>([
+    { $match: match },
+    {
+      $facet: {
+        total: [{ $count: "count" }],
+        performed: [{ $match: { performedBy: { $exists: true, $ne: null } } }, { $count: "count" }],
+        byCategory: [
+          {
+            $group: {
+              _id: "$category",
+              ordered: { $sum: 1 },
+              performed: {
+                $sum: { $cond: [{ $ifNull: ["$performedBy", false] }, 1, 0] },
+              },
+            },
+          },
+          { $sort: { ordered: -1 } },
+        ],
+        byPerformer: [
+          { $match: { performedBy: { $exists: true, $ne: null } } },
+          { $group: { _id: "$performedBy", performed: { $sum: 1 } } },
+          { $sort: { performed: -1 } },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  return {
+    total: f?.total[0]?.count ?? 0,
+    performed: f?.performed[0]?.count ?? 0,
+    byCategory: (f?.byCategory ?? []).map((r) => ({
+      category: r._id,
+      ordered: r.ordered,
+      performed: r.performed,
+    })),
+    byPerformer: (f?.byPerformer ?? []).map((r) => ({
+      performedBy: r._id,
+      performed: r.performed,
+    })),
+  };
+}
+
 /**
  * Moves the order, and records WHO moved it.
  *

@@ -32,6 +32,7 @@ import { allergyRouter } from "./modules/allergies/index.js";
 import { reportRouter } from "./modules/reports/index.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
+import { reportingRouter } from "./modules/reporting/index.js";
 import { env } from "./config/env.js";
 
 export function createApp(logger: Logger): Express {
@@ -156,6 +157,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(reportRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
+  v1Router.use(reportingRouter());
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

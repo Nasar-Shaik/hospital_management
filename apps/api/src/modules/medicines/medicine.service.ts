@@ -22,13 +22,15 @@ import type { Medicine, StockMovement } from "./medicine.repository.js";
 
 const logger = createLogger({ service: "medicine-service" });
 
-export type { Medicine, StockMovement } from "./medicine.repository.js";
+export type { Medicine, StockMovement, StockRegisterRow } from "./medicine.repository.js";
 export type { MedicineForm, StockMovementKind } from "./medicine.model.js";
 export { MEDICINE_FORMS, STOCK_MOVEMENT_KINDS } from "./medicine.model.js";
 
 export const listMedicines = repo.list;
 export const getMedicine = repo.findById;
 export const listMovements = repo.listMovements;
+/** The stock register for a period — see the repository. Used by the reporting module. */
+export const stockRegister = repo.stockRegister;
 
 export async function createMedicine(input: repo.CreateMedicineInput): Promise<Medicine> {
   try {

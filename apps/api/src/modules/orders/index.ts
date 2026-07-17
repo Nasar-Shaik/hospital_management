@@ -26,11 +26,13 @@ export {
   releaseOrder,
   cancelOrder,
   isWaitingOnResults,
+  diagnosticsReport,
   type Order,
   type PlaceOrderInput,
   type PlaceOrderResult,
   type CompleteOrderInput,
 } from "./order.service.js";
+export type { DiagnosticsReport } from "./order.repository.js";
 
 export {
   ORDER_CATEGORIES,

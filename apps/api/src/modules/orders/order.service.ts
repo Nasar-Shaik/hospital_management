@@ -488,3 +488,6 @@ export const cancelOrder = (id: string, reason: string): Promise<repo.Order> =>
 export const getOrder = (id: string): Promise<repo.Order | undefined> => repo.findById(id);
 export const listOrders = repo.list;
 export const isWaitingOnResults = repo.isWaitingOnResults;
+
+/** The diagnostics register for a period — used by the reporting module. */
+export const diagnosticsReport = repo.diagnosticsReport;

@@ -47,6 +47,7 @@ const NAVIGATION: NavSection[] = [
       { label: "Roles & permissions", href: "/roles", permission: "role:manage" },
       { label: "Subscription & usage", href: "/subscription", permission: "subscription:manage" },
       { label: "Service tariff", href: "/tariff", permission: "tariff:manage" },
+      { label: "Reports", href: "/reports", permission: "report:view" },
       { label: "Activity trail", href: "/audit", permission: "audit:view" },
       { label: "Hospital profile", href: "/settings", permission: "hospital:manage", soon: true },
       { label: "Branches", href: "/branches", permission: "branch:manage", soon: true },

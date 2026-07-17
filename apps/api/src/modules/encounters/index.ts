@@ -31,10 +31,13 @@ export {
   cancelEncounter,
   markLeftWithoutBeingSeen,
   isQueued,
+  visitReport,
+  doctorProductivity,
   type Encounter,
   type StartEncounterInput,
   type StartEncounterResult,
 } from "./encounter.service.js";
+export type { VisitReport, DoctorLoadRow } from "./encounter.repository.js";
 
 export {
   ENCOUNTER_STATUSES,

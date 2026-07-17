@@ -198,6 +198,73 @@ export async function updateService(
   return doc ? toServiceItem(doc) : undefined;
 }
 
+/* ── Reporting: the collections register (period on payment date, half-open) ── */
+
+export interface CollectionsReport {
+  /** Total money RECEIVED in the period, in paise. */
+  total: number;
+  /** Number of individual payments taken. */
+  count: number;
+  byMonth: { month: string; amount: number; count: number }[];
+  byMethod: { method: string; amount: number; count: number }[];
+}
+
+/**
+ * Money actually RECEIVED in a period — not billed, received.
+ *
+ * Collections are the payments taken (`invoices.payments[].at`), never the invoice totals: an
+ * auditor's "how much money came in during March" is answered by what crossed the counter that
+ * month, which can lag or lead when the invoice was raised. The pipeline unwinds each invoice's
+ * payments, keeps those whose `at` falls in the half-open `[from, to)` window, and groups by
+ * month and by method (cash, card, UPI…). Amounts are paise; the UI divides by 100. Tenant-
+ * scoped by the aggregate hook.
+ */
+export async function collectionsReport(from: Date, to: Date): Promise<CollectionsReport> {
+  const model = getInvoiceModel(getTenantDb());
+  const facet = await model.aggregate<{
+    total: { amount: number; count: number }[];
+    byMonth: { _id: string; amount: number; count: number }[];
+    byMethod: { _id: string; amount: number; count: number }[];
+  }>([
+    { $unwind: "$payments" },
+    { $match: { "payments.at": { $gte: from, $lt: to } } },
+    {
+      $facet: {
+        total: [
+          { $group: { _id: null, amount: { $sum: "$payments.amount" }, count: { $sum: 1 } } },
+        ],
+        byMonth: [
+          {
+            $group: {
+              _id: { $dateToString: { format: "%Y-%m", date: "$payments.at" } },
+              amount: { $sum: "$payments.amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ],
+        byMethod: [
+          {
+            $group: {
+              _id: "$payments.method",
+              amount: { $sum: "$payments.amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  return {
+    total: f?.total[0]?.amount ?? 0,
+    count: f?.total[0]?.count ?? 0,
+    byMonth: (f?.byMonth ?? []).map((r) => ({ month: r._id, amount: r.amount, count: r.count })),
+    byMethod: (f?.byMethod ?? []).map((r) => ({ method: r._id, amount: r.amount, count: r.count })),
+  };
+}
+
 /* ── Charges ───────────────────────────────────────────────────────────────── */
 
 export interface PostChargeInput {

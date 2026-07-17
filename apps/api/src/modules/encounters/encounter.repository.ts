@@ -337,6 +337,90 @@ export async function list(
   return { items: docs.map(toEncounter), total };
 }
 
+/* ── Reporting aggregations (period on `arrivedAt`, half-open [from, to)) ────── */
+
+export interface VisitReport {
+  total: number;
+  byClass: { key: string; count: number }[];
+  byOrigin: { key: string; count: number }[];
+  byMonth: { month: string; count: number }[];
+}
+
+/**
+ * How many patients presented in a period, and how they break down.
+ *
+ * Counts every encounter that ARRIVED in the window — the visit register a hospital reports to
+ * itself and to an auditor. Cancelled and left-without-being-seen are excluded: they are not
+ * visits, they are visits that did not happen. Grouped three ways from one scan so the totals
+ * across the breakdowns always agree with the headline. Tenant-scoped by the aggregate hook.
+ */
+export async function visitReport(from: Date, to: Date): Promise<VisitReport> {
+  const model = getEncounterModel(getTenantDb());
+  const match = {
+    arrivedAt: { $gte: from, $lt: to },
+    status: { $nin: ["cancelled", "left_without_being_seen"] },
+  };
+  const facet = await model.aggregate<{
+    total: { count: number }[];
+    byClass: { _id: string; count: number }[];
+    byOrigin: { _id: string; count: number }[];
+    byMonth: { _id: string; count: number }[];
+  }>([
+    { $match: match },
+    {
+      $facet: {
+        total: [{ $count: "count" }],
+        byClass: [{ $group: { _id: "$class", count: { $sum: 1 } } }, { $sort: { count: -1 } }],
+        byOrigin: [{ $group: { _id: "$origin", count: { $sum: 1 } } }, { $sort: { count: -1 } }],
+        byMonth: [
+          {
+            $group: {
+              _id: { $dateToString: { format: "%Y-%m", date: "$arrivedAt" } },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  return {
+    total: f?.total[0]?.count ?? 0,
+    byClass: (f?.byClass ?? []).map((r) => ({ key: r._id, count: r.count })),
+    byOrigin: (f?.byOrigin ?? []).map((r) => ({ key: r._id, count: r.count })),
+    byMonth: (f?.byMonth ?? []).map((r) => ({ month: r._id, count: r.count })),
+  };
+}
+
+export interface DoctorLoadRow {
+  doctorId: string;
+  patients: number;
+}
+
+/**
+ * Which doctor saw how many patients in the period, busiest first.
+ *
+ * Keyed on `doctorId` for encounters that arrived in the window and were assigned a doctor —
+ * the name is resolved by the caller (the reporting module), because a doctor's name lives in
+ * the users module, not here. An unassigned encounter (walk-in not yet routed) carries no
+ * doctor and is simply not counted against anyone.
+ */
+export async function doctorProductivity(from: Date, to: Date): Promise<DoctorLoadRow[]> {
+  const rows = await getEncounterModel(getTenantDb()).aggregate<{ _id: string; patients: number }>([
+    {
+      $match: {
+        arrivedAt: { $gte: from, $lt: to },
+        doctorId: { $exists: true, $ne: null },
+        status: { $nin: ["cancelled", "left_without_being_seen"] },
+      },
+    },
+    { $group: { _id: "$doctorId", patients: { $sum: 1 } } },
+    { $sort: { patients: -1 } },
+  ]);
+  return rows.map((r) => ({ doctorId: r._id, patients: r.patients }));
+}
+
 /* ── Episodes of care ─────────────────────────────────────────────────────── */
 
 export async function createEpisode(

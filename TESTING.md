@@ -831,3 +831,56 @@ hospital's flat `CONSULT_GEN` tariff. The line stays a consultation; only its pr
 - **Edge cases:** every filter change returns to page 1; an empty window shows "Nothing recorded…" rather
   than an error; the integrity check and CSV export remain `audit:*`-gated (a viewer without export sees
   no CSV button).
+
+## 15 · Reports — the audit/register suite
+
+The month-wise, drug-wise, doctor-wise registers an auditor asks for, all under **Reports**
+(Administration nav, `report:view` — the admin holds it). Each takes the same period and each
+exports to CSV.
+
+> Preconditions: API + web dev servers running, migrations + permission sync applied
+> (`pnpm --filter @medicore/api migrate -- --all` — adds `report:view`). Sign in as
+> `admin@sunrise.test`. Pick a period at the top; the "To" day is included in full (the request
+> uses a half-open range that ends at the start of the next day). All dev passwords are `123456`.
+
+### R1 · Pharmacy stock register (received / sold / balance, drug-wise)
+
+- **Preconditions:** some medicines received and at least one dispense in the period (do §13 C2/C3).
+- **Steps & expected:** open **Reports → Pharmacy stock.** Each drug shows **Opening, Received,
+  Dispensed, Adjusted, Closing** for the period. Confirm it **reconciles**: closing = opening +
+  received − dispensed + adjusted, on every row. **Download CSV** → a `stock-register-…csv` with the
+  same figures.
+- **Edge cases:** a drug with no movement in the window is omitted; a drug that went negative shows a
+  negative closing (it is a real fact, not clamped); retired drugs still appear if they moved.
+
+### R2 · Patient visits (how many, month-wise + by setting)
+
+- **Steps & expected:** **Reports → Patient visits.** Headline **Total visits**, plus **outpatient**
+  and **inpatient** counts; tables **by month** and **by care setting**. Cancelled and
+  left-without-being-seen are excluded (they are not visits). CSV gives the month-wise table.
+
+### R3 · Doctor load (which doctor saw how many)
+
+- **Steps & expected:** **Reports → Doctor load.** Each doctor with the **number of patients** they
+  saw in the period, busiest first, **by name** (not an id). CSV matches.
+- **Edge cases:** a walk-in never routed to a doctor is counted in visits but against no doctor here; a
+  deleted doctor shows as "Unknown (…id)" rather than dropping the row.
+
+### R4 · Diagnostics (how many tests, and by whom)
+
+- **Preconditions:** some lab/radiology orders in the period, ideally a few marked performed.
+- **Steps & expected:** **Reports → Diagnostics.** **Tests ordered** vs **tests performed**; a
+  **by-category** table (lab/radiology, ordered vs performed) and a **by-who-performed-them** table
+  with the technician/radiologist's **name** and their count. CSV gives the performer table.
+- **Edge cases:** pharmacy and other non-diagnostic orders are not counted; an order not yet performed
+  appears in "ordered" but not in any performer's row.
+
+### R5 · Collections (money received, month-wise + by method)
+
+- **Preconditions:** at least one payment recorded on an invoice in the period.
+- **Steps & expected:** **Reports → Collections.** **Total received** (₹) and **payments taken**;
+  tables **by month** (₹ and payment count) and **by method** (cash / card / UPI…). These are payments
+  actually RECEIVED in the window — keyed on the payment date, not when the invoice was raised. CSV
+  gives the month-wise table in rupees.
+- **Edge cases:** on a government hospital every consultation/test is ₹0, so collections are ₹0 unless
+  a manual charge was paid; a non-admin has no **Reports** nav entry and every `/reports/*` route 403s.
