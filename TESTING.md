@@ -1139,3 +1139,40 @@ appearing with no edit to the site.
 
 - Until a staff doctor is flagged "show on public website", the **Doctors** section is absent. Once
   one is flagged (Phase B), they appear with name and specialty; the nav gains a **Doctors** link.
+
+## 22 · Editing the public website (self-service) (⏳ eyeball)
+
+**Why:** each hospital controls its own site without a support ticket. A hospital admin (anyone with
+`branding:manage`, which `TENANT_ADMIN` inherits) edits it from **Administration → Public website**;
+the server refuses the same endpoints for anyone without that permission, and the nav entry is hidden
+from them. Verified live against the running stack (2026-07-18): logging in as the sunrise admin and
+`PATCH /api/v1/site/settings` with a new accent + tagline was reflected immediately by the public
+`GET /api/v1/site`.
+
+### E1 · Edit the brand and copy
+
+- Sign in as an admin at **sunrise.localhost:3000** (admin@sunrise.test / 123456) → **Administration →
+  Public website**.
+- Change the **display name**, pick an **accent colour**, edit the **tagline** and **about**, add a
+  **service** and a **highlight**, fill in **contact** details → **Save changes**.
+- Click **View public site →** (opens `/`) → every change is live, and the whole site is now tinted
+  with the accent colour you picked.
+
+### E2 · Announcement + publish toggle
+
+- Add an **announcement** message → a strip appears across the top of the public site. Clear it → the
+  strip disappears.
+- Turn **Publish** off → visiting `/` signed-out now goes straight to `/login`. Turn it back on.
+
+### E3 · Feature a doctor
+
+- **Administration → Staff** → edit a **doctor** → tick **Show on the public website** → Save.
+- Public site now shows a **Doctors** section with that doctor's name and specialty, and the header
+  gains a **Doctors** link. Untick and save → they disappear (the flag is merged server-side, so the
+  `false` genuinely clears it).
+
+### E4 · Permission is enforced, not just hidden
+
+- A user without `branding:manage` (e.g. a receptionist) has **no** "Public website" nav entry, and
+  visiting `/settings/site` shows a "No access" notice. The API independently returns 403 on
+  `GET/PATCH /api/v1/site/settings` for them — the hidden nav is convenience, not the guard.

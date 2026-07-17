@@ -66,6 +66,8 @@ interface FormState {
   address: string;
   emergencyContactName: string;
   emergencyContactPhone: string;
+  /** Doctors only: feature this person on the public website. */
+  showOnPublicSite: boolean;
 }
 
 const EMPTY_FORM: FormState = {
@@ -86,6 +88,7 @@ const EMPTY_FORM: FormState = {
   address: "",
   emergencyContactName: "",
   emergencyContactPhone: "",
+  showOnPublicSite: false,
 };
 
 function formFromMember(m: StaffMember): FormState {
@@ -108,6 +111,7 @@ function formFromMember(m: StaffMember): FormState {
     address: p.address ?? "",
     emergencyContactName: p.emergencyContactName ?? "",
     emergencyContactPhone: p.emergencyContactPhone ?? "",
+    showOnPublicSite: p.showOnPublicSite ?? false,
   };
 }
 
@@ -130,6 +134,9 @@ function profileFromForm(f: FormState): StaffProfile {
   put("address", f.address);
   put("emergencyContactName", f.emergencyContactName);
   put("emergencyContactPhone", f.emergencyContactPhone);
+  // Always sent (not via `put`), because the profile is MERGED server-side: to UN-publish a
+  // doctor the `false` has to overwrite the stored `true`, so omitting it would never clear.
+  out.showOnPublicSite = f.showOnPublicSite;
   return out;
 }
 
@@ -309,6 +316,23 @@ function StaffForm({
               onChange={(e) => set({ consultationFee: e.target.value })}
               hint="Charged when a patient starts a visit with them. Blank = hospital rate."
             />
+          )}
+          {hasSpecialty && (
+            <label className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+              <input
+                type="checkbox"
+                checked={form.showOnPublicSite}
+                onChange={(e) => set({ showOnPublicSite: e.target.checked })}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span className="text-sm text-[var(--color-fg)]">
+                Show on the public website
+                <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
+                  Features this doctor (name and specialty only) in the Doctors section of your
+                  hospital&apos;s public site.
+                </span>
+              </span>
+            </label>
           )}
           {isClinical && (
             <Field
