@@ -1,8 +1,36 @@
 /**
  * Design tokens (Doc 08 §2–§5). Semantic tokens only — components never use
  * raw palette values. Tenant branding overrides ONLY the brand ramp.
+ *
+ * ── LIGHT AND DARK ───────────────────────────────────────────────────────────
+ * Every component in both apps already styles itself from `var(--color-*)`, so
+ * the theme switch happens HERE and nowhere else — a component that reads a token
+ * gets dark mode for free, and one that hardcodes `#fff` silently will not. That
+ * is the design: there is exactly one place a colour is decided.
+ *
+ * `[data-theme="dark"]` on <html> is the switch. It is set before first paint by
+ * `themeInitScript` (see theme.tsx), which resolves the user's saved choice — or
+ * the system preference when they have not made one — so the page never flashes
+ * white and then repaints dark. A no-JS client gets light, which is a safe floor.
+ *
+ * Dark is NOT "light with the lightness inverted". Two things are deliberately
+ * different:
+ *
+ *   1. **Surfaces get lighter as they rise, not darker.** On light, an elevated
+ *      card is white on grey; on dark, it must be *lighter* than the page or it
+ *      reads as a hole. Elevation is the opposite direction in each theme.
+ *   2. **The semantic colours are re-picked, not reused.** `--color-danger:
+ *      #b91c1c` is a deep red chosen for contrast against WHITE; on a near-black
+ *      page it fails WCAG AA badly and a critical alert becomes the least legible
+ *      thing on screen. The dark ramp uses lighter, desaturated variants that hit
+ *      contrast against the dark surface — which matters more here than anywhere,
+ *      because these colours are load-bearing (Doc 08 §1.4: semantic colour is
+ *      sacred, never decorative) and this is a hospital: a nurse on a night shift
+ *      reading a panic value must not be squinting at it.
  */
 :root {
+  color-scheme: light;
+
   /* brand ramp (tenant-brandable; default medical teal) */
   --color-brand-50: #f0fdfa;
   --color-brand-100: #ccfbf1;
@@ -32,6 +60,23 @@
   --color-info-bg: #eff6ff;
   --color-critical-clinical: #dc2626;
 
+  /**
+   * Text ON a filled accent (a primary button, a danger button, a solid badge).
+   *
+   * It cannot be hardcoded `white`, and that is not obvious until you switch
+   * themes: the accent fills INVERT in lightness between themes. Light mode fills
+   * with deep teal (#0d9488) and deep red (#b91c1c) — white text on those is
+   * crisp. Dark mode fills with BRIGHT teal (#14b8a6) and salmon (#f87171), and
+   * white text on those is barely legible (contrast ≈ 2:1, well under WCAG AA).
+   * So the foreground flips to near-black, and every filled control stays readable
+   * in both themes without a single component knowing which theme it is in.
+   */
+  --color-on-accent: #ffffff;
+
+  /* elevation (Doc 08 §5) — shadow on light, see the dark block for why it changes */
+  --shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.06);
+  --shadow-md: 0 4px 12px -2px rgb(15 23 42 / 0.1);
+
   /* spacing 4px grid (Doc 08 §3) */
   --space-1: 4px;
   --space-2: 8px;
@@ -46,7 +91,29 @@
   --radius-lg: 12px;
 }
 
+/**
+ * `.dark` is kept alongside `[data-theme="dark"]` because Tailwind's `dark:`
+ * variant keys off the class. Both are set together on <html>, so a component may
+ * use either mechanism and get the same answer.
+ */
+:root[data-theme="dark"],
 .dark {
+  color-scheme: dark;
+
+  /**
+   * The brand ramp is re-anchored, not inverted. Teal 500/600 on near-black is
+   * fine for a fill but too dim for TEXT, so the mid-tones brighten while the
+   * deep end stays available for surfaces. A tenant's custom brand colour
+   * overrides these the same way it overrides the light ones (A8, white-label).
+   */
+  --color-brand-50: #042f2e;
+  --color-brand-100: #134e4a;
+  --color-brand-500: #2dd4bf;
+  --color-brand-600: #14b8a6;
+  --color-brand-700: #5eead4;
+  --color-brand-900: #ccfbf1;
+
+  /* Surfaces rise TOWARD the light — elevation inverts (see the header note). */
   --color-bg: #0b1220;
   --color-bg-subtle: #0f172a;
   --color-bg-elevated: #1e293b;
@@ -55,4 +122,31 @@
   --color-fg-subtle: #64748b;
   --color-border: #1e293b;
   --color-border-strong: #334155;
+
+  /**
+   * Re-picked for contrast against a dark surface, not merely darkened. The `-bg`
+   * tints are deep, low-saturation washes: a light `#fef2f2` danger tint would be
+   * a glowing white slab on a dark page and would draw the eye harder than the
+   * alert it is meant to carry.
+   */
+  --color-success: #4ade80;
+  --color-success-bg: #052e16;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #2e1e05;
+  --color-danger: #f87171;
+  --color-danger-bg: #2e0a0a;
+  --color-info: #60a5fa;
+  --color-info-bg: #0a1c33;
+  --color-critical-clinical: #ff6b6b;
+
+  /* Flips to near-black: the accent fills are BRIGHT here. See the light block. */
+  --color-on-accent: #0b1220;
+
+  /**
+   * Shadows barely read on a dark page — a black shadow on near-black is nothing.
+   * Depth comes from the lighter elevated SURFACE instead, so the shadow's job
+   * shrinks to a soft ambient edge rather than the primary depth cue.
+   */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.5);
 }

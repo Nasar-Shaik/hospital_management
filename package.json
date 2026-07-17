@@ -2,7 +2,7 @@
   "name": "medicore-hms",
   "private": true,
   "version": "0.0.1",
-  "description": "PaperlessTech HMS — enterprise multi-tenant hospital management SaaS (monorepo root)",
+  "description": "PaperlessTech HMS \u2014 enterprise multi-tenant hospital management SaaS (monorepo root)",
   "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=22"
@@ -16,9 +16,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "boundaries": "depcruise apps packages --config .dependency-cruiser.cjs",
-    "docker:dev": "docker compose -f infra/docker/docker-compose.yml up -d",
+    "docker:dev": "docker compose -f infra/docker/docker-compose.yml up -d --wait",
     "docker:dev:down": "docker compose -f infra/docker/docker-compose.yml down",
-    "prepare": "husky"
+    "clean": "rm -rf apps/*/.next apps/*/.next-dev apps/*/dist packages/*/dist .turbo apps/*/.turbo packages/*/.turbo",
+    "prepare": "husky",
+    "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.0",

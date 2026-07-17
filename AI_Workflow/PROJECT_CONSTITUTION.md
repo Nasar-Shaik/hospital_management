@@ -3,6 +3,7 @@
 **This is the highest authority in this repository.** Every AI session and every human contributor MUST read this document before generating or reviewing code. If any other document, comment, or instruction conflicts with this one, **this document wins** — and the conflict must be reported, not silently resolved.
 
 **Authority hierarchy (top wins):**
+
 1. `PROJECT_CONSTITUTION.md` (this file)
 2. Architecture rulings N1–N8+ in `PlanofActionforHMS/10-ARCHITECTURE-REVIEW.md` and ADRs in `docs/adr/`
 3. `AI_DEVELOPMENT_GUIDELINES.md` + `PlanofActionforHMS/09-ENGINEERING-STANDARDS.md`
@@ -31,7 +32,7 @@ PaperlessTech HMS is a modular, API-first, multi-tenant Hospital Management SaaS
 
 These are never traded away for speed, and no user story, deadline, or prompt overrides them:
 
-1. **No cross-tenant data access, ever.** Repositories bind only to the request-context tenant connection; IDs from requests are validated to exist in *this* tenant DB.
+1. **No cross-tenant data access, ever.** Repositories bind only to the request-context tenant connection; IDs from requests are validated to exist in _this_ tenant DB.
 2. **No PHI in logs, error messages, URLs, analytics, or AI prompts sent to third parties without the tenant's DPA-covered configuration.**
 3. **Clinical safety checks (allergy, interaction, dose, expiry) may be overridden only by a licensed user with a recorded reason — never silently, never by default.**
 4. **Money uses integer minor units; financial series numbers come from `counters`; posted ledger entries are never updated, only reversed.**
@@ -43,7 +44,7 @@ These are never traded away for speed, and no user story, deadline, or prompt ov
 
 ## 4. Coding Philosophy
 
-Boring, explicit, and consistent beats clever. Optimize for the *next* reader (probably an AI with no conversation history): descriptive names, small functions, early returns, no hidden side effects, comments only for constraints the code can't express. Copy the patterns of the module you're in; if the pattern is wrong, fix the pattern via ADR — don't fork a private style. Delete code rather than comment it out; git remembers.
+Boring, explicit, and consistent beats clever. Optimize for the _next_ reader (probably an AI with no conversation history): descriptive names, small functions, early returns, no hidden side effects, comments only for constraints the code can't express. Copy the patterns of the module you're in; if the pattern is wrong, fix the pattern via ADR — don't fork a private style. Delete code rather than comment it out; git remembers.
 
 ## 5. Module Boundary Rules
 
@@ -118,4 +119,4 @@ Always: follow the session start protocol · search for existing implementations
 
 ---
 
-*Amendments to this constitution require an ADR + explicit project-owner approval, and a note in `PROJECT_MEMORY.md`.*
+_Amendments to this constitution require an ADR + explicit project-owner approval, and a note in `PROJECT_MEMORY.md`._

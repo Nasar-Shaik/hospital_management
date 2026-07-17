@@ -5,6 +5,8 @@
 import { z } from "zod";
 
 export { z };
+/** Re-exported so consumers type middleware/helpers without importing zod directly. */
+export type { ZodError, ZodIssue, ZodTypeAny, infer as Infer } from "zod";
 
 /** Standard list-query params (Doc 04 §5.1). `.strict()` per Doc 09 §6. */
 export const listQuerySchema = z

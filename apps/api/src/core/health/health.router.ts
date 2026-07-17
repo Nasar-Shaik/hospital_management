@@ -7,7 +7,7 @@
  */
 import { Router, type Request, type Response } from "express";
 import type { ApiEnvelope, HealthStatus, ReadinessStatus } from "@medicore/types";
-import { pingMongo } from "../db/mongo.js";
+import { pingMaster } from "../db/masterDb.js";
 import { pingRedis } from "../redis/redis.js";
 import { env } from "../../config/env.js";
 
@@ -32,16 +32,14 @@ healthRouter.get("/health", (_req: Request, res: Response) => {
 
 healthRouter.get("/ready", async (_req: Request, res: Response) => {
   const checks: ReadinessStatus["checks"] = {
-    mongo: env.MONGO_URI ? await pingMongo() : "skipped",
+    mongo: env.MONGO_URI ? await pingMaster() : "skipped",
     redis: env.REDIS_URL ? await pingRedis() : "skipped",
   };
   const down = Object.values(checks).includes("down");
   const body: ApiEnvelope<ReadinessStatus> = {
     success: !down,
     data: { status: down ? "degraded" : "ready", service: SERVICE_NAME, checks },
-    ...(down
-      ? { error: { code: "HMS-TEN-004", message: "A dependency is unavailable" } }
-      : {}),
+    ...(down ? { error: { code: "HMS-TEN-004", message: "A dependency is unavailable" } } : {}),
   };
   res.status(down ? 503 : 200).json(body);
 });

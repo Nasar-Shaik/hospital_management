@@ -19,9 +19,9 @@ describe("money helpers (Constitution §3.4: integer minor units)", () => {
   });
 
   it("rejects cross-currency addition", () => {
-    expect(() =>
-      addMoney({ amount: 1, currency: "INR" }, { amount: 1, currency: "USD" }),
-    ).toThrow(/currency mismatch/);
+    expect(() => addMoney({ amount: 1, currency: "INR" }, { amount: 1, currency: "USD" })).toThrow(
+      /currency mismatch/,
+    );
   });
 });
 

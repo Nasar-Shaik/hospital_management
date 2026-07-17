@@ -1,0 +1,991 @@
+/**
+ * The tenant-database migration set. Every tenant DB converges to this.
+ *
+ * Rules (Doc 09 §14): ids are monotonic and never renumbered; every migration has
+ * an `up` and a `down`; index builds are background so they never block a live
+ * hospital.
+ *
+ * Phase 1A ships only the platform-level collections that exist today. Business
+ * collections (patients, appointments, …) are added by their own modules in
+ * later phases — each as a NEW migration, never by editing an applied one.
+ */
+import type { Migration } from "./runner.js";
+
+export const tenantMigrations: Migration[] = [
+  {
+    id: "0001-counters",
+    description: "Business numbering sequences (Doc 03 §5.1) — UHIDs, invoice numbers, tokens",
+    up: async (db) => {
+      await db.createCollection("counters").catch(() => undefined);
+    },
+    down: async (db) => {
+      await db
+        .collection("counters")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0002-outbox-events",
+    description: "Transactional outbox (Doc 03 §5.2) — the single event-publishing seam",
+    up: async (db) => {
+      await db.createCollection("outboxEvents").catch(() => undefined);
+      await db
+        .collection("outboxEvents")
+        .createIndex({ tenantId: 1, status: 1, createdAt: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("outboxEvents")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0003-audit-logs",
+    description: "Append-only audit trail (Doc 09 §9) — every PHI/financial mutation",
+    up: async (db) => {
+      await db.createCollection("auditLogs").catch(() => undefined);
+      await db
+        .collection("auditLogs")
+        .createIndex({ tenantId: 1, resource: 1, resourceId: 1, at: -1 }, { background: true });
+      await db
+        .collection("auditLogs")
+        .createIndex({ tenantId: 1, actorId: 1, at: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("auditLogs")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0004-idempotency-keys",
+    description: "Idempotency keys with TTL (Doc 03 §5.2) — money-moving POSTs",
+    up: async (db) => {
+      await db.createCollection("idempotencyKeys").catch(() => undefined);
+      await db
+        .collection("idempotencyKeys")
+        .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("idempotencyKeys")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0005-identity-auth",
+    description:
+      "Identity & auth (ADR-0009/0010): users, credentials, roles, sessions, refresh tokens, MFA",
+    up: async (db) => {
+      for (const name of [
+        "users",
+        "credentials",
+        "passwordHistory",
+        "roles",
+        "userRoles",
+        "sessions",
+        "refreshTokens",
+        "mfaSecrets",
+        "loginAttempts",
+      ]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      // Email is the login identifier — uniqueness is enforced by the database,
+      // not by a read-then-write race in the service (Doc 03 §4).
+      await db
+        .collection("users")
+        .createIndex({ tenantId: 1, email: 1 }, { unique: true, background: true });
+
+      await db
+        .collection("credentials")
+        .createIndex({ tenantId: 1, userId: 1 }, { unique: true, background: true });
+      await db
+        .collection("passwordHistory")
+        .createIndex({ tenantId: 1, userId: 1, createdAt: -1 }, { background: true });
+
+      await db
+        .collection("roles")
+        .createIndex({ tenantId: 1, code: 1 }, { unique: true, background: true });
+      await db
+        .collection("userRoles")
+        .createIndex({ tenantId: 1, userId: 1, roleId: 1 }, { unique: true, background: true });
+
+      // Refresh lookups are by digest and must be a single indexed hit.
+      await db
+        .collection("refreshTokens")
+        .createIndex({ tenantId: 1, tokenHash: 1 }, { unique: true, background: true });
+      // Reuse detection revokes a whole family at once.
+      await db
+        .collection("refreshTokens")
+        .createIndex({ tenantId: 1, family: 1 }, { background: true });
+      await db.collection("sessions").createIndex({ tenantId: 1, userId: 1 }, { background: true });
+      await db
+        .collection("sessions")
+        .createIndex({ tenantId: 1, family: 1 }, { unique: true, background: true });
+
+      await db
+        .collection("mfaSecrets")
+        .createIndex({ tenantId: 1, userId: 1 }, { unique: true, background: true });
+
+      // Lockout counts recent failures for an email.
+      await db
+        .collection("loginAttempts")
+        .createIndex({ tenantId: 1, email: 1, at: -1 }, { background: true });
+
+      // TTL: expired sessions, spent refresh tokens and the attempt ledger are
+      // reaped by Mongo. Without this, `refreshTokens` grows without bound —
+      // every rotation writes a row (DATA_RETENTION_POLICY).
+      for (const name of ["sessions", "refreshTokens", "loginAttempts"]) {
+        await db
+          .collection(name)
+          .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, background: true });
+      }
+    },
+    down: async (db) => {
+      for (const name of [
+        "users",
+        "credentials",
+        "passwordHistory",
+        "roles",
+        "userRoles",
+        "sessions",
+        "refreshTokens",
+        "mfaSecrets",
+        "loginAttempts",
+      ]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+  {
+    id: "0006-rbac-permissions",
+    description: "Permission catalog + role grants (ADR-0010) — layer 2 of authorization",
+    up: async (db) => {
+      for (const name of ["permissions", "rolePermissions"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      await db
+        .collection("permissions")
+        .createIndex({ tenantId: 1, code: 1 }, { unique: true, background: true });
+
+      // One grant per (role, permission) — the unique index is what makes
+      // re-seeding idempotent instead of duplicating every grant on each deploy.
+      await db
+        .collection("rolePermissions")
+        .createIndex(
+          { tenantId: 1, roleId: 1, permissionId: 1 },
+          { unique: true, background: true },
+        );
+
+      // The hot authorization query: role ids → permission codes.
+      await db
+        .collection("rolePermissions")
+        .createIndex({ tenantId: 1, roleId: 1, permissionCode: 1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["permissions", "rolePermissions"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+  {
+    id: "0007-audit-chain-outbox",
+    description:
+      "Audit sequencing + hash-chain anchors (Doc 09 §9) and the outbox relay index (ADR-0007)",
+    up: async (db) => {
+      for (const name of ["auditAnchors", "counters"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * The gap-free sequence is what makes a DELETED audit entry visible: without
+       * a unique index there is nothing to stop a second entry claiming a hole's
+       * number, and a re-used seq is indistinguishable from an honest one.
+       */
+      await db
+        .collection("auditLogs")
+        .createIndex({ tenantId: 1, seq: 1 }, { unique: true, background: true });
+
+      // The compliance officer's actual query: "what happened, newest first",
+      // filtered by category (PHI vs money vs security).
+      await db.collection("auditLogs").createIndex({ tenantId: 1, at: -1 }, { background: true });
+      await db
+        .collection("auditLogs")
+        .createIndex({ tenantId: 1, category: 1, at: -1 }, { background: true });
+
+      await db
+        .collection("auditAnchors")
+        .createIndex({ tenantId: 1, index: 1 }, { unique: true, background: true });
+
+      /**
+       * The relay's claim query: due, unsent, oldest first. Without this index the
+       * relay scans the whole outbox on every poll — including the `sent` rows,
+       * which is every event the hospital has ever published.
+       */
+      await db
+        .collection("outboxEvents")
+        .createIndex({ tenantId: 1, status: 1, availableAt: 1 }, { background: true });
+
+      // Consumers dedupe on eventId; so does BullMQ's jobId. A duplicate here
+      // would mean two different events claiming the same identity.
+      await db
+        .collection("outboxEvents")
+        .createIndex({ eventId: 1 }, { unique: true, background: true });
+    },
+    down: async (db) => {
+      for (const name of ["auditAnchors", "counters"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+      // `auditLogs` is NOT dropped here. Migration 0003 created it and a `down`
+      // that deletes the audit trail is a compliance incident wearing a rollback
+      // costume — the indexes go, the evidence stays.
+      for (const index of ["tenantId_1_seq_1", "tenantId_1_at_-1", "tenantId_1_category_1_at_-1"]) {
+        await db
+          .collection("auditLogs")
+          .dropIndex(index)
+          .catch(() => undefined);
+      }
+    },
+  },
+  {
+    id: "0008-patients",
+    description: "Patient master + MPI (Doc 02 C1) — the first PHI collection",
+    up: async (db) => {
+      await db.createCollection("patients").catch(() => undefined);
+
+      /**
+       * The UHID is the hospital's promise that this number means this person, and
+       * only the database can keep that promise. A service-level "check then
+       * insert" loses the race between two clerks registering at the same instant
+       * — and two patients sharing a UHID is not a bug you can fix afterwards,
+       * because you can no longer tell which records belonged to whom.
+       */
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, uhid: 1 }, { unique: true, background: true });
+
+      // The MPI's `$or`: each arm needs its own index or the duplicate check
+      // degrades into a collection scan — run on every registration, at a desk,
+      // with a patient standing there.
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, nameKey: 1 }, { background: true });
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, "contact.phone": 1 }, { background: true });
+      await db.collection("patients").createIndex({ tenantId: 1, dob: 1 }, { background: true });
+
+      // The patient list: active first, newest first, branch-scoped.
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+      await db
+        .collection("patients")
+        .createIndex({ tenantId: 1, branchId: 1, status: 1 }, { background: true });
+    },
+    down: async (db) => {
+      /**
+       * This drops a collection of PATIENT RECORDS. It exists because Doc 09 §14
+       * requires every migration to have a `down`, and it is honest about what it
+       * does — but rolling this back on a live hospital destroys clinical data
+       * that is under a statutory retention period (DATA_RETENTION_POLICY). The
+       * real rollback for a bad patients release is a code revert, not this.
+       */
+      await db
+        .collection("patients")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0009-role-branch-scope",
+    description:
+      "Explicit branch scope on role bindings (ADR-0010) — an empty list stops meaning two things",
+    up: async (db) => {
+      /**
+       * Backfills `branchScope` on every existing binding, from what its branch
+       * list already implied:
+       *
+       *   branchIds empty     → "all"       nobody has been confined to a branch,
+       *                                     because branches are not a feature yet
+       *                                     (B1–B3). This is every user today.
+       *   branchIds non-empty → "branches"  confined to exactly those.
+       *
+       * This preserves today's behaviour EXACTLY and grants nobody anything they
+       * did not already have. Before P2 there was no `branch`-scoped resource, so
+       * every user effectively reached their whole hospital; this writes that fact
+       * down so `scopeFilter` no longer has to infer it from an empty array.
+       *
+       * Ordered AFTER 0008 because that is the migration that made the ambiguity
+       * reachable — `patients` is the first branch-scoped collection.
+       */
+      await db.collection("userRoles").updateMany(
+        {
+          branchScope: { $exists: false },
+          $or: [{ branchIds: { $size: 0 } }, { branchIds: { $exists: false } }],
+        },
+        { $set: { branchScope: "all" } },
+      );
+
+      await db
+        .collection("userRoles")
+        .updateMany({ branchScope: { $exists: false } }, { $set: { branchScope: "branches" } });
+    },
+    down: async (db) => {
+      await db.collection("userRoles").updateMany({}, { $unset: { branchScope: "" } });
+    },
+  },
+  {
+    id: "0010-appointments",
+    description: "Appointment book + doctor schedules (Doc 02 E1/D2)",
+    up: async (db) => {
+      for (const name of ["appointments", "doctorSchedules"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * ── THE DOUBLE-BOOKING INVARIANT ────────────────────────────────────────
+       * This index IS the rule "a doctor cannot be in two places at once". It is
+       * not a performance index that happens to be unique — it is the only thing
+       * that actually prevents the race, and no service-level check can replace it:
+       * two receptionists both read "10:30 is free" and both write, and only the
+       * database can arbitrate between them.
+       *
+       * PARTIAL, on `occupies`, because a cancelled appointment must RELEASE its
+       * slot while a booked one holds it. `partialFilterExpression` cannot express
+       * `status: {$in: [...]}`, which is why the occupying states are collapsed
+       * into that one boolean (appointment.model.ts).
+       *
+       * If you ever find yourself dropping this to fix a bug, the bug is elsewhere.
+       */
+      await db.collection("appointments").createIndex(
+        { tenantId: 1, doctorId: 1, startAt: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { occupies: { $eq: true } },
+          background: true,
+          name: "one_doctor_one_slot",
+        },
+      );
+
+      // The two screens that exist: a doctor's day, and a patient's history.
+      await db
+        .collection("appointments")
+        .createIndex({ tenantId: 1, doctorId: 1, startAt: 1, status: 1 }, { background: true });
+      await db
+        .collection("appointments")
+        .createIndex({ tenantId: 1, patientId: 1, startAt: -1 }, { background: true });
+      await db
+        .collection("appointments")
+        .createIndex({ tenantId: 1, branchId: 1, startAt: 1 }, { background: true });
+
+      // One active template per doctor per weekday — the upsert key.
+      await db
+        .collection("doctorSchedules")
+        .createIndex({ tenantId: 1, doctorId: 1, weekday: 1 }, { unique: true, background: true });
+    },
+    down: async (db) => {
+      for (const name of ["appointments", "doctorSchedules"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+
+  {
+    id: "0011-notifications",
+    description: "Notification ledger + template catalog (Doc 02 A6)",
+    up: async (db) => {
+      for (const name of ["notifications", "notificationTemplates"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * ── THE IDEMPOTENCY INVARIANT ───────────────────────────────────────────
+       * This index IS the rule "one message per cause". It is not a lookup index
+       * that happens to be unique — it is the only thing that actually stops a
+       * patient receiving two confirmations for one booking.
+       *
+       * Delivery is at-least-once by design (ADR-0007): the relay redelivers rather
+       * than risk losing an event, so the consumer WILL see `appointment.booked`
+       * twice. No service-level "have we already sent this?" check can arbitrate
+       * that — two handlers on two pods both read "no" and both send. Only the
+       * database can decide, and this is where it does.
+       *
+       * The caller supplies `dedupeKey` from the message's CAUSE
+       * (`appointment.confirmation:{id}`), never from its content — so a redelivery,
+       * a DLQ replay, or a restore all collide here and lose.
+       */
+      await db
+        .collection("notifications")
+        .createIndex(
+          { tenantId: 1, dedupeKey: 1 },
+          { unique: true, background: true, name: "one_message_per_cause" },
+        );
+
+      // "Did they get it?" — the ledger's reason to exist, asked at a front desk
+      // with a patient on the phone. Newest first, per recipient.
+      await db
+        .collection("notifications")
+        .createIndex({ tenantId: 1, recipientId: 1, createdAt: -1 }, { background: true });
+
+      // The operator's view: what is stuck, what bounced, what never had an address.
+      await db
+        .collection("notifications")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+
+      // The key the code renders by — and the upsert key the seed writes through.
+      await db
+        .collection("notificationTemplates")
+        .createIndex({ tenantId: 1, key: 1 }, { unique: true, background: true });
+    },
+    down: async (db) => {
+      for (const name of ["notifications", "notificationTemplates"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+
+  {
+    id: "0012-encounters",
+    description: "Encounter + Episode of Care — the central clinical object (ADR-0013)",
+    up: async (db) => {
+      for (const name of ["encounters", "episodesOfCare"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      /**
+       * ── THE ONE-OPEN-ENCOUNTER INVARIANT ────────────────────────────────────
+       * This index IS the rule "a patient cannot be in the building twice at once".
+       *
+       * It exists to make the commonest data-quality disaster in an OPD physically
+       * impossible: a patient goes to the lab, comes back, and a clerk who cannot
+       * see that their visit is still open registers them AGAIN. One visit becomes
+       * two — the census double-counts them, the bill splits across two records
+       * that no longer reconcile, and the doctor's history has a hole in it.
+       *
+       * No service-level check can prevent it: two desks both read "no open
+       * encounter" and both write. Only the database can arbitrate, and this is
+       * where it does. The service catches the duplicate-key error and hands the
+       * clerk back the encounter that already exists — which is what they actually
+       * wanted, because the patient is already here.
+       *
+       * PARTIAL, on `open`, because a patient must be able to come back TOMORROW.
+       * `partialFilterExpression` cannot express `status: {$in: [...]}`, which is
+       * why the live states collapse into that one boolean (encounter.model.ts) —
+       * exactly as `appointments.occupies` does for the double-booking index.
+       */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, patientId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true } },
+          background: true,
+          name: "one_open_encounter_per_patient",
+        },
+      );
+
+      // The queue board: who is waiting, in token order, for this doctor/department.
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, doctorId: 1, status: 1, token: 1 }, { background: true });
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, departmentId: 1, status: 1, token: 1 }, { background: true });
+
+      // The patient's history, newest first.
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, patientId: 1, arrivedAt: -1 }, { background: true });
+
+      // The care story: every encounter in one episode (ADR-0013 §4). This is the
+      // read that makes an admission inherit the OP consultation that preceded it.
+      await db
+        .collection("encounters")
+        .createIndex({ tenantId: 1, episodeId: 1, arrivedAt: 1 }, { background: true });
+
+      await db
+        .collection("episodesOfCare")
+        .createIndex({ tenantId: 1, patientId: 1, startedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["encounters", "episodesOfCare"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+  {
+    id: "0013-orders",
+    description: "Orders — the spine that carries work between departments (ADR-0013 §3)",
+    up: async (db) => {
+      await db.createCollection("orders").catch(() => undefined);
+
+      /**
+       * ── THE DEPARTMENT WORKLIST INDEX ───────────────────────────────────────
+       * This index IS the lab's worklist, and the radiology worklist, and the
+       * pharmacy's. "Doctor orders appear automatically in the destination
+       * department" is not a hand-off somebody has to build — it is this query
+       * being fast.
+       *
+       * `priorityRank` before `orderedAt` is deliberate and it is clinical: sickest
+       * first, then oldest. A worklist sorted purely by arrival time is a worklist
+       * in which the emergency troponin waits behind the routine cholesterol.
+       */
+      await db
+        .collection("orders")
+        .createIndex(
+          { tenantId: 1, category: 1, status: 1, priorityRank: 1, orderedAt: 1 },
+          { background: true, name: "department_worklist" },
+        );
+
+      /**
+       * ── THE IDEMPOTENCY INDEX ───────────────────────────────────────────────
+       * A doctor double-clicking "Order CBC" must not draw two tubes of blood from a
+       * real arm and raise two bills for it. Nor must a client retrying after a
+       * timeout — and that is the case a disabled button cannot save you from,
+       * because the first request may well have succeeded before the connection
+       * dropped.
+       *
+       * PARTIAL, because `requestId` is optional: a `curl` without one still works,
+       * and without the partial filter every such order would collide on `null`.
+       */
+      await db.collection("orders").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_order_per_request_id",
+        },
+      );
+
+      // "Is anything still owed on this visit?" — the question that decides whether a
+      // patient parked in `awaiting_results` can be called back in to the doctor.
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, encounterId: 1, status: 1 }, { background: true });
+
+      // The patient's investigations, newest first — and the episode read that makes
+      // an admission inherit the OP consultation's tests (ADR-0013 §4).
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, patientId: 1, orderedAt: -1 }, { background: true });
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, episodeId: 1, orderedAt: 1 }, { background: true });
+
+      // "What have I ordered, and what has come back?" — the doctor's own list.
+      await db
+        .collection("orders")
+        .createIndex({ tenantId: 1, orderedBy: 1, status: 1, orderedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("orders")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0014-billing",
+    description: "Tariff, charge ledger and invoices (Doc 02 F-group)",
+    up: async (db) => {
+      for (const name of ["serviceItems", "charges", "invoices"]) {
+        await db.createCollection(name).catch(() => undefined);
+      }
+
+      // One tariff entry per code. A price list with two `CBC` rows silently charges
+      // whichever one the query happened to reach first.
+      await db
+        .collection("serviceItems")
+        .createIndex({ tenantId: 1, code: 1 }, { unique: true, background: true });
+      await db
+        .collection("serviceItems")
+        .createIndex({ tenantId: 1, category: 1, name: 1 }, { background: true });
+
+      /**
+       * ── THE DOUBLE-BILLING INVARIANT ────────────────────────────────────────
+       * The outbox is at-least-once BY DESIGN, so the consumer that charges for a lab
+       * order WILL run twice. Without this index the patient pays for two blood tests
+       * and only had one — and they find out at the counter, in front of a queue.
+       *
+       * PARTIAL, because a manual charge has no `sourceId` and a cashier must be able
+       * to post two identical items (two dressings, same visit) on purpose.
+       */
+      await db.collection("charges").createIndex(
+        { tenantId: 1, sourceId: 1, code: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { sourceId: { $exists: true } },
+          background: true,
+          name: "one_charge_per_cause",
+        },
+      );
+
+      // The bill: every charge on this visit, oldest first.
+      await db
+        .collection("charges")
+        .createIndex({ tenantId: 1, encounterId: 1, postedAt: 1 }, { background: true });
+      await db
+        .collection("charges")
+        .createIndex({ tenantId: 1, patientId: 1, postedAt: -1 }, { background: true });
+
+      // One live invoice per visit.
+      await db
+        .collection("invoices")
+        .createIndex({ tenantId: 1, encounterId: 1 }, { background: true });
+      // The invoice number is a statutory identifier: two bills numbered INV-2026-0042
+      // is a tax problem, not a display bug.
+      await db.collection("invoices").createIndex(
+        { tenantId: 1, number: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { number: { $exists: true } },
+          background: true,
+          name: "one_invoice_per_number",
+        },
+      );
+      await db
+        .collection("invoices")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["serviceItems", "charges", "invoices"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+
+  {
+    id: "0015-prescriptions",
+    description: "Prescriptions + dispensing — what the doctor ordered and what was handed over",
+    up: async (db) => {
+      /**
+       * The chart's view: every prescription on this visit, newest first. This is what the
+       * doctor's Rx pad and the pharmacist's screen both read.
+       */
+      await db
+        .collection("prescriptions")
+        .createIndex({ tenantId: 1, encounterId: 1, prescribedAt: -1 }, { background: true });
+
+      // The patient's medication history across every visit (ADR-0013 §4: the episode's
+      // timeline is a read model, and this is one of the queries behind it).
+      await db
+        .collection("prescriptions")
+        .createIndex({ tenantId: 1, patientId: 1, prescribedAt: -1 }, { background: true });
+
+      // Resolving the pharmacy worklist entry back to the drugs it carries. One
+      // prescription raises at most one `pharmacy` order (`requestId: rx:<id>`), so this
+      // is a lookup, not a scan.
+      await db
+        .collection("prescriptions")
+        .createIndex(
+          { tenantId: 1, orderId: 1 },
+          { background: true, partialFilterExpression: { orderId: { $exists: true } } },
+        );
+
+      /**
+       * ── THE DOUBLE-HANDOVER INVARIANT ───────────────────────────────────────
+       * A pharmacist double-clicking "Dispense", or a client retrying after a timeout on a
+       * request that had already succeeded, must not hand over — and bill for — a second
+       * lot of the same drugs. With a controlled substance that is not a billing error, it
+       * is a diversion, and the ledger would show it never happened.
+       *
+       * PARTIAL, because `requestId` is optional: a handover recorded by an internal
+       * caller with no client to generate a key is still a legitimate handover, and a
+       * plain unique index would collapse every one of those onto a single null.
+       */
+      await db.collection("dispenses").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_dispense_per_request_id",
+        },
+      );
+
+      // The handover ledger for one prescription, oldest first — "who gave what, when".
+      // The `dispensedQty` on each line is a SUM of these rows, and this index is what
+      // makes that sum re-derivable rather than merely asserted.
+      await db
+        .collection("dispenses")
+        .createIndex({ tenantId: 1, prescriptionId: 1, dispensedAt: 1 }, { background: true });
+
+      // What this patient has actually been given, across visits. The question a
+      // pharmacist asks when somebody says they lost their tablets.
+      await db
+        .collection("dispenses")
+        .createIndex({ tenantId: 1, patientId: 1, dispensedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["prescriptions", "dispenses"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
+
+  {
+    id: "0016-admissions",
+    description: "Ward notes + the discharge summary — the record of an inpatient stay",
+    up: async (db) => {
+      /**
+       * The ward round: this admission's chart, oldest first.
+       */
+      await db
+        .collection("wardNotes")
+        .createIndex({ tenantId: 1, encounterId: 1, at: 1 }, { background: true });
+
+      /**
+       * ── ONE ADMISSION, ONE DISCHARGE SUMMARY ────────────────────────────────
+       * Two summaries for one stay means the patient goes home holding one document while
+       * the hospital's record says another, and nothing anywhere says which is current.
+       * The next doctor reads whichever they happen to find.
+       *
+       * PARTIAL on the type, because there are MANY progress notes per admission and that
+       * is the entire point of them.
+       */
+      await db.collection("wardNotes").createIndex(
+        { tenantId: 1, encounterId: 1, type: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { type: "discharge_summary" },
+          background: true,
+          name: "one_discharge_summary_per_admission",
+        },
+      );
+
+      // The patient's notes across every stay — the question asked when somebody is
+      // readmitted and nobody can remember what happened last time.
+      await db
+        .collection("wardNotes")
+        .createIndex({ tenantId: 1, patientId: 1, at: -1 }, { background: true });
+
+      /**
+       * The ward round's list: everyone in a bed, in the order a doctor walks.
+       *
+       * PARTIAL on `open`, matching `one_open_encounter_per_patient` — a discharged
+       * encounter carries no `open` key at all, so it drops out of this index entirely
+       * rather than sitting in it forever making the ward list slower every year.
+       */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+        {
+          partialFilterExpression: { open: { $eq: true } },
+          background: true,
+          name: "ward_round",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("wardNotes")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("encounters")
+        .dropIndex("ward_round")
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0017-allergies",
+    description: "The allergy list — what the prescribing safety check screens against",
+    up: async (db) => {
+      /**
+       * A patient's allergies, most recent first — the read behind both the management
+       * screen and the prescribing check. Keyed on the patient and NOT the branch, because
+       * an allergy follows the person across every branch of the hospital (allergy.model.ts).
+       */
+      await db
+        .collection("allergies")
+        .createIndex({ tenantId: 1, patientId: 1, notedAt: -1 }, { background: true });
+
+      /**
+       * ── ONE ACTIVE ROW PER ALLERGEN, PER PATIENT ────────────────────────────
+       * Two "active penicillin allergy" rows are not more information; they are one fact
+       * entered twice, and they would make the prescribing alert fire in duplicate and clutter
+       * the list a clinician has to read in a hurry.
+       *
+       * PARTIAL on `status: "active"`, so a REFUTED penicillin allergy does not block a later,
+       * correctly re-recorded active one — the patient's history can hold both "was thought
+       * allergic, ruled out" and a fresh finding, which is exactly the record a real allergy
+       * work-up produces.
+       */
+      await db.collection("allergies").createIndex(
+        { tenantId: 1, patientId: 1, allergen: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { status: "active" },
+          background: true,
+          name: "one_active_allergy_per_allergen",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("allergies")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0018-report-files",
+    description: "Uploaded diagnostic report files (stored in the tenant DB)",
+    up: async (db) => {
+      // The doctor's cross-visit report view: everything for a patient, newest visit first.
+      await db
+        .collection("reportFiles")
+        .createIndex({ tenantId: 1, patientId: 1, visitDate: -1 }, { background: true });
+      // The reports answering one order (a test can produce more than one document).
+      await db
+        .collection("reportFiles")
+        .createIndex({ tenantId: 1, orderId: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("reportFiles")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0019-medicine-master",
+    description: "Pharmacy medicine master and its stock-movement ledger",
+    up: async (db) => {
+      // One medicine per code per hospital — the code is the key a dispense matches on, so a
+      // duplicate would make the decrement ambiguous. Unique per tenant.
+      await db
+        .collection("medicines")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_medicine_per_code", background: true },
+        );
+      // The master list, ordered by name (only the active ones, but the sort is the same).
+      await db.collection("medicines").createIndex({ tenantId: 1, name: 1 }, { background: true });
+      // The low-stock report scans stock against the reorder level.
+      await db
+        .collection("medicines")
+        .createIndex({ tenantId: 1, stockUnits: 1 }, { background: true });
+
+      // The movement history for one medicine, newest first.
+      await db
+        .collection("stockMovements")
+        .createIndex({ tenantId: 1, medicineId: 1, createdAt: -1 }, { background: true });
+      // IDEMPOTENCY: a dispense may move a medicine exactly once, however many times the
+      // `medication.dispensed` event is redelivered. Partial — only dispense rows carry a
+      // dispenseId, and receipts/adjustments must be free to repeat.
+      await db.collection("stockMovements").createIndex(
+        { tenantId: 1, dispenseId: 1, medicineCode: 1 },
+        {
+          unique: true,
+          name: "one_stock_move_per_dispense_line",
+          background: true,
+          partialFilterExpression: { dispenseId: { $exists: true } },
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("medicines")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("stockMovements")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0020-bed-occupancy",
+    description: "One open inpatient stay per bed — no two patients recorded in the same bed",
+    up: async (db) => {
+      /**
+       * A bed holds one patient at a time. Among OPEN encounters that record a bed — i.e. the
+       * current inpatients — the ward + bedCode must be unique, so the database refuses the
+       * double-occupancy the ward screen could not (PROJECT_MEMORY §5). Exactly the shape of
+       * `one_open_encounter_per_patient`: a unique PARTIAL index on `open`, so a discharged stay
+       * frees the bed the instant its `open` key is removed, and OP encounters (which carry no
+       * bed) are never in scope.
+       *
+       * Scoped by ward AND bedCode because a bedCode is only unique within its ward — `ICU / A-12`
+       * and `General / A-12` are two different beds. If this index cannot be built because two open
+       * stays already share a bed, that is the very defect it exists to prevent: move one patient
+       * to a free bed, then re-run.
+       */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+          background: true,
+          name: "one_open_stay_per_bed",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("encounters")
+        .dropIndex("one_open_stay_per_bed")
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0021-password-reset-tokens",
+    description: "Single-use password-reset tokens (forgot-password)",
+    up: async (db) => {
+      // A hash resolves to exactly one token — the lookup on reset is by hash, and two rows sharing
+      // one would make "which token is this?" ambiguous.
+      await db
+        .collection("passwordResetTokens")
+        .createIndex(
+          { tenantId: 1, tokenHash: 1 },
+          { unique: true, name: "one_reset_token_per_hash", background: true },
+        );
+      // Invalidate-then-issue reads a user's outstanding tokens by id.
+      await db
+        .collection("passwordResetTokens")
+        .createIndex({ tenantId: 1, userId: 1 }, { background: true });
+      // TTL: an expired reset token is rubbish — MongoDB reaps it at its own expiry. Bearer secrets
+      // must not linger in the database after they can no longer be used.
+      await db
+        .collection("passwordResetTokens")
+        .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("passwordResetTokens")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+];

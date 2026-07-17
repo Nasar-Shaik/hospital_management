@@ -18,17 +18,17 @@ The UI contract for every surface (web app, admin console, patient/doctor/staff 
 
 Semantic tokens (CSS variables; Tailwind maps to these — components never use raw palette values):
 
-| Token | Usage |
-|-------|-------|
-| `--color-brand-{50…950}` | Tenant-brandable ramp (default: teal/blue medical neutral) |
-| `--color-bg`, `--color-bg-subtle`, `--color-bg-elevated` | Page, section, card/popover backgrounds |
-| `--color-fg`, `--color-fg-muted`, `--color-fg-subtle` | Primary/secondary/tertiary text |
-| `--color-border`, `--color-border-strong` | Dividers, inputs |
-| `--color-success` / `-bg` | Completed, paid, normal results |
-| `--color-warning` / `-bg` | Pending, near-expiry, abnormal-flagged |
-| `--color-danger` / `-bg` | Critical values, overdue, destructive actions, allergies |
-| `--color-info` / `-bg` | Informational states |
-| `--color-critical-clinical` | Reserved: panic lab values, code blue, severe allergy — highest visual priority, never overridden by branding |
+| Token                                                    | Usage                                                                                                         |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `--color-brand-{50…950}`                                 | Tenant-brandable ramp (default: teal/blue medical neutral)                                                    |
+| `--color-bg`, `--color-bg-subtle`, `--color-bg-elevated` | Page, section, card/popover backgrounds                                                                       |
+| `--color-fg`, `--color-fg-muted`, `--color-fg-subtle`    | Primary/secondary/tertiary text                                                                               |
+| `--color-border`, `--color-border-strong`                | Dividers, inputs                                                                                              |
+| `--color-success` / `-bg`                                | Completed, paid, normal results                                                                               |
+| `--color-warning` / `-bg`                                | Pending, near-expiry, abnormal-flagged                                                                        |
+| `--color-danger` / `-bg`                                 | Critical values, overdue, destructive actions, allergies                                                      |
+| `--color-info` / `-bg`                                   | Informational states                                                                                          |
+| `--color-critical-clinical`                              | Reserved: panic lab values, code blue, severe allergy — highest visual priority, never overridden by branding |
 
 Rules: semantic tokens only in components; brand ramp only for primary actions/navigation/accents; every fg/bg pair ships ≥ 4.5:1 contrast (validated in CI via token tests).
 
@@ -68,13 +68,13 @@ Rules: semantic tokens only in components; brand ramp only for primary actions/n
 
 ## 9. Buttons
 
-| Variant | Use |
-|---------|-----|
-| `primary` (brand) | One per view — the main action |
-| `secondary` (outline) | Alternate actions |
-| `ghost` | Toolbars, table row actions |
+| Variant                | Use                                                  |
+| ---------------------- | ---------------------------------------------------- |
+| `primary` (brand)      | One per view — the main action                       |
+| `secondary` (outline)  | Alternate actions                                    |
+| `ghost`                | Toolbars, table row actions                          |
 | `destructive` (danger) | Delete/void/cancel-bill — always with confirm dialog |
-| `link` | Inline navigation |
+| `link`                 | Inline navigation                                    |
 
 Sizes `sm 32` `md 40` (default) `lg 48` (patient-facing/touch). Loading state = spinner + retained label; disabled always has a tooltip explaining why. Icon-only buttons require `aria-label`.
 
@@ -117,13 +117,13 @@ Every list/table/widget defines: icon + one-line explanation + primary action ("
 
 ## 18. Notification Guidelines
 
-| Channel | Use | Rules |
-|---------|-----|-------|
-| Toast (4 s) | Action feedback | Max 1 visible; success auto-dismiss; errors persist until dismissed |
-| Inline alert | Contextual warnings (allergy conflict, credit limit) | Not dismissible if safety-relevant |
-| Notification center | Async outcomes (report ready, result approved) | Read/unread, deep links |
-| Push/SMS/WhatsApp | Time-critical + patient engagement | Respect `notificationPreferences`, quiet hours, locale templates |
-| Blocking modal | Only: destructive confirms, e-sign, panic-value acknowledgment | Requires explicit action |
+| Channel             | Use                                                            | Rules                                                               |
+| ------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Toast (4 s)         | Action feedback                                                | Max 1 visible; success auto-dismiss; errors persist until dismissed |
+| Inline alert        | Contextual warnings (allergy conflict, credit limit)           | Not dismissible if safety-relevant                                  |
+| Notification center | Async outcomes (report ready, result approved)                 | Read/unread, deep links                                             |
+| Push/SMS/WhatsApp   | Time-critical + patient engagement                             | Respect `notificationPreferences`, quiet hours, locale templates    |
+| Blocking modal      | Only: destructive confirms, e-sign, panic-value acknowledgment | Requires explicit action                                            |
 
 Critical clinical alerts (panic values, allergy conflicts) bypass quiet-hours and require acknowledgment (audited).
 

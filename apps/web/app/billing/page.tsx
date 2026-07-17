@@ -1,0 +1,347 @@
+"use client";
+
+/**
+ * Billing (Doc 02 F-group) — the counter.
+ *
+ * ── THE SAME SCREEN SERVES A PRIVATE AND A GOVERNMENT HOSPITAL ───────────────
+ * At Sunrise it shows ₹1,300 and takes the money. At District General every line is
+ * ₹0 and the bill is already `paid` the moment it is issued. Same code, same columns,
+ * same invoice number — the difference is `billingMode` on the hospital's preset, and
+ * nothing on this page knows which kind of hospital it is running in.
+ *
+ * A government bill is NOT an empty screen. It has real line items with real list
+ * prices struck through, because free to the PATIENT is not free to the STATE — and
+ * the numbers the state needs to cost the care are exactly these.
+ *
+ * ── EVERY AMOUNT IS PAISE UNTIL IT IS PRINTED ────────────────────────────────
+ * `rupees()` at the edge, nothing computed on the divided number (lib/money.ts).
+ */
+import { useCallback, useEffect, useState } from "react";
+import {
+  ApiClientError,
+  type Invoice,
+  type InvoiceStatus,
+  type Patient,
+} from "@medicore/api-client";
+import { rupees, toPaise } from "../../lib/money";
+import { useAuth } from "../../components/AuthProvider";
+import { Protected } from "../../components/Protected";
+import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+
+const METHODS = ["cash", "card", "upi", "netbanking", "cheque", "insurance"] as const;
+
+function statusTone(s: InvoiceStatus): "success" | "danger" | "brand" | "neutral" {
+  if (s === "paid") return "success";
+  if (s === "cancelled") return "danger";
+  if (s === "finalized") return "brand";
+  return "neutral";
+}
+
+/** Taking money. Partial payments are normal; the server refuses an overpayment. */
+function PaymentForm({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void }) {
+  const { api } = useAuth();
+  const balance = invoice.total - invoice.paid;
+
+  // Pre-filled with the balance, because that is what is paid nine times in ten —
+  // and typing an amount is the one place a human can put money in the wrong column.
+  const [amount, setAmount] = useState((balance / 100).toFixed(2));
+  const [method, setMethod] = useState<string>("cash");
+  const [reference, setReference] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordPayment(invoice.id, {
+        amount: toPaise(amount),
+        method,
+        ...(reference ? { reference } : {}),
+      });
+      onPaid();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not record the payment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1.5fr_auto]">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Amount (₹)
+          </span>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Method
+          </span>
+          <select
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          >
+            {METHODS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Reference (optional)
+          </span>
+          <input
+            value={reference}
+            onChange={(e) => setReference(e.target.value)}
+            placeholder="UPI / card ref"
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+
+        <div className="flex items-end">
+          <Button disabled={busy} onClick={() => void submit()}>
+            {busy ? "Taking…" : "Take payment"}
+          </Button>
+        </div>
+      </div>
+
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        Balance {rupees(balance)}. A part payment is fine — the bill stays open.
+      </p>
+    </div>
+  );
+}
+
+function InvoiceRow({
+  invoice,
+  nameOf,
+  onChanged,
+}: {
+  invoice: Invoice;
+  nameOf: (id: string) => string;
+  onChanged: () => void;
+}) {
+  const { can } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [paying, setPaying] = useState(false);
+
+  const owes = invoice.total - invoice.paid;
+
+  return (
+    <li className="rounded-lg border border-[var(--color-border)] p-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-sm font-medium text-[var(--color-fg)]">
+              {invoice.number ?? "draft"}
+            </span>
+            <Badge tone={statusTone(invoice.status)}>{invoice.status}</Badge>
+            {/*
+             * A ₹0 bill at a government hospital is `paid` on issue — it must never sit
+             * in an "outstanding" list that nobody will ever clear.
+             */}
+            {invoice.total === 0 && <Badge tone="neutral">no charge</Badge>}
+          </div>
+          <p className="mt-1 text-sm text-[var(--color-fg-muted)]">{nameOf(invoice.patientId)}</p>
+        </div>
+
+        <div className="text-right">
+          <p className="text-lg font-semibold text-[var(--color-fg)]">{rupees(invoice.total)}</p>
+          {owes > 0 && (
+            <p className="text-xs text-[var(--color-danger)]">{rupees(owes)} outstanding</p>
+          )}
+          {invoice.paid > 0 && invoice.paid < invoice.total && (
+            <p className="text-xs text-[var(--color-fg-subtle)]">{rupees(invoice.paid)} paid</p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <Button variant="ghost" onClick={() => setOpen(!open)}>
+          {open ? "Hide lines" : "View lines"}
+        </Button>
+        {owes > 0 && invoice.status === "finalized" && (
+          <PermissionGate can={can} permission="payment:collect">
+            <Button variant="secondary" onClick={() => setPaying(!paying)}>
+              {paying ? "Cancel" : "Take payment"}
+            </Button>
+          </PermissionGate>
+        )}
+      </div>
+
+      {open && (
+        <table className="mt-3 w-full text-left text-xs">
+          <tbody className="divide-y divide-[var(--color-border)]">
+            {invoice.lines.map((l, i) => (
+              <tr key={`${l.code}-${String(i)}`}>
+                <td className="py-1.5 pr-3 text-[var(--color-fg)]">{l.description}</td>
+                <td className="py-1.5 pr-3 text-[var(--color-fg-subtle)]">{l.category}</td>
+                <td className="py-1.5 text-right font-medium text-[var(--color-fg)]">
+                  {rupees(l.amount)}
+                  {l.amount === 0 && l.listPrice > 0 && (
+                    <span
+                      title="What this care is worth. The patient pays nothing; the state still costs it."
+                      className="ml-1 font-normal text-[var(--color-fg-subtle)] line-through"
+                    >
+                      {rupees(l.listPrice)}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {invoice.payments.length > 0 && (
+        <ul className="mt-2 space-y-0.5">
+          {invoice.payments.map((p, i) => (
+            <li key={i} className="text-xs text-[var(--color-fg-subtle)]">
+              {rupees(p.amount)} · {p.method}
+              {p.reference ? ` · ${p.reference}` : ""} ·{" "}
+              {new Date(p.at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {paying && (
+        <PaymentForm
+          invoice={invoice}
+          onPaid={() => {
+            setPaying(false);
+            onChanged();
+          }}
+        />
+      )}
+    </li>
+  );
+}
+
+function Billing() {
+  const { api } = useAuth();
+
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [filter, setFilter] = useState<InvoiceStatus | "all">("all");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    /**
+     * 100 is the server's cap. Asking for more is a 400, not a bigger page.
+     *
+     * The failure is SURFACED rather than swallowed: an earlier `.catch(() => undefined)`
+     * here turned that 400 into an empty dropdown with no error, which reads as "this
+     * hospital has no patients" — a lie that took a browser session to disbelieve.
+     */
+    void api
+      .listPatients({ limit: 100 })
+      .then((page) => setPatients(page.items))
+      .catch((err: unknown) =>
+        setError(err instanceof ApiClientError ? err.message : "Could not load patients."),
+      );
+  }, [api]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const page = await api.listInvoices({
+        limit: 100,
+        ...(filter !== "all" ? { status: filter } : {}),
+      });
+      setInvoices(page.items);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not load bills.");
+    } finally {
+      setLoading(false);
+    }
+  }, [api, filter]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
+
+  const outstanding = invoices.reduce((sum, i) => sum + (i.total - i.paid), 0);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Billing</h1>
+        <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
+          Bills are issued from the visit — Reception finalizes them. This is the counter.
+        </p>
+      </div>
+
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          {(["all", "finalized", "paid", "cancelled"] as const).map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFilter(f)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                filter === f
+                  ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                  : "bg-[var(--color-bg-elevated)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+              }`}
+            >
+              {f === "finalized" ? "unpaid" : f}
+            </button>
+          ))}
+        </div>
+
+        {outstanding > 0 && (
+          <p className="text-sm text-[var(--color-fg-muted)]">
+            <span className="font-semibold text-[var(--color-fg)]">{rupees(outstanding)}</span>{" "}
+            outstanding
+          </p>
+        )}
+      </div>
+
+      <Card className="p-5">
+        {loading ? (
+          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
+        ) : invoices.length === 0 ? (
+          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
+            No bills yet. A bill appears once Reception finalizes a visit.
+          </p>
+        ) : (
+          <ul className="space-y-2.5">
+            {invoices.map((i) => (
+              <InvoiceRow key={i.id} invoice={i} nameOf={nameOf} onChanged={() => void load()} />
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+export default function BillingPage() {
+  return (
+    <Protected>
+      <Billing />
+    </Protected>
+  );
+}

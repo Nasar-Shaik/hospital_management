@@ -6,16 +6,53 @@ name: medicore-hms
 services:
   mongo:
     image: mongo:7
-    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    # ── WHY THIS PROJECT OWNS ITS OWN PORT AND REPLICA-SET NAME ──────────────────
+    # A replica-set client does not talk to the server you named: it asks that
+    # server who the members are, then connects to THOSE addresses. So the RS config
+    # host must be an address the *client* (usually on the host, not this network)
+    # can resolve. Two failure modes have to be designed out on a machine that runs
+    # more than one Mongo:
+    #
+    #   1. PORT. The conventional 27017 is "whatever else the developer is running."
+    #      This project therefore owns 37018 — an address nothing else on the box
+    #      uses — and runs mongod on 37018 *inside* the container too, publishing
+    #      37018:37018. That makes ONE address true from both sides: `localhost:37018`
+    #      is this server from the host AND from inside the container, so discovery
+    #      is self-consistent even without `directConnection=true`.
+    #
+    #   2. NAME. Replica sets are conventionally ALL named `rs0`, so a driver that
+    #      does reach a neighbour cannot tell it has crossed projects — it just sees
+    #      an `rs0` primary and writes. This set is named `hms0`. A client that pins
+    #      `replicaSet=hms0` will REFUSE any server that answers `rs0`, turning a
+    #      silent cross-project write into a loud connection error.
+    #
+    # Registry of who owns which port on this machine: infra/docker/LOCAL_PORTS.md.
+    command: ["mongod", "--replSet", "hms0", "--port", "37018", "--bind_ip_all"]
     ports:
-      # Host 27018 to avoid clashing with other local mongo containers.
-      - "27018:27017"
+      # Bound to 127.0.0.1 ON PURPOSE, not the 0.0.0.0 wildcard. A wildcard bind
+      # lets a second listener (e.g. an SSH tunnel from another project) also grab
+      # this port on a more-specific loopback address and silently win. Binding the
+      # specific loopback address means such a listener fails to bind and says so,
+      # and keeps the dev database off the LAN. Keep host port == container port
+      # (37018) — overriding MONGO_PORT breaks the discovery equality described above.
+      - "127.0.0.1:${MONGO_PORT:-37018}:37018"
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      # Initiates the single-node replica set on first check (transactions/change streams need RS).
+      # Initiates the single-node replica set on first check (transactions and
+      # change streams need one). SELF-HEALING: if an existing volume advertises a
+      # different member host, force-reconfigure it to the address we require.
+      # Idempotent, and it costs one comparison per health check.
       test: |
-        mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }"
+        mongosh --quiet --port 37018 --eval "
+          const want = 'localhost:37018';
+          try {
+            const c = rs.conf();
+            if (c.members[0].host !== want) { c.members[0].host = want; c.version++; rs.reconfig(c, {force: true}); }
+            rs.status().ok;
+          } catch (e) {
+            rs.initiate({_id:'hms0',members:[{_id:0,host:want}]}).ok;
+          }"
       interval: 10s
       timeout: 10s
       retries: 5
@@ -25,8 +62,10 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      # Host 6380 to avoid clashing with other local redis containers.
-      - "6380:6379"
+      # Host 6380, not 6379 — same reason as mongo above. Override with REDIS_PORT.
+      # 127.0.0.1, not the 0.0.0.0 wildcard — same reasoning as mongo: a specific
+      # loopback bind makes a colliding listener fail loudly and keeps it off the LAN.
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -66,9 +105,24 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      MONGO_URI: mongodb://mongo:27017/paperlesstech_master?replicaSet=rs0&directConnection=true
+      # Inside a container, 127.0.0.1 is reachable only from the container itself,
+      # so the production default would make the API unreachable. Docker's network
+      # provides the isolation here instead of the bind address.
+      API_BIND: 0.0.0.0
+      # Port 37018 inside the network too — mongod listens there now (see the mongo
+      # service). `directConnection=true` is still required: from THIS container,
+      # the advertised `localhost:37018` would mean the api container itself.
+      MONGO_URI: mongodb://mongo:37018/?directConnection=true
       REDIS_URL: redis://redis:6379
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+      # Local-compose secrets only. Real environments inject these from the secret
+      # store — never from a committed file (Doc 09 §20).
+      API_JWT_SECRET: ${API_JWT_SECRET:-local-compose-jwt-secret-not-for-any-real-environment}
+      API_ENCRYPTION_KEY: ${API_ENCRYPTION_KEY:-bG9jYWwtY29tcG9zZS1lbmMta2V5LTMyLWJ5dGVzISE=}
+      # Notifications (A6). `mailhog` is the service name on the compose network —
+      # from INSIDE a container, `localhost` would mean the api container itself.
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
     ports:
       - "4000:4000"
     depends_on:

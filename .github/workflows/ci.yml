@@ -16,8 +16,69 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    services:
+      # NOTE: MongoDB is deliberately NOT a `services:` container — see the
+      # "Start MongoDB" step below. GitHub cannot pass a command to a service, and
+      # mongod needs `--replSet` to support transactions at all.
+
+      # Real Redis for the auth suite's access-token blocklist. Without it the
+      # blocklist assertions would pass vacuously — cache helpers fail soft, so a
+      # missing Redis makes "revoked" and "never revoked" look identical.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      # A real mail server for the notifications suite. It asserts on what actually
+      # ARRIVED in an inbox — a mocked transport would only prove we called
+      # nodemailer, which is not a claim anyone cares about. Mailhog needs no
+      # credentials and delivers nowhere, so no test can email a real person.
+      mailhog:
+        image: mailhog/mailhog:latest
+        ports:
+          - 1025:1025 # SMTP
+          - 8025:8025 # the inbox, over HTTP — this is what the suite reads
+
     steps:
       - uses: actions/checkout@v4
+
+      # MongoDB must be a single-node REPLICA SET, not a standalone: transactions
+      # and change streams do not exist without one. A `services:` container cannot
+      # take a command, so a standalone is all it could ever give us — and a
+      # standalone fails only at the moment a service first opens a transaction,
+      # which is a confusing way to discover this months later.
+      - name: Start MongoDB (single-node replica set)
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7 \
+            mongod --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'db.adminCommand({ping:1})' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec mongo mongosh --quiet --eval \
+            "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+          # Wait for the primary to be elected — an RS that has not finished electing
+          # rejects writes, and the first test would fail for a reason that has
+          # nothing to do with the test.
+          for i in $(seq 1 30); do
+            docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break
+            sleep 1
+          done
+          # Prove it before any suite runs: if transactions are unavailable, fail
+          # HERE with a clear message rather than inside an unrelated assertion.
+          docker exec mongo mongosh --quiet --eval '
+            const s = db.getMongo().startSession();
+            s.startTransaction();
+            s.getDatabase("ci_probe").c.insertOne({ok: 1});
+            s.commitTransaction();
+            print("transactions: OK");
+          '
 
       - uses: pnpm/action-setup@v4
         with:
@@ -42,6 +103,19 @@ jobs:
 
       - name: Unit tests
         run: pnpm test
+
+      # Release-gating (Doc 05 §4.2, RISK_REGISTER T1). Runs against a real MongoDB
+      # and a real Redis — these suites fail, never skip, if the infrastructure is
+      # unreachable: a silently skipped isolation suite is indistinguishable from a
+      # passing one.
+      - name: Integration tests (isolation + auth + RBAC matrix + notifications)
+        run: pnpm --filter @medicore/api test:int
+        env:
+          MONGO_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          REDIS_TEST_URL: redis://127.0.0.1:6379
+          TEST_SMTP_HOST: 127.0.0.1
+          TEST_SMTP_PORT: "1025"
+          MAILHOG_API_URL: http://127.0.0.1:8025
 
       - name: Build
         run: pnpm build

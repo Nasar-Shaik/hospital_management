@@ -7,6 +7,7 @@ How we see the system. Stack (Doc 04 §8): OpenTelemetry → Prometheus/Grafana 
 **Golden signals per service (api, workers, web-edge):** request rate, error rate, duration histograms (by route class), saturation (event-loop lag, CPU, memory, connection-pool usage).
 
 **Domain metrics (labels always include `tenant` — bounded by tenant count, and `branch` only on low-cardinality boards):**
+
 - `hms_appointments_booked_total`, `hms_queue_wait_seconds`
 - `hms_lab_tat_seconds` (order→approved), `hms_panic_alerts_total` + `hms_panic_ack_seconds`
 - `hms_payments_captured_total{mode}`, `hms_payment_failures_total{gateway}`
@@ -17,21 +18,23 @@ How we see the system. Stack (Doc 04 §8): OpenTelemetry → Prometheus/Grafana 
 **Cardinality rule:** never label by patientId/userId/path-with-ids.
 
 ## 2. Logs (Loki, structured JSON via pino)
+
 Mandatory fields: `ts, level, msg, traceId, tenantId, module, userId?`. PHI redaction at the logger (schema-driven, Doc 09 §8). Retention: 30 d hot / 13 mo archived (audit logs are a separate, immutable store — not Loki).
 
 ## 3. Tracing (OTel)
+
 Trace every request end-to-end: gateway → middleware (tenant-resolution span!) → service → Mongo/Redis/integration spans → queue producer; workers continue the trace via `traceId` in job payloads. `traceId` returned in every error envelope so support can jump from ticket → trace.
 
 ## 4. SLI / SLO / SLA
 
-| SLI | SLO (internal) | SLA (contractual, Doc 07) |
-|-----|----------------|---------------------------|
-| API availability (5xx ratio) | 99.95% monthly | 99.5–99.95% by edition |
-| API latency | PERFORMANCE_BUDGET p95s | — |
-| Panic-alert delivery | < 5 s p99 | — (patient-safety internal) |
-| Notification delivery (reminder class) | 99% < 5 min | — |
-| Read-model freshness | < 60 s | — |
-| Per-tenant backup success | 100% daily | RPO ≤ 5 min / RTO ≤ 30 min |
+| SLI                                    | SLO (internal)          | SLA (contractual, Doc 07)   |
+| -------------------------------------- | ----------------------- | --------------------------- |
+| API availability (5xx ratio)           | 99.95% monthly          | 99.5–99.95% by edition      |
+| API latency                            | PERFORMANCE_BUDGET p95s | —                           |
+| Panic-alert delivery                   | < 5 s p99               | — (patient-safety internal) |
+| Notification delivery (reminder class) | 99% < 5 min             | —                           |
+| Read-model freshness                   | < 60 s                  | —                           |
+| Per-tenant backup success              | 100% daily              | RPO ≤ 5 min / RTO ≤ 30 min  |
 
 Error budgets: burn-rate alerts at 2%/1h (page) and 5%/6h (ticket). Budget exhausted ⇒ feature freeze for reliability work (Constitution-level policy).
 
@@ -42,6 +45,7 @@ Error budgets: burn-rate alerts at 2%/1h (page) and 5%/6h (ticket). Budget exhau
 Every page alert links to its runbook section (DISASTER_RECOVERY_RUNBOOK).
 
 ## 6. Dashboards (Grafana, provisioned as code in `infra/`)
+
 1. **Platform overview** — golden signals, error budget, active tenants.
 2. **Tenant drill-down** — per-tenant traffic/errors/latency/connections (support's first stop).
 3. **Queues & jobs** — depth, DLQ, job success/duration.
@@ -50,6 +54,7 @@ Every page alert links to its runbook section (DISASTER_RECOVERY_RUNBOOK).
 6. **Clinical safety** — panic alert delivery + acknowledgment times (reviewed weekly).
 
 ## 7. Synthetics & Status
+
 Blackbox probes: login flow, booking flow, patient-portal report fetch — per region, every minute. Public status page auto-driven by probe state; tenant-facing incident comms templates in support playbooks.
 
 **Rule:** new feature ⇒ ask "how will we know it's broken?" — if the answer isn't a metric/alert here, add it (Guidelines §4).

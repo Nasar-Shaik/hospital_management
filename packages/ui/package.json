@@ -3,9 +3,29 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Design tokens + shared web components (Doc 08). Sprint 0 ships tokens only; Shadcn components land with the app shell in P1.",
+  "description": "Design tokens + shared theme (Doc 08). Light/dark lives here so both frontends share one implementation.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
+    ".": "./dist/index.js",
     "./tokens.css": "./src/tokens.css"
   },
-  "sideEffects": ["*.css"]
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@medicore/config": "workspace:*",
+    "@types/react": "^19.0.0",
+    "eslint": "^9.24.0",
+    "react": "^19.0.0",
+    "typescript": "^5.8.0"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
 }

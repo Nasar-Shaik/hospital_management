@@ -1,0 +1,80 @@
+/**
+ * Billing DTOs (Doc 09 §5/§6). `.strict()` — an unexpected field is a 400.
+ *
+ * Every amount is PAISE, and every one of them is `.int()`. A float that reaches the
+ * ledger is money that cannot be reconciled, and the validator is the cheapest place
+ * to stop it.
+ */
+import { z } from "@medicore/validation";
+import { CHARGE_CATEGORIES, INVOICE_STATUSES } from "./billing.model.js";
+
+const objectId = z.string().regex(/^[a-f\d]{24}$/i, "invalid id");
+/** Paise. Non-negative integer, capped at ₹10,00,000 to catch a misplaced decimal. */
+const paise = z.number().int().min(0).max(100_000_000);
+
+export const postChargeSchema = z
+  .object({
+    encounterId: objectId,
+    code: z.string().min(1).max(64),
+    description: z.string().max(200).optional(),
+    category: z.enum(CHARGE_CATEGORIES),
+    quantity: z.number().int().min(1).max(1000).default(1),
+    /** Overrides the tariff. The pharmacy knows the price of the batch it dispensed. */
+    unitPrice: paise.optional(),
+  })
+  .strict();
+
+export const voidChargeSchema = z.object({ reason: z.string().min(3).max(500) }).strict();
+
+export const recordPaymentSchema = z
+  .object({
+    amount: paise.refine((v) => v > 0, "a payment of nothing is not a payment"),
+    method: z.enum(["cash", "card", "upi", "netbanking", "cheque", "insurance"]),
+    reference: z.string().max(120).optional(),
+  })
+  .strict();
+
+export const listInvoicesQuerySchema = z
+  .object({
+    status: z.enum(INVOICE_STATUSES).optional(),
+    patientId: objectId.optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
+export const listServicesQuerySchema = z
+  .object({ category: z.enum(CHARGE_CATEGORIES).optional() })
+  .strict();
+
+export const idParamSchema = z.object({ id: objectId }).strict();
+
+/** The full tariff, retired entries included — the management read may filter by category. */
+export const listAllServicesQuerySchema = z
+  .object({ category: z.enum(CHARGE_CATEGORIES).optional() })
+  .strict();
+
+export const createServiceSchema = z
+  .object({
+    code: z.string().trim().min(1).max(64),
+    name: z.string().trim().min(1).max(200),
+    category: z.enum(CHARGE_CATEGORIES),
+    /** Paise — non-negative whole number. */
+    price: z.number().int().min(0).max(1_000_000_000),
+  })
+  .strict();
+
+export const updateServiceSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    price: z.number().int().min(0).max(1_000_000_000).optional(),
+    active: z.boolean().optional(),
+  })
+  .strict()
+  .refine((b) => Object.keys(b).length > 0, { message: "nothing to update" });
+
+export type PostChargeBody = z.infer<typeof postChargeSchema>;
+export type RecordPaymentBody = z.infer<typeof recordPaymentSchema>;
+export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
+export type CreateServiceBody = z.infer<typeof createServiceSchema>;
+export type UpdateServiceBody = z.infer<typeof updateServiceSchema>;

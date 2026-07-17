@@ -11,13 +11,15 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN A — SaaS & Platform
 
 ## A1. Tenant Management
+
 **Purpose:** Provision, configure, suspend, export and terminate hospital tenants with full data isolation and lifecycle control. Runs against the **master database `paperlesstech_master`**; provisioning creates the tenant's **dedicated database `hms_<slug>`** (create DB → run migrations → seed roles/permissions → invite admin). The registry maps `tenantId, hospitalName, slug, databaseName, dbUri?, customDomain, subscription, status`; the Connection Manager resolves requests to the right DB by subdomain or custom domain.
 **Pages:**
-- *Tenant List* — browse/search all tenants (super-admin).
-- *Tenant Provisioning* — create a tenant, assign plan, region, initial admin.
-- *Tenant Detail* — configuration, status, usage, lifecycle actions.
-- *Impersonation* — support login-as with audit.
-- *Data Residency* — pin region, view compliance posture.
+
+- _Tenant List_ — browse/search all tenants (super-admin).
+- _Tenant Provisioning_ — create a tenant, assign plan, region, initial admin.
+- _Tenant Detail_ — configuration, status, usage, lifecycle actions.
+- _Impersonation_ — support login-as with audit.
+- _Data Residency_ — pin region, view compliance posture.
 
 **Collections:** [MASTER] `tenants` (registry), `licenses`, `supportTickets`, `globalSettings`, `impersonationLogs`; [tenant DB] `tenantSettings`.
 **REST APIs:** `GET/POST/PATCH/DELETE /tenants`, `POST /tenants/:id/suspend|activate|export|terminate`, `POST /tenants/:id/impersonate`.
@@ -28,6 +30,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Self-serve signup + automated onboarding, tenant health scoring, usage-based auto-tiering.
 
 ## A2. Subscription & Plans
+
 **Purpose:** Define plans, entitlements, metered usage and SaaS billing/dunning.
 **Pages:** Plan Catalog, Plan Editor, Subscription Detail, Usage & Limits, Invoices & Dunning, Feature-Flag Matrix.
 **Collections:** `plans`, `subscriptions`, `entitlements`, `usageCounters`, `saasInvoices`, `featureFlags`.
@@ -39,10 +42,12 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Usage-based billing, add-on marketplace, trial automation, proration engine.
 
 ## A3. Identity & Authentication
+
 **Purpose:** Secure authentication with JWT access + rotating refresh, MFA, SSO, password policy and session management.
 **Pages:** Login, Register Tenant, Forgot/Reset Password, MFA Setup/Challenge, SSO Callback, Accept Invitation, Active Sessions.
 **Collections:** `users`, `credentials`, `sessions`, `refreshTokens`, `mfaSecrets`, `passwordHistory`, `loginAttempts`.
-**REST APIs:** `POST /auth/login|refresh|logout`, `POST /auth/mfa/setup|verify`, `POST /auth/forgot-password|reset-password`, `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`.
+**REST APIs:** `POST /auth/login|refresh|logout`, `POST /auth/change-password`, `POST /auth/mfa/setup|activate|verify|disable`, `POST /auth/forgot-password|reset-password`, `GET /auth/me`, `GET /auth/sessions`, `DELETE /auth/sessions/:id`.
+**Implementation note (Phase 1B):** identity is split across three code modules to keep the graph acyclic — `users` (the `users` collection; depends on nothing), `auth` (every secret: credentials, sessions, refresh tokens, MFA), and `rbac` (A4). Both `auth` and `rbac` depend on `users`; nothing depends on `auth`. `forgot/reset-password` is the one endpoint above not yet built: it needs an email channel, so it lands with A6 (Notifications) rather than shipping a password-reset flow that cannot deliver a reset.
 **Permissions:** public (auth), `session:revoke`, `user:read`.
 **Dependencies:** A1.
 **Reports:** Login audit, failed-login/anomaly, active sessions.
@@ -50,6 +55,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Passkeys/WebAuthn, adaptive/risk-based auth, device trust.
 
 ## A4. RBAC & Permission Management
+
 **Purpose:** Fine-grained authorization: roles, permission catalog, bindings, branch scoping.
 **Pages:** Roles List, Role Editor (permission matrix), Permission Catalog, User-Role Assignment, Branch Scope Assignment.
 **Collections:** `roles`, `permissions`, `rolePermissions`, `userRoles`, `permissionScopes`.
@@ -61,6 +67,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** ABAC/policy-as-code, time-bound roles, approval workflows for privileged grants.
 
 ## A5. Audit & Activity Logging
+
 **Purpose:** Immutable audit trail of every PHI/financial mutation + user activity stream.
 **Pages:** Audit Log Explorer, Activity Feed, Record History/Diff, Compliance Export.
 **Collections:** `auditLogs` (append-only), `activityLogs`, `recordVersions`.
@@ -72,6 +79,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Tamper-evident hash-chaining/WORM storage, SIEM streaming, anomaly detection.
 
 ## A6. Notification System
+
 **Purpose:** Unified multi-channel notifications (in-app, email, SMS, WhatsApp, push) with templates and preferences.
 **Pages:** Notification Center, Template Manager, Channel Settings, Delivery Log, Preferences.
 **Collections:** `notifications`, `notificationTemplates`, `notificationPreferences`, `notificationDeliveries`, `pushTokens`.
@@ -83,6 +91,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Journey/automation builder, smart send-time, localization per recipient.
 
 ## A7. File & Document Service
+
 **Purpose:** Secure uploads, signed URLs, quotas, virus scanning, versioning for all attachments and medical documents.
 **Pages:** Document Library, Upload, Storage Usage, Trash/Retention.
 **Collections:** `files`, `fileVersions`, `storageQuotas`, `fileScans`.
@@ -94,6 +103,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Client-side encryption, CDN delivery, automatic OCR indexing.
 
 ## A8. White-Label, Branding & Custom Domains
+
 **Purpose:** Per-tenant branding, themes, logos, custom domains for commercial resale.
 **Pages:** Branding Studio, Theme Editor, Domain Settings (DNS/SSL), Email Branding.
 **Collections:** `brandingConfigs`, `customDomains`, `themes`.
@@ -105,6 +115,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Full white-label mobile app builds, per-branch branding.
 
 ## A9. API Keys & Developer Platform
+
 **Purpose:** Programmatic access with scoped keys, rate limits, webhooks.
 **Pages:** API Keys, API Explorer/Docs, Webhook Manager, Usage & Limits.
 **Collections:** `apiKeys`, `apiRateLimits`, `webhooks`, `webhookDeliveries`.
@@ -120,6 +131,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN B — Hospital Administration
 
 ## B1. Hospital Profile & Organization
+
 **Purpose:** Define the legal entity, licenses, accreditation, contacts and global settings.
 **Pages:** Hospital Profile, Licenses & Accreditation, Contact & Legal, Global Settings.
 **Collections:** `hospitalProfile`, `licenses`, `accreditations`.
@@ -131,6 +143,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Multi-entity groups, compliance calendar.
 
 ## B2. Branch Management
+
 **Purpose:** Model multiple branches/locations with independent operations and consolidated reporting.
 **Pages:** Branch List, Branch Editor, Branch Settings, Inter-Branch Config.
 **Collections:** `branches`, `branchSettings`.
@@ -142,6 +155,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Franchise model, branch-level P&L autonomy.
 
 ## B3. Departments, Buildings, Floors
+
 **Purpose:** Model organizational and physical structure for routing, scheduling and reporting.
 **Pages:** Department List/Editor, Building Setup, Floor Setup, Org Chart.
 **Collections:** `departments`, `buildings`, `floors`.
@@ -153,6 +167,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Indoor wayfinding maps, capacity planning.
 
 ## B4. Wards, Rooms, Beds & Bed Management
+
 **Purpose:** Manage inpatient physical capacity and real-time bed availability/allocation.
 **Pages:** Ward Setup, Room Setup, Bed Setup, **Bed Board** (real-time), Bed Allocation, Transfer, Housekeeping status.
 **Collections:** `wards`, `rooms`, `beds`, `bedAllocations`, `bedStatusHistory`.
@@ -164,6 +179,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** AI bed prediction (Phase 8), automated bed assignment, RTLS integration.
 
 ## B5. Operation Theatres, ICUs, Emergency Rooms
+
 **Purpose:** Register and manage critical-care and surgical spaces with utilization tracking.
 **Pages:** OT Registry, ICU Registry, ER Registry, OT/ICU Utilization Board.
 **Collections:** `operationTheatres`, `icuUnits`, `emergencyRooms`.
@@ -175,6 +191,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Predictive OT scheduling, ER triage board.
 
 ## B6. Ambulance Management
+
 **Purpose:** Fleet registry, dispatch, tracking and trip billing.
 **Pages:** Ambulance Registry, Dispatch Console, Trip Log, Maintenance.
 **Collections:** `ambulances`, `ambulanceDispatches`, `ambulanceTrips`.
@@ -186,30 +203,35 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** GPS live tracking, emergency SOS integration, route optimization.
 
 ## B7. Medical Equipment, Assets & Maintenance
+
 **Purpose:** Asset lifecycle, calibration, preventive maintenance and downtime tracking.
+
 > **Normalization (ruling N2, see Doc 10):** one `assets` collection with `assetType: medical-equipment | it | furniture | vehicle`; biomedical-specific fields (calibration, AERB/PNDT license) live in a sub-document. `equipment` is a filtered view of `assets`, not a separate collection.
-**Pages:** Equipment Registry, Asset Registry, Maintenance Schedule, Work Orders, Calibration Log, Depreciation.
-**Collections:** `equipment`, `assets`, `maintenanceRecords`, `calibrations`, `workOrders`.
-**REST APIs:** `CRUD /equipment|/assets|/maintenance|/work-orders`, `POST /maintenance/:id/complete`.
-**Permissions:** `asset:manage`, `maintenance:manage`.
-**Dependencies:** B3.
-**Reports:** Downtime, maintenance cost, calibration due, asset register/depreciation.
-**Mobile:** Technician work-order app.
-**Future:** IoT/biomedical telemetry, predictive maintenance (Phase 8), QR asset tags.
+> **Pages:** Equipment Registry, Asset Registry, Maintenance Schedule, Work Orders, Calibration Log, Depreciation.
+> **Collections:** `equipment`, `assets`, `maintenanceRecords`, `calibrations`, `workOrders`.
+> **REST APIs:** `CRUD /equipment|/assets|/maintenance|/work-orders`, `POST /maintenance/:id/complete`.
+> **Permissions:** `asset:manage`, `maintenance:manage`.
+> **Dependencies:** B3.
+> **Reports:** Downtime, maintenance cost, calibration due, asset register/depreciation.
+> **Mobile:** Technician work-order app.
+> **Future:** IoT/biomedical telemetry, predictive maintenance (Phase 8), QR asset tags.
 
 ## B8. Insurance Companies, Corporate Clients, Vendors & Suppliers (Masters)
+
 **Purpose:** Maintain business partner master data used across billing, claims and procurement.
+
 > **Normalization (ruling N1, see Doc 10):** every party you procure from is a **`vendors`** document with `categories[]` (pharma, consumables, equipment, services…). `suppliers` and `pharmacySuppliers` are deprecated aliases — same collection, filtered by category — never separate collections. This prevents split spend/payables data.
-**Pages:** Insurance Company List/Editor, Corporate Client List/Editor (rate contracts), Vendor/Supplier List/Editor.
-**Collections:** `insuranceCompanies`, `corporateClients`, `rateContracts`, `vendors`, `suppliers`.
-**REST APIs:** `CRUD /insurance-companies|/corporate-clients|/vendors|/suppliers|/rate-contracts`.
-**Permissions:** `master:manage`.
-**Dependencies:** A1.
-**Reports:** Partner-wise revenue/spend, contract expiry, outstanding.
-**Mobile:** Reference only.
-**Future:** Partner portals, automated contract renewal, e-procurement.
+> **Pages:** Insurance Company List/Editor, Corporate Client List/Editor (rate contracts), Vendor/Supplier List/Editor.
+> **Collections:** `insuranceCompanies`, `corporateClients`, `rateContracts`, `vendors`, `suppliers`.
+> **REST APIs:** `CRUD /insurance-companies|/corporate-clients|/vendors|/suppliers|/rate-contracts`.
+> **Permissions:** `master:manage`.
+> **Dependencies:** A1.
+> **Reports:** Partner-wise revenue/spend, contract expiry, outstanding.
+> **Mobile:** Reference only.
+> **Future:** Partner portals, automated contract renewal, e-procurement.
 
 ## B9. Facility Operations — Housekeeping, Laundry, Cafeteria, Parking, Security, Visitor Mgmt, Reception, Help Desk
+
 **Purpose:** Non-clinical operational services that keep the facility running and safe.
 **Pages:** Housekeeping Task Board, Laundry Register, Cafeteria/Diet Orders, Parking Register, Security/Incident Log, Visitor Check-in/Pass, Reception Console, Help Desk/Ticketing.
 **Collections:** `housekeepingTasks`, `laundryRecords`, `cafeteriaOrders`, `dietOrders`, `parkingRecords`, `securityIncidents`, `visitors`, `visitorPasses`, `helpdeskTickets`.
@@ -221,6 +243,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Kiosk self-check-in, RFID visitor badges, IoT sensor cleaning triggers.
 
 ## B10. Feedback & Complaints
+
 **Purpose:** Capture patient/visitor feedback and manage complaint resolution with SLAs.
 **Pages:** Feedback Inbox, Survey Builder, Complaint Tracker, Resolution Workflow, NPS Dashboard.
 **Collections:** `feedback`, `surveys`, `complaints`, `complaintActions`.
@@ -232,6 +255,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Sentiment analysis (AI), auto-routing, closed-loop follow-up.
 
 ## B11. Biomedical Waste Management
+
 **Purpose:** Track segregation, collection, disposal and statutory compliance of biomedical waste.
 **Pages:** Waste Log, Segregation Config, Disposal Records, Compliance Reports.
 **Collections:** `biomedicalWaste`, `wasteCategories`, `wasteDisposals`.
@@ -242,7 +266,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Collection staff logging.
 **Future:** Barcode/weighbridge integration, regulator e-reporting.
 
-## B12. CSSD — Central Sterile Supply Department *(flag: `module.support.cssd`)*
+## B12. CSSD — Central Sterile Supply Department _(flag: `module.support.cssd`)_
+
 **Purpose:** Track instrument sets through cleaning, sterilization, storage and issue so every OT/procedure uses a traceable, released set.
 **Pages:** Instrument Set Master, Sterilization Cycle Log (autoclave/plasma), Batch Release, Set Issue/Return, Recall Console.
 **Collections:** `instrumentSets`, `sterilizationCycles`, `setIssues`, `sterilizationRecalls`.
@@ -253,7 +278,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Barcode scan on issue/return.
 **Future:** Biological-indicator device integration, RFID set tracking.
 
-## B13. Mortuary Management *(flag: `module.support.mortuary`)*
+## B13. Mortuary Management _(flag: `module.support.mortuary`)_
+
 **Purpose:** Manage body admission, cold-storage assignment, release/handover with legal documentation and post-mortem linkage.
 **Pages:** Body Admission, Storage Unit Board, Release/Handover (with e-sign), Post-Mortem Register.
 **Collections:** `mortuaryRecords`, `mortuaryUnits`, `bodyReleases`, `postMortemRecords`.
@@ -269,15 +295,17 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN C — Patient Management
 
 ## C1. Patient Registration & Master Patient Index (MPI/UHID)
+
 **Purpose:** Register patients once, deduplicate, and maintain a single UHID across visits, branches and channels.
 **Pages:**
-- *Quick Registration* — minimal fields for rapid intake.
-- *OP Registration* — outpatient visit registration + billing link.
-- *IP Admission* — inpatient admission with bed, deposit, admitting doctor.
-- *Emergency Registration* — unknown/critical patients, later reconciled.
-- *Patient Search / MPI* — global patient lookup with dedup.
-- *Patient Profile (360°)* — demographics, history, visits, docs.
-- *Duplicate Merge* — reconcile duplicate records.
+
+- _Quick Registration_ — minimal fields for rapid intake.
+- _OP Registration_ — outpatient visit registration + billing link.
+- _IP Admission_ — inpatient admission with bed, deposit, admitting doctor.
+- _Emergency Registration_ — unknown/critical patients, later reconciled.
+- _Patient Search / MPI_ — global patient lookup with dedup.
+- _Patient Profile (360°)_ — demographics, history, visits, docs.
+- _Duplicate Merge_ — reconcile duplicate records.
 
 **Collections:** `patients`, `patientIdentifiers`, `patientContacts`, `emergencyContacts`, `admissions`, `visits`, `patientMergeLogs`.
 **REST APIs:** `CRUD /patients`, `POST /patients/quick|emergency`, `POST /patients/:id/admit|discharge`, `GET /patients/search`, `POST /patients/merge`, `GET /patients/:id/timeline`.
@@ -288,6 +316,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** ABHA/eKYC auto-fill, facial/biometric patient ID, deduplication ML.
 
 ## C2. Patient Clinical Profile — History, Allergies, Vitals, Diagnosis, Treatment Plans, Follow-ups, Timeline
+
 **Purpose:** Maintain the longitudinal clinical picture of the patient.
 **Pages:** Medical History, Family History, Allergy List, Vitals Chart, Diagnosis/Problem List, Treatment Plan, Follow-ups, Patient Timeline.
 **Collections:** `medicalHistory`, `familyHistory`, `allergies`, `vitals`, `diagnoses`, `problemList`, `treatmentPlans`, `followUps`.
@@ -299,6 +328,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Wearable/vitals device sync, risk-scoring dashboards.
 
 ## C3. Medical Records, Documents, Consent, Discharge & Death Summary
+
 **Purpose:** Manage structured and unstructured clinical documentation and legal forms.
 **Pages:** Medical Records, Patient Documents, Consent Form Builder & Sign, Discharge Summary, Death Summary.
 **Collections:** `medicalRecords`, `patientDocuments`, `consents`, `dischargeSummaries`, `deathSummaries`, `documentSignatures`.
@@ -310,6 +340,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Auto-generated discharge summaries (AI), e-sign regulatory workflows.
 
 ## C4. Referral & Transfer Management
+
 **Purpose:** Manage internal/external referrals and inter-department/inter-branch patient transfers.
 **Pages:** Referral In/Out, Transfer Request, Transfer Board, Referral Network.
 **Collections:** `referrals`, `transfers`, `referralPartners`.
@@ -321,6 +352,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Referral marketplace, e-referral interoperability (FHIR).
 
 ## C5. Patient Wallet, Packages, Insurance & Corporate Billing (patient-side)
+
 **Purpose:** Manage patient prepaid balance, health packages, and payer linkage.
 **Pages:** Wallet Ledger, Package Enrollment, Insurance Policy Link, Corporate Employee Link.
 **Collections:** `wallets`, `walletTransactions`, `packageEnrollments`, `insurancePolicies`, `corporateMemberships`.
@@ -332,6 +364,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Auto-recharge, loyalty points, family shared wallet.
 
 ## C6. Online Registration, Appointments & Digital Forms (patient-facing)
+
 **Purpose:** Let patients self-register, book and fill intake/consent forms digitally.
 **Pages:** Public Booking Portal, Online Registration, Digital Form Filler, e-Consent.
 **Collections:** `onlineBookings`, `patientAppUsers`, `dependents`, `digitalForms`, `formSubmissions`.
@@ -342,7 +375,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Core patient app flows.
 **Future:** Conversational booking (AI), pre-visit questionnaires, insurance pre-check.
 
-## C7. MRD / Health Information Management *(flag: `module.support.mrd`)*
+## C7. MRD / Health Information Management _(flag: `module.support.mrd`)_
+
 **Purpose:** Govern the medical record itself — physical/digital chart tracking, coding worklist, record deficiency management, statutory registers (birth/death/MLC/notifiable disease).
 **Pages:** Chart Tracking (check-out/in), Coding Worklist (ICD-10/11 assignment & review), Deficiency Tracker (incomplete records chase), Statutory Registers, Record Retention Console.
 **Collections:** `chartTracking`, `codingWorklist`, `recordDeficiencies`, `statutoryRegisters`.
@@ -358,6 +392,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN D — Doctor & Clinical
 
 ## D1. Electronic Medical Records (EMR)
+
 **Purpose:** The structured clinical record — SOAP notes, diagnoses/ICD, procedures, notes, attachments, digital signatures, versioning.
 **Pages:** Clinical Chart/Timeline, SOAP Note Editor, Diagnosis/ICD Picker, Procedure Entry, Problem List, Clinical Notes, Attachments, e-Sign, Version History, Clinical Template Manager.
 **Collections:** `emrRecords`, `soapNotes`, `diagnoses`, `icdCodes`, `snomedCodes`, `procedures`, `clinicalNotes`, `problemList`, `clinicalTemplates`, `documentSignatures`, `recordVersions`.
@@ -369,6 +404,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Ambient AI scribe (Phase 8), FHIR-native records, specialty templates library.
 
 ## D2. Doctor Management
+
 **Purpose:** Manage doctor profiles, specializations, availability, schedules, performance and leave/attendance.
 **Pages:** Doctor Directory, Doctor Profile, Specialization Master, Availability Editor, Consultation Schedule, Slot Configuration, Doctor Dashboard, Performance & Revenue, Leave, Attendance.
 **Collections:** `doctors`, `specializations`, `doctorSchedules`, `doctorAvailability`, `appointmentSlots`, `doctorPerformance`, `doctorLeaves`, `doctorAttendance`.
@@ -380,6 +416,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Credentialing/privileging workflow, panel/roster optimization.
 
 ## D3. Doctor Consultation Workspace
+
 **Purpose:** The doctor's daily cockpit — patient queue, consultation, prescription, orders, referrals, follow-ups.
 **Pages:** Daily Patient List, Consultation Workspace, Prescription Composer, Order Entry (lab/radiology/procedure), Referral Form, Follow-up Scheduler.
 **Collections:** `consultations`, `prescriptions`, `prescriptionItems`, `orders`, `referrals`, `followUps`.
@@ -391,6 +428,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** AI prescription suggestions (guarded), voice-driven consult, decision support.
 
 ## D4. Tele-Consultation / Telemedicine
+
 **Purpose:** Remote consultations via secure video/voice with integrated EMR and e-prescription.
 **Pages:** Teleconsult Scheduler, Waiting Room, Consult Room (video), e-Prescription, Session Notes.
 **Collections:** `teleconsultSessions`, `videoSessions`.
@@ -402,6 +440,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Remote monitoring integration, multi-party (specialist) calls, AI transcription.
 
 ## D5. Nursing
+
 **Purpose:** Ward-based nursing care: vitals, medication administration, notes, care plans, shift handover, monitoring.
 **Pages:** Nursing Dashboard, Ward Console, Vitals Entry, Medication Administration Record (MAR), Nursing Notes, Care Plans, Shift Management, Handover, Patient Monitoring Board, Intake/Output.
 **Collections:** `nursingNotes`, `medicationAdministration`, `carePlans`, `shiftHandovers`, `intakeOutput`, `nursingAssignments`, `vitals`.
@@ -413,6 +452,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Barcode medication administration (BCMA), early-warning scores (NEWS/MEWS), smart-bed integration.
 
 ## D6. Laboratory Information System (LIS)
+
 **Purpose:** End-to-end lab workflow — test master, ordering, sample collection/tracking, barcode, analyzer integration, result entry/approval, reports.
 **Pages:** Test Catalog, Order Worklist, Sample Collection, Sample Tracking (barcode), Analyzer Worklist, Result Entry, Result Approval, Report Viewer/Print, Reference Ranges.
 **Collections:** `labTests`, `labPanels`, `labOrders`, `samples`, `labResults`, `labResultApprovals`, `analyzers`, `referenceRanges`.
@@ -424,6 +464,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Auto-verification rules, delta checks, reflex testing, full HL7/ASTM bidirectional.
 
 ## D7. Radiology (RIS / PACS-lite)
+
 **Purpose:** Imaging order management, modality worklist, image/DICOM handling, reporting and sign-off.
 **Pages:** Modality Worklist, Order Detail, Image Upload/DICOM Viewer, Report Editor, Report Sign-off, Templates.
 **Collections:** `radiologyOrders`, `radiologyReports`, `dicomStudies`, `radiologyTemplates`.
@@ -435,6 +476,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Full PACS, AI image triage (Phase 8), structured reporting, teleradiology.
 
 ## D8. Operation Theatre (OT) Management
+
 **Purpose:** Surgical scheduling and documentation — pre/intra/post-op, team, consumables, reports.
 **Pages:** OT Schedule Board, Booking, Pre-op Checklist, Anesthesia Record, Intra-op Notes, Post-op/Recovery, Surgical Team, Consumable Log, OT Report.
 **Collections:** `otSchedules`, `otBookings`, `preOpRecords`, `anesthesiaRecords`, `intraOpNotes`, `postOpRecords`, `surgicalTeams`, `otConsumables`.
@@ -446,6 +488,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** WHO surgical safety checklist automation, implant tracking, video capture.
 
 ## D9. Blood Bank
+
 **Purpose:** Manage donors, blood inventory, cross-match, issue and transfusion records.
 **Pages:** Donor Registry, Donation Camp, Blood Inventory, Cross-match, Issue/Request, Transfusion Record, Discard Log.
 **Collections:** `bloodDonors`, `donations`, `bloodInventory`, `crossMatches`, `bloodIssues`, `transfusions`, `bloodDiscards`.
@@ -456,7 +499,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Donor app (eligibility, camps), staff issue app.
 **Future:** Donor engagement/CRM, regional blood-network sharing, cold-chain IoT.
 
-## D10. Emergency Department & Triage *(flag: `module.clinical.emergency`)*
+## D10. Emergency Department & Triage _(flag: `module.clinical.emergency`)_
+
 **Purpose:** Run the ED as a clinical workflow, not just a room registry — triage, tracking board, resuscitation documentation, disposition.
 **Pages:** Triage Console (ESI/CTAS level, chief complaint, NEWS/MEWS auto-score), ED Tracking Board (realtime: waiting→triage→treatment→disposition), Code Blue/Resuscitation Record, MLC Register, Disposition (admit/discharge/transfer/LAMA).
 **Collections:** `triageRecords`, `edTrackingBoard`, `codeBlueRecords`, `mlcRecords`.
@@ -467,7 +511,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** ED board on staff app.
 **Future:** Ambulance pre-arrival notification, AI triage assist (Phase 8), sepsis screening alerts.
 
-## D11. Critical Care — ICU / NICU / PICU *(flag: `module.clinical.criticalCare`)*
+## D11. Critical Care — ICU / NICU / PICU _(flag: `module.clinical.criticalCare`)_
+
 **Purpose:** High-frequency clinical charting for intensive care: flowsheets, devices, scores.
 **Pages:** ICU Flowsheet (hourly vitals/infusions/ventilator grid), Ventilator Settings Log, Infusion & Line Management, Severity Scores (APACHE-II, SOFA, GCS), NICU Growth & Feeding Charts, ICU Census Board.
 **Collections:** `icuFlowsheets`, `ventilatorSettings`, `infusionRecords`, `criticalScores`, `nicuCharts`.
@@ -478,7 +523,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Flowsheet entry on staff app (offline-tolerant).
 **Future:** Monitor/ventilator device integration (HL7/MQTT), early-deterioration AI.
 
-## D12. Dialysis Management *(flag: `module.clinical.dialysis`)*
+## D12. Dialysis Management _(flag: `module.clinical.dialysis`)_
+
 **Purpose:** Run a dialysis unit — schedules, sessions, machines, access, adequacy. Serves standalone dialysis centers and hospital units.
 **Pages:** Dialysis Schedule (machine × slot grid), Session Record (pre/intra/post vitals, heparin, complications), Machine & Reprocessing Log, Vascular Access Tracker, Adequacy (Kt/V, URR) Trends.
 **Collections:** `dialysisSessions`, `dialysisSchedules`, `dialysisMachines`, `vascularAccess`, `dialyzerReuse`.
@@ -489,7 +535,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Patient app (schedule/reminders), technician session entry.
 **Future:** Machine data integration, transplant workup tracking, home-PD remote monitoring.
 
-## D13. Physiotherapy & Rehabilitation *(flag: `module.clinical.physiotherapy`)*
+## D13. Physiotherapy & Rehabilitation _(flag: `module.clinical.physiotherapy`)_
+
 **Purpose:** Assessment→plan→session→outcome workflow for physio/rehab; serves standalone physio clinics and hospital departments.
 **Pages:** Physio Assessment (ROM, strength, pain scales), Treatment Plan, Session Scheduler & Log, Exercise Library/Home Program, Outcome Measures Trend.
 **Collections:** `physioAssessments`, `physioTreatmentPlans`, `physioSessions`, `exerciseLibrary`, `homePrograms`.
@@ -500,7 +547,8 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Mobile:** Patient app home-exercise program with adherence tracking; therapist session app.
 **Future:** Video exercise guides, wearable ROM sensors, tele-rehab.
 
-## D14. Clinical Dietetics *(flag: `module.clinical.dietetics`)*
+## D14. Clinical Dietetics _(flag: `module.clinical.dietetics`)_
+
 **Purpose:** Nutrition assessment and therapeutic diet prescription for inpatients (kitchen fulfillment remains in B9 facility ops — ruling N3).
 **Pages:** Nutrition Screening/Assessment (MUST/SGA), Therapeutic Diet Prescription, Ward Diet Sheet (feeds kitchen), NPO/allergy flags, Dietitian Consult Notes.
 **Collections:** `nutritionAssessments`, `dietPrescriptions`, `dietitianNotes`.
@@ -515,22 +563,58 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 
 # DOMAIN E — Appointments & Scheduling
 
-## E1. Appointment Management
-**Purpose:** Full scheduling lifecycle — calendar, online booking, walk-ins, queue, tokens, reminders, reschedule/cancel, waiting list.
-**Pages:** Calendar (day/week/month/resource), Book Appointment, Online Booking Manager, Walk-in Intake, **Queue Board**, Token Display, Waiting List, Reminders Config, Reschedule/Cancel, Appointment Status.
-**Collections:** `appointments`, `appointmentSlots`, `queues`, `tokens`, `waitingList`, `appointmentReminders`.
-**REST APIs:** `CRUD /appointments`, `POST /appointments/:id/checkin|reschedule|cancel|noshow`, `GET /appointments/calendar`, `CRUD /queues`, `POST /tokens/next`, `CRUD /waiting-list`.
-**Permissions:** `appointment:create|read|update|cancel`, `queue:manage`.
-**Dependencies:** C1, D2 (doctor schedules), Notifications.
+## E0. Encounter & Patient Journey — **THE ENTRY POINT** (ADR-0013)
+
+**Purpose:** The central clinical object. Every patient contact — booked, walk-in, emergency, referral, camp, telemedicine — becomes an **Encounter**, and every note, order, result and charge hangs on exactly one. This module, **not E1**, is where a patient journey begins.
+
+**Why it is not part of E1:** only ONE of our six target organization types (the private hospital) is appointment-first. A government hospital, a small clinic and a diagnostic centre are walk-in-first. Modelling the walk-in as an "exception" to the appointment — which the blueprint previously did — makes the majority journey a special case of the minority one, and forces a hospital that never books anything to enable an appointment book just to see a patient.
+
+**Pages:** Registration/Intake (walk-in), Arrival & Check-in, **Queue Board**, Token Display, Encounter Timeline, Episode View (OP history + admission in one story), Transfer/Refer.
+**Collections:** `encounters`, `episodesOfCare`. (`workItems` lives in E2.)
+**REST APIs:** `POST /encounters` (walk-in/emergency), `POST /appointments/:id/checkin` → creates the encounter, `POST /encounters/:id/transition`, `GET /encounters/:id/timeline`, `GET /episodes/:id`.
+**Permissions:** `encounter:create|read|update|close`, `encounter:transfer`.
+**Dependencies:** C1 (patients). **E1 is an OPTIONAL origin, not a dependency.**
+**Feature flag:** `module.ops.opd` — **independent of `module.ops.appointments`**, so OPD can be bought without the appointment book.
+**Policy:** `encounterPolicy` (entry, tokenIssuedAt, routing, billingMode, pharmacy) — seeded from the tenant's `organizationType` preset. **`if (organizationType === "government")` is forbidden in code (ADR-0013 §6).**
+**Mobile:** doctor app (my waiting patients), staff (intake/queue), patient app (my visit status).
+
+## E2. Work Queue Engine — **PLATFORM MODULE** (ADR-0014)
+
+**Purpose:** One queue engine consumed by every department — doctor, lab, radiology, pharmacy, billing, admission, insurance — with different queue types, priorities, permissions and routing rules.
+
+**It is a PROJECTION, never a source of truth.** `workItems` is a read model built by outbox consumers from `order.placed` / `encounter.started`, idempotent on `(sourceType, sourceId)` and rebuildable from the domain at any time. An authoritative queue table would be a dual write to two systems that cannot commit together — the exact failure the outbox exists to prevent, reintroduced where a dropped write means a blood test nobody performs.
+
+**Rule P1 (PLATFORM_STRATEGY):** zero clinical vocabulary. It routes _work items_ to _targets_ by _priority_. School ERP inherits it for admission approvals and fee escalations, unchanged.
+
+**Collections:** `workItems`, `queueDefinitions`, `routingRules`.
+**REST APIs:** `GET /queues/:type`, `POST /work-items/:id/claim|release|complete`, `POST /queues/rebuild` (operator).
+**Permissions:** `queue:read|claim|manage`, scoped per queue type.
+**Dependencies:** the outbox (A5b). Consumed by D1, E0, F1, lab, radiology, pharmacy.
+
+## E1. Appointment Management — an encounter ORIGIN, not an entry point
+
+**Purpose:** Scheduling — calendar, online booking, reminders, reschedule/cancel, waiting list. **An appointment is a promise of a future Encounter (ADR-0013).** `checked_in` keeps the promise: it creates the Encounter and hands the patient to E0.
+
+**Queue, tokens and walk-in intake MOVED OUT of this module** to E0/E2. A token is a queue concern, not a scheduling concern — a walk-in has a token and no appointment, and in a government hospital that is the normal case.
+
+**Pages:** Calendar (day/week/month/resource), Book Appointment, Online Booking Manager, Reminders Config, Reschedule/Cancel, Appointment Status.
+**Collections:** `appointments`, `appointmentSlots`, `waitingList`, `appointmentReminders`.
+**REST APIs:** `CRUD /appointments`, `POST /appointments/:id/checkin|reschedule|cancel|noshow`, `GET /appointments/calendar`, `CRUD /waiting-list`.
+**Permissions:** `appointment:create|read|update|cancel`.
+**Dependencies:** C1, E0 (check-in creates the encounter), D2 (doctor schedules), Notifications.
+**Feature flag:** `module.ops.appointments` — a hospital may run OPD (E0) without it.
 **Reports:** Bookings, no-show %, wait time, utilization, channel mix.
-**Mobile:** Patient app (book/manage), doctor app (schedule), staff (queue).
+**Mobile:** Patient app (book/manage), doctor app (schedule).
 **Future:** AI slot optimization + no-show prediction (Phase 8), overbooking rules, group/recurring appts.
+
+**Implemented (2026-07-14):** the double-booking unique partial index and the appointment state machine are live and **survive this change untouched** — only `tokenNumber` moves to the Encounter.
 
 ---
 
 # DOMAIN F — Financial
 
 ## F1. Billing (OP/IP/Pharmacy/Lab/Radiology/Package/Insurance/Corporate)
+
 **Purpose:** Unified revenue-cycle billing across all service lines with discounts, refunds, advances, multi-mode payments, tax and documents.
 **Pages:** OP Bill, IP Interim/Final Bill, Consolidated Bill, Pharmacy/Lab/Radiology Bill, Package Bill, Payment Collection, Advance/Deposit, Refund, Discount Approval, Invoice/Receipt Print, Bill Audit, Daily Collection.
 **Collections:** `bills`, `billItems`, `payments`, `paymentAllocations`, `refunds`, `advances`, `discounts`, `invoices`, `receipts`, `taxConfigs`.
@@ -542,6 +626,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Real-time IP running bill, price transparency estimates, self-service kiosk billing.
 
 ## F2. Insurance, TPA & Claims
+
 **Purpose:** Manage payer eligibility, pre-authorization, claim submission/tracking and reconciliation.
 **Pages:** Pre-Authorization, Claim Submission, Claim Tracking, Eligibility Check, TPA Reconciliation, Denial Management.
 **Collections:** `preAuthorizations`, `claims`, `claimItems`, `claimStatusHistory`, `denials`, `reconciliations`.
@@ -553,6 +638,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Automated eligibility/adjudication, e-claims (NHCX/insurer APIs), denial-prediction AI.
 
 ## F3. Corporate Billing & Packages
+
 **Purpose:** Bill corporate clients and manage health/procedure packages with entitlement tracking.
 **Pages:** Corporate Ledger, Corporate Invoice, Package Catalog, Package Consumption, Rate Contracts.
 **Collections:** `corporateLedgers`, `corporateInvoices`, `packages`, `packageEnrollments`, `rateContracts`.
@@ -564,6 +650,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Corporate self-service portal, bulk employee onboarding.
 
 ## F4. Pharmacy (Commercial)
+
 **Purpose:** Retail/inpatient pharmacy — medicine master, inventory, batch/expiry, purchase, sales/POS, returns, supplier management, stock reports.
 **Pages:** Medicine Master, Stock/Inventory, Batch & Expiry, Purchase Order, GRN, Sales/POS, Returns, Supplier, Reorder, Stock/Expiry/Movement Reports.
 **Collections:** `medicines`, `pharmacyStock`, `batches`, `pharmacyPurchases`, `pharmacySales`, `pharmacyReturns`, `pharmacySuppliers`, `reorderRules`.
@@ -575,6 +662,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** e-Pharmacy/home delivery, drug interaction engine, narcotics register compliance.
 
 ## F5. Inventory / Store Management
+
 **Purpose:** General medical/non-medical store — items, indent, PO, GRN, issue, transfers, returns, stock audit.
 **Pages:** Item Master, Indent, Purchase Order, GRN, Issue, Inter-store Transfer, Returns, Stock Ledger, Stock Audit/Reconciliation, Reorder.
 **Collections:** `inventoryItems`, `stock`, `indents`, `purchaseOrders`, `goodsReceipts`, `stockIssues`, `stockTransfers`, `stockReturns`, `stockAudits`.
@@ -586,6 +674,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Consignment stock, auto-PO, RFID inventory, demand forecasting (AI).
 
 ## F6. Finance & Accounting
+
 **Purpose:** Core financial accounting — income, expenses, chart of accounts, ledgers, day/cash/bank books, tax, P&L.
 **Pages:** Chart of Accounts, Journal/Ledger, Day Book, Cash Book, Bank Book, Expense Entry, Income Entry, Tax/GST, Trial Balance, P&L, Balance Sheet.
 **Collections:** `chartOfAccounts`, `journalEntries`, `ledgers`, `expenses`, `incomes`, `bankAccounts`, `bankTransactions`, `taxFilings`.
@@ -597,6 +686,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Full double-entry with cost centers, budgeting, Tally/ERP sync, auto bank reconciliation.
 
 ## F7. Human Resources & Payroll
+
 **Purpose:** Manage the workforce — employees, attendance/biometric, leave, payroll, recruitment, training, performance, shifts.
 **Pages:** Employee Directory, Attendance/Biometric, Leave Requests/Approvals/Balances, Payroll Run, Payslip, Salary Structure, Recruitment/ATS, Training, Performance Review, Shift Roster.
 **Collections:** `employees`, `attendance`, `biometricLogs`, `leaves`, `leaveBalances`, `payrollRuns`, `payslips`, `salaryStructures`, `recruitments`, `candidates`, `trainings`, `performanceReviews`, `shiftRosters`.
@@ -612,6 +702,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN G — Mobile Applications
 
 ## G1. Patient Mobile App / Portal
+
 **Purpose:** Patient engagement — appointments, records, prescriptions, reports, bills, payments, teleconsult, chat, feedback.
 **Screens:** Home, Book Appointment, My Appointments, Health Records, Prescriptions, Lab Reports, Radiology, Bills & Payments, Wallet, Teleconsult, Chat, Notifications, Feedback, Family/Dependents, Digital Forms, Profile.
 **Collections:** (reuses) + `patientAppUsers`, `dependents`, `pushTokens`, `deviceSessions`.
@@ -623,6 +714,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Health tracking/wearables, medication reminders, care programs, loyalty.
 
 ## G2. Doctor Mobile App
+
 **Purpose:** Doctor productivity on the go — schedule, queue, consultation, prescription, reports, history, telemedicine.
 **Screens:** Today's Schedule, Patient Queue, Consultation, e-Prescription, Order Entry, Reports Viewer, Patient History, Teleconsult, Notifications, Availability.
 **Collections:** (reuses clinical collections).
@@ -634,6 +726,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Offline consult drafting, AI scribe, voice prescription.
 
 ## G3. Staff Mobile App
+
 **Purpose:** Field/ward staff — attendance, tasks, patient monitoring, nursing, approvals, notifications.
 **Screens:** Attendance (geo/biometric), Task List, Assigned Patients, Vitals/MAR, Nursing Notes, Approvals, Handover, Notifications.
 **Collections:** (reuses HR + nursing collections).
@@ -649,6 +742,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN H — Communication
 
 ## H1. Communication Suite
+
 **Purpose:** All internal/external messaging — internal chat, doctor-patient chat, announcements, SMS/Email/WhatsApp, push, video/voice.
 **Pages:** Chat Console, Doctor-Patient Chat, Announcement Composer, Channel/Provider Settings, Broadcast Campaigns, Video/Voice Room.
 **Collections:** `chatThreads`, `chatMessages`, `announcements`, `broadcasts`, `videoSessions`, `callLogs`, `pushTokens`.
@@ -664,6 +758,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN I — Analytics & Reporting
 
 ## I1. Reporting Engine & Report Catalog
+
 **Purpose:** Parameterized, scheduled, exportable reports across every domain + self-service builder.
 **Pages:** Report Catalog, Report Runner, Scheduled Reports, Custom Report Builder, Export Center.
 **Collections:** `reportDefinitions`, `reportSchedules`, `reportRuns`, `savedReports`, `exportJobs`.
@@ -675,6 +770,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Future:** Natural-language querying (AI), embedded analytics, data export API.
 
 ## I2. Dashboards (Executive / Management)
+
 **Purpose:** Role-based KPI dashboards for operational and executive decision-making.
 **Pages:** Executive Dashboard, Revenue Dashboard, Occupancy/Bed Utilization, Doctor Performance, Patient Flow, Department P&L.
 **Collections:** `dashboards`, `dashboardWidgets`, `kpiSnapshots`, `analyticsAggregates`.
@@ -690,6 +786,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN J — AI (see Phase 8 for build detail)
 
 ## J1. AI Feature Suite
+
 **Purpose:** Advisory intelligence: appointment assistant, symptom checker, prescription suggestions, analytics/forecasting (bed/revenue/inventory), chat assistant, OCR, voice-to-notes.
 **Pages:** AI Assistant Panel, Symptom Checker, Voice Scribe, OCR Intake, Forecasting Dashboards, No-Show Insights, AI Settings & Guardrails, Suggestion Review Queue, AI Audit Log.
 **Collections:** `aiJobs`, `aiSuggestions`, `aiFeedback`, `aiAuditLogs`, `embeddings`, `knowledgeBase`, `ocrExtractions`, `voiceTranscripts`, `forecasts`, `modelConfigs`, `promptTemplates`.
@@ -705,6 +802,7 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 # DOMAIN K — Security & Compliance (see Phase 9)
 
 ## K1. Security & Compliance Center
+
 **Purpose:** Centralize RBAC oversight, audit, encryption, backups, DR, sessions, API security, compliance & data-subject requests.
 **Pages:** Security Center, Audit Explorer, Session Management, Encryption/Key Management, Backup/DR Console, Compliance/Consent Center, Data Subject Requests, Retention Policies.
 **Collections:** `securityScans`, `backups`, `restorePoints`, `drDrills`, `retentionPolicies`, `dataSubjectRequests`, `dataExports`, `incidents`.
@@ -719,24 +817,24 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 
 ## Module → Phase Traceability
 
-| Module | Phase |
-|--------|-------|
-| A1–A9 Platform/SaaS | P1 (A2/A8/A9 features extend through P9) |
-| B1–B3 Org structure | P1/P2 |
-| B4–B11 Facilities/Masters/Ops | P2 |
-| B12 CSSD, B13 Mortuary | P3 (flag-gated) |
-| C1–C6 Patient | P2 (C2/C3 clinical parts in P3), C6 in P5 |
-| C7 MRD / HIM | P3 (flag-gated) |
-| D1–D9 Clinical | P3 |
-| D10–D14 Emergency/Critical Care/Dialysis/Physio/Dietetics | P3 (flag-gated, after D1–D9) |
-| E1 Appointments | P2 |
-| F1–F7 Financial | P4 |
-| G1–G3 Mobile apps | P5 |
-| Home Healthcare, Occupational Health | P5 (flag-gated) |
-| H1 Communication | P5 |
-| I1–I2 Analytics | P6 |
-| J1 AI | P8 |
-| K1 Security/Compliance | P9 (foundations in P1) |
-| Integrations | P7 |
+| Module                                                    | Phase                                     |
+| --------------------------------------------------------- | ----------------------------------------- |
+| A1–A9 Platform/SaaS                                       | P1 (A2/A8/A9 features extend through P9)  |
+| B1–B3 Org structure                                       | P1/P2                                     |
+| B4–B11 Facilities/Masters/Ops                             | P2                                        |
+| B12 CSSD, B13 Mortuary                                    | P3 (flag-gated)                           |
+| C1–C6 Patient                                             | P2 (C2/C3 clinical parts in P3), C6 in P5 |
+| C7 MRD / HIM                                              | P3 (flag-gated)                           |
+| D1–D9 Clinical                                            | P3                                        |
+| D10–D14 Emergency/Critical Care/Dialysis/Physio/Dietetics | P3 (flag-gated, after D1–D9)              |
+| E1 Appointments                                           | P2                                        |
+| F1–F7 Financial                                           | P4                                        |
+| G1–G3 Mobile apps                                         | P5                                        |
+| Home Healthcare, Occupational Health                      | P5 (flag-gated)                           |
+| H1 Communication                                          | P5                                        |
+| I1–I2 Analytics                                           | P6                                        |
+| J1 AI                                                     | P8                                        |
+| K1 Security/Compliance                                    | P9 (foundations in P1)                    |
+| Integrations                                              | P7                                        |
 
 > **Ruling N6 (Doc 10):** every module declares a feature-flag key `module.<domain>.<name>`. Editions (Doc 07) are compositions of these flags plus limits — org types are never served by forked code.
