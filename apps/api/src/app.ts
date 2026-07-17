@@ -28,6 +28,7 @@ import { prescriptionRouter } from "./modules/prescriptions/index.js";
 import { pharmacyRouter } from "./modules/pharmacy/index.js";
 import { admissionRouter } from "./modules/admissions/index.js";
 import { allergyRouter } from "./modules/allergies/index.js";
+import { reportRouter } from "./modules/reports/index.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
 import { env } from "./config/env.js";
@@ -85,7 +86,21 @@ export function createApp(logger: Logger): Express {
       credentials: true,
     }),
   );
-  app.use(express.json({ limit: "1mb" }));
+  /**
+   * 1 MB is the right ceiling for every ordinary JSON request, and a low ceiling is a cheap
+   * defence against a memory-exhaustion body. The ONE exception is a report upload, which
+   * carries a base64 file: its route mounts its OWN higher-limit parser, so this global one
+   * must step aside for that path — otherwise it rejects the upload at 1 MB before the route's
+   * parser is ever reached. Matched narrowly (POST …/orders/:id/reports) so nothing else is
+   * granted the larger body.
+   */
+  const globalJson = express.json({ limit: "1mb" });
+  app.use((req, res, next) => {
+    if (req.method === "POST" && /\/orders\/[a-f\d]{24}\/reports$/i.test(req.path)) {
+      return next();
+    }
+    return globalJson(req, res, next);
+  });
   // Browsers carry the refresh token in an httpOnly cookie (ADR-0009); native
   // clients send it in the body. Both paths need this parsed.
   app.use(cookieParser());
@@ -136,6 +151,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(pharmacyRouter());
   v1Router.use(admissionRouter());
   v1Router.use(allergyRouter());
+  v1Router.use(reportRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
   app.use("/api/v1", resolveTenant(), v1Router);

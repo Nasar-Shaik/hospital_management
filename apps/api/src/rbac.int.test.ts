@@ -531,6 +531,24 @@ const PROBES: Record<string, Probe> = {
     body: { reason: "matrix probe" },
   },
 
+  /* ── Diagnostic reports ─────────────────────────────────────────────────────
+   * `order:perform` uploads a report (the technician/radiologist who ran the test);
+   * `emr:read` lists a patient's reports and opens a file (every clinical reader).
+   */
+  "POST /api/v1/orders/:id/reports": {
+    method: "post",
+    url: "/api/v1/orders/64b7f0000000000000000001/reports",
+    body: { filename: "r.pdf", contentType: "application/pdf", dataBase64: "aGVsbG8=" },
+  },
+  "GET /api/v1/patients/:patientId/reports": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/reports",
+  },
+  "GET /api/v1/reports/:id/file": {
+    method: "get",
+    url: "/api/v1/reports/64b7f0000000000000000001/file",
+  },
+
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
   "GET /api/v1/notifications/templates": {
     method: "get",

@@ -698,3 +698,22 @@ Short, hands-on checks for the admin/clinical enhancements. Log in at `sunrise.l
   - **Disable** a login (confirm the prompt) → status flips to `disabled` and their sessions end immediately; **Enable** restores it.
   - **Reset password** issues a new temporary password (shown once) and ends their sessions.
 - **Edge cases:** every professional field is optional — create a doctor with only name/email/role and it still saves. A non-admin has no Add/Edit/Disable actions.
+
+### B1 · Multi-select order pad (doctor)
+
+- **Preconditions:** logged in as `drrao@sunrise.test`; a patient called in (in progress) on **My patients**.
+- **Steps & expected:**
+  - In the **Order** card, tap several tests across Blood & lab and X-ray — each toggles a tick and highlights; tap again to deselect.
+  - Set one **priority** for the batch.
+  - Press **Send N for tests** → all selected go to the worklist at once; the notice says how many were sent (and how many were already ordered).
+- **Edge cases:** the button is disabled with nothing selected; sending twice does not double-order (each carries an idempotency key).
+
+### B2 · Lab report upload & the doctor's report view
+
+- **Preconditions:** a test has been ordered for a patient (do B1 first). Log in as `labtech@sunrise.test` → **Worklist**.
+- **Steps & expected:**
+  - Each order now has an **Upload report** button. Pick a PDF or image → it uploads with **no verify/approve step** and the notice confirms the ordering doctor can see it.
+  - Log in as `drrao@sunrise.test` → **My patients**, select that patient. The **Reports** card lists the report, **grouped by appointment date, then by category** (Blood & lab / X-ray & imaging).
+  - Press **View** → the file opens in a new tab (PDF renders, image shows).
+  - Reports from **previous visits** appear too — the list is the patient's whole history, not just today's visit.
+- **Edge cases:** only PDF/image types are accepted; a file over 10 MB is refused with a clear message; a lab technician cannot open the patient report list (no `emr:read`) — that is the doctor's/clinical view.

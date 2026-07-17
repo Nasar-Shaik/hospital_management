@@ -858,4 +858,24 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0018-report-files",
+    description: "Uploaded diagnostic report files (stored in the tenant DB)",
+    up: async (db) => {
+      // The doctor's cross-visit report view: everything for a patient, newest visit first.
+      await db
+        .collection("reportFiles")
+        .createIndex({ tenantId: 1, patientId: 1, visitDate: -1 }, { background: true });
+      // The reports answering one order (a test can produce more than one document).
+      await db
+        .collection("reportFiles")
+        .createIndex({ tenantId: 1, orderId: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("reportFiles")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

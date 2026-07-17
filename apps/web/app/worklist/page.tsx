@@ -186,6 +186,7 @@ function Worklist() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState<string | null>(null);
 
   useEffect(() => {
     /**
@@ -262,6 +263,45 @@ function Worklist() {
       }
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Uploads a scanned report against an order. No verify step — a document the technician
+   * scanned in goes straight to the ordering doctor's patient record (report.model.ts). The
+   * file is read as base64 in the browser and posted as JSON.
+   */
+  async function uploadReport(order: Order, file: File) {
+    setError(null);
+    setNotice(null);
+    setUploading(order.id);
+    try {
+      const dataBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result);
+          // A data URL is "data:<type>;base64,<payload>" — send only the payload.
+          resolve(result.slice(result.indexOf(",") + 1));
+        };
+        reader.onerror = () => reject(new Error("Could not read the file."));
+        reader.readAsDataURL(file);
+      });
+
+      await api.uploadReport(order.id, {
+        filename: file.name,
+        contentType: file.type || "application/octet-stream",
+        dataBase64,
+      });
+      setNotice(`Report uploaded for ${order.name}. The ordering doctor can see it now.`);
+    } catch (err) {
+      if (err instanceof ApiClientError) {
+        const fieldMsg = Object.values(err.fieldErrors)[0]?.[0];
+        setError(fieldMsg ?? err.message);
+      } else {
+        setError("Could not upload the report.");
+      }
+    } finally {
+      setUploading(null);
     }
   }
 
@@ -368,6 +408,28 @@ function Worklist() {
                       <Button variant="ghost" disabled={busy} onClick={() => void act(o, "cancel")}>
                         Cancel
                       </Button>
+                    )}
+
+                    {/* Upload a scanned report — no verify step, straight to the doctor. */}
+                    {o.status !== "cancelled" && can("order:perform") && (
+                      <label
+                        className={`inline-flex cursor-pointer items-center rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] ${
+                          uploading === o.id ? "opacity-50" : ""
+                        }`}
+                      >
+                        {uploading === o.id ? "Uploading…" : "Upload report"}
+                        <input
+                          type="file"
+                          accept="application/pdf,image/*"
+                          className="hidden"
+                          disabled={uploading !== null}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = ""; // allow re-picking the same file
+                            if (file) void uploadReport(o, file);
+                          }}
+                        />
+                      </label>
                     )}
                   </div>
                 </div>

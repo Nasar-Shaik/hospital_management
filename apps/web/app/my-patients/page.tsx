@@ -38,6 +38,7 @@ import {
   type Patient,
   type Prescription,
   type PrescriptionLineInput,
+  type ReportMeta,
   type SafetyAlert,
   type DoctorRef,
 } from "@medicore/api-client";
@@ -70,7 +71,15 @@ function priorityTone(p: OrderPriority): "danger" | "brand" | "neutral" {
   return "neutral";
 }
 
-/** What the doctor can order, grouped by where the work goes. */
+/**
+ * What the doctor can order, grouped by where the work goes.
+ *
+ * ── MARK, THEN SEND — NOT ONE-CLICK-ONE-ORDER ───────────────────────────────
+ * A consultation ends with "bloods, a chest film and a urine test", not one test at a time.
+ * So the pad is multi-SELECT: tap the tests to mark them, set one priority for the batch, and
+ * send them together. Each order still carries its own idempotency key, so a double-tap on
+ * "Send" places each test exactly once — the mark-then-send flow does not weaken that.
+ */
 function OrderPad({
   encounter,
   services,
@@ -82,7 +91,8 @@ function OrderPad({
 }) {
   const { api } = useAuth();
   const [priority, setPriority] = useState<OrderPriority>("routine");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -91,32 +101,51 @@ function OrderPad({
     [services],
   );
 
-  async function order(item: CatalogueItem) {
-    setBusy(item.code);
+  function toggle(code: string) {
+    setNotice(null);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }
+
+  async function sendSelected() {
+    const items = orderable.filter((s) => selected.has(s.code));
+    if (items.length === 0) return;
+
+    setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      const result = await api.placeOrder({
-        encounterId: encounter.id,
-        // The tariff's category IS the destination department. One polymorphic order,
-        // and the category is the only thing that differs (ADR-0013 §3).
-        category: item.category as "lab" | "radiology" | "procedure",
-        code: item.code,
-        name: item.name,
-        priority,
-        requestId: requestKey(encounter.id, item.code),
-      });
+      let placed = 0;
+      let duplicates = 0;
+      // One request each — the endpoint is idempotent per (encounter, code), so a retry of
+      // the whole batch never double-orders. A true batch endpoint would save round trips;
+      // at a consultation's scale (a handful of tests) this is simpler and just as safe.
+      for (const item of items) {
+        const result = await api.placeOrder({
+          encounterId: encounter.id,
+          category: item.category as "lab" | "radiology" | "procedure",
+          code: item.code,
+          name: item.name,
+          priority,
+          requestId: requestKey(encounter.id, item.code),
+        });
+        if (result.duplicate) duplicates += 1;
+        else placed += 1;
+      }
 
       setNotice(
-        result.duplicate
-          ? `${item.name} was already ordered — not ordered twice.`
-          : `${item.name} ordered. It is in the ${item.category} worklist now.`,
+        `${String(placed)} sent for tests${duplicates > 0 ? `, ${String(duplicates)} already ordered` : ""}.`,
       );
+      setSelected(new Set());
       onOrdered();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not place the order.");
+      setError(err instanceof ApiClientError ? err.message : "Could not place the orders.");
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
@@ -164,21 +193,48 @@ function OrderPad({
               {group.label}
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {items.map((item) => (
-                <button
-                  key={item.code}
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => void order(item)}
-                  className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] hover:bg-[var(--color-brand-50)] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {busy === item.code ? "Ordering…" : item.name}
-                </button>
-              ))}
+              {items.map((item) => {
+                const on = selected.has(item.code);
+                return (
+                  <button
+                    key={item.code}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => toggle(item.code)}
+                    className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
+                      on
+                        ? "border-[var(--color-brand-600)] bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                        : "border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] text-[var(--color-fg)] hover:border-[var(--color-brand-500)] hover:bg-[var(--color-brand-50)]"
+                    }`}
+                  >
+                    <span className="text-[0.7rem]">{on ? "✓" : "+"}</span>
+                    {item.name}
+                  </button>
+                );
+              })}
             </div>
           </div>
         );
       })}
+
+      <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-3">
+        <Button disabled={busy || selected.size === 0} onClick={() => void sendSelected()}>
+          {busy
+            ? "Sending…"
+            : selected.size === 0
+              ? "Select tests to send"
+              : `Send ${String(selected.size)} for tests`}
+        </Button>
+        {selected.size > 0 && !busy && (
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="text-xs text-[var(--color-fg-muted)] hover:underline"
+          >
+            Clear
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -457,6 +513,113 @@ function AllergyPanel({
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+const REPORT_CATEGORY_LABEL: Record<string, string> = {
+  lab: "Blood & lab",
+  radiology: "X-ray & imaging",
+  procedure: "Procedures",
+};
+
+function dayLabel(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/**
+ * The patient's diagnostic reports, across EVERY visit — grouped by appointment date, then by
+ * category. This is where a doctor opens "what did the last CBC show" without leaving the
+ * consultation, and it deliberately reaches back through previous encounters: a result is a
+ * fact about the patient, not about the visit it was ordered in.
+ */
+function PatientReports({ reports }: { reports: ReportMeta[] }) {
+  const { api } = useAuth();
+  const [opening, setOpening] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function open(report: ReportMeta) {
+    setOpening(report.id);
+    setError(null);
+    try {
+      const blob = await api.fetchReportBlob(report.id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      // Revoke after a beat — long enough for the new tab to have loaded it.
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch {
+      setError("Could not open the report.");
+    } finally {
+      setOpening(null);
+    }
+  }
+
+  if (reports.length === 0) {
+    return (
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        No reports uploaded for this patient yet. When the lab uploads one it appears here.
+      </p>
+    );
+  }
+
+  // Group by visit day (newest first), then by category within a day.
+  const byDay = new Map<string, ReportMeta[]>();
+  for (const r of reports) {
+    const key = dayLabel(r.visitDate);
+    (byDay.get(key) ?? byDay.set(key, []).get(key)!).push(r);
+  }
+
+  return (
+    <div className="space-y-4">
+      {error && <Alert tone="danger">{error}</Alert>}
+      {[...byDay.entries()].map(([day, dayReports]) => {
+        const byCategory = new Map<string, ReportMeta[]>();
+        for (const r of dayReports) {
+          (byCategory.get(r.category) ?? byCategory.set(r.category, []).get(r.category)!).push(r);
+        }
+        return (
+          <div key={day}>
+            <p className="mb-2 text-xs font-semibold text-[var(--color-fg)]">{day}</p>
+            <div className="space-y-2 border-l-2 border-[var(--color-border)] pl-3">
+              {[...byCategory.entries()].map(([category, catReports]) => (
+                <div key={category}>
+                  <p className="text-xs font-medium tracking-wide text-[var(--color-fg-subtle)] uppercase">
+                    {REPORT_CATEGORY_LABEL[category] ?? category}
+                  </p>
+                  <ul className="mt-1 space-y-1">
+                    {catReports.map((r) => (
+                      <li
+                        key={r.id}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-[var(--color-fg)]">
+                            {r.testName}
+                          </p>
+                          <p className="truncate text-xs text-[var(--color-fg-muted)]">
+                            {r.filename} · {(r.size / 1024).toFixed(0)} KB
+                          </p>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          disabled={opening === r.id}
+                          onClick={() => void open(r)}
+                        >
+                          {opening === r.id ? "Opening…" : "View"}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -999,6 +1162,7 @@ function MyPatients() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [allergies, setAllergies] = useState<Allergy[]>([]);
+  const [reports, setReports] = useState<ReportMeta[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
   const [error, setError] = useState<string | null>(null);
@@ -1100,6 +1264,17 @@ function MyPatients() {
     [api],
   );
 
+  /** Reports too are the PATIENT'S — every visit, so the doctor sees prior results. */
+  const loadReports = useCallback(
+    (patientId: string) => {
+      void api
+        .listReports(patientId)
+        .then(setReports)
+        .catch(() => setReports([]));
+    },
+    [api],
+  );
+
   const selected = waiting.find((e) => e.id === selectedId) ?? null;
   const selectedPatientId = selected?.patientId ?? null;
 
@@ -1111,8 +1286,11 @@ function MyPatients() {
   }, [selectedId, loadOrders, loadPrescriptions]);
 
   useEffect(() => {
-    if (selectedPatientId) loadAllergies(selectedPatientId);
-  }, [selectedPatientId, loadAllergies]);
+    if (selectedPatientId) {
+      loadAllergies(selectedPatientId);
+      loadReports(selectedPatientId);
+    }
+  }, [selectedPatientId, loadAllergies, loadReports]);
 
   async function act(action: string) {
     if (!selected) return;
@@ -1367,6 +1545,15 @@ function MyPatients() {
                   Ordered on this visit
                 </h3>
                 <OrdersForVisit orders={orders} />
+              </Card>
+
+              <Card className="p-5">
+                <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Reports</h3>
+                <p className="mb-3 text-xs text-[var(--color-fg-muted)]">
+                  Every uploaded report for this patient, newest visit first — including previous
+                  appointments.
+                </p>
+                <PatientReports reports={reports} />
               </Card>
             </>
           )}

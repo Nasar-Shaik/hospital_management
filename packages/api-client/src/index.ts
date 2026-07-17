@@ -276,6 +276,23 @@ export interface Allergy {
   refutedReason?: string;
 }
 
+/** A diagnostic report file's metadata (never its bytes). */
+export interface ReportMeta {
+  id: string;
+  orderId: string;
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  category: string;
+  testName: string;
+  visitDate: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
 export interface RegisterPatientInput {
   name: string;
   gender?: Gender;
@@ -984,6 +1001,48 @@ export class ApiClient {
   /** Rules an allergy out. It stops firing the prescribing check but stays on the record. */
   refuteAllergy(id: string, reason: string): Promise<Allergy> {
     return this.request<Allergy>("POST", `/api/v1/allergies/${id}/refute`, { reason });
+  }
+
+  /* ── diagnostic reports ── */
+
+  /** Uploads a report file against an order. `dataBase64` is the file, base64-encoded. */
+  uploadReport(
+    orderId: string,
+    input: { filename: string; contentType: string; dataBase64: string },
+  ): Promise<ReportMeta> {
+    return this.request<ReportMeta>("POST", `/api/v1/orders/${orderId}/reports`, input);
+  }
+
+  /** Every report for a patient, across all their visits — the doctor's cross-visit view. */
+  listReports(patientId: string): Promise<ReportMeta[]> {
+    return this.request<ReportMeta[]>("GET", `/api/v1/patients/${patientId}/reports`);
+  }
+
+  /**
+   * Fetches a report file's bytes, authenticated, as a Blob. The caller turns it into an
+   * object URL and opens it — a plain `<a href>` cannot carry the bearer token the download
+   * route requires, so the file must be fetched, not linked.
+   */
+  async fetchReportBlob(id: string): Promise<Blob> {
+    const token = this.getAccessToken?.();
+    const headers: Record<string, string> = {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (this.tenantHost) headers.host = this.tenantHost;
+
+    const res = await this.fetchImpl(`${this.baseUrl}/api/v1/reports/${id}/file`, {
+      method: "GET",
+      headers,
+      credentials: this.credentials,
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new ApiClientError(
+        res.status,
+        "HMS-GEN-500",
+        `Could not load the report (HTTP ${String(res.status)}).`,
+      );
+    }
+    return res.blob();
   }
 
   /** The as-you-type duplicate check. POST because the body carries PHI. */
