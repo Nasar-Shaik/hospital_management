@@ -160,7 +160,22 @@ function ReportsPage() {
     void load();
   }, [load]);
 
-  const activeSlug = TABS.find((t) => t.id === tab)?.slug ?? "pharmacy-stock";
+  const activeTab = TABS.find((t) => t.id === tab);
+  const activeSlug = activeTab?.slug ?? "pharmacy-stock";
+  const activeLabel = activeTab?.label ?? "report";
+
+  // "1 Jul – 17 Jul 2026" — the human form of the selected window, shown beside the tabs.
+  const periodLabel = useMemo(() => {
+    const fmt = (s: string, withYear: boolean) =>
+      new Date(`${s}T00:00:00`).toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "short",
+        ...(withYear ? { year: "numeric" } : {}),
+      });
+    if (!fromStr || !toStr) return "";
+    const sameYear = fromStr.slice(0, 4) === toStr.slice(0, 4);
+    return `${fmt(fromStr, !sameYear)} – ${fmt(toStr, true)}`;
+  }, [fromStr, toStr]);
 
   async function downloadCsv() {
     setDownloading(true);
@@ -230,27 +245,37 @@ function ReportsPage() {
             </Button>
           </div>
           <div className="ml-auto">
-            <Button variant="secondary" onClick={() => void downloadCsv()} loading={downloading}>
-              Download CSV
+            <Button
+              variant="secondary"
+              onClick={() => void downloadCsv()}
+              loading={downloading}
+              title={`Export the ${activeLabel} report to CSV`}
+            >
+              Export CSV
             </Button>
           </div>
         </div>
       </Card>
 
-      <div className="flex flex-wrap gap-2">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
-              tab === t.id
-                ? "bg-[var(--color-brand-600)] font-medium text-[var(--color-on-accent)]"
-                : "border border-[var(--color-border)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
+                tab === t.id
+                  ? "bg-[var(--color-brand-600)] font-medium text-[var(--color-on-accent)]"
+                  : "border border-[var(--color-border)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {/* Always show WHICH period the figures cover — a report with no visible date range is a
+            number nobody can trust. */}
+        <span className="text-xs text-[var(--color-fg-muted)]">{periodLabel}</span>
       </div>
 
       {error && <Alert tone="danger">{error}</Alert>}
