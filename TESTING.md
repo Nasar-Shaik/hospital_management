@@ -778,3 +778,56 @@ block a patient's medicine.
   - **Idempotency:** the dispense event is delivered at-least-once; a redelivery does **not** double-decrement
     (the ledger carries a unique `dispenseId + code` key). A dispense with the same drug on two lines
     (e.g. QID + SOS) records **one** movement for the summed quantity.
+
+## 14 · Track D — Tariff manager, per-doctor consultation fee, activity-trail filters
+
+> Preconditions for every block: API and web dev servers running, migrations + permission sync
+> applied (`pnpm --filter @medicore/api migrate -- --all` — adds the `tariff:manage` permission).
+> Sign in as `admin@sunrise.test` unless a step says otherwise. All dev passwords are `123456`.
+
+### D1 · Service tariff manager (admin)
+
+- **Preconditions:** signed in as the admin. Open **Service tariff** under Administration.
+- **Steps & expected:**
+  - The table lists every priced service — consultations, lab, radiology, procedures — with **Code**,
+    **Category**, **Price** (₹) and **Active/Retired** status. Filter by category, search by name/code.
+  - **Add service** → enter a code (e.g. `LAB_LFT`), name, category, and a rupee price. Save → it
+    appears. The price you set is what a patient is billed when that code is ordered.
+  - **Edit** a service — the **code and category are frozen** (orders match on the code); change the
+    **name or price** and save; the row updates.
+  - **Retire** an active service → it greys out and status flips to **Retired**; the doctor's order pad
+    no longer offers it, but past charges keep their price. **Restore** brings it back.
+- **Edge cases:** a duplicate code is refused with "that service code is already in the tariff" (409);
+  a price of 0 is valid (a government hospital's whole tariff is zeros); a non-admin has no **Service
+  tariff** nav entry and the routes 403.
+
+### D2 · Per-doctor consultation fee
+
+The consultation charged when a patient starts a visit can be the **doctor's own rate**, not just the
+hospital's flat `CONSULT_GEN` tariff. The line stays a consultation; only its price changes.
+
+- **Preconditions:** admin on the **Staff** screen; a doctor account (e.g. Dr Rao).
+- **Steps & expected:**
+  - **Edit** the doctor. Because the role is a specialist role, the form shows a **Consultation fee (₹)**
+    field. Set it (e.g. `800`) and save. **View** the doctor → the fee shows under the profile.
+  - As reception, register a patient and **start an encounter with that doctor**. Open the patient's
+    **bill**: the consultation line is charged at **₹800**, the doctor's rate — not the hospital default.
+  - Edit a _different_ doctor and leave the fee **blank**; a visit with them charges the hospital's
+    `CONSULT_GEN` tariff unchanged.
+- **Edge cases:** on a **government** hospital (`gov.localhost`) the zero-tariff policy still flattens the
+  consultation to **₹0**, whatever the doctor's fee — free care is a billing mode, not a per-doctor
+  choice. A doctor who is deleted or unreadable falls back to the tariff rather than failing the visit.
+
+### D3 · Activity-trail filters (reduce the load)
+
+- **Preconditions:** admin on **Activity trail**.
+- **Steps & expected:**
+  - The category pills still work. Below them: a **From / To date range** and a **Refusals only** toggle.
+  - Pick a date window → the list narrows to entries in those days (inclusive of the whole "To" day).
+  - Press **Refusals only** → only failed/denied events show (the ones that reveal an attack or a
+    misconfigured login). Combine it with a category and a date window to zero in.
+  - **Clear filters** appears once anything is set and resets everything to the first page.
+  - **Export CSV** honours the SAME filters — the downloaded file matches what is on screen.
+- **Edge cases:** every filter change returns to page 1; an empty window shows "Nothing recorded…" rather
+  than an error; the integrity check and CSV export remain `audit:*`-gated (a viewer without export sees
+  no CSV button).

@@ -20,7 +20,7 @@
  *  3. INTEGRITY IS ON THE PAGE, not in a report we send them. The customer can
  *     verify the chain themselves, whenever they like.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClientError, type AuditEntry, type AuditIntegrity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
@@ -62,6 +62,9 @@ function AuditTrail() {
 
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [category, setCategory] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [failuresOnly, setFailuresOnly] = useState(false);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -69,14 +72,27 @@ function AuditTrail() {
   const [integrity, setIntegrity] = useState<AuditIntegrity | null>(null);
   const [checking, setChecking] = useState(false);
 
+  /**
+   * Every narrowing the reader has chosen, in one object — shared by the list and the CSV export
+   * so the file always matches the screen. Dates become an inclusive day: `to` is pushed to the
+   * end of the chosen day so "the 3rd" means all of the 3rd, not midnight at its start.
+   */
+  const filters = useMemo(
+    () => ({
+      ...(category ? { category: category as AuditEntry["category"] } : {}),
+      ...(from ? { from: new Date(`${from}T00:00:00`).toISOString() } : {}),
+      ...(to ? { to: new Date(`${to}T23:59:59.999`).toISOString() } : {}),
+      ...(failuresOnly ? { outcome: "failure" as const } : {}),
+    }),
+    [category, from, to, failuresOnly],
+  );
+
+  const hasFilters = category !== "" || from !== "" || to !== "" || failuresOnly;
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await api.listAudit({
-        page,
-        limit: 25,
-        ...(category ? { category: category as AuditEntry["category"] } : {}),
-      });
+      const result = await api.listAudit({ page, limit: 25, ...filters });
       setEntries(result.items);
       setTotal(result.meta.total ?? result.items.length);
       setError(null);
@@ -85,7 +101,7 @@ function AuditTrail() {
     } finally {
       setLoading(false);
     }
-  }, [api, category, page]);
+  }, [api, filters, page]);
 
   useEffect(() => {
     void load();
@@ -122,9 +138,7 @@ function AuditTrail() {
 
           <PermissionGate can={can} permission="audit:export">
             <a
-              href={api.auditExportUrl(
-                category ? { category: category as AuditEntry["category"] } : {},
-              )}
+              href={api.auditExportUrl(filters)}
               className="inline-flex items-center rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
             >
               Export CSV
@@ -181,6 +195,66 @@ function AuditTrail() {
             {option.label}
           </button>
         ))}
+      </div>
+
+      {/* Narrow the trail — the point is to read a specific window or the refusals alone, not to
+          scroll a whole hospital's day. Every control resets to the first page. */}
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col text-xs text-[var(--color-fg-muted)]">
+          From
+          <input
+            type="date"
+            value={from}
+            max={to || undefined}
+            onChange={(e) => {
+              setFrom(e.target.value);
+              setPage(1);
+            }}
+            className="mt-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+        <label className="flex flex-col text-xs text-[var(--color-fg-muted)]">
+          To
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={(e) => {
+              setTo(e.target.value);
+              setPage(1);
+            }}
+            className="mt-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setFailuresOnly((v) => !v);
+            setPage(1);
+          }}
+          className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
+            failuresOnly
+              ? "bg-[var(--color-danger)] font-medium text-[var(--color-on-accent)]"
+              : "border border-[var(--color-border)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+          }`}
+        >
+          Refusals only
+        </button>
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={() => {
+              setCategory("");
+              setFrom("");
+              setTo("");
+              setFailuresOnly(false);
+              setPage(1);
+            }}
+            className="rounded-lg px-3 py-1.5 text-sm text-[var(--color-fg-muted)] underline hover:text-[var(--color-fg)]"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       <Card className="overflow-x-auto">

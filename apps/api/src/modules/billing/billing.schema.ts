@@ -49,6 +49,32 @@ export const listServicesQuerySchema = z
 
 export const idParamSchema = z.object({ id: objectId }).strict();
 
+/** The full tariff, retired entries included — the management read may filter by category. */
+export const listAllServicesQuerySchema = z
+  .object({ category: z.enum(CHARGE_CATEGORIES).optional() })
+  .strict();
+
+export const createServiceSchema = z
+  .object({
+    code: z.string().trim().min(1).max(64),
+    name: z.string().trim().min(1).max(200),
+    category: z.enum(CHARGE_CATEGORIES),
+    /** Paise — non-negative whole number. */
+    price: z.number().int().min(0).max(1_000_000_000),
+  })
+  .strict();
+
+export const updateServiceSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    price: z.number().int().min(0).max(1_000_000_000).optional(),
+    active: z.boolean().optional(),
+  })
+  .strict()
+  .refine((b) => Object.keys(b).length > 0, { message: "nothing to update" });
+
 export type PostChargeBody = z.infer<typeof postChargeSchema>;
 export type RecordPaymentBody = z.infer<typeof recordPaymentSchema>;
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
+export type CreateServiceBody = z.infer<typeof createServiceSchema>;
+export type UpdateServiceBody = z.infer<typeof updateServiceSchema>;

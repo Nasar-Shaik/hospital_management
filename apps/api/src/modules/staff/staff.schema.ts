@@ -14,6 +14,8 @@ export const staffProfileSchema = z
     designation: z.string().max(120).optional(),
     department: z.string().max(120).optional(),
     specialty: z.string().max(120).optional(),
+    /** Doctors' OP consultation fee, in PAISE. Non-negative whole number. */
+    consultationFee: z.number().int().min(0).max(100_000_000).optional(),
     qualification: z.string().max(200).optional(),
     registrationNo: z.string().max(80).optional(),
     gender: z.enum(["male", "female", "other"]).optional(),

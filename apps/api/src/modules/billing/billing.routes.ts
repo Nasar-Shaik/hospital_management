@@ -27,6 +27,9 @@ import {
   idParamSchema,
   listInvoicesQuerySchema,
   listServicesQuerySchema,
+  listAllServicesQuerySchema,
+  createServiceSchema,
+  updateServiceSchema,
   postChargeSchema,
   recordPaymentSchema,
   voidChargeSchema,
@@ -59,6 +62,39 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.ORDER_CREATE, FEATURE),
     validate(listServicesQuerySchema, "query"),
     asyncHandler(controller.listCatalogue),
+  );
+
+  /**
+   * The tariff MANAGER — the full price list, prices editable, retired entries shown.
+   *
+   * `tariff:manage`, not `billing:read`: this is where the hospital DEFINES what things cost,
+   * not where a counter reads them. A separate route from `/services` because the two answer
+   * different questions for different people — "what can I edit?" versus "what does this cost
+   * right now?" — and only one of them may write.
+   */
+  router.get(
+    "/tariff",
+    authenticate(),
+    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    validate(listAllServicesQuerySchema, "query"),
+    asyncHandler(controller.listAllServices),
+  );
+
+  router.post(
+    "/tariff",
+    authenticate(),
+    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    validate(createServiceSchema),
+    asyncHandler(controller.createService),
+  );
+
+  router.patch(
+    "/tariff/:id",
+    authenticate(),
+    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(updateServiceSchema),
+    asyncHandler(controller.updateService),
   );
 
   /**

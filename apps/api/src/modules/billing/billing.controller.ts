@@ -6,7 +6,14 @@ import type { ApiEnvelope, PageMeta } from "@medicore/types";
 import { AppError } from "../../core/errors/appError.js";
 import { getEncounter } from "../encounters/index.js";
 import * as billing from "./billing.service.js";
-import type { ListInvoicesQuery, PostChargeBody, RecordPaymentBody } from "./billing.schema.js";
+import type {
+  ListInvoicesQuery,
+  PostChargeBody,
+  RecordPaymentBody,
+  CreateServiceBody,
+  UpdateServiceBody,
+} from "./billing.schema.js";
+import type { ChargeCategory } from "./billing.model.js";
 
 function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
   const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
@@ -17,6 +24,25 @@ function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
 export const listServices: RequestHandler = async (req, res) => {
   const { category } = req.query as { category?: never };
   ok(res, await billing.listServices(category));
+};
+
+/* ── Tariff management (needs tariff:manage; prices are visible and editable) ── */
+
+/** The full price list, retired entries included — what the tariff manager edits. */
+export const listAllServices: RequestHandler = async (req, res) => {
+  const { category } = req.query as { category?: ChargeCategory };
+  ok(res, await billing.listAllServices(category));
+};
+
+export const createService: RequestHandler = async (req, res) => {
+  const body = req.body as CreateServiceBody;
+  ok(res, await billing.createServiceItem(body), 201);
+};
+
+export const updateService: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as UpdateServiceBody;
+  ok(res, await billing.updateServiceItem(id, body));
 };
 
 /**

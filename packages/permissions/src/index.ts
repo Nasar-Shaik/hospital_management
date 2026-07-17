@@ -311,6 +311,12 @@ const FINANCE = {
   BILLING_DISCOUNT: p("billing:discount", "Apply a discount"),
   BILLING_REFUND: p("billing:refund", "Issue a refund"),
   PAYMENT_COLLECT: p("payment:collect", "Collect a payment", "branch"),
+  /**
+   * Maintain the service tariff — the hospital's price list. Tenant-scoped: a price applies to
+   * the whole hospital, not one branch, and it is the administrator's lever, kept apart from the
+   * counter permissions (`billing:read/create`) that only USE the prices it sets.
+   */
+  TARIFF_MANAGE: p("tariff:manage", "Manage the service tariff"),
 
   INSURANCE_PREAUTH: p("insurance:preauth", "Request pre-authorization"),
   INSURANCE_CLAIM: p("insurance:claim", "File a claim"),

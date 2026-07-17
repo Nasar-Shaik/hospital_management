@@ -22,6 +22,9 @@ import { EVENTS } from "../../core/events/eventCatalog.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
 import { postCharge, reverseChargesFor } from "./billing.service.js";
 import type { ChargeCategory } from "./billing.model.js";
+// A pricing INPUT: the doctor's own consultation fee. Read through the users module's public
+// face, so billing prices per-doctor without any clinical module knowing money exists.
+import { getById as getUserById } from "../users/index.js";
 
 const logger = createLogger({ service: "billing-consumers" });
 
@@ -35,6 +38,16 @@ const CONSULTATION_CODE = "CONSULT_GEN";
  * prepaid hospital actually takes the money — at the desk, before the patient sits
  * down. A government hospital posts the same charge at ₹0 (see `postCharge`).
  *
+ * ── PER-DOCTOR PRICING, WITHOUT A CODE PER DOCTOR ───────────────────────────
+ * The line stays `CONSULT_GEN` — one consultation code the invoice and reports already
+ * understand — but its PRICE can come from the doctor. When the doctor carries a
+ * `consultationFee` on their staff profile, that overrides the tariff for this visit; when
+ * they do not, the hospital's flat consultation tariff applies unchanged. Reading the fee
+ * here (rather than baking it into the event) keeps the pricing decision in the module that
+ * owns money, and `getById` is a public read on the users module — no clinical module learns
+ * that a consultation has a price. The zero-tariff policy still flattens it to ₹0 in
+ * `postCharge`, because free care is a billing MODE, not a doctor's choice.
+ *
  * Idempotent on the encounter: a redelivered event must not charge a second
  * consultation fee.
  */
@@ -47,6 +60,9 @@ async function onEncounterStarted(event: DomainEvent): Promise<void> {
     return;
   }
 
+  const doctorId = typeof event.payload.doctorId === "string" ? event.payload.doctorId : undefined;
+  const fee = doctorId ? await doctorConsultationFee(doctorId) : undefined;
+
   await postCharge({
     encounterId,
     patientId,
@@ -57,8 +73,28 @@ async function onEncounterStarted(event: DomainEvent): Promise<void> {
     // The encounter IS the cause. One consultation fee per visit, enforced by the
     // unique index on (sourceId, code).
     sourceId: encounterId,
+    // The doctor's own rate when they set one; otherwise postCharge falls back to the tariff.
+    ...(fee !== undefined ? { unitPrice: fee } : {}),
     ...(typeof event.branchId === "string" ? { branchId: event.branchId } : {}),
   });
+}
+
+/**
+ * The doctor's own consultation fee, or undefined to fall back to the tariff.
+ *
+ * A missing doctor, or a doctor who never set a fee, is not an error — it is the ordinary
+ * "use the hospital rate" case, so this swallows a lookup miss into undefined rather than
+ * failing a registration over a pricing read.
+ */
+async function doctorConsultationFee(doctorId: string): Promise<number | undefined> {
+  try {
+    const doctor = await getUserById(doctorId);
+    const fee = doctor?.profile?.consultationFee;
+    return typeof fee === "number" && fee >= 0 ? fee : undefined;
+  } catch (err) {
+    logger.warn({ doctorId, err }, "could not read doctor consultation fee — using the tariff");
+    return undefined;
+  }
 }
 
 /** Maps an order's category onto a charge category. Lab and radiology bill differently. */

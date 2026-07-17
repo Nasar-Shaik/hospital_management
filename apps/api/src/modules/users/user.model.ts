@@ -42,6 +42,14 @@ export interface StaffProfile {
   department?: string;
   /** Doctors: their clinical specialty. Distinct from department. */
   specialty?: string;
+  /**
+   * Doctors: the OP consultation fee in PAISE, charged when a patient starts an encounter with
+   * them. Absent means "use the hospital's general consultation tariff" — so a hospital that
+   * prices consultations one flat rate never has to set this, and a specialist who charges more
+   * simply carries their own number. A government hospital's zero-tariff policy still overrides
+   * it to ₹0, because that is a billing MODE, not a per-doctor choice.
+   */
+  consultationFee?: number;
   /** "MBBS, MD", "B.Sc MLT". */
   qualification?: string;
   /** Medical-council / professional registration or licence number. */
@@ -88,6 +96,7 @@ const userSchema = new Schema<UserDoc>(
         designation: { type: String, trim: true, maxlength: 120 },
         department: { type: String, trim: true, maxlength: 120 },
         specialty: { type: String, trim: true, maxlength: 120 },
+        consultationFee: { type: Number, min: 0, max: 100_000_000 },
         qualification: { type: String, trim: true, maxlength: 200 },
         registrationNo: { type: String, trim: true, maxlength: 80 },
         gender: { type: String, enum: STAFF_GENDERS },

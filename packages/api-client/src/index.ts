@@ -120,6 +120,8 @@ export interface StaffProfile {
   designation?: string;
   department?: string;
   specialty?: string;
+  /** Doctors: OP consultation fee in PAISE. Absent = charge the hospital's consultation tariff. */
+  consultationFee?: number;
   qualification?: string;
   registrationNo?: string;
   gender?: StaffGender;
@@ -544,6 +546,34 @@ export interface CatalogueItem {
   code: string;
   name: string;
   category: ChargeCategory;
+}
+
+/**
+ * A tariff entry AS THE MANAGER SEES IT — with its price, and whether it is active. Distinct
+ * from `CatalogueItem` (the doctor's price-free view) precisely because this one carries money:
+ * it is only ever returned by the `tariff:manage` endpoints.
+ */
+export interface TariffItem {
+  id: string;
+  code: string;
+  name: string;
+  category: ChargeCategory;
+  /** Paise. */
+  price: number;
+  active: boolean;
+}
+
+export interface CreateTariffInput {
+  code: string;
+  name: string;
+  category: ChargeCategory;
+  /** Paise. */
+  price: number;
+}
+export interface UpdateTariffInput {
+  name?: string;
+  price?: number;
+  active?: boolean;
 }
 
 /* ── Prescriptions & pharmacy (STATE_MACHINE_CATALOG §6) ──────────────────── */
@@ -1424,6 +1454,21 @@ export class ApiClient {
   listCatalogue(params: { category?: ChargeCategory } = {}): Promise<CatalogueItem[]> {
     const qs = params.category ? `?category=${params.category}` : "";
     return this.request<CatalogueItem[]>("GET", `/api/v1/services/catalogue${qs}`);
+  }
+
+  /* ── Tariff management (needs tariff:manage; prices included) ─────────────── */
+
+  listTariff(params: { category?: ChargeCategory } = {}): Promise<TariffItem[]> {
+    const qs = params.category ? `?category=${params.category}` : "";
+    return this.request<TariffItem[]>("GET", `/api/v1/tariff${qs}`);
+  }
+
+  createTariff(input: CreateTariffInput): Promise<TariffItem> {
+    return this.request<TariffItem>("POST", "/api/v1/tariff", input);
+  }
+
+  updateTariff(id: string, patch: UpdateTariffInput): Promise<TariffItem> {
+    return this.request<TariffItem>("PATCH", `/api/v1/tariff/${id}`, patch);
   }
 
   postCharge(input: {

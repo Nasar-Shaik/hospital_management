@@ -124,6 +124,38 @@ export const listServices = repo.listServices;
 export const listInvoices = repo.listInvoices;
 export const getInvoice = repo.findInvoiceById;
 
+/* ── Tariff management (the price list a hospital edits) ────────────────────── */
+
+export const listAllServices = repo.listAllServices;
+
+/**
+ * Adds a service to the tariff. The code is the key an order and a charge carry, so it is
+ * unique per hospital (migration 0006's index); a clash comes back as a clear 409 rather than
+ * a duplicate-key stack trace.
+ */
+export async function createServiceItem(input: repo.CreateServiceInput): Promise<repo.ServiceItem> {
+  try {
+    return await repo.createService({ ...input, code: input.code.toUpperCase() });
+  } catch (err) {
+    if (repo.isDuplicateKey(err)) {
+      throw new AppError("HMS-VAL-001", 409, "That service code is already in the tariff", {
+        code: input.code,
+        hint: "codes are unique per hospital — edit the existing entry, or pick another code",
+      });
+    }
+    throw err;
+  }
+}
+
+export async function updateServiceItem(
+  id: string,
+  patch: repo.UpdateServiceInput,
+): Promise<repo.ServiceItem> {
+  const updated = await repo.updateService(id, patch);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Service not found", { id });
+  return updated;
+}
+
 export async function voidCharge(id: string, reason: string): Promise<repo.Charge> {
   const charge = await repo.voidCharge(id, reason);
   if (!charge) {

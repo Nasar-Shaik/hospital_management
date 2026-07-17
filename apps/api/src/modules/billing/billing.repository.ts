@@ -138,6 +138,66 @@ export async function listServices(category?: ChargeCategory): Promise<ServiceIt
   return docs.map(toServiceItem);
 }
 
+/**
+ * The FULL tariff, retired entries included — the management view. `listServices` above is the
+ * clinical read (active only, price stripped at the controller); this one carries the price and
+ * the inactive rows, because managing a price list means seeing what you have turned off.
+ */
+export async function listAllServices(category?: ChargeCategory): Promise<ServiceItem[]> {
+  const docs = await getServiceItemModel(getTenantDb())
+    .find({ ...(category ? { category } : {}) })
+    .sort({ category: 1, name: 1 })
+    .lean<ServiceItemDoc[]>();
+  return docs.map(toServiceItem);
+}
+
+export async function findServiceById(id: string): Promise<ServiceItem | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getServiceItemModel(getTenantDb())
+    .findById(new Types.ObjectId(id))
+    .lean<ServiceItemDoc>();
+  return doc ? toServiceItem(doc) : undefined;
+}
+
+export interface CreateServiceInput {
+  code: string;
+  name: string;
+  category: ChargeCategory;
+  /** Paise. */
+  price: number;
+}
+
+export async function createService(input: CreateServiceInput): Promise<ServiceItem> {
+  const ctx = getContext();
+  const doc = await getServiceItemModel(getTenantDb()).create({
+    tenantId: ctx.tenantId,
+    code: input.code,
+    name: input.name,
+    category: input.category,
+    price: input.price,
+    active: true,
+  });
+  return toServiceItem(doc.toObject() as ServiceItemDoc);
+}
+
+/** Editable fields of a tariff entry. NOT `code` or `category` — those define what it IS. */
+export interface UpdateServiceInput {
+  name?: string;
+  price?: number;
+  active?: boolean;
+}
+
+export async function updateService(
+  id: string,
+  patch: UpdateServiceInput,
+): Promise<ServiceItem | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getServiceItemModel(getTenantDb())
+    .findByIdAndUpdate(new Types.ObjectId(id), { $set: patch }, { new: true })
+    .lean<ServiceItemDoc>();
+  return doc ? toServiceItem(doc) : undefined;
+}
+
 /* ── Charges ───────────────────────────────────────────────────────────────── */
 
 export interface PostChargeInput {

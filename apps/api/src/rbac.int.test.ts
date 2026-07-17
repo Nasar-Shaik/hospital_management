@@ -549,6 +549,21 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/reports/64b7f0000000000000000001/file",
   },
 
+  /* ── Tariff management ───────────────────────────────────────────────────────
+   * `tariff:manage` — the administrator's price list. Prices are visible and editable here.
+   */
+  "GET /api/v1/tariff": { method: "get", url: "/api/v1/tariff" },
+  "POST /api/v1/tariff": {
+    method: "post",
+    url: "/api/v1/tariff",
+    body: { code: "PROC_DRESSING", name: "Wound dressing", category: "procedure", price: 15000 },
+  },
+  "PATCH /api/v1/tariff/:id": {
+    method: "patch",
+    url: "/api/v1/tariff/64b7f0000000000000000001",
+    body: { price: 20000 },
+  },
+
   /* ── Pharmacy medicine master & stock ───────────────────────────────────────
    * `pharmacy:stock` throughout — maintaining the shelf, gated on module.pharmacy.full.
    * Stock decrements from a dispense are an EVENT, not a route, so they are not probed here.

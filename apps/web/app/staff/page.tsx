@@ -27,6 +27,7 @@ import {
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
+import { rupees, toPaise } from "../../lib/money";
 
 function statusTone(status: StaffMember["status"]): "success" | "danger" | "neutral" {
   if (status === "active") return "success";
@@ -55,6 +56,8 @@ interface FormState {
   designation: string;
   department: string;
   specialty: string;
+  /** Rupees, as typed — converted to paise on submit. */
+  consultationFee: string;
   qualification: string;
   registrationNo: string;
   gender: string;
@@ -74,6 +77,7 @@ const EMPTY_FORM: FormState = {
   designation: "",
   department: "",
   specialty: "",
+  consultationFee: "",
   qualification: "",
   registrationNo: "",
   gender: "",
@@ -95,6 +99,7 @@ function formFromMember(m: StaffMember): FormState {
     designation: p.designation ?? "",
     department: p.department ?? "",
     specialty: p.specialty ?? "",
+    consultationFee: p.consultationFee !== undefined ? String(p.consultationFee / 100) : "",
     qualification: p.qualification ?? "",
     registrationNo: p.registrationNo ?? "",
     gender: p.gender ?? "",
@@ -115,6 +120,8 @@ function profileFromForm(f: FormState): StaffProfile {
   put("designation", f.designation);
   put("department", f.department);
   put("specialty", f.specialty);
+  // Rupees in the box → paise on the wire. Blank means "not set" — the hospital tariff applies.
+  if (f.consultationFee.trim()) out.consultationFee = toPaise(f.consultationFee);
   put("qualification", f.qualification);
   put("registrationNo", f.registrationNo);
   if (f.gender) out.gender = f.gender as StaffProfile["gender"];
@@ -288,7 +295,19 @@ function StaffForm({
               name="specialty"
               value={form.specialty}
               onChange={(e) => set({ specialty: e.target.value })}
-              hint="Drives this doctor's consultation fee"
+              hint="e.g. Cardiology, Orthopaedics"
+            />
+          )}
+          {hasSpecialty && (
+            <Field
+              label="Consultation fee (₹)"
+              name="consultationFee"
+              type="number"
+              min={0}
+              step="1"
+              value={form.consultationFee}
+              onChange={(e) => set({ consultationFee: e.target.value })}
+              hint="Charged when a patient starts a visit with them. Blank = hospital rate."
             />
           )}
           {isClinical && (
@@ -408,6 +427,10 @@ function StaffDetail({ member }: { member: StaffMember }) {
         <DetailRow label="Designation" value={p.designation} />
         <DetailRow label="Department" value={p.department} />
         <DetailRow label="Specialty" value={p.specialty} />
+        <DetailRow
+          label="Consultation fee"
+          value={p.consultationFee !== undefined ? rupees(p.consultationFee) : undefined}
+        />
         <DetailRow label="Qualification" value={p.qualification} />
         <DetailRow label="Registration / licence" value={p.registrationNo} />
         <DetailRow label="Phone" value={member.phone} />
