@@ -1268,4 +1268,29 @@ pathologist/radiologist verifies and releases).
   blood, radiologist for imaging). Once released, the item appears under **Completed** with "Released
   … — visible to the doctor."
 
+## 26 · Front Office hybrid role (reception + cash) (⏳ eyeball)
+
+**Why:** in a small hospital ONE person at the front desk both registers the patient and takes the OP
+fee. Rather than staple two roles together, there is now a single **Front Office (Reception + Cash)**
+role — the union of Receptionist and Cashier. It invents no new privilege: every permission it holds
+already belongs to one of those two roles, so a hospital that separates the desk from the cash counter
+simply grants the two roles instead. (The RBAC layer already unions permissions across roles; this just
+gives the common combination a name.) Seeded to every hospital by `pnpm migrate --all` (roles 11 → 12).
+
+### F1 · Assign it
+
+- **Administration → Staff** → add or edit a person → role **Front Office (Reception + Cash)**. They
+  can now register patients, manage the queue, create/finalize bills and collect payments — from one
+  login.
+
+### F2 · The registration-to-payment flow
+
+- As Front Office: **Reception** → register/queue a walk-in and tag them to a **doctor**. Starting the
+  encounter raises the consultation charge automatically — at THAT doctor's fee if one is set on their
+  staff profile, otherwise the hospital's general consultation tariff.
+- **Billing** → the charge is there to finalize and **collect** — same person, no hand-off.
+
+_(Pay-before-lab gating and the pharmacy budget/override are the next slice — see the pending
+design decision.)_
+
 _(Payment-status badges and route-to-room land in Phase 4 with the payment-gated flow.)_

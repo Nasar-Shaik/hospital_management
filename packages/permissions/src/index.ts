@@ -744,6 +744,41 @@ export const DEFAULT_ROLES = [
     ),
   },
   {
+    /**
+     * The small-hospital reality: ONE person at the front desk both registers the patient AND
+     * takes the OP fee. Rather than make an admin staple two roles together, this is that job as a
+     * single named role — the union of RECEPTIONIST and CASHIER. It is not a new privilege level;
+     * every permission here already belongs to one of those two roles, so nothing is invented, and
+     * a hospital that separates the desk from the cash counter simply grants the two roles instead.
+     */
+    code: "FRONT_OFFICE",
+    name: "Front Office (Reception + Cash)",
+    description: "Registers patients, manages the queue, AND bills and collects payment.",
+    permissions: codes(
+      // Reception
+      PATIENT.PATIENT_REGISTER,
+      PATIENT.PATIENT_READ,
+      PATIENT.PATIENT_UPDATE,
+      OPERATIONS.ENCOUNTER_CREATE,
+      OPERATIONS.ENCOUNTER_READ,
+      OPERATIONS.ENCOUNTER_UPDATE,
+      OPERATIONS.APPOINTMENT_CREATE,
+      OPERATIONS.APPOINTMENT_READ,
+      OPERATIONS.APPOINTMENT_UPDATE,
+      OPERATIONS.APPOINTMENT_CANCEL,
+      OPERATIONS.QUEUE_MANAGE,
+      ORGANIZATION.VISITOR_MANAGE,
+      ORGANIZATION.HELPDESK_MANAGE,
+      PLATFORM.FILE_UPLOAD,
+      // Cash
+      FINANCE.BILLING_CREATE,
+      FINANCE.BILLING_READ,
+      FINANCE.BILLING_FINALIZE,
+      FINANCE.PAYMENT_COLLECT,
+      PATIENT.WALLET_MANAGE,
+    ),
+  },
+  {
     code: "PHARMACIST",
     name: "Pharmacist",
     description: "Dispensing and pharmacy stock.",
