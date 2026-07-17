@@ -20,7 +20,6 @@ import { apiTarget } from "../../lib/api";
 import { Alert, Button, Card, Field } from "../../components/ui";
 import {
   DEV_MULTI_ACCOUNT,
-  DEV_PASSWORD,
   listRememberedAccounts,
   forgetAccount,
   type RememberedAccount,
@@ -225,7 +224,7 @@ function LoginForm() {
           {DEV_MULTI_ACCOUNT && !mfaToken && accounts.length > 0 && (
             <div className="mt-5 border-t border-[var(--color-border)] pt-4">
               <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
-                Developer quick sign-in
+                Recent accounts (dev)
               </p>
               <div className="flex flex-wrap gap-2">
                 {accounts.map((a) => (
@@ -233,12 +232,21 @@ function LoginForm() {
                     key={a.email}
                     className="group inline-flex items-center gap-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] pl-1 text-sm"
                   >
+                    {/*
+                      Fills the EMAIL only — like a browser's remembered-username list. It never
+                      signs in: after logout, the next person still needs the password. A one-click
+                      passwordless re-login after logout is the opposite of what "sign out" means.
+                    */}
                     <button
                       type="button"
-                      disabled={busy}
-                      onClick={() => void doLogin(a.email, DEV_PASSWORD)}
-                      className="rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-bg-subtle)] disabled:opacity-50"
-                      title={a.email}
+                      onClick={() => {
+                        setEmail(a.email);
+                        setPassword("");
+                        setError(null);
+                        document.querySelector<HTMLInputElement>('input[name="password"]')?.focus();
+                      }}
+                      className="rounded-md px-2 py-1.5 text-left hover:bg-[var(--color-bg-subtle)]"
+                      title={`Fill email: ${a.email}`}
                     >
                       <span className="font-medium text-[var(--color-fg)]">{a.name}</span>
                       {a.role && (
@@ -262,8 +270,8 @@ function LoginForm() {
                 ))}
               </div>
               <p className="mt-3 text-xs text-[var(--color-fg-muted)]">
-                Each browser tab keeps its own account — open a new tab to sign in as someone else
-                and both stay logged in. (Local development only.)
+                Fills the email — you still enter the password. Each browser tab keeps its own
+                account, so open a new tab to sign in as someone else. (Local development only.)
               </p>
             </div>
           )}
