@@ -16,6 +16,7 @@ import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { isDuplicateKey } from "../../core/db/mongoErrors.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import {
   getAllergyModel,
   type AllergyDoc,
@@ -156,4 +157,15 @@ export async function refute(id: string, reason: string): Promise<Allergy | unde
     .lean<AllergyDoc>();
 
   return doc ? toAllergy(doc) : undefined;
+}
+
+/**
+ * Move every allergy off a merged patient onto the survivor (patient.patients.merged).
+ *
+ * The most safety-critical re-point in the system: an allergy left pointing at the
+ * merged record is an allergy `drugSafety.screen()` will never see, and the fatal drug
+ * goes through. Idempotent — see repointPatientId.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getAllergyModel(getTenantDb()), "patientId", ref, { objectId: true });
 }

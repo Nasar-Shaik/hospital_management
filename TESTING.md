@@ -1054,3 +1054,42 @@ email belongs to an account — otherwise the box becomes a directory of who has
 - Click the same link again after resetting → **"This reset link is invalid or has expired"** with a
   **Request a new link** button. Same message for a link older than 60 minutes, or a tampered token.
 - Opening `/reset-password` with no `?token=` shows the "open the link from your email" state.
+
+## 20 · Patient merge re-points every reference (⏳ eyeball)
+
+**Why:** merging two duplicate records declares them one person, but the merged record keeps its row —
+so appointments, encounters, allergies, prescriptions, orders, bills, dispenses, ward notes and
+report files all still point at the _old_ id until something moves them. If they are not moved, the
+survivor's chart is missing history a clinician is relying on. The most dangerous case is
+**allergies**: an allergy left on the merged record is one the prescribing safety check will never
+see. Merge now publishes `patient.patients.merged`, and every module that stores a `patientId`
+consumes it and re-points its OWN references to the survivor (each module owns its collection — the
+patients module never learns their names). At-least-once delivery is safe: re-pointing is idempotent,
+so a redelivery moves zero rows.
+
+**Out of scope, deliberately:** a patient-portal login (`users.patientId`) is an identity, not a
+clinical reference — merging two charts does not merge two logins, which is a credential decision of
+its own. It is intentionally NOT re-pointed here.
+
+### G1 · A merged patient's history follows the survivor
+
+- Pick two patients A (survivor) and B (duplicate) who BOTH have activity — book an appointment for
+  each, record an allergy on B, and (if you can) start an encounter / add a bill for B.
+- **Patients → find B → Merge into A** (needs `patient:merge`). Give a reason.
+- **Expect:** open A's chart and B's activity is now there — B's appointment, allergy, encounter and
+  any bill all appear under A. B's record still exists, marked _merged → A_, but holds no live
+  references any more.
+
+### G2 · The allergy safety net moves with the patient
+
+- Record an allergy (e.g. Penicillin) on B, then merge B into A.
+- Prescribe the matching drug for **A** → the safety check must fire on A, because the allergy is now
+  A's. (Before this feature it would have stayed silent — the allergy was stranded on B.)
+
+### G3 · Re-running is harmless (idempotent)
+
+- A merge fires the event once; a redelivery (operator draining the queue, a restart) must change
+  nothing. There is no user action for this — the guarantee is that `repointPatientId` matches the
+  OLD id, which no longer exists after the first pass, so the second pass moves 0 rows. The
+  per-module consumer logs `re-pointed … references to the surviving patient` with a count only when
+  it actually moved something.

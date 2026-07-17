@@ -4,6 +4,7 @@
  */
 import type { ClientSession } from "mongoose";
 import { getTenantDb } from "../../core/context/requestContext.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import {
   getAppointmentModel,
@@ -244,4 +245,15 @@ export async function deactivateSchedule(id: string): Promise<boolean> {
     { new: true },
   );
   return Boolean(doc);
+}
+
+/**
+ * Move a merged patient's appointments onto the survivor (patient.patients.merged).
+ * `patientId` is stored as a STRING here (not an ObjectId), hence objectId: false.
+ * Idempotent — see repointPatientId.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getAppointmentModel(getTenantDb()), "patientId", ref, {
+    objectId: false,
+  });
 }

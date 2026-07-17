@@ -13,6 +13,7 @@
  */
 import { createLogger } from "@medicore/logger";
 import { EVENTS } from "../../core/events/eventCatalog.js";
+import { onPatientsMerged } from "../../core/events/patientMerge.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { notify } from "../notifications/index.js";
@@ -20,7 +21,7 @@ import { getPatient } from "../patients/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getById as getTenant } from "../tenants/index.js";
 import { getEncounter, startConsultation } from "../encounters/index.js";
-import { isWaitingOnResults } from "./order.repository.js";
+import { isWaitingOnResults, repointPatient } from "./order.repository.js";
 import { getOrder } from "./order.service.js";
 import { AWAITED_CATEGORIES } from "./order.model.js";
 
@@ -154,6 +155,7 @@ async function bringThePatientBack(encounterId: string): Promise<void> {
 export const orderConsumers: ModuleConsumers = {
   events: {
     [EVENTS.RESULT_RELEASED]: onResultReleased,
+    [EVENTS.PATIENTS_MERGED]: onPatientsMerged("orders", repointPatient),
   },
   tasks: {},
 };

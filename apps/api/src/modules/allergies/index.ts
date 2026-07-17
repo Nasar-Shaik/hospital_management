@@ -25,3 +25,6 @@ export {
   type AllergyStatus,
   type AllergySeverity,
 } from "./allergy.model.js";
+
+/** Re-points allergies onto the survivor on merge. Registered by eventConsumer.ts. */
+export { allergyConsumers } from "./allergy.consumers.js";

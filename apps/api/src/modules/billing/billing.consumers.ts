@@ -19,8 +19,10 @@ import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
 import { calendarDaysStarted } from "../../core/time/day.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
+import { onPatientsMerged } from "../../core/events/patientMerge.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
 import { postCharge, reverseChargesFor } from "./billing.service.js";
+import { repointPatient } from "./billing.repository.js";
 import type { ChargeCategory } from "./billing.model.js";
 // A pricing INPUT: the doctor's own consultation fee. Read through the users module's public
 // face, so billing prices per-doctor without any clinical module knowing money exists.
@@ -397,6 +399,7 @@ export const billingConsumers: ModuleConsumers = {
     [EVENTS.MEDICATION_DISPENSED]: onMedicationDispensed,
     [EVENTS.PATIENT_ADMITTED]: onPatientAdmitted,
     [EVENTS.PATIENT_DISCHARGED]: onPatientDischarged,
+    [EVENTS.PATIENTS_MERGED]: onPatientsMerged("billing", repointPatient),
   },
   tasks: {},
 };

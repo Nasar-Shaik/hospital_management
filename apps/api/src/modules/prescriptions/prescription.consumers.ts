@@ -21,6 +21,7 @@
  */
 import { createLogger } from "@medicore/logger";
 import { EVENTS } from "../../core/events/eventCatalog.js";
+import { onPatientsMerged } from "../../core/events/patientMerge.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
 import { cancelOrder, getOrder, placeOrder } from "../orders/index.js";
 import * as repo from "./prescription.repository.js";
@@ -155,6 +156,7 @@ export const prescriptionConsumers: ModuleConsumers = {
   events: {
     [EVENTS.PRESCRIPTION_SIGNED]: onPrescriptionSigned,
     [EVENTS.PRESCRIPTION_CANCELLED]: onPrescriptionCancelled,
+    [EVENTS.PATIENTS_MERGED]: onPatientsMerged("prescriptions", repo.repointPatient),
   },
   tasks: {},
 };

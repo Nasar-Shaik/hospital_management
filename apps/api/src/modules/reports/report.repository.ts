@@ -7,6 +7,7 @@
  */
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { getReportFileModel, type ReportFileDoc } from "./report.model.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 
@@ -123,4 +124,12 @@ function toBuffer(raw: unknown): Buffer {
   if (binary.buffer && Buffer.isBuffer(binary.buffer)) return binary.buffer;
   if (typeof binary.value === "function") return binary.value();
   return Buffer.from(raw as Uint8Array);
+}
+
+/**
+ * Move a merged patient's report files onto the survivor (patient.patients.merged).
+ * Idempotent — see repointPatientId.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getReportFileModel(getTenantDb()), "patientId", ref, { objectId: true });
 }

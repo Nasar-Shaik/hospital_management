@@ -277,6 +277,11 @@ const IN_PROCESS_EVENTS = new Set<string>([
   EVENTS.PATIENT_REGISTERED,
   EVENTS.APPOINTMENT_BOOKED,
   EVENTS.APPOINTMENT_CANCELLED,
+  // Two records became one person. Every module that stores a patientId re-points its
+  // own references from here (core/events/patientMerge.ts). In-process because a stale
+  // chart — the survivor missing the duplicate's allergies, encounters, bills — is a
+  // clinical hazard, not a nightly-batch nicety.
+  EVENTS.PATIENTS_MERGED,
   // The report reaching the doctor who asked for it. Note that CRITICAL_RESULT_FLAGGED
   // is deliberately NOT here: its alert has already been raised synchronously by the
   // time it is published, and routing it through a queue as well would make the

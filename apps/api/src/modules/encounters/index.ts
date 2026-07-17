@@ -52,3 +52,6 @@ export {
   type EncounterClass,
   type DischargeDisposition,
 } from "./encounter.model.js";
+
+/** Re-points encounters + episodes onto the survivor on merge. Registered by eventConsumer.ts. */
+export { encounterConsumers } from "./encounter.consumers.js";

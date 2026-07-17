@@ -6,6 +6,7 @@ import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { isDuplicateKey } from "../../core/db/mongoErrors.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import {
   getChargeModel,
@@ -502,4 +503,20 @@ export async function listInvoices(filter: {
   ]);
 
   return { items: docs.map(toInvoice), total };
+}
+
+/**
+ * Move a merged patient's charges AND invoices onto the survivor (patient.patients.merged).
+ * Both collections carry patientId; the survivor must inherit the money owed on either.
+ * Returns the total rows moved across both. Idempotent — see repointPatientId.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  const conn = getTenantDb();
+  const charges = await repointPatientId(getChargeModel(conn), "patientId", ref, {
+    objectId: true,
+  });
+  const invoices = await repointPatientId(getInvoiceModel(conn), "patientId", ref, {
+    objectId: true,
+  });
+  return charges + invoices;
 }

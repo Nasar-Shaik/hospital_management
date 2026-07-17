@@ -27,3 +27,6 @@ export {
 } from "./pharmacy.service.js";
 
 export type { DispenseLine } from "./dispense.model.js";
+
+/** Re-points dispense records onto the survivor on merge. Registered by eventConsumer.ts. */
+export { dispenseConsumers } from "./dispense.consumers.js";

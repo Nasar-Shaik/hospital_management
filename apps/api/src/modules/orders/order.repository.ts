@@ -5,6 +5,7 @@ import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { isDuplicateKey } from "../../core/db/mongoErrors.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import {
   getOrderModel,
@@ -338,4 +339,12 @@ export async function list(filter: ListOrdersFilter): Promise<{ items: Order[]; 
   ]);
 
   return { items: docs.map(toOrder), total };
+}
+
+/**
+ * Move a merged patient's orders onto the survivor (patient.patients.merged).
+ * Idempotent — see repointPatientId.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getOrderModel(getTenantDb()), "patientId", ref, { objectId: true });
 }

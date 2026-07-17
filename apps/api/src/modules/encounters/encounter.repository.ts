@@ -6,6 +6,7 @@ import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { isDuplicateKey } from "../../core/db/mongoErrors.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import {
   getEncounterModel,
@@ -517,4 +518,21 @@ export async function encountersInEpisode(episodeId: string): Promise<Encounter[
     .lean<EncounterDoc[]>();
 
   return docs.map(toEncounter);
+}
+
+/**
+ * Move a merged patient's encounters AND episodes of care onto the survivor
+ * (patient.patients.merged). Both collections key on patientId; a re-point that moved
+ * one but not the other would leave an encounter in an episode belonging to someone
+ * else. Returns the total rows moved across both. Idempotent — see repointPatientId.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  const conn = getTenantDb();
+  const encounters = await repointPatientId(getEncounterModel(conn), "patientId", ref, {
+    objectId: true,
+  });
+  const episodes = await repointPatientId(getEpisodeModel(conn), "patientId", ref, {
+    objectId: true,
+  });
+  return encounters + episodes;
 }

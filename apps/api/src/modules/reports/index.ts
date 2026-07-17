@@ -15,3 +15,6 @@ export {
   type ReportMeta,
   type ReportBytes,
 } from "./report.service.js";
+
+/** Re-points report files onto the survivor on merge. Registered by eventConsumer.ts. */
+export { reportConsumers } from "./report.consumers.js";

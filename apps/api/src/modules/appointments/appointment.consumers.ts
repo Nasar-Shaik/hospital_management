@@ -10,9 +10,11 @@ import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
+import { onPatientsMerged } from "../../core/events/patientMerge.js";
 import { scheduleTask } from "../../core/events/taskQueue.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
 import { notify } from "../notifications/index.js";
+import * as repo from "./appointment.repository.js";
 import { getPatient } from "../patients/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getById as getTenant } from "../tenants/index.js";
@@ -247,6 +249,7 @@ export const appointmentConsumers: ModuleConsumers = {
   events: {
     [EVENTS.APPOINTMENT_BOOKED]: onAppointmentBooked,
     [EVENTS.APPOINTMENT_CANCELLED]: onAppointmentCancelled,
+    [EVENTS.PATIENTS_MERGED]: onPatientsMerged("appointments", repo.repointPatient),
   },
   tasks: {
     [REMINDER_TASK]: onReminderDue,

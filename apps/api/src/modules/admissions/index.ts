@@ -26,3 +26,6 @@ export {
 } from "./admission.service.js";
 
 export { WARD_NOTE_TYPES, type WardNoteType } from "./wardNote.model.js";
+
+/** Re-points ward notes onto the survivor on merge. Registered by eventConsumer.ts. */
+export { wardNoteConsumers } from "./wardNote.consumers.js";
