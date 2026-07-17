@@ -174,13 +174,45 @@ function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
   );
 }
 
+/** Which tab a status belongs to. Pending = not started; In progress = running/awaiting sign-off. */
+type WorkTab = "pending" | "inprogress" | "completed";
+
+const TAB_OF: Record<string, WorkTab> = {
+  placed: "pending",
+  accepted: "pending",
+  in_progress: "inprogress",
+  completed: "inprogress",
+  verified: "inprogress",
+  released: "completed",
+};
+
+type DatePreset = "today" | "week" | "all";
+
+/** Half-open [start, end) for the completed-tab date filter, or null for "all". */
+function completedSince(preset: DatePreset): Date | null {
+  if (preset === "all") return null;
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  if (preset === "week") d.setDate(d.getDate() - 6);
+  return d;
+}
+
 function Worklist() {
   const { api, can } = useAuth();
 
   const [category, setCategory] = useState<OrderCategory>("lab");
-  const [orders, setOrders] = useState<Order[]>([]);
+  // The active queue (outstanding) and recently-released work are two different reads: pending
+  // work persists across days regardless of when it was ordered, while "completed" is a dated
+  // history. Keeping them apart is what lets the Completed tab be date-filtered without hiding a
+  // two-day-old sample that still needs running.
+  const [active, setActive] = useState<Order[]>([]);
+  const [done, setDone] = useState<Order[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [entering, setEntering] = useState<string | null>(null);
+
+  const [tab, setTab] = useState<WorkTab>("pending");
+  const [search, setSearch] = useState("");
+  const [datePreset, setDatePreset] = useState<DatePreset>("today");
 
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -207,9 +239,13 @@ function Worklist() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // THE worklist. Sorted by the server: sickest first, then oldest.
-      const page = await api.listOrders({ category, outstanding: true, limit: 100 });
-      setOrders(page.items);
+      // The active queue (sickest first, then oldest — the server sorts) and the released history.
+      const [activePage, donePage] = await Promise.all([
+        api.listOrders({ category, outstanding: true, limit: 100 }),
+        api.listOrders({ category, status: "released", limit: 100 }),
+      ]);
+      setActive(activePage.items);
+      setDone(donePage.items);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load the worklist.");
@@ -222,6 +258,25 @@ function Worklist() {
     void load();
   }, [load]);
 
+  const matchesSearch = (o: Order): boolean =>
+    search.trim() === "" || o.name.toLowerCase().includes(search.trim().toLowerCase());
+
+  const since = completedSince(datePreset);
+  const pending = active.filter((o) => TAB_OF[o.status] === "pending" && matchesSearch(o));
+  const inprogress = active.filter((o) => TAB_OF[o.status] === "inprogress" && matchesSearch(o));
+  const completed = done.filter(
+    (o) =>
+      matchesSearch(o) &&
+      (since === null || (o.releasedAt ? new Date(o.releasedAt) >= since : true)),
+  );
+
+  const tabs: { key: WorkTab; label: string; orders: Order[] }[] = [
+    { key: "pending", label: "Pending", orders: pending },
+    { key: "inprogress", label: "In progress", orders: inprogress },
+    { key: "completed", label: "Completed", orders: completed },
+  ];
+  const orders = tabs.find((t) => t.key === tab)?.orders ?? [];
+
   async function act(order: Order, action: string) {
     setBusy(true);
     setError(null);
@@ -229,6 +284,22 @@ function Worklist() {
     try {
       if (action === "accept") await api.acceptOrder(order.id);
       if (action === "start") await api.startOrder(order.id);
+      if (action === "complete") {
+        // The quick path for work whose deliverable is an uploaded document (a scan, a signed
+        // report) rather than typed values: record a one-line note and move it to "completed".
+        // Honest by construction — the note says what happened, and a full result still goes
+        // through "Enter result".
+        const note = window.prompt(
+          "Short result note (e.g. 'See uploaded report'):",
+          "See uploaded report",
+        );
+        if (note === null) {
+          setBusy(false);
+          return;
+        }
+        await api.completeOrder(order.id, note.trim() ? { summary: note.trim() } : {});
+        setNotice(`${order.name} marked complete — awaiting verification.`);
+      }
       if (action === "verify") await api.verifyOrder(order.id);
       if (action === "release") {
         await api.releaseOrder(order.id);
@@ -313,7 +384,7 @@ function Worklist() {
       <div>
         <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Worklist</h1>
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          Everything ordered and not yet released. Nobody sent it here — the order is the hand-off.
+          Pending, in-progress and completed work. Nobody sent it here — the order is the hand-off.
         </p>
       </div>
 
@@ -337,12 +408,68 @@ function Worklist() {
         ))}
       </div>
 
+      {/* Status tabs + search. The tab is the worklist's state-of-play at a glance: what is waiting,
+          what is running, what is done. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-1 rounded-lg border border-[var(--color-border)] p-0.5">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                tab === t.key
+                  ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                  : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+              }`}
+            >
+              {t.label}
+              <span
+                className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${
+                  tab === t.key ? "bg-white/20" : "bg-[var(--color-bg-subtle)]"
+                }`}
+              >
+                {t.orders.length}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2">
+          {tab === "completed" &&
+            (["today", "week", "all"] as DatePreset[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setDatePreset(p)}
+                className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                  datePreset === p
+                    ? "bg-[var(--color-bg-subtle)] text-[var(--color-fg)]"
+                    : "text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)]"
+                }`}
+              >
+                {p === "today" ? "Today" : p === "week" ? "7 days" : "All"}
+              </button>
+            ))}
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter by test…"
+            className="w-40 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+          />
+        </div>
+      </div>
+
       <Card className="p-5">
         {loading ? (
           <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
         ) : orders.length === 0 ? (
           <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
-            Nothing outstanding. When a doctor orders something it appears here instantly.
+            {tab === "pending"
+              ? "Nothing waiting. When a doctor orders something it appears here instantly."
+              : tab === "inprogress"
+                ? "Nothing in progress."
+                : "No completed work in this period."}
           </p>
         ) : (
           <ul className="space-y-2.5">
@@ -386,12 +513,21 @@ function Worklist() {
                       </Button>
                     )}
                     {o.status === "in_progress" && can("order:perform") && (
-                      <Button
-                        disabled={busy}
-                        onClick={() => setEntering(entering === o.id ? null : o.id)}
-                      >
-                        {entering === o.id ? "Cancel entry" : "Enter result"}
-                      </Button>
+                      <>
+                        <Button
+                          disabled={busy}
+                          onClick={() => setEntering(entering === o.id ? null : o.id)}
+                        >
+                          {entering === o.id ? "Cancel entry" : "Enter result"}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() => void act(o, "complete")}
+                        >
+                          Mark complete
+                        </Button>
+                      </>
                     )}
                     {/* The SECOND pair of eyes. A technician never sees this button. */}
                     {o.status === "completed" && can("order:verify") && (
@@ -440,12 +576,24 @@ function Worklist() {
                   </p>
                 )}
 
-                {o.status === "completed" && o.result?.summary && (
+                {o.result?.summary && (o.status === "completed" || o.status === "released") && (
                   <p className="mt-2 rounded bg-[var(--color-bg-subtle)] p-2 text-xs text-[var(--color-fg-muted)]">
                     {o.result.summary}
-                    <span className="mt-1 block text-[var(--color-fg-subtle)]">
-                      Awaiting verification — not yet visible to the doctor.
-                    </span>
+                    {o.status === "completed" && (
+                      <span className="mt-1 block text-[var(--color-fg-subtle)]">
+                        Awaiting verification — not yet visible to the doctor.
+                      </span>
+                    )}
+                    {o.status === "released" && o.releasedAt && (
+                      <span className="mt-1 block text-[var(--color-fg-subtle)]">
+                        Released{" "}
+                        {new Date(o.releasedAt).toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                        })}{" "}
+                        — visible to the doctor.
+                      </span>
+                    )}
                   </p>
                 )}
 

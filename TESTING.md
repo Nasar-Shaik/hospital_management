@@ -1237,3 +1237,35 @@ authenticated user over a half-open date range.
 
 - The **Quick actions** grid lists only what your roles allow (a receptionist sees Register / Reception
   / Billing; a lab tech sees Worklist; etc.). A role with none shows no grid.
+
+## 25 · Lab worklist — tabs, filters & mark-complete (⏳ eyeball)
+
+**Why:** the worklist showed one flat list of outstanding work. A technician now sees it the way they
+work it — **Pending / In progress / Completed** tabs with live counts, a **filter-by-test** box, and a
+**date filter** on completed work (Today / 7 days / All) so "what did we run today" is one click. A
+quick **Mark complete** moves work whose deliverable is an uploaded document to "completed" without the
+full values form, while still respecting the two-person rule (a technician completes; only a
+pathologist/radiologist verifies and releases).
+
+### W1 · Tabs and counts
+
+- **Worklist** → pick a department (Blood & lab / X-ray / Procedures). Three tabs show with counts:
+  **Pending** (placed/accepted), **In progress** (running / awaiting verify / awaiting release),
+  **Completed** (released).
+- Newly ordered tests land in **Pending** instantly (the order is the hand-off — no "send to lab" step).
+
+### W2 · Filter and date
+
+- Type in **Filter by test** → the list narrows to matching test names across the current tab.
+- On **Completed**, switch **Today / 7 days / All** → the released history filters by release date.
+
+### W3 · Run and complete
+
+- On an **in-progress** order: **Enter result** (values + optional critical flag) as before, OR **Mark
+  complete** → a short note prompt (defaults to "See uploaded report") → the order moves to Completed
+  (status "completed", awaiting verification). **Upload report** still attaches a scan at any point.
+- A technician never sees **Verify** / **Release** — those need category authority (pathologist for
+  blood, radiologist for imaging). Once released, the item appears under **Completed** with "Released
+  … — visible to the doctor."
+
+_(Payment-status badges and route-to-room land in Phase 4 with the payment-gated flow.)_
