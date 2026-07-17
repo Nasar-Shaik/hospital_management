@@ -925,4 +925,38 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0020-bed-occupancy",
+    description: "One open inpatient stay per bed — no two patients recorded in the same bed",
+    up: async (db) => {
+      /**
+       * A bed holds one patient at a time. Among OPEN encounters that record a bed — i.e. the
+       * current inpatients — the ward + bedCode must be unique, so the database refuses the
+       * double-occupancy the ward screen could not (PROJECT_MEMORY §5). Exactly the shape of
+       * `one_open_encounter_per_patient`: a unique PARTIAL index on `open`, so a discharged stay
+       * frees the bed the instant its `open` key is removed, and OP encounters (which carry no
+       * bed) are never in scope.
+       *
+       * Scoped by ward AND bedCode because a bedCode is only unique within its ward — `ICU / A-12`
+       * and `General / A-12` are two different beds. If this index cannot be built because two open
+       * stays already share a bed, that is the very defect it exists to prevent: move one patient
+       * to a free bed, then re-run.
+       */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+          background: true,
+          name: "one_open_stay_per_bed",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("encounters")
+        .dropIndex("one_open_stay_per_bed")
+        .catch(() => undefined);
+    },
+  },
 ];

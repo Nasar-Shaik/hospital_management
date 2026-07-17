@@ -953,6 +953,10 @@ then sign out of one and confirm the other is unaffected.
 
 ## 17 · IPD terminal outcomes — telling a death from a homecoming
 
+> ⏳ **Awaiting manual browser verification** (code-complete, all gates green, API endpoints
+> live-checked). The end-to-end browser walk-through below — and R6 above, which it populates — have
+> not yet been eyeballed on the seeded stack.
+
 **Why:** every inpatient stay used to end as a plain "discharge", so death, a patient leaving against
 medical advice, and an absconder all read alike in the record — and every census, ALOS and mortality
 figure counted them alike. The stay now closes carrying WHICH of four endings it was
@@ -984,3 +988,36 @@ ending happened, whichever it was.
 
 - After any T1/T2 ending on a bedded patient, the bed-day charges post from `patient.discharged` exactly as
   before — a death or a LAMA is billed for the nights the bed was occupied, not waived.
+
+---
+
+## 18 · Bed occupancy — one patient per bed
+
+> ⏳ **Awaiting manual browser verification** (code-complete, gates green; the unique index was
+> proven to refuse a second open stay in the same bed via a direct DB probe).
+
+**Why:** the bed used to be RECORDED but not reserved, so nothing stopped two patients being put in
+the same bed — the classic HIS double-allocation. A unique partial index (`one_open_stay_per_bed`,
+migration 0020) now refuses a second OPEN stay in the same ward + bed; `admitPatient` turns that into
+a clean 409. This is NOT a bed inventory — it still cannot tell you which beds are FREE, only that a
+given bed is taken.
+
+- **Preconditions:** IPD edition; two registered patients, each with an open OP encounter ready to
+  admit. You need `admission:create`.
+
+### B1 · A bed cannot hold two patients
+
+- Admit patient A to, say, `ICU / A-12`. Admit patient B to the **same** `ICU / A-12`.
+- **Expect:** B's admission is refused with **409 "That bed is already occupied"** (choose a free
+  bed). A stays admitted; B is NOT left half-admitted — the whole admission rolls back in one
+  transaction, so B keeps their open OP encounter and can be admitted to a different bed.
+
+### B2 · Discharge frees the bed
+
+- Discharge (or record an outcome for) patient A, then admit patient B into `ICU / A-12`.
+- **Expect:** it succeeds — the index is partial on `open`, so a closed stay no longer holds the bed.
+
+### B3 · Same bedCode in different wards is fine
+
+- Admit into `ICU / A-12` and `General / A-12` at the same time.
+- **Expect:** both succeed — a bedCode is unique only within its ward, so these are two beds.

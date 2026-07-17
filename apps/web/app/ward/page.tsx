@@ -5,12 +5,11 @@
  *
  * ── THE LIST IS DERIVED FROM WHERE THE PATIENTS ARE, NOT FROM A BED MAP ─────
  * `GET /inpatients` is `class: IP` + still open. There is no bed board because there is no
- * bed inventory — no wards, no rooms, no occupancy (`bed:manage` is a permission with
- * nothing behind it). So this screen shows who is admitted and which bed they were
- * RECORDED into; it cannot tell you which beds are free, and it will not stop two patients
- * being put in A-12. That gap is real and written down (PROJECT_MEMORY §5) rather than
- * half-closed: a bed board that is only sometimes right is worse than a wall chart,
- * because people stop checking the wall.
+ * bed inventory — no catalogue of wards, rooms or free beds (`bed:manage` is a permission
+ * with nothing behind it). So this screen shows who is admitted and which bed they were
+ * RECORDED into; it cannot tell you which beds are FREE. It can, though, no longer put two
+ * patients in the same bed: admitting into an occupied ward+bed is refused (a unique index,
+ * migration 0020). The free-bed board is future work (PROJECT_MEMORY §5).
  *
  * ── THE STAY'S BILL IS THE IP ENCOUNTER'S, NOT THE OP VISIT'S ───────────────
  * Two encounters, one episode (ADR-0013 §4). The consultation that led to the admission

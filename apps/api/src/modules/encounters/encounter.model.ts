@@ -211,13 +211,15 @@ export interface EncounterDoc {
    * version of exactly that — `admissions` hanging off `patients` as a parallel root —
    * is the structure ADR-0013 was written to kill. Admission is a CLASS of encounter.
    *
-   * ── AND THIS IS NOT A BED INVENTORY ─────────────────────────────────────────
+   * ── IT PREVENTS DOUBLE-OCCUPANCY, BUT IS STILL NOT A BED INVENTORY ───────────
    * It records which bed the patient is in so the stay can be billed and the ward round
-   * knows where to go. It does NOT reserve one: there are no wards, no rooms, no
-   * occupancy map, so nothing stops two patients being recorded in bed `A-12`.
-   * `bed:manage` exists as a permission and nothing writes it. That gap is real and is
-   * written down (PROJECT_MEMORY §5) rather than half-closed — a bed board that is only
-   * sometimes right is worse than a wall chart, because people stop checking the wall.
+   * knows where to go. A unique partial index (`one_open_stay_per_bed`, migration 0020) now
+   * refuses to record two OPEN stays in the same ward + bed, so a bed can no longer hold two
+   * patients at once — the database enforcing it, the same way `one_open_encounter_per_patient`
+   * does for the patient. What this still is NOT is an inventory: there is no catalogue of beds
+   * and no free-bed board, so it can tell you a bed is TAKEN but not which beds are free.
+   * `bed:manage` exists as a permission and nothing writes it — that board is future work
+   * (PROJECT_MEMORY §5).
    */
   bed?: {
     /** `General Ward`, `ICU` — what a human calls it. */

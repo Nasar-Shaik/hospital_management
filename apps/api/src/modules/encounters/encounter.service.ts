@@ -67,6 +67,16 @@ function invalidTransition(from: EncounterStatus, to: EncounterStatus): AppError
   });
 }
 
+/**
+ * Was a duplicate-key error the BED index, not the patient one? Both live on `encounters`, so a
+ * failed admission could be either; the remedy differs (free a bed vs the patient is already here),
+ * so the message must. Read from `keyPattern` rather than the message text, which is not stable.
+ */
+function isBedOccupiedConflict(err: unknown): boolean {
+  const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
+  return keyPattern ? "bed.bedCode" in keyPattern : false;
+}
+
 /** The queue a patient is placed in — a named doctor, or a department/OP room. */
 function queueKeyOf(input: { doctorId?: string; departmentId?: string }): string {
   return input.doctorId ?? input.departmentId ?? "general";
@@ -361,33 +371,52 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
     );
     if (!outpatient) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
 
-    const inpatient = await repo.create(
-      {
-        patientId: current.patientId,
-        // THE SAME EPISODE. This one line is what makes the admission part of the care
-        // story rather than a new one — and what lets the ward see the OP consultation
-        // and its results without anything being copied.
-        episodeId: current.episodeId,
-        // The patient came from inside the building. `transfer` is the ADR-0013 §2 origin
-        // for exactly this: an encounter that begins where another one ended.
-        origin: "transfer",
-        class: "IP",
-        // Straight to `in_progress`: there is no queue for a bed. The patient is not
-        // waiting to be seen — they are in the ward, and somebody is responsible for them
-        // from this second.
-        status: "in_progress",
-        bed: { ward: input.ward, bedCode: input.bedCode, tariffCode: input.tariffCode },
-        admittedAt,
-        admittedFrom: current.id,
-        ...((input.doctorId ?? current.doctorId)
-          ? { doctorId: (input.doctorId ?? current.doctorId) as string }
-          : {}),
-        ...(current.departmentId ? { departmentId: current.departmentId } : {}),
-        ...(input.reason ? { reason: input.reason } : {}),
-        ...(current.branchId ? { branchId: current.branchId } : {}),
-      },
-      session,
-    );
+    let inpatient: repo.Encounter;
+    try {
+      inpatient = await repo.create(
+        {
+          patientId: current.patientId,
+          // THE SAME EPISODE. This one line is what makes the admission part of the care
+          // story rather than a new one — and what lets the ward see the OP consultation
+          // and its results without anything being copied.
+          episodeId: current.episodeId,
+          // The patient came from inside the building. `transfer` is the ADR-0013 §2 origin
+          // for exactly this: an encounter that begins where another one ended.
+          origin: "transfer",
+          class: "IP",
+          // Straight to `in_progress`: there is no queue for a bed. The patient is not
+          // waiting to be seen — they are in the ward, and somebody is responsible for them
+          // from this second.
+          status: "in_progress",
+          bed: { ward: input.ward, bedCode: input.bedCode, tariffCode: input.tariffCode },
+          admittedAt,
+          admittedFrom: current.id,
+          ...((input.doctorId ?? current.doctorId)
+            ? { doctorId: (input.doctorId ?? current.doctorId) as string }
+            : {}),
+          ...(current.departmentId ? { departmentId: current.departmentId } : {}),
+          ...(input.reason ? { reason: input.reason } : {}),
+          ...(current.branchId ? { branchId: current.branchId } : {}),
+        },
+        session,
+      );
+    } catch (err) {
+      /**
+       * The bed is taken. `one_open_stay_per_bed` (migration 0020) refused a second open stay in
+       * this ward+bed — the database enforcing what the ward screen cannot see. Rethrow as the
+       * hospital's answer, not a 500: choose a free bed. Because we are inside `withTransaction`,
+       * the OP encounter's move to `admitted` rolls back with us, so the patient is NOT left
+       * discharged-from-the-OPD-into-nothing — exactly the atom the admission is wrapped in for.
+       */
+      if (repo.isDuplicateKey(err) && isBedOccupiedConflict(err)) {
+        throw new AppError("HMS-STATE-001", 409, "That bed is already occupied", {
+          ward: input.ward,
+          bedCode: input.bedCode,
+          hint: "another patient is currently admitted in this bed — choose a free bed",
+        });
+      }
+      throw err;
+    }
 
     /**
      * Billing listens for this and posts the first bed-day. Published in the SAME
