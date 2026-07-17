@@ -16,6 +16,7 @@ import {
   ApiClientError,
   type CollectionsReport,
   type DiagnosticsReport,
+  type DischargeRegister,
   type DoctorLoadRow,
   type ReportRange,
   type StockRegisterRow,
@@ -26,7 +27,7 @@ import { Protected } from "../../components/Protected";
 import { Alert, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
-type Tab = "stock" | "visits" | "doctors" | "diagnostics" | "collections";
+type Tab = "stock" | "visits" | "doctors" | "diagnostics" | "collections" | "discharges";
 
 const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "stock", label: "Pharmacy stock", slug: "pharmacy-stock" },
@@ -34,7 +35,16 @@ const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "doctors", label: "Doctor load", slug: "doctor-load" },
   { id: "diagnostics", label: "Diagnostics", slug: "diagnostics" },
   { id: "collections", label: "Collections", slug: "collections" },
+  { id: "discharges", label: "Discharges", slug: "discharge-outcomes" },
 ];
+
+/** The human name for each way a stay ends — what an auditor reads, not the wire value. */
+const DISPOSITION_LABEL: Record<string, string> = {
+  discharged: "Discharged (routine)",
+  lama: "Left against advice (LAMA)",
+  absconded: "Absconded",
+  deceased: "Deceased",
+};
 
 const CLASS_LABEL: Record<string, string> = {
   OP: "Outpatient",
@@ -134,6 +144,7 @@ function ReportsPage() {
   const [doctors, setDoctors] = useState<DoctorLoadRow[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null);
   const [collections, setCollections] = useState<CollectionsReport | null>(null);
+  const [discharges, setDischarges] = useState<DischargeRegister | null>(null);
 
   const range: ReportRange = useMemo(
     () => ({ from: iso(fromStr), to: isoNextDay(toStr) }),
@@ -149,6 +160,7 @@ function ReportsPage() {
       else if (tab === "doctors") setDoctors(await api.reportDoctorLoad(range));
       else if (tab === "diagnostics") setDiagnostics(await api.reportDiagnostics(range));
       else if (tab === "collections") setCollections(await api.reportCollections(range));
+      else if (tab === "discharges") setDischarges(await api.reportDischargeOutcomes(range));
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : "Could not load the report.");
     } finally {
@@ -376,6 +388,55 @@ function ReportsPage() {
                     headers={["Performed by", "Tests"]}
                     rows={diagnostics.byPerformer.map((p) => [p.performerName, p.performed])}
                     empty="No tests were performed yet."
+                  />
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {tab === "discharges" && discharges && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Stat label="Stays ended" value={String(discharges.total)} />
+                <Stat
+                  label="Deaths"
+                  value={String(
+                    discharges.byDisposition.find((d) => d.key === "deceased")?.count ?? 0,
+                  )}
+                />
+                <Stat
+                  label="LAMA"
+                  value={String(discharges.byDisposition.find((d) => d.key === "lama")?.count ?? 0)}
+                />
+                <Stat
+                  label="Absconded"
+                  value={String(
+                    discharges.byDisposition.find((d) => d.key === "absconded")?.count ?? 0,
+                  )}
+                />
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    By outcome
+                  </h3>
+                  <ReportTable
+                    headers={["Outcome", "Stays"]}
+                    rows={discharges.byDisposition.map((d) => [
+                      DISPOSITION_LABEL[d.key] ?? d.key,
+                      d.count,
+                    ])}
+                    empty="No inpatient stays ended in this period."
+                  />
+                </Card>
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    By month
+                  </h3>
+                  <ReportTable
+                    headers={["Month", "Stays ended"]}
+                    rows={discharges.byMonth.map((m) => [m.month, m.count])}
+                    empty="No inpatient stays ended in this period."
                   />
                 </Card>
               </div>

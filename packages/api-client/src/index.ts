@@ -631,6 +631,13 @@ export interface CollectionsReport {
   byMethod: { method: string; amount: number; count: number }[];
 }
 
+/** How inpatient stays ended in the period — the discharge / mortality register. */
+export interface DischargeRegister {
+  total: number;
+  byDisposition: { key: string; count: number }[];
+  byMonth: { month: string; count: number }[];
+}
+
 /* ── Prescriptions & pharmacy (STATE_MACHINE_CATALOG §6) ──────────────────── */
 
 export const DRUG_ROUTES = [
@@ -1561,6 +1568,13 @@ export class ApiClient {
 
   reportCollections(range: ReportRange): Promise<CollectionsReport> {
     return this.request<CollectionsReport>("GET", `/api/v1/reports/collections${rangeQs(range)}`);
+  }
+
+  reportDischargeOutcomes(range: ReportRange): Promise<DischargeRegister> {
+    return this.request<DischargeRegister>(
+      "GET",
+      `/api/v1/reports/discharge-outcomes${rangeQs(range)}`,
+    );
   }
 
   /**

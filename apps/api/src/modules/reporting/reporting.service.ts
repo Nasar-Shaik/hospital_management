@@ -13,12 +13,24 @@
  * is what an auditor asks for, and why the aggregations scope by tenant, not by branch.
  */
 import { stockRegister, type StockRegisterRow } from "../medicines/index.js";
-import { visitReport, doctorProductivity, type VisitReport } from "../encounters/index.js";
+import {
+  visitReport,
+  doctorProductivity,
+  dischargeRegister,
+  type VisitReport,
+  type DischargeRegister,
+} from "../encounters/index.js";
 import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
 import { collectionsReport, type CollectionsReport } from "../billing/index.js";
 import { getById as getUser } from "../users/index.js";
 
-export type { StockRegisterRow, VisitReport, DiagnosticsReport, CollectionsReport };
+export type {
+  StockRegisterRow,
+  VisitReport,
+  DiagnosticsReport,
+  CollectionsReport,
+  DischargeRegister,
+};
 
 export interface DateRange {
   from: Date;
@@ -45,6 +57,10 @@ export const patientVisits = (range: DateRange): Promise<VisitReport> =>
 
 export const collections = (range: DateRange): Promise<CollectionsReport> =>
   collectionsReport(range.from, range.to);
+
+/** How inpatient stays ended in the period — routine discharges, LAMA, absconded, deaths. */
+export const dischargeOutcomes = (range: DateRange): Promise<DischargeRegister> =>
+  dischargeRegister(range.from, range.to);
 
 /**
  * Resolves a set of user ids to display names in one pass, tolerating the unknowns. A user who

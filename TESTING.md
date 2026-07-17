@@ -885,6 +885,17 @@ exports to CSV.
 - **Edge cases:** on a government hospital every consultation/test is ₹0, so collections are ₹0 unless
   a manual charge was paid; a non-admin has no **Reports** nav entry and every `/reports/*` route 403s.
 
+### R6 · Discharges (how inpatient stays ended — the mortality / LAMA register)
+
+- **Preconditions:** IPD edition (`module.ops.ipd`) and at least one IP stay that ENDED in the period —
+  a routine discharge and/or a recorded outcome (§17). Do a couple of each for a meaningful table.
+- **Steps & expected:** **Reports → Discharges.** Headline stats **Stays ended / Deaths / LAMA /
+  Absconded**; tables **by outcome** (Discharged / LAMA / Absconded / Deceased) and **by month**. Counts
+  are keyed on when the stay CLOSED (`dischargedAt`) in the window. CSV gives the by-outcome table.
+- **Edge cases:** a stay closed before dispositions existed counts as **Discharged** (that is what it
+  meant then), so totals never show a block of "unknown"; a clinic/diagnostic edition without beds gets
+  **not in your edition** (HMS-PLAN-002) on this report, not an empty table.
+
 ## 16 · Multi-account testing — one account per browser tab (dev only)
 
 Testing a hospital means being several people at once. The blocker was that the refresh token is

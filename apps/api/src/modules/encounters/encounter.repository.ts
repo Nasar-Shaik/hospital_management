@@ -424,6 +424,58 @@ export async function doctorProductivity(from: Date, to: Date): Promise<DoctorLo
   return rows.map((r) => ({ doctorId: r._id, patients: r.patients }));
 }
 
+export interface DischargeRegister {
+  /** Inpatient stays that ENDED in the window, however they ended. */
+  total: number;
+  /** discharged / lama / absconded / deceased, commonest first. */
+  byDisposition: { key: string; count: number }[];
+  /** Stays that ended each month — the census an auditor reconciles against. */
+  byMonth: { month: string; count: number }[];
+}
+
+/**
+ * How inpatient stays ENDED in a period — the discharge / mortality register.
+ *
+ * One scan over the IP encounters that CLOSED within [from, to), grouped by disposition, so a
+ * medical director or an auditor reads the death count, the LAMA count and the routine discharges
+ * off the same figure the census is built from. A stay that closed BEFORE the disposition field
+ * existed is counted as `discharged` — which is exactly what those closes meant at the time, so the
+ * register stays truthful across the change rather than showing a block of "unknown". Tenant-scoped
+ * by the aggregate hook.
+ */
+export async function dischargeRegister(from: Date, to: Date): Promise<DischargeRegister> {
+  const model = getEncounterModel(getTenantDb());
+  const facet = await model.aggregate<{
+    total: { count: number }[];
+    byDisposition: { _id: string; count: number }[];
+    byMonth: { _id: string; count: number }[];
+  }>([
+    { $match: { class: "IP", status: "closed", dischargedAt: { $gte: from, $lt: to } } },
+    { $set: { disp: { $ifNull: ["$disposition", "discharged"] } } },
+    {
+      $facet: {
+        total: [{ $count: "count" }],
+        byDisposition: [{ $group: { _id: "$disp", count: { $sum: 1 } } }, { $sort: { count: -1 } }],
+        byMonth: [
+          {
+            $group: {
+              _id: { $dateToString: { format: "%Y-%m", date: "$dischargedAt" } },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { _id: 1 } },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  return {
+    total: f?.total[0]?.count ?? 0,
+    byDisposition: (f?.byDisposition ?? []).map((r) => ({ key: r._id, count: r.count })),
+    byMonth: (f?.byMonth ?? []).map((r) => ({ month: r._id, count: r.count })),
+  };
+}
+
 /* ── Episodes of care ─────────────────────────────────────────────────────── */
 
 export async function createEpisode(

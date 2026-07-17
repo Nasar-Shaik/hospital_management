@@ -117,3 +117,20 @@ export const collections: RequestHandler = async (req, res) => {
   }
   ok(res, report);
 };
+
+export const dischargeOutcomes: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.dischargeOutcomes(range);
+  if (csv) {
+    // The principal table is the outcome breakdown — the one line an auditor reads for the
+    // mortality and LAMA counts. The month-wise census is a screen breakdown, one query away.
+    sendCsv(
+      res,
+      "discharge-outcomes",
+      ["Outcome", "Count"],
+      report.byDisposition.map((d) => [d.key, d.count]),
+    );
+    return;
+  }
+  ok(res, report);
+};

@@ -603,6 +603,7 @@ export const listInpatients = repo.listInpatients;
 /* ── Reporting aggregations (used by the reporting module) ─────────────────── */
 export const visitReport = repo.visitReport;
 export const doctorProductivity = repo.doctorProductivity;
+export const dischargeRegister = repo.dischargeRegister;
 
 /** The patient is called in from the waiting room. */
 export const startConsultation = (id: string): Promise<repo.Encounter> =>
