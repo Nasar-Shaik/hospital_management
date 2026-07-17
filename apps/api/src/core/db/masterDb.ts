@@ -26,15 +26,28 @@ async function assertExpectedCluster(conn: Connection): Promise<void> {
   const expected = env.MONGO_EXPECT_MEMBER;
   if (!expected || !conn.db) return;
   const hello = (await conn.db.command({ hello: 1 })) as { me?: string; setName?: string };
-  const me = hello.me ?? "(unknown)";
-  if (me !== expected) {
+  if (hello.me === expected) return;
+
+  // No replica-set identity at all — the server answers, but reports neither a set name nor
+  // a member address. That is an UNINITIATED set, not a wrong one: a container that has only
+  // just started, before its healthcheck runs `rs.initiate`. A different cause and a
+  // different fix from a genuine collision, so say so rather than cry "wrong Mongo".
+  if (!hello.setName || !hello.me) {
     throw new Error(
-      `Mongo identity check failed: connected to replica-set member "${me}" ` +
-        `(set "${hello.setName ?? "standalone"}") but expected "${expected}". ` +
-        `Another project's Mongo has likely taken this host port — a stray SSH tunnel or ` +
-        `a second container. Free the port and retry; see infra/docker/LOCAL_PORTS.md.`,
+      `Mongo is reachable but its replica set is not ready yet (expected member "${expected}", ` +
+        `got set "${hello.setName ?? "none"}"). If you just started the container, give it a few ` +
+        `seconds to initiate the set and retry — wait for it to report healthy (docker ps). ` +
+        `\`pnpm docker:dev\` waits for this; a bare \`docker compose up -d\` does not.`,
     );
   }
+
+  // A real set, but the WRONG one — this is the cross-project collision the check exists for.
+  throw new Error(
+    `Mongo identity check failed: connected to replica-set member "${hello.me}" ` +
+      `(set "${hello.setName}") but expected "${expected}". Another project's Mongo has likely ` +
+      `taken this host port — a stray SSH tunnel or a second container. Free the port and retry; ` +
+      `see infra/docker/LOCAL_PORTS.md.`,
+  );
 }
 
 /** Opens (once) and returns the master connection. Throws if MONGO_URI is unset. */
