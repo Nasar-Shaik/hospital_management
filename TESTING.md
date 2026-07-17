@@ -895,15 +895,22 @@ refresh token in `sessionStorage`, refreshed from the request body), so tabs are
 > This is **development only** (`NODE_ENV !== "production"`). In production the httpOnly-cookie flow
 > is unchanged — `sessionStorage` is readable by scripts, a trade only acceptable on a dev machine.
 
-### M1 · Two accounts, two tabs, both stay logged in
+### M1 · Two accounts, two tabs (or windows), both stay logged in
+
+Each tab/window is its OWN session. A new tab or window does **not** inherit a login (and must not —
+inheriting the shared cookie is exactly what used to sign the other tab out); you sign in per tab.
 
 - **Steps & expected:**
-  - Tab 1: open `http://sunrise.localhost:3000`, sign in as `admin@sunrise.test` / `123456`.
-  - Tab 2 (same window, new tab): open the same URL, sign in as `drrao@sunrise.test`.
-  - Switch back to **Tab 1 and reload** → still the admin (not the doctor). Reload Tab 2 → still the
-    doctor. Both sessions survive reloads independently.
-- **Edge cases:** a **duplicated** tab inherits the original's account (sessionStorage is copied) — that
-  is expected; a brand-new tries the last account until you sign in as someone else.
+  - Tab 1: open `http://sunrise.localhost:3000` → you get the login page → sign in as
+    `admin@sunrise.test` / `123456`.
+  - Tab 2 — a new tab OR a separate Chrome window (same profile) — open the same URL → you get the
+    login page (it does not adopt Tab 1's account) → sign in as `drrao@sunrise.test`.
+  - Back in **Tab 1: reload** → still the admin. Reload Tab 2 → still the doctor. Signing in on one
+    never signs the other out.
+  - **Sign out** of Tab 2 → Tab 1 is unaffected.
+- **Edge cases:** a **duplicated** tab inherits the original's account (the browser copies
+  `sessionStorage` on duplicate) — expected. A brand-new tab shows the **login page**, not the last
+  account — that is the fix; adopting the shared cookie was the bug.
 
 ### M2 · Recent-accounts chips (fill email only — never sign in)
 

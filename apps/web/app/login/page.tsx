@@ -270,8 +270,9 @@ function LoginForm() {
                 ))}
               </div>
               <p className="mt-3 text-xs text-[var(--color-fg-muted)]">
-                Fills the email — you still enter the password. Each browser tab keeps its own
-                account, so open a new tab to sign in as someone else. (Local development only.)
+                Fills the email — you still enter the password. Each browser tab or window is its
+                OWN session: sign in here per tab, and several accounts stay logged in side by side
+                without signing each other out. (Local development only.)
               </p>
             </div>
           )}

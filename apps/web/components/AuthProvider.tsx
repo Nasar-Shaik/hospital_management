@@ -38,7 +38,12 @@ import {
   type TokenPair,
 } from "@medicore/api-client";
 import { browserApi } from "../lib/api";
-import { devRefreshToken, setDevRefreshToken, rememberAccount } from "../lib/devSession";
+import {
+  DEV_MULTI_ACCOUNT,
+  devRefreshToken,
+  setDevRefreshToken,
+  rememberAccount,
+} from "../lib/devSession";
 
 interface AuthState {
   user: AuthenticatedUser | null;
@@ -88,9 +93,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refreshTimer.current = setTimeout(() => {
         void (async () => {
           try {
+            const stored = devRefreshToken();
+            // Dev: this tab's session lives ONLY in its own token — never the shared cookie (see
+            // the bootstrap note). If it is gone, the tab is logged out; do not silently adopt
+            // whatever account the cookie now points at. Production keeps the cookie flow.
+            if (DEV_MULTI_ACCOUNT && !stored) throw new Error("no per-tab session token");
             // In dev, refresh from THIS tab's own token (body) so tabs don't share an account;
-            // in production `devRefreshToken()` is undefined and the httpOnly cookie is used.
-            const pair = await api.refresh(devRefreshToken());
+            // in production `stored` is undefined and the httpOnly cookie is used.
+            const pair = await api.refresh(stored);
             accessToken.current = pair.accessToken;
             setDevRefreshToken(pair.refreshToken);
             scheduleRefresh(pair.expiresIn);
@@ -130,15 +140,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api, scheduleRefresh],
   );
 
-  // Bootstrap: turn the cookie into a session, or conclude there isn't one.
+  // Bootstrap: revive this tab's session, or conclude there isn't one.
   useEffect(() => {
     let cancelled = false;
 
     void (async () => {
       try {
-        // Dev: revive THIS tab's own session from its stored token; production: the cookie.
+        const stored = devRefreshToken();
+        /**
+         * ── DEV PER-TAB MODE: NEVER FALL BACK TO THE SHARED COOKIE ────────────────
+         * A tab with no stored token is a LOGGED-OUT tab, full stop. It must not call refresh
+         * with an empty body, because the server would then use the httpOnly cookie — which is
+         * shared by every tab of this browser and holds whichever account logged in LAST. A new
+         * tab reviving from it would rotate (spend) that token, and the tab that actually owns
+         * it would later present the now-spent token, trip reuse-detection, and be logged out.
+         * That is the "logging in over here signs me out over there" bug. So: no session token
+         * in this tab means show login, and each tab logs in independently. Production is
+         * unaffected — `devRefreshToken()` is always undefined there, so the cookie flow below
+         * runs exactly as before.
+         */
+        if (DEV_MULTI_ACCOUNT && !stored) {
+          if (!cancelled) setState({ user: null, permissions: [], loading: false });
+          return;
+        }
         // Reuse an in-flight bootstrap so a StrictMode remount does not fire a second refresh.
-        bootstrap.current ??= api.refresh(devRefreshToken());
+        bootstrap.current ??= api.refresh(stored);
         const pair = await bootstrap.current;
         if (!cancelled) await adopt(pair);
       } catch {
