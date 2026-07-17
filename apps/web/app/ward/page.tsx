@@ -18,7 +18,13 @@
  * separation is what makes both of them billable at all.
  */
 import { useCallback, useEffect, useState } from "react";
-import { ApiClientError, type Encounter, type Patient, type WardNote } from "@medicore/api-client";
+import {
+  ApiClientError,
+  type Encounter,
+  type Patient,
+  type WardNote,
+  type TerminalOutcome,
+} from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
@@ -56,8 +62,20 @@ function Notes({ notes }: { notes: WardNote[] }) {
           className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-2.5"
         >
           <div className="mb-1 flex flex-wrap items-center gap-2">
-            <Badge tone={n.type === "discharge_summary" ? "success" : "neutral"}>
-              {n.type === "discharge_summary" ? "discharge summary" : "progress"}
+            <Badge
+              tone={
+                n.type === "discharge_summary"
+                  ? "success"
+                  : n.type === "outcome_note"
+                    ? "warning"
+                    : "neutral"
+              }
+            >
+              {n.type === "discharge_summary"
+                ? "discharge summary"
+                : n.type === "outcome_note"
+                  ? "outcome"
+                  : "progress"}
             </Badge>
             <span className="text-xs text-[var(--color-fg-subtle)]">{when(n.at)}</span>
           </div>
@@ -188,6 +206,101 @@ function DischargeForm({
       <p className="text-xs text-[var(--color-fg-subtle)]">
         There is no way to discharge without a summary. It is the only record of this stay the next
         doctor to see this patient is likely to read.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The endings that are NOT a routine discharge. Deliberately separate from the discharge
+ * form and styled as the exception it is: a death or a patient leaving against advice is
+ * not a homegoing, and filing it as one is the false record this screen exists to prevent.
+ */
+const OUTCOME_ORDER: TerminalOutcome[] = ["lama", "absconded", "deceased"];
+const OUTCOMES: Record<TerminalOutcome, { label: string; verb: string; prompt: string }> = {
+  lama: {
+    label: "Left against medical advice",
+    verb: "Record LAMA & close stay",
+    prompt: "Record that the risks were explained and the patient chose to leave.",
+  },
+  absconded: {
+    label: "Absconded",
+    verb: "Record absconded & close stay",
+    prompt: "Record when the patient was found missing.",
+  },
+  deceased: {
+    label: "Deceased",
+    verb: "Record death & close stay",
+    prompt: "Record the circumstances / cause of death. This is the statutory record.",
+  },
+};
+
+function OutcomeForm({
+  encounterId,
+  onRecorded,
+}: {
+  encounterId: string;
+  onRecorded: (outcome: TerminalOutcome) => void;
+}) {
+  const { api } = useAuth();
+  const [outcome, setOutcome] = useState<TerminalOutcome>("lama");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const chosen = OUTCOMES[outcome];
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordOutcome(encounterId, { outcome, text });
+      onRecorded(outcome);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not record the outcome.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        How the stay ended
+        <select
+          value={outcome}
+          onChange={(e) => setOutcome(e.target.value as TerminalOutcome)}
+          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+        >
+          {OUTCOME_ORDER.map((value) => (
+            <option key={value} value={value}>
+              {OUTCOMES[value].label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        {chosen.prompt}
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={3}
+          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+        />
+      </label>
+
+      <Button
+        variant="danger"
+        disabled={busy || text.trim().length === 0}
+        onClick={() => void submit()}
+      >
+        {busy ? "Recording…" : chosen.verb}
+      </Button>
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        This closes the stay and cannot be undone. The bed-days are still billed — the bed was
+        occupied until now, whichever way the stay ended.
       </p>
     </div>
   );
@@ -393,6 +506,30 @@ function Ward() {
                       setNotice(
                         "Discharged. The summary is on the chart and the bed-days are billed.",
                       );
+                      setSelectedId(null);
+                      void load();
+                    }}
+                  />
+                </Card>
+
+                <Card className="p-5">
+                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">
+                    Other outcome
+                  </h3>
+                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                    When the stay does not end in a routine discharge — the patient left against
+                    advice, absconded, or died. Recorded as what it was, not as a discharge.
+                  </p>
+                  <OutcomeForm
+                    encounterId={selected.id}
+                    onRecorded={(outcome) => {
+                      const said =
+                        outcome === "deceased"
+                          ? "Death recorded. The account is on the chart and the stay is closed."
+                          : outcome === "lama"
+                            ? "Recorded: left against medical advice. The stay is closed."
+                            : "Recorded: absconded. The stay is closed.";
+                      setNotice(said);
                       setSelectedId(null);
                       void load();
                     }}

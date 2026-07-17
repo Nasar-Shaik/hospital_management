@@ -422,9 +422,16 @@ export interface Encounter {
   bed?: Bed;
   admittedAt?: string;
   dischargedAt?: string;
+  /** How the inpatient stay ended — set with `dischargedAt` when an IP encounter closes. */
+  disposition?: DischargeDisposition;
   /** The OP encounter this admission came out of. */
   admittedFrom?: string;
 }
+
+/** How an inpatient stay ended (see the admissions module). */
+export type DischargeDisposition = "discharged" | "lama" | "absconded" | "deceased";
+/** The three non-routine endings — everything except a routine `discharged`. */
+export type TerminalOutcome = "lama" | "absconded" | "deceased";
 
 export interface StartEncounterResult {
   encounter: Encounter;
@@ -848,7 +855,7 @@ export interface Bed {
   tariffCode: string;
 }
 
-export type WardNoteType = "progress" | "discharge_summary";
+export type WardNoteType = "progress" | "discharge_summary" | "outcome_note";
 
 export interface WardNote {
   id: string;
@@ -1678,6 +1685,18 @@ export class ApiClient {
     input: { text: string; diagnosis?: string; advice?: string; followUpOn?: string },
   ): Promise<{ summary: WardNote; encounterId: string }> {
     return this.request("POST", `/api/v1/encounters/${encounterId}/discharge`, input);
+  }
+
+  /**
+   * Ends the stay WITHOUT a routine discharge — LAMA, absconded, or a death. Writes the
+   * account of what happened (`outcome_note`) and closes the encounter with its true
+   * disposition. `discharged` is not an option here — that goes through `discharge`.
+   */
+  recordOutcome(
+    encounterId: string,
+    input: { outcome: TerminalOutcome; text: string },
+  ): Promise<{ note: WardNote; encounterId: string }> {
+    return this.request("POST", `/api/v1/encounters/${encounterId}/outcome`, input);
   }
 
   /**
