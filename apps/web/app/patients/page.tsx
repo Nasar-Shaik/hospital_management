@@ -16,6 +16,7 @@
  * A refusal a clerk cannot act on is a refusal they learn to route around.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import {
   ApiClientError,
   type DuplicateCandidate,
@@ -374,12 +375,17 @@ function Patients() {
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
                 {patients.map((patient) => (
-                  <tr key={patient.id}>
+                  <tr
+                    key={patient.id}
+                    className="group transition-colors hover:bg-[var(--color-bg-subtle)]"
+                  >
                     <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-fg-muted)]">
-                      {patient.uhid}
+                      <Link href={`/patients/${patient.id}`} className="hover:underline">
+                        {patient.uhid}
+                      </Link>
                     </td>
-                    <td className="py-2.5 pr-4 font-medium text-[var(--color-fg)]">
-                      {patient.name}
+                    <td className="py-2.5 pr-4 font-medium text-[var(--color-fg)] group-hover:text-[var(--color-brand-700)]">
+                      <Link href={`/patients/${patient.id}`}>{patient.name}</Link>
                     </td>
                     <td className="py-2.5 pr-4 text-[var(--color-fg-muted)]">
                       {age(patient.dob)} · {patient.gender}

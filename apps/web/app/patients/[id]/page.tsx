@@ -1,0 +1,633 @@
+"use client";
+
+/**
+ * Patient profile — the whole record for one person, in one place.
+ *
+ * A hospital's most-asked question is "who is this patient and what has happened to them?" — and
+ * until now the answer was scattered across the encounter, order, prescription, billing and lab
+ * screens. This page gathers them: a header that states the safety-critical facts at a glance
+ * (allergies, dues), and a timeline plus tabs that trace every visit, test, prescription and bill.
+ *
+ * It is built ENTIRELY from existing per-patient endpoints — it reads the record, it does not
+ * change it, so a receptionist and a doctor can both open it within their own permissions.
+ */
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import {
+  ApiClientError,
+  type Allergy,
+  type Encounter,
+  type Invoice,
+  type Order,
+  type Patient,
+  type Prescription,
+  type ReportMeta,
+} from "@medicore/api-client";
+import { useAuth } from "../../../components/AuthProvider";
+import { Protected } from "../../../components/Protected";
+import { Alert, Badge, Button, Card } from "../../../components/ui";
+import { rupees } from "../../../lib/money";
+
+/* ── helpers ─────────────────────────────────────────────────────────────────── */
+
+function ageOf(dob?: string): string {
+  if (!dob) return "—";
+  const d = new Date(dob);
+  if (Number.isNaN(d.getTime())) return "—";
+  const now = new Date();
+  let years = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) years--;
+  return `${years}y`;
+}
+
+function fmtDate(iso?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function fmtDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/** Outstanding = what is billed but not yet paid. Drafts are not dues; paid invoices owe nothing. */
+function duesOf(invoices: Invoice[]): number {
+  return invoices
+    .filter((i) => i.status === "finalized")
+    .reduce((sum, i) => sum + Math.max(0, i.total - i.paid), 0);
+}
+
+const ENCOUNTER_LABEL: Record<string, string> = {
+  planned: "Planned",
+  arrived: "Arrived",
+  in_queue: "In queue",
+  in_progress: "In progress",
+  awaiting_results: "Awaiting results",
+  closed: "Closed",
+  cancelled: "Cancelled",
+  left_without_being_seen: "Left unseen",
+  admitted: "Admitted",
+};
+
+const ORDER_TONE: Record<string, "neutral" | "warning" | "success" | "brand"> = {
+  placed: "warning",
+  accepted: "warning",
+  in_progress: "warning",
+  completed: "brand",
+  verified: "brand",
+  released: "success",
+  cancelled: "neutral",
+};
+
+/* ── page ────────────────────────────────────────────────────────────────────── */
+
+type TabKey = "timeline" | "visits" | "tests" | "prescriptions" | "bills";
+
+function Profile() {
+  const { can, api } = useAuth();
+  const params = useParams<{ id: string }>();
+  const id = params.id;
+
+  const [patient, setPatient] = useState<Patient | null>(null);
+  const [allergies, setAllergies] = useState<Allergy[]>([]);
+  const [encounters, setEncounters] = useState<Encounter[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
+  const [reports, setReports] = useState<ReportMeta[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [doctors, setDoctors] = useState<Map<string, string>>(new Map());
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>("timeline");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // The record is fanned out across modules; pull the pieces in parallel. A missing
+      // permission on one strand (e.g. billing) must not blank the whole page, so each
+      // optional strand tolerates a failure and simply shows empty.
+      const soft = <T,>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback);
+      const [pat, alg, enc, ord, rx, rep, inv, docs] = await Promise.all([
+        api.getPatient(id),
+        soft(api.listAllergies(id), [] as Allergy[]),
+        soft(api.listEncounters({ patientId: id, limit: 100 }), {
+          items: [] as Encounter[],
+          meta: { page: 1, limit: 0 },
+        }),
+        soft(api.listOrders({ patientId: id, limit: 200 }), {
+          items: [] as Order[],
+          meta: { page: 1, limit: 0 },
+        }),
+        soft(api.listPrescriptions({ patientId: id }), [] as Prescription[]),
+        soft(api.listReports(id), [] as ReportMeta[]),
+        soft(api.listInvoices({ patientId: id, limit: 100 }), {
+          items: [] as Invoice[],
+          meta: { page: 1, limit: 0 },
+        }),
+        soft(api.listDoctors(), [] as { id: string; name: string }[]),
+      ]);
+      setPatient(pat);
+      setAllergies(alg.filter((a) => a.status === "active"));
+      setEncounters(enc.items);
+      setOrders(ord.items);
+      setPrescriptions(rx);
+      setReports(rep);
+      setInvoices(inv.items);
+      setDoctors(new Map(docs.map((d) => [d.id, d.name])));
+    } catch (err) {
+      setError(
+        err instanceof ApiClientError && err.code === "HMS-GEN-404"
+          ? "This patient could not be found."
+          : "Could not load this patient. Please try again.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [api, id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const who = useCallback(
+    (userId?: string) => (userId ? (doctors.get(userId) ?? "—") : "—"),
+    [doctors],
+  );
+  const dues = useMemo(() => duesOf(invoices), [invoices]);
+  const reportByOrder = useMemo(() => new Map(reports.map((r) => [r.orderId, r])), [reports]);
+
+  if (loading) {
+    return (
+      <Shell>
+        <div className="flex justify-center py-24">
+          <span className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--color-brand-600)] border-t-transparent" />
+        </div>
+      </Shell>
+    );
+  }
+
+  if (error || !patient) {
+    return (
+      <Shell>
+        <Alert tone="danger">{error ?? "Patient not found."}</Alert>
+        <Link
+          href="/patients"
+          className="mt-4 inline-block text-sm text-[var(--color-brand-600)] hover:underline"
+        >
+          ← Back to patients
+        </Link>
+      </Shell>
+    );
+  }
+
+  const tabs: { key: TabKey; label: string; count?: number }[] = [
+    { key: "timeline", label: "Timeline" },
+    { key: "visits", label: "Visits", count: encounters.length },
+    { key: "tests", label: "Tests", count: orders.length },
+    { key: "prescriptions", label: "Prescriptions", count: prescriptions.length },
+    { key: "bills", label: "Bills", count: invoices.length },
+  ];
+
+  return (
+    <Shell>
+      <Link
+        href="/patients"
+        className="mb-4 inline-block text-sm text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+      >
+        ← Patients
+      </Link>
+
+      {/* Header */}
+      <Card className="p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-semibold text-[var(--color-fg)]">{patient.name}</h1>
+              <Badge tone={patient.status === "active" ? "success" : "neutral"}>
+                {patient.status}
+              </Badge>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--color-fg-muted)]">
+              <span className="font-mono text-xs">{patient.uhid}</span>
+              <span>
+                {ageOf(patient.dob)} · {patient.gender}
+              </span>
+              {patient.bloodGroup && <span>🩸 {patient.bloodGroup}</span>}
+              {patient.contact.phone && <span>📞 {patient.contact.phone}</span>}
+              <span>Registered {fmtDate(patient.createdAt)}</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end gap-2">
+            {dues > 0 && (
+              <button
+                type="button"
+                onClick={() => setTab("bills")}
+                className="rounded-lg bg-[var(--color-warning-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--color-warning)]"
+              >
+                Dues {rupees(dues)} →
+              </button>
+            )}
+            {can("encounter:create") && (
+              <Link href="/reception">
+                <Button>Start visit</Button>
+              </Link>
+            )}
+          </div>
+        </div>
+
+        {/* Allergy banner — the one thing that must never be a click away. */}
+        {allergies.length > 0 ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-danger)]/20 bg-[var(--color-danger-bg)] px-4 py-2.5">
+            <span className="text-sm font-semibold text-[var(--color-danger)]">⚠ Allergies:</span>
+            {allergies.map((a) => (
+              <span
+                key={a.id}
+                className="rounded-md bg-[var(--color-danger)]/10 px-2 py-0.5 text-sm text-[var(--color-danger)]"
+              >
+                {a.label}
+                {a.severity === "anaphylaxis" || a.severity === "severe" ? ` (${a.severity})` : ""}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-4 py-2 text-sm text-[var(--color-fg-muted)]">
+            No known allergies on record.
+          </div>
+        )}
+      </Card>
+
+      {/* Tabs */}
+      <div className="mt-6 flex flex-wrap gap-1 border-b border-[var(--color-border)]">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            className={`-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+              tab === t.key
+                ? "border-[var(--color-brand-600)] text-[var(--color-brand-700)]"
+                : "border-transparent text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+            }`}
+          >
+            {t.label}
+            {t.count !== undefined && (
+              <span className="ml-1.5 rounded-full bg-[var(--color-bg-subtle)] px-1.5 py-0.5 text-xs">
+                {t.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-5">
+        {tab === "timeline" && (
+          <Timeline
+            encounters={encounters}
+            orders={orders}
+            prescriptions={prescriptions}
+            reports={reports}
+            who={who}
+          />
+        )}
+        {tab === "visits" && <Visits encounters={encounters} who={who} />}
+        {tab === "tests" && (
+          <Tests orders={orders} reportByOrder={reportByOrder} who={who} api={api} />
+        )}
+        {tab === "prescriptions" && <Prescriptions prescriptions={prescriptions} who={who} />}
+        {tab === "bills" && <Bills invoices={invoices} />}
+      </div>
+    </Shell>
+  );
+}
+
+/* ── tab panels ──────────────────────────────────────────────────────────────── */
+
+interface TimelineEvent {
+  at: string;
+  icon: string;
+  text: string;
+  tone?: "danger";
+}
+
+function Timeline({
+  encounters,
+  orders,
+  prescriptions,
+  reports,
+  who,
+}: {
+  encounters: Encounter[];
+  orders: Order[];
+  prescriptions: Prescription[];
+  reports: ReportMeta[];
+  who: (id?: string) => string;
+}) {
+  const events: TimelineEvent[] = [];
+  for (const e of encounters) {
+    const doc = e.doctorId ? ` · Dr ${who(e.doctorId)}` : "";
+    events.push({ at: e.arrivedAt, icon: "🏥", text: `${e.class} visit${doc}` });
+  }
+  for (const o of orders) {
+    events.push({ at: o.orderedAt, icon: "🧪", text: `Ordered ${o.name} (${o.category})` });
+    if (o.releasedAt) {
+      events.push({
+        at: o.releasedAt,
+        icon: "📄",
+        text: `Result released — ${o.name}${o.result?.critical ? " ⚠ critical" : ""}`,
+        ...(o.result?.critical ? { tone: "danger" as const } : {}),
+      });
+    }
+  }
+  for (const r of reports) {
+    events.push({ at: r.uploadedAt, icon: "📎", text: `Report uploaded — ${r.testName}` });
+  }
+  for (const p of prescriptions) {
+    const when = p.signedAt ?? p.prescribedAt;
+    const drugs = p.lines.map((l) => l.drugName).join(", ");
+    events.push({
+      at: when,
+      icon: "💊",
+      text: `Prescribed ${drugs || "medication"} · Dr ${who(p.prescribedBy)}`,
+    });
+  }
+
+  events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+  if (events.length === 0) return <Empty>No activity yet.</Empty>;
+
+  // Group by calendar day.
+  const groups: { day: string; items: TimelineEvent[] }[] = [];
+  for (const ev of events) {
+    const day = fmtDay(ev.at);
+    const last = groups[groups.length - 1];
+    if (last && last.day === day) last.items.push(ev);
+    else groups.push({ day, items: [ev] });
+  }
+
+  return (
+    <div className="space-y-6">
+      {groups.map((g) => (
+        <div key={g.day}>
+          <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+            {g.day}
+          </p>
+          <div className="space-y-2 border-l-2 border-[var(--color-border)] pl-4">
+            {g.items.map((ev, i) => (
+              <div key={i} className="flex items-start gap-2 text-sm">
+                <span>{ev.icon}</span>
+                <span
+                  className={
+                    ev.tone === "danger" ? "text-[var(--color-danger)]" : "text-[var(--color-fg)]"
+                  }
+                >
+                  {ev.text}
+                </span>
+                <span className="ml-auto text-xs text-[var(--color-fg-subtle)]">
+                  {new Date(ev.at).toLocaleTimeString("en-IN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Visits({ encounters, who }: { encounters: Encounter[]; who: (id?: string) => string }) {
+  if (encounters.length === 0) return <Empty>No visits recorded.</Empty>;
+  const sorted = [...encounters].sort(
+    (a, b) => new Date(b.arrivedAt).getTime() - new Date(a.arrivedAt).getTime(),
+  );
+  return (
+    <Rows head={["Date", "Type", "Doctor", "Status"]}>
+      {sorted.map((e) => (
+        <tr key={e.id}>
+          <Td>{fmtDate(e.arrivedAt)}</Td>
+          <Td>
+            <Badge tone="brand">{e.class}</Badge>
+          </Td>
+          <Td>{e.doctorId ? `Dr ${who(e.doctorId)}` : "—"}</Td>
+          <Td>
+            {ENCOUNTER_LABEL[e.status] ?? e.status}
+            {e.disposition ? ` · ${e.disposition}` : ""}
+          </Td>
+        </tr>
+      ))}
+    </Rows>
+  );
+}
+
+function Tests({
+  orders,
+  reportByOrder,
+  who,
+  api,
+}: {
+  orders: Order[];
+  reportByOrder: Map<string, ReportMeta>;
+  who: (id?: string) => string;
+  api: ReturnType<typeof useAuth>["api"];
+}) {
+  if (orders.length === 0) return <Empty>No tests ordered.</Empty>;
+  const sorted = [...orders].sort(
+    (a, b) => new Date(b.orderedAt).getTime() - new Date(a.orderedAt).getTime(),
+  );
+
+  async function download(report: ReportMeta) {
+    try {
+      const blob = await api.fetchReportBlob(report.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = report.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* best-effort download */
+    }
+  }
+
+  return (
+    <Rows head={["Date", "Test", "Ordered by", "Status", "Result"]}>
+      {sorted.map((o) => {
+        const report = reportByOrder.get(o.id);
+        return (
+          <tr key={o.id}>
+            <Td>{fmtDate(o.orderedAt)}</Td>
+            <Td className="font-medium text-[var(--color-fg)]">
+              {o.name}
+              <span className="ml-1 text-xs text-[var(--color-fg-subtle)]">{o.category}</span>
+            </Td>
+            <Td>Dr {who(o.orderedBy)}</Td>
+            <Td>
+              <Badge tone={ORDER_TONE[o.status] ?? "neutral"}>{o.status.replace("_", " ")}</Badge>
+            </Td>
+            <Td>
+              {o.result?.summary ? (
+                <span className={o.result.critical ? "font-medium text-[var(--color-danger)]" : ""}>
+                  {o.result.summary}
+                </span>
+              ) : report ? (
+                <button
+                  type="button"
+                  onClick={() => void download(report)}
+                  className="text-[var(--color-brand-600)] hover:underline"
+                >
+                  Download report
+                </button>
+              ) : (
+                <span className="text-[var(--color-fg-subtle)]">—</span>
+              )}
+            </Td>
+          </tr>
+        );
+      })}
+    </Rows>
+  );
+}
+
+function Prescriptions({
+  prescriptions,
+  who,
+}: {
+  prescriptions: Prescription[];
+  who: (id?: string) => string;
+}) {
+  if (prescriptions.length === 0) return <Empty>No prescriptions.</Empty>;
+  const sorted = [...prescriptions].sort(
+    (a, b) => new Date(b.prescribedAt).getTime() - new Date(a.prescribedAt).getTime(),
+  );
+  return (
+    <div className="space-y-3">
+      {sorted.map((p) => {
+        const dispensed = p.lines.every((l) => l.dispensedQty >= l.quantity);
+        const partly = !dispensed && p.lines.some((l) => l.dispensedQty > 0);
+        return (
+          <Card key={p.id} className="p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-[var(--color-fg-muted)]">
+                {fmtDate(p.signedAt ?? p.prescribedAt)} · Dr {who(p.prescribedBy)}
+              </span>
+              <Badge tone={dispensed ? "success" : partly ? "warning" : "neutral"}>
+                {dispensed ? "Dispensed" : partly ? "Partly dispensed" : p.status.replace("_", " ")}
+              </Badge>
+            </div>
+            <ul className="mt-2 space-y-1 text-sm">
+              {p.lines.map((l, i) => (
+                <li key={i} className="flex justify-between">
+                  <span className="text-[var(--color-fg)]">
+                    {l.drugName}{" "}
+                    <span className="text-[var(--color-fg-muted)]">
+                      {l.dose} · {l.frequency}
+                    </span>
+                  </span>
+                  <span className="text-xs text-[var(--color-fg-subtle)]">
+                    {l.dispensedQty}/{l.quantity} given
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function Bills({ invoices }: { invoices: Invoice[] }) {
+  if (invoices.length === 0) return <Empty>No bills.</Empty>;
+  const sorted = [...invoices].sort((a, b) =>
+    a.finalizedAt && b.finalizedAt
+      ? new Date(b.finalizedAt).getTime() - new Date(a.finalizedAt).getTime()
+      : 0,
+  );
+  return (
+    <Rows head={["Invoice", "Date", "Total", "Paid", "Outstanding", "Status"]}>
+      {sorted.map((i) => {
+        const outstanding = Math.max(0, i.total - i.paid);
+        return (
+          <tr key={i.id}>
+            <Td className="font-mono text-xs">{i.number ?? "draft"}</Td>
+            <Td>{fmtDate(i.finalizedAt)}</Td>
+            <Td>{rupees(i.total)}</Td>
+            <Td>{rupees(i.paid)}</Td>
+            <Td className={outstanding > 0 ? "font-medium text-[var(--color-warning)]" : ""}>
+              {rupees(outstanding)}
+            </Td>
+            <Td>
+              <Badge
+                tone={
+                  i.status === "paid" ? "success" : i.status === "finalized" ? "warning" : "neutral"
+                }
+              >
+                {i.status}
+              </Badge>
+            </Td>
+          </tr>
+        );
+      })}
+    </Rows>
+  );
+}
+
+/* ── little shared bits ──────────────────────────────────────────────────────── */
+
+function Shell({ children }: { children: ReactNode }) {
+  return <div className="mx-auto max-w-4xl">{children}</div>;
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-dashed border-[var(--color-border)] py-12 text-center text-sm text-[var(--color-fg-muted)]">
+      {children}
+    </div>
+  );
+}
+
+function Rows({ head, children }: { head: string[]; children: ReactNode }) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-subtle)]">
+              {head.map((h) => (
+                <th key={h} className="px-4 py-2.5 font-medium">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--color-border)]">{children}</tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function Td({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <td className={`px-4 py-2.5 text-[var(--color-fg-muted)] ${className}`}>{children}</td>;
+}
+
+export default function PatientProfilePage() {
+  return (
+    <Protected>
+      <Profile />
+    </Protected>
+  );
+}

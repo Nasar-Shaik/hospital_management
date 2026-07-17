@@ -1176,3 +1176,34 @@ from them. Verified live against the running stack (2026-07-18): logging in as t
 - A user without `branding:manage` (e.g. a receptionist) has **no** "Public website" nav entry, and
   visiting `/settings/site` shows a "No access" notice. The API independently returns 403 on
   `GET/PATCH /api/v1/site/settings` for them — the hidden nav is convenience, not the guard.
+
+## 23 · Patient profile & clinical timeline (⏳ eyeball)
+
+**Why:** the most-asked hospital question — "who is this patient and what has happened to them?" — was
+scattered across the encounter, order, prescription, billing and lab screens. The patient profile
+gathers the whole record in one place: a header stating the safety-critical facts (allergies, dues) and
+a timeline plus tabs tracing every visit, test, prescription and bill. It is read-only and built
+entirely from existing per-patient endpoints, so any role can open it within its own permissions (a
+strand the user cannot read, e.g. billing, simply shows empty rather than blanking the page). This is
+the spine the later dashboard drill-downs link into.
+
+### PP1 · Open a patient
+
+- **Patients** (`sunrise.localhost:3000/patients`) → click a **UHID** or **name** → the profile opens.
+- Header shows **name · UHID · age/sex · blood group · phone · registered-on**, an **allergy banner**
+  (red chips when present, "No known allergies" otherwise), and — if anything is unpaid — a **Dues
+  ₹…** pill. A **Start visit** button appears only with `encounter:create`.
+
+### PP2 · The tabs
+
+- **Timeline** — visits, tests ordered, results released, reports uploaded and prescriptions, merged
+  and grouped by day, newest first (a critical result shows in red).
+- **Visits / Tests / Prescriptions / Bills** — each lists the matching records with counts in the tab.
+  A **released** lab result shows its summary; an uploaded report has a **Download** link. Prescriptions
+  show per-line **dispensed / authorised** quantities. Bills show total / paid / **outstanding** + status.
+
+### PP3 · Empty and dues
+
+- A brand-new patient with no history shows clean empty states per tab and "No known allergies".
+- Clicking the **Dues** pill jumps to the **Bills** tab; the outstanding figure = sum of unpaid
+  finalized invoices.
