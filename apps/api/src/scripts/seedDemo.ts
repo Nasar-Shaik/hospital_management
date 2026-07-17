@@ -30,6 +30,8 @@ import { assignRoleByCode, seedRbac } from "../modules/rbac/index.js";
 import { setPassword } from "../modules/auth/index.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
+import { seedFormulary } from "../seed/formulary.js";
+import { listMedicines, receiveStock } from "../modules/medicines/index.js";
 
 const logger = createLogger({ service: "seed-demo" });
 
@@ -178,6 +180,31 @@ async function seedHospital(h: DemoHospital): Promise<void> {
 
   await seedNotificationTemplates(tenant.id, h.slug, connection);
   await seedTariff(tenant.id, h.slug, connection);
+  await seedFormulary(tenant.id, h.slug, connection);
+
+  /**
+   * Opening stock — DEMO ONLY, and through the real `receiveStock` service so every unit on the
+   * shelf has an honest ledger entry behind it (never a raw `stockUnits` write). Idempotent: it
+   * tops up only a medicine that has none, so re-running the seed does not inflate the shelf.
+   */
+  await runWithContext(
+    { traceId: `seed-demo-stock-${h.slug}`, tenantId: tenant.id, tenantSlug: h.slug, connection },
+    async () => {
+      const expiry = new Date();
+      expiry.setFullYear(expiry.getFullYear() + 1);
+      let stocked = 0;
+      for (const m of await listMedicines({})) {
+        if (m.stockUnits > 0) continue;
+        await receiveStock(m.id, {
+          quantity: 200,
+          batchNo: `OPEN-${String(expiry.getFullYear())}`,
+          expiry,
+        });
+        stocked += 1;
+      }
+      if (stocked > 0) logger.info({ slug: h.slug, stocked }, "opening stock received");
+    },
+  );
 }
 
 async function main(): Promise<void> {

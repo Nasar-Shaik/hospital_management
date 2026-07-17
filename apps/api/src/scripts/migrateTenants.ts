@@ -25,6 +25,7 @@ import { migrateTenant, getBySlug, type TenantRegistryEntry } from "../modules/t
 import { seedRbac } from "../modules/rbac/index.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
+import { seedFormulary } from "../seed/formulary.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
 
 const logger = createLogger({ service: "migrate-cli" });
@@ -59,6 +60,7 @@ interface Outcome {
   roles: number;
   templatesAdded: number;
   tariffAdded: number;
+  formularyAdded: number;
   error?: string;
 }
 
@@ -90,6 +92,9 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
   //    message. It never overwrites wording a hospital has edited.
   const templatesAdded = await seedNotificationTemplates(tenant.id, tenant.slug, connection);
   const tariffAdded = await seedTariff(tenant.id, tenant.slug, connection);
+  // The medicine master mirrors the pharmacy tariff (same codes) so a dispensed drug is the same
+  // object the stock ledger decrements. Reference data only — zero stock, seeded on insert.
+  const formularyAdded = await seedFormulary(tenant.id, tenant.slug, connection);
 
   return {
     slug: tenant.slug,
@@ -98,6 +103,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     roles: seeded.roles.length,
     templatesAdded,
     tariffAdded,
+    formularyAdded,
   };
 }
 
@@ -139,6 +145,7 @@ async function main(): Promise<void> {
         roles: 0,
         templatesAdded: 0,
         tariffAdded: 0,
+        formularyAdded: 0,
         error: err instanceof Error ? err.message : String(err),
       });
     }
