@@ -17,12 +17,14 @@ import { validate } from "../../middleware/validate.js";
 import * as controller from "./auth.controller.js";
 import {
   changePasswordSchema,
+  forgotPasswordSchema,
   loginSchema,
   logoutSchema,
   mfaActivateSchema,
   mfaDisableSchema,
   mfaVerifySchema,
   refreshSchema,
+  resetPasswordSchema,
   sessionIdParamSchema,
 } from "./auth.schema.js";
 
@@ -39,6 +41,22 @@ export function authRouter(): Router {
 
   // Completes a login: the MFA challenge token IS the credential here.
   router.post("/mfa/verify", validate(mfaVerifySchema), asyncHandler(controller.verifyMfa));
+
+  // Forgot password: emails a single-use reset link. Public — the caller has, by definition, no
+  // session. Answers the same way for any email, so it cannot be used to enumerate accounts.
+  router.post(
+    "/forgot-password",
+    validate(forgotPasswordSchema),
+    asyncHandler(controller.forgotPassword),
+  );
+
+  // Reset password from the emailed link. Public — the token IS the credential, single-use and
+  // short-lived; a successful reset revokes every existing session.
+  router.post(
+    "/reset-password",
+    validate(resetPasswordSchema),
+    asyncHandler(controller.resetPassword),
+  );
 
   /* ── authenticated ─────────────────────────────────────────────────────── */
 

@@ -959,4 +959,33 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0021-password-reset-tokens",
+    description: "Single-use password-reset tokens (forgot-password)",
+    up: async (db) => {
+      // A hash resolves to exactly one token — the lookup on reset is by hash, and two rows sharing
+      // one would make "which token is this?" ambiguous.
+      await db
+        .collection("passwordResetTokens")
+        .createIndex(
+          { tenantId: 1, tokenHash: 1 },
+          { unique: true, name: "one_reset_token_per_hash", background: true },
+        );
+      // Invalidate-then-issue reads a user's outstanding tokens by id.
+      await db
+        .collection("passwordResetTokens")
+        .createIndex({ tenantId: 1, userId: 1 }, { background: true });
+      // TTL: an expired reset token is rubbish — MongoDB reaps it at its own expiry. Bearer secrets
+      // must not linger in the database after they can no longer be used.
+      await db
+        .collection("passwordResetTokens")
+        .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0, background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("passwordResetTokens")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

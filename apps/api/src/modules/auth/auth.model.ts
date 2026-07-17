@@ -192,6 +192,32 @@ const loginAttemptSchema = new Schema<LoginAttemptDoc>(
 );
 loginAttemptSchema.plugin(tenantScopePlugin);
 
+/* ── passwordResetTokens ─────────────────────────────────────────────────── */
+
+export interface PasswordResetTokenDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  userId: string;
+  /** SHA-256 digest. The plaintext lives only in the link we email; we can verify, never reveal. */
+  tokenHash: string;
+  expiresAt: Date;
+  /** Set the moment it is spent. A reset token is single-use — a second use is refused. */
+  usedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const passwordResetTokenSchema = new Schema<PasswordResetTokenDoc>(
+  {
+    userId: { type: String, required: true },
+    tokenHash: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+    usedAt: { type: Date },
+  },
+  { timestamps: true, collection: "passwordResetTokens", autoIndex: false },
+);
+passwordResetTokenSchema.plugin(tenantScopePlugin);
+
 /* ── model accessors (bound to the request's tenant connection) ──────────── */
 
 export function getCredentialModel(conn: Connection): Model<CredentialDoc> {
@@ -232,5 +258,12 @@ export function getLoginAttemptModel(conn: Connection): Model<LoginAttemptDoc> {
   return (
     (conn.models.LoginAttempt as Model<LoginAttemptDoc>) ??
     conn.model<LoginAttemptDoc>("LoginAttempt", loginAttemptSchema)
+  );
+}
+
+export function getPasswordResetTokenModel(conn: Connection): Model<PasswordResetTokenDoc> {
+  return (
+    (conn.models.PasswordResetToken as Model<PasswordResetTokenDoc>) ??
+    conn.model<PasswordResetTokenDoc>("PasswordResetToken", passwordResetTokenSchema)
   );
 }

@@ -22,6 +22,8 @@ export {
   revokeAllSessions,
   setPassword,
   changePassword,
+  requestPasswordReset,
+  resetPassword,
   setupMfa,
   activateMfa,
   verifyMfaChallenge,

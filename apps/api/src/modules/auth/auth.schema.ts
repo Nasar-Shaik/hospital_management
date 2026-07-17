@@ -74,6 +74,21 @@ export const changePasswordSchema = z
   })
   .strict();
 
+export const forgotPasswordSchema = z
+  .object({
+    email: z.string().email().max(254),
+  })
+  .strict();
+
+export const resetPasswordSchema = z
+  .object({
+    /** The opaque token from the emailed link. */
+    token: z.string().min(20).max(512),
+    // Bound from the POLICY, not a literal — same reason as changePassword above.
+    newPassword: z.string().min(env.PASSWORD_MIN_LENGTH).max(512),
+  })
+  .strict();
+
 export const mfaVerifySchema = z
   .object({
     mfaToken: z.string().min(10),
@@ -106,3 +121,5 @@ export const sessionIdParamSchema = z
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;

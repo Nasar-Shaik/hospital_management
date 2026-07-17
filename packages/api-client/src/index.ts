@@ -1044,6 +1044,23 @@ export class ApiClient {
   }
 
   /**
+   * Begins a password reset — emails a single-use link if the address belongs to an account. The
+   * response is intentionally the same either way (no account enumeration), so callers must NOT
+   * infer existence from it.
+   */
+  forgotPassword(email: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>("POST", "/api/v1/auth/forgot-password", { email });
+  }
+
+  /** Completes a reset from the emailed token. On success, every existing session is revoked. */
+  resetPassword(token: string, newPassword: string): Promise<{ passwordReset: boolean }> {
+    return this.request<{ passwordReset: boolean }>("POST", "/api/v1/auth/reset-password", {
+      token,
+      newPassword,
+    });
+  }
+
+  /**
    * Exchanges a refresh token for a fresh access token.
    *
    * With no argument it relies on the httpOnly refresh COOKIE — the production web flow, where

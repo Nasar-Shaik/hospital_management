@@ -44,6 +44,7 @@ import { recordAudit, tryRecordAudit } from "../../core/audit/auditWriter.js";
 import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import * as users from "../users/index.js";
 import type { User } from "../users/index.js";
+import { notify } from "../notifications/index.js";
 import { getEffectivePermissions, getRoleClaims } from "../rbac/index.js";
 import * as repo from "./auth.repository.js";
 import type { Session } from "./auth.repository.js";
@@ -527,6 +528,105 @@ export async function setPassword(
     resource: "user",
     resourceId: userId,
     meta: { mustChangePassword: options.mustChangePassword ?? false },
+  });
+}
+
+/* ── password reset (forgot password) ────────────────────────────────────── */
+
+/** How long a reset link lives. Short on purpose — the link is a bearer key to the account. */
+const RESET_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * The link we email. Built from the tenant host in the request context, never a hardcoded domain,
+ * for the same reason provisioning's sign-in URL is: on a laptop this must be `http` + the web port
+ * and the developer's own hostname, not the live server.
+ */
+function passwordResetUrl(rawToken: string): string {
+  const ctx = getContext();
+  const domain = env.TENANT_BASE_DOMAIN;
+  const local = domain === "localhost" || domain.endsWith(".localhost");
+  const base = local
+    ? `http://${ctx.tenantSlug}.${domain}:${process.env.WEB_PORT ?? "3000"}`
+    : `https://${ctx.tenantSlug}.${domain}`;
+  return `${base}/reset-password?token=${rawToken}`;
+}
+
+/**
+ * Begins a password reset: emails a single-use link to the address on file.
+ *
+ * ── NO ACCOUNT ENUMERATION ──────────────────────────────────────────────────
+ * This ALWAYS returns the same way, whether or not the email belongs to a real user. Telling an
+ * anonymous caller "no such account" turns the forgot-password box into a probe for who has a login
+ * here, so the work happens only for a real, active account and the caller is told nothing either
+ * way. The controller answers with a fixed "if that account exists, we've sent a link".
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const normalized = email.trim().toLowerCase();
+  const user = await users.getByEmail(normalized);
+
+  // Only a real, ACTIVE account with an address gets a link. An invited or suspended account — or
+  // one with no email — is silently skipped; the caller cannot tell the difference (see the header).
+  if (!user || user.status !== "active" || !user.email) return;
+
+  const rawToken = generateOpaqueToken();
+  await repo.createPasswordResetToken({
+    userId: user.id,
+    tokenHash: digestToken(rawToken),
+    expiresAt: new Date(Date.now() + RESET_TTL_MS),
+  });
+
+  await notify({
+    templateKey: "password.reset",
+    recipient: { address: user.email, name: user.name, type: "staff", id: user.id },
+    data: {
+      name: user.name,
+      resetUrl: passwordResetUrl(rawToken),
+      validMinutes: String(RESET_TTL_MS / 60_000),
+    },
+    // Each request is its OWN message: a person may legitimately ask twice, and the newer link must
+    // send rather than dedupe against the older one. Keyed on the token, so redelivery is still safe.
+    dedupeKey: `password.reset:${digestToken(rawToken)}`,
+  });
+
+  await tryRecordAudit({
+    action: "auth.password.reset.requested",
+    category: "security",
+    resource: "user",
+    resourceId: user.id,
+  });
+}
+
+/**
+ * Completes a reset: sets the new password from a valid, unspent, unexpired link, then signs every
+ * device out.
+ *
+ * ── THE LINK IS SPENT BEFORE THE PASSWORD CHANGES ───────────────────────────
+ * `markPasswordResetTokenUsed` only succeeds if the token was still unspent, so two clicks of the
+ * same link (a double-submit, a replay) cannot both set a password — the second loses the race and
+ * is refused. And because a reset is a "someone may have been in this account" event, every session
+ * is revoked: a thief holding a live refresh token is logged out along with everyone else.
+ */
+export async function resetPassword(rawToken: string, newPassword: string): Promise<void> {
+  const invalidLink = (): AppError =>
+    new AppError("HMS-AUTH-002", 400, "This reset link is invalid or has expired", {
+      hint: "request a new link from the sign-in page",
+    });
+
+  const stored = await repo.findPasswordResetTokenByHash(digestToken(rawToken));
+  if (!stored || stored.usedAt || stored.expiresAt.getTime() < Date.now()) throw invalidLink();
+
+  // Spend it FIRST, and only if unspent — the atomic guard against two resets from one link.
+  if (!(await repo.markPasswordResetTokenUsed(stored.id))) throw invalidLink();
+
+  // `setPassword` still enforces the policy and history — a reset is not a way around either.
+  await setPassword(stored.userId, newPassword, { mustChangePassword: false });
+  await revokeAllSessions(stored.userId);
+
+  await recordAudit({
+    action: "auth.password.reset.completed",
+    category: "security",
+    resource: "user",
+    resourceId: stored.userId,
   });
 }
 

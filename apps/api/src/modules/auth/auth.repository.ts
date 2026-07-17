@@ -11,6 +11,7 @@ import {
   getLoginAttemptModel,
   getMfaSecretModel,
   getPasswordHistoryModel,
+  getPasswordResetTokenModel,
   getRefreshTokenModel,
   getSessionModel,
 } from "./auth.model.js";
@@ -250,6 +251,54 @@ export async function revokeAllRefreshTokens(userId: string): Promise<void> {
     { userId, revokedAt: { $exists: false } },
     { revokedAt: new Date() },
   );
+}
+
+/* ── password reset tokens ───────────────────────────────────────────────── */
+
+export interface StoredPasswordResetToken {
+  id: string;
+  userId: string;
+  expiresAt: Date;
+  usedAt?: Date;
+}
+
+/**
+ * Invalidates any outstanding reset tokens for a user, then issues one. A person who asks twice
+ * has only their newest link work — an older link left live is a second key to the same door.
+ */
+export async function createPasswordResetToken(input: {
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+}): Promise<void> {
+  const model = getPasswordResetTokenModel(db());
+  await model.updateMany(
+    { userId: input.userId, usedAt: { $exists: false } },
+    { usedAt: new Date() },
+  );
+  await model.create(input);
+}
+
+export async function findPasswordResetTokenByHash(
+  tokenHash: string,
+): Promise<StoredPasswordResetToken | undefined> {
+  const doc = await getPasswordResetTokenModel(db()).findOne({ tokenHash });
+  if (!doc) return undefined;
+  return {
+    id: doc._id.toString(),
+    userId: doc.userId,
+    expiresAt: doc.expiresAt,
+    ...(doc.usedAt ? { usedAt: doc.usedAt } : {}),
+  };
+}
+
+/** Marks the token spent — but only if it has not been spent already (single-use, race-safe). */
+export async function markPasswordResetTokenUsed(id: string): Promise<boolean> {
+  const result = await getPasswordResetTokenModel(db()).updateOne(
+    { _id: id, usedAt: { $exists: false } },
+    { usedAt: new Date() },
+  );
+  return result.modifiedCount === 1;
 }
 
 /* ── MFA ─────────────────────────────────────────────────────────────────── */

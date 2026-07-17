@@ -47,6 +47,23 @@ interface TemplateSeed {
  */
 export const DEFAULT_TEMPLATES: TemplateSeed[] = [
   {
+    key: "password.reset",
+    channel: "email",
+    description: "Sent when a staff member requests a password reset. Carries a single-use link.",
+    subject: "Reset your password",
+    body: [
+      "Hello {{name}},",
+      "",
+      "We received a request to reset the password on your account.",
+      "Open the link below to choose a new one:",
+      "",
+      "  {{resetUrl}}",
+      "",
+      "The link is valid for {{validMinutes}} minutes and can be used once.",
+      "If you did not ask for this, you can ignore this email — your password stays unchanged.",
+    ].join("\n"),
+  },
+  {
     key: "patient.welcome",
     channel: "email",
     description: "Sent when a patient is registered. Carries their UHID.",

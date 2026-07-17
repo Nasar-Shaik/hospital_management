@@ -1021,3 +1021,36 @@ given bed is taken.
 
 - Admit into `ICU / A-12` and `General / A-12` at the same time.
 - **Expect:** both succeed — a bedCode is unique only within its ward, so these are two beds.
+
+---
+
+## 19 · Forgot / reset password (verified end-to-end)
+
+**Why:** every deployment needs a self-service way back into an account, and doing it well is a
+security exercise, not a form. Reset links are single-use, expire in 60 minutes, are stored only as
+a hash, and a successful reset signs every device out. The request step never reveals whether an
+email belongs to an account — otherwise the box becomes a directory of who has a login here.
+
+- **Verified against the running stack (2026-07-17):** forgot-password returns the SAME response
+  for a real and an unknown email, and Mailhog received exactly ONE mail (the real account);
+  the emailed link reset the password; reusing the token → 400; the new password logged in and the
+  old one gave 401. Demo password restored to `123456` afterwards.
+
+### P1 · Request a link
+
+- **Sign-in page → "Forgotten your password?" → enter an email → "Send reset link".** You always see
+  the same "if an account exists, we've sent a link" confirmation.
+- Open **Mailhog** (http://localhost:8025): a real, active account gets a **"Reset your password"**
+  email; an unknown or inactive one gets nothing. The response on screen is identical either way.
+
+### P2 · Reset from the link
+
+- Click the link in the email → **Choose a new password** (enter it twice) → **Reset password**.
+- **Expect:** success, and every session is revoked — sign in again with the new password. The old
+  password no longer works.
+
+### P3 · The link is single-use and time-boxed
+
+- Click the same link again after resetting → **"This reset link is invalid or has expired"** with a
+  **Request a new link** button. Same message for a link older than 60 minutes, or a tampered token.
+- Opening `/reset-password` with no `?token=` shows the "open the link from your email" state.

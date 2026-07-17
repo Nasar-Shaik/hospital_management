@@ -169,6 +169,31 @@ export const changePassword: RequestHandler = async (req, res) => {
   ok(res, { passwordChanged: true, reauthenticationRequired: true });
 };
 
+/**
+ * Forgot password — unauthenticated. The response is DELIBERATELY the same whether or not the email
+ * belongs to an account: anything else lets an anonymous caller learn who has a login here. The
+ * service does the work only for a real, active account; this handler always says the same sentence.
+ */
+export const forgotPassword: RequestHandler = async (req, res) => {
+  const { email } = req.body as { email: string };
+  await authService.requestPasswordReset(email);
+  ok(res, { message: "If that account exists, we've sent a reset link to its email." });
+};
+
+/**
+ * Reset password from an emailed link — unauthenticated. A valid, unspent, unexpired token sets the
+ * new password and logs every device out; anything else is a 400 with a "request a new link" hint.
+ */
+export const resetPassword: RequestHandler = async (req, res) => {
+  const { token, newPassword } = req.body as { token: string; newPassword: string };
+  await authService.resetPassword(token, newPassword);
+
+  // No session is created here — the user signs in fresh with the new password, which is also the
+  // proof the reset worked. Clear any stale refresh cookie so the login screen starts clean.
+  clearRefreshCookie(res);
+  ok(res, { passwordReset: true });
+};
+
 export const setupMfa: RequestHandler = async (req, res) => {
   ok(res, await authService.setupMfa(requireAuth(req).userId));
 };

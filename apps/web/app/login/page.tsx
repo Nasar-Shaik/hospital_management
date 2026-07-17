@@ -278,9 +278,13 @@ function LoginForm() {
           )}
         </Card>
 
-        <p className="mt-6 text-center text-xs text-[var(--color-fg-subtle)]">
-          Forgotten your password? Ask an administrator to reset it.
-        </p>
+        {!mfaToken && (
+          <p className="mt-6 text-center text-sm text-[var(--color-fg-muted)]">
+            <a href="/forgot-password" className="hover:underline">
+              Forgotten your password?
+            </a>
+          </p>
+        )}
       </div>
     </main>
   );
