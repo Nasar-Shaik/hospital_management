@@ -186,6 +186,45 @@ export async function listDoctors(): Promise<DoctorRef[]> {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** A doctor as the PUBLIC website shows them — name, and what they do. Never contact/HR detail. */
+export interface PublicDoctor {
+  id: string;
+  name: string;
+  specialty?: string;
+  designation?: string;
+}
+
+/**
+ * The doctors a hospital has chosen to feature on its public website.
+ *
+ * Opt-in and DOCTOR-only: a person appears only if they carry the DOCTOR role AND their record
+ * is flagged `profile.showOnPublicSite`. So the public page never leaks the staff directory —
+ * publishing is a deliberate act per person, and un-flagging (or leaving) removes them with no
+ * edit to the site itself. `active` only, for the same reason `listDoctors` is: someone who has
+ * left must not still be advertised.
+ */
+export async function listPublicDoctors(): Promise<PublicDoctor[]> {
+  const page = await users.listUsers({ page: 1, limit: 500, status: "active" });
+
+  const doctors = await Promise.all(
+    page.users.map(async (user) => {
+      if (!user.profile?.showOnPublicSite) return undefined;
+      const claims = await rbac.getRoleClaims(user.id);
+      if (!claims.roles.includes("DOCTOR")) return undefined;
+      return {
+        id: user.id,
+        name: user.name,
+        ...(user.profile.specialty ? { specialty: user.profile.specialty } : {}),
+        ...(user.profile.designation ? { designation: user.profile.designation } : {}),
+      } satisfies PublicDoctor;
+    }),
+  );
+
+  return doctors
+    .filter((d): d is PublicDoctor => d !== undefined)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export async function updateStaff(
   userId: string,
   input: { name?: string; phone?: string; employeeId?: string; profile?: StaffProfile },

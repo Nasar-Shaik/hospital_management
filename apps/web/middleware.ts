@@ -14,8 +14,15 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 const REFRESH_COOKIE = "hms_refresh";
 
-/** Reachable without a session. Everything else requires one. */
-const PUBLIC_PATHS = ["/login", "/mfa"];
+/**
+ * Reachable without a session. Everything else requires one.
+ *
+ * `/` is the hospital's PUBLIC website (see app/page.tsx) — the first thing a visitor sees, so it
+ * must never bounce to sign-in. The password-reset pages are public too: they are the way BACK in
+ * for someone who has no session by definition, so guarding them behind one is a locked door with
+ * the key on the inside.
+ */
+const PUBLIC_PATHS = ["/login", "/mfa", "/forgot-password", "/reset-password"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

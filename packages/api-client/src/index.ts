@@ -130,6 +130,8 @@ export interface StaffProfile {
   address?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
+  /** Opt-in: feature this person (doctors only) on the hospital's public website. */
+  showOnPublicSite?: boolean;
 }
 
 export interface StaffMember {
@@ -150,6 +152,97 @@ export interface StaffMember {
 export interface DoctorRef {
   id: string;
   name: string;
+}
+
+/* ── Public site (per-hospital website) ─────────────────────────────────────── */
+
+export interface SiteService {
+  name: string;
+  description?: string;
+  icon?: string;
+}
+
+export interface SiteStat {
+  label: string;
+  value: string;
+}
+
+export interface SiteContact {
+  phone?: string;
+  email?: string;
+  address?: string;
+  emergencyPhone?: string;
+  hoursText?: string;
+}
+
+export interface SiteSocial {
+  website?: string;
+  facebook?: string;
+  instagram?: string;
+  twitter?: string;
+  youtube?: string;
+  linkedin?: string;
+}
+
+export interface SiteAnnouncement {
+  text: string;
+  link?: string;
+}
+
+/** A doctor as the public website shows them — never contact/HR detail. */
+export interface PublicDoctor {
+  id: string;
+  name: string;
+  specialty?: string;
+  designation?: string;
+}
+
+/** What `GET /site` returns — always fully populated (saved content over defaults). */
+export interface PublicSite {
+  hospitalName: string;
+  displayName: string;
+  accentColor: string;
+  tagline: string;
+  about: string;
+  services: SiteService[];
+  stats: SiteStat[];
+  contact: SiteContact;
+  social: SiteSocial;
+  announcement?: SiteAnnouncement;
+  metaDescription: string;
+  doctors: PublicDoctor[];
+  published: boolean;
+}
+
+/** The saved fields, for the admin editor — blanks mean "not set". */
+export interface EditableSite {
+  hospitalName: string;
+  displayName: string;
+  accentColor: string;
+  tagline: string;
+  about: string;
+  services: SiteService[];
+  stats: SiteStat[];
+  contact: SiteContact;
+  social: SiteSocial;
+  announcement?: SiteAnnouncement;
+  metaDescription: string;
+  published: boolean;
+}
+
+/** The admin write DTO. `announcement: null` clears the strip; omitting a field leaves it. */
+export interface UpdateSiteInput {
+  displayName?: string;
+  accentColor?: string;
+  tagline?: string;
+  about?: string;
+  services?: SiteService[];
+  stats?: SiteStat[];
+  contact?: SiteContact;
+  social?: SiteSocial;
+  announcement?: SiteAnnouncement | null;
+  metaDescription?: string;
+  published?: boolean;
 }
 
 export interface CreateStaffResult {
@@ -1155,6 +1248,23 @@ export class ApiClient {
 
   resetStaffPassword(id: string): Promise<{ temporaryPassword?: string }> {
     return this.request("POST", `/api/v1/users/${id}/reset-password`, {});
+  }
+
+  /* ── Public site ──────────────────────────────────────────────────────────── */
+
+  /** PUBLIC — the hospital's website content. No auth; resolved from the host. */
+  getPublicSite(): Promise<PublicSite> {
+    return this.request<PublicSite>("GET", "/api/v1/site");
+  }
+
+  /** Admin — the saved site fields, for the editor. Needs `branding:manage`. */
+  getSiteSettings(): Promise<EditableSite> {
+    return this.request<EditableSite>("GET", "/api/v1/site/settings");
+  }
+
+  /** Admin — save site edits. Needs `branding:manage`. */
+  updateSiteSettings(input: UpdateSiteInput): Promise<EditableSite> {
+    return this.request<EditableSite>("PATCH", "/api/v1/site/settings", input);
   }
 
   /* ── patients (Doc 02 C1) ── */

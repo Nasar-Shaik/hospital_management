@@ -60,6 +60,13 @@ export interface StaffProfile {
   address?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
+  /**
+   * Opt-in: show this person on the hospital's PUBLIC website (the doctors section).
+   * Off by default — a staff record is internal until someone deliberately publishes it, so
+   * nobody's name reaches the open internet by accident. Only name/specialty/designation are
+   * ever exposed (see staff.listPublicDoctors); never contact details or HR fields.
+   */
+  showOnPublicSite?: boolean;
 }
 
 export interface UserDoc {
@@ -105,6 +112,7 @@ const userSchema = new Schema<UserDoc>(
         address: { type: String, trim: true, maxlength: 500 },
         emergencyContactName: { type: String, trim: true, maxlength: 120 },
         emergencyContactPhone: { type: String, trim: true, maxlength: 20 },
+        showOnPublicSite: { type: Boolean },
       },
       // `default: undefined`, never `{}` — an empty object would make the audit hash-chain
       // see a "profile changed" diff on an untouched record (the trap on duplicateOverride).

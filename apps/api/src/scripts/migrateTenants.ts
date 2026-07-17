@@ -26,6 +26,7 @@ import { seedRbac } from "../modules/rbac/index.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
+import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
 
 const logger = createLogger({ service: "migrate-cli" });
@@ -61,6 +62,7 @@ interface Outcome {
   templatesAdded: number;
   tariffAdded: number;
   formularyAdded: number;
+  siteSeeded: boolean;
   error?: string;
 }
 
@@ -95,6 +97,14 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
   // The medicine master mirrors the pharmacy tariff (same codes) so a dispensed drug is the same
   // object the stock ledger decrements. Reference data only — zero stock, seeded on insert.
   const formularyAdded = await seedFormulary(tenant.id, tenant.slug, connection);
+  // The public website. Seeded on insert only (never overwrites an admin's edits), so this both
+  // backfills hospitals provisioned before the feature and leaves edited ones untouched.
+  const siteSeeded = await seedSiteSettings(
+    tenant.id,
+    tenant.slug,
+    connection,
+    tenant.hospitalName,
+  );
 
   return {
     slug: tenant.slug,
@@ -104,6 +114,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     templatesAdded,
     tariffAdded,
     formularyAdded,
+    siteSeeded,
   };
 }
 
@@ -146,6 +157,7 @@ async function main(): Promise<void> {
         templatesAdded: 0,
         tariffAdded: 0,
         formularyAdded: 0,
+        siteSeeded: false,
         error: err instanceof Error ? err.message : String(err),
       });
     }

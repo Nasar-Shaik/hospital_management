@@ -988,4 +988,25 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0022-site-settings",
+    description: "Public website content — one settings document per hospital",
+    up: async (db) => {
+      // A hospital has exactly ONE public site. The unique index on tenantId is what makes the
+      // collection a singleton: the repository queries with no id and upserts, trusting this to
+      // reject a second document rather than silently keeping two competing sites.
+      await db
+        .collection("siteSettings")
+        .createIndex(
+          { tenantId: 1 },
+          { unique: true, name: "one_site_per_tenant", background: true },
+        );
+    },
+    down: async (db) => {
+      await db
+        .collection("siteSettings")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

@@ -1093,3 +1093,49 @@ its own. It is intentionally NOT re-pointed here.
   OLD id, which no longer exists after the first pass, so the second pass moves 0 rows. The
   per-module consumer logs `re-pointed … references to the surviving patient` with a count only when
   it actually moved something.
+
+## 21 · Per-hospital public website (⏳ eyeball)
+
+**Why:** a visitor who types a hospital's address (`sunrise.localhost:3000`) should meet that
+hospital's own professional website — its name, services, doctors, contact — and step into sign-in
+from there, exactly like a real hospital's site. The content lives in the hospital's OWN database
+(`siteSettings`, one document per tenant), is served by a public, no-auth endpoint (`GET /api/v1/site`)
+that resolves the tenant from the host, and is rendered server-side for SEO. A hospital that has saved
+nothing still gets a full page: the service composes saved content over sensible defaults derived from
+the hospital's name. Provisioning (and `pnpm migrate --all`, which backfills existing hospitals) seeds
+a concrete starter site.
+
+**Storage / editing:** content is the tenant's; only a hospital admin with `branding:manage` may edit
+it (Phase B — §22). The doctors shown are pulled LIVE from the staff directory, opt-in per person, so
+nobody's name reaches the open internet unless deliberately published, and a doctor who leaves stops
+appearing with no edit to the site.
+
+### S1 · The site renders at the hospital root
+
+- Open **http://sunrise.localhost:3000/** (signed out). Expect a full landing page: brand name in the
+  header, a hero with the tagline, a stats strip (24/7 · 20+ · 50+), a services grid, an About block,
+  a contact section with opening hours, and a footer. The accent colour is the hospital's (default
+  teal until changed).
+- **Sign in** (header, hero and footer) → `/login`. After signing in, return to `/` — the button now
+  reads **Go to dashboard** instead of Sign in.
+
+### S2 · It is per-hospital and isolated
+
+- **http://district.localhost:3000/** shows the district hospital's own name and content, independent
+  of sunrise (separate tenant databases). An edit to one never touches the other.
+
+### S3 · Fallbacks are graceful
+
+- An **unknown host** (e.g. `nope.localhost:3000`) or the API being down shows a neutral "being set
+  up" page with a Sign-in link — never a stack trace.
+- A hospital whose site is **unpublished** (Phase B toggle) sends visitors straight to `/login`.
+
+### S4 · SEO
+
+- View source / browser tab on `/`: the `<title>` is `‹Hospital› — ‹tagline›` and there is a
+  `<meta name="description">` plus Open Graph tags, all from the hospital's saved content.
+
+### S5 · Doctors appear only when published (needs a flagged doctor — see §22)
+
+- Until a staff doctor is flagged "show on public website", the **Doctors** section is absent. Once
+  one is flagged (Phase B), they appear with name and specialty; the nav gains a **Doctors** link.

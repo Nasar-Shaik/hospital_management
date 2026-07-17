@@ -21,6 +21,7 @@ import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
+import { seedSiteSettings } from "../seed/siteSettings.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
@@ -123,6 +124,16 @@ async function main(): Promise<void> {
   // shelf. Reference data only (zero stock) — a pharmacist receives the actual quantities.
   const formulary = await seedFormulary(result.tenant.id, result.tenant.slug, connection);
   logger.info({ formulary }, "formulary seeded");
+
+  // The hospital's own public website — a presentable landing page from the first minute, so a
+  // brand-new tenant at <slug>.<domain> shows a real page rather than a bare login.
+  const siteSeeded = await seedSiteSettings(
+    result.tenant.id,
+    result.tenant.slug,
+    connection,
+    result.tenant.hospitalName,
+  );
+  logger.info({ siteSeeded }, "site settings seeded");
 
   if (admin.generatedPassword) {
     // Deliberately on stdout, not through the logger: logs are shipped, indexed
