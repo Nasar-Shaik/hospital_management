@@ -905,12 +905,16 @@ refresh token in `sessionStorage`, refreshed from the request body), so tabs are
 - **Edge cases:** a **duplicated** tab inherits the original's account (sessionStorage is copied) — that
   is expected; a brand-new tries the last account until you sign in as someone else.
 
-### M2 · Quick sign-in chips
+### M2 · Recent-accounts chips (fill email only — never sign in)
 
 - **Steps & expected:** after you have signed in as a few accounts on this hospital, the login page shows
-  a **Developer quick sign-in** row — one chip per account (name + role). Click one to sign in as that
-  account (password is the dev default). The **✕** on a chip forgets it. The list is per hospital
-  (`localStorage` is per hostname), so `sunrise` and `demo` keep separate lists.
+  a **Recent accounts (dev)** row — one chip per account (name + role). Clicking a chip **fills the email
+  and focuses the password box**; it does NOT sign you in — you still enter the password. The **✕** on a
+  chip forgets it. The list is per hospital (`localStorage` is per hostname), so `sunrise` and `demo` keep
+  separate lists.
+- **Why not one-click:** a remembered account persists across logout and tab-close, so auto-signing-in
+  from a chip would let the next person at the machine re-enter an account that had signed out. Filling
+  the email (like a browser's saved-username list) keeps the convenience without that hole.
 
 ### M3 · Refresh + security still hold (verified end-to-end)
 
