@@ -1712,6 +1712,18 @@ export class ApiClient {
     return this.request<MyActivity>("GET", `/api/v1/reports/my-activity${rangeQs(range)}`);
   }
 
+  /**
+   * PAID / UNPAID (or `free` / `unbilled`) per order — for the lab worklist. A status flag only, so
+   * it is reachable with `order:read`. `free` is a zero-tariff (government) patient who owes nothing.
+   */
+  orderPaymentStatus(
+    orderIds: string[],
+  ): Promise<Record<string, "paid" | "unpaid" | "unbilled" | "free">> {
+    if (orderIds.length === 0) return Promise.resolve({});
+    const qs = `?orderIds=${encodeURIComponent(orderIds.join(","))}`;
+    return this.request("GET", `/api/v1/billing/order-payments${qs}`);
+  }
+
   reportPharmacyStock(range: ReportRange): Promise<StockRegisterRow[]> {
     return this.request<StockRegisterRow[]>(
       "GET",

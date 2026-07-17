@@ -520,3 +520,42 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
   });
   return charges + invoices;
 }
+
+/**
+ * The charges caused by a set of orders (or other sources), for a payment-status lookup.
+ *
+ * Projected to the three fields the check needs — what it is worth, and which invoice (if any) it
+ * has been rolled into — never the whole charge. Voided charges are excluded: a reversed charge is
+ * not something the patient owes. Tenant-isolated by the query hook.
+ */
+export async function chargesForSources(
+  sourceIds: string[],
+): Promise<{ sourceId: string; amount: number; invoiceId?: string }[]> {
+  if (sourceIds.length === 0) return [];
+  const docs = await getChargeModel(getTenantDb())
+    .find(
+      { sourceId: { $in: sourceIds }, voided: { $ne: true } },
+      { sourceId: 1, amount: 1, invoiceId: 1 },
+    )
+    .lean<{ sourceId?: string; amount: number; invoiceId?: Types.ObjectId }[]>();
+
+  return docs
+    .filter((d): d is { sourceId: string; amount: number; invoiceId?: Types.ObjectId } =>
+      Boolean(d.sourceId),
+    )
+    .map((d) => ({
+      sourceId: d.sourceId,
+      amount: d.amount,
+      ...(d.invoiceId ? { invoiceId: d.invoiceId.toString() } : {}),
+    }));
+}
+
+/** The status of a set of invoices by id — for tracing whether a charge has been paid. */
+export async function invoiceStatusByIds(ids: string[]): Promise<Map<string, string>> {
+  const objectIds = ids.filter((i) => Types.ObjectId.isValid(i)).map((i) => new Types.ObjectId(i));
+  if (objectIds.length === 0) return new Map();
+  const docs = await getInvoiceModel(getTenantDb())
+    .find({ _id: { $in: objectIds } }, { status: 1 })
+    .lean<{ _id: Types.ObjectId; status: string }[]>();
+  return new Map(docs.map((d) => [d._id.toString(), d.status]));
+}

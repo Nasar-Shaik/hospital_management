@@ -331,3 +331,52 @@ export async function recordPayment(
 
   return updated;
 }
+
+/** Whether the work an order represents has been PAID for — shown on the lab/imaging worklist. */
+export type OrderPaymentState = "paid" | "unpaid" | "unbilled" | "free";
+
+/**
+ * The payment state of each order, traced order → charge → invoice.
+ *
+ * `free` means the charge exists but is worth nothing — a zero-tariff government patient, who must
+ * never be shown as "unpaid" and turned away. `unbilled` means no charge was ever raised (nothing to
+ * pay yet). This is a STATUS, not the bill: it carries no amounts, so the worklist can show it to a
+ * technician who holds `order:read` but not `billing:read`.
+ */
+export async function orderPaymentStatus(
+  orderIds: string[],
+): Promise<Record<string, OrderPaymentState>> {
+  const charges = await repo.chargesForSources(orderIds);
+
+  // One order can raise more than one charge; collapse to a single owed amount + any invoice.
+  const bySource = new Map<string, { amount: number; invoiceId?: string }>();
+  for (const c of charges) {
+    const existing = bySource.get(c.sourceId);
+    if (existing) {
+      existing.amount += c.amount;
+      existing.invoiceId = existing.invoiceId ?? c.invoiceId;
+    } else {
+      bySource.set(c.sourceId, {
+        amount: c.amount,
+        ...(c.invoiceId ? { invoiceId: c.invoiceId } : {}),
+      });
+    }
+  }
+
+  const invoiceIds = [
+    ...new Set(
+      [...bySource.values()].map((v) => v.invoiceId).filter((x): x is string => Boolean(x)),
+    ),
+  ];
+  const invoiceStatus = await repo.invoiceStatusByIds(invoiceIds);
+
+  const out: Record<string, OrderPaymentState> = {};
+  for (const id of orderIds) {
+    const c = bySource.get(id);
+    if (!c) out[id] = "unbilled";
+    else if (c.amount === 0) out[id] = "free";
+    else if (!c.invoiceId) out[id] = "unpaid";
+    else out[id] = invoiceStatus.get(c.invoiceId) === "paid" ? "paid" : "unpaid";
+  }
+  return out;
+}

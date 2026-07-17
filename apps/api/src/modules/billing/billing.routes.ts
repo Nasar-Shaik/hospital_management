@@ -40,6 +40,18 @@ const FEATURE = { feature: FEATURE_FLAGS.OPS_OPD } as const;
 export function billingRouter(): Router {
   const router = Router();
 
+  /**
+   * PAID / UNPAID per order, for the worklist. Gated on `order:read` (NOT billing:read): a lab
+   * technician must see whether the test in front of them has been paid for, and they hold that,
+   * not the counter's permission. Returns a status flag only — no amounts, no bill.
+   */
+  router.get(
+    "/billing/order-payments",
+    authenticate(),
+    authorize(PERMISSIONS.ORDER_READ, FEATURE),
+    asyncHandler(controller.orderPayments),
+  );
+
   /** The price list — the counter's view. */
   router.get(
     "/services",

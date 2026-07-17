@@ -43,6 +43,19 @@ function priorityTone(p: OrderPriority): "danger" | "brand" | "neutral" {
   return "neutral";
 }
 
+/**
+ * PAID / UNPAID for the test in front of the technician. Advisory, not a gate: an unpaid emergency
+ * still gets run, and a zero-tariff government patient shows "free", never "unpaid". Absent (no
+ * data) renders nothing rather than a misleading "unpaid".
+ */
+function PaymentBadge({ state }: { state?: "paid" | "unpaid" | "unbilled" | "free" }) {
+  if (!state) return null;
+  if (state === "paid") return <Badge tone="success">paid</Badge>;
+  if (state === "free") return <Badge tone="neutral">no charge</Badge>;
+  if (state === "unbilled") return <Badge tone="neutral">not billed</Badge>;
+  return <Badge tone="danger">unpaid</Badge>;
+}
+
 const DEPARTMENTS: { label: string; category: OrderCategory }[] = [
   { label: "Blood & lab", category: "lab" },
   { label: "X-ray & imaging", category: "radiology" },
@@ -210,6 +223,10 @@ function Worklist() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [entering, setEntering] = useState<string | null>(null);
 
+  const [payment, setPayment] = useState<Record<string, "paid" | "unpaid" | "unbilled" | "free">>(
+    {},
+  );
+
   const [tab, setTab] = useState<WorkTab>("pending");
   const [search, setSearch] = useState("");
   const [datePreset, setDatePreset] = useState<DatePreset>("today");
@@ -247,6 +264,14 @@ function Worklist() {
       setActive(activePage.items);
       setDone(donePage.items);
       setError(null);
+
+      // Payment status is advisory — the worklist still works if billing refuses (a technician who
+      // cannot reach it just sees no badge), so a failure here never blanks the list.
+      const ids = [...activePage.items, ...donePage.items].map((o) => o.id);
+      api
+        .orderPaymentStatus(ids)
+        .then(setPayment)
+        .catch(() => setPayment({}));
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load the worklist.");
     } finally {
@@ -483,6 +508,7 @@ function Worklist() {
                       <Badge tone={o.status === "completed" ? "brand" : "neutral"}>
                         {o.status.replace("_", " ")}
                       </Badge>
+                      <PaymentBadge state={payment[o.id]} />
                     </div>
                     <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
                       {nameOf(o.patientId)}{" "}

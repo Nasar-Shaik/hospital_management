@@ -20,6 +20,20 @@ function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
   res.status(status).json(body);
 }
 
+/**
+ * PAID / UNPAID per order — for the lab & imaging worklist. Takes `?orderIds=a,b,c`. A status flag
+ * only (no amounts), so it is reachable with `order:read`, which a technician holds.
+ */
+export const orderPayments: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.orderIds === "string" ? req.query.orderIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  ok(res, await billing.orderPaymentStatus(ids));
+};
+
 /** The tariff — what this hospital charges for things. Prices included. */
 export const listServices: RequestHandler = async (req, res) => {
   const { category } = req.query as { category?: never };

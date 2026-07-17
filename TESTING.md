@@ -1290,7 +1290,21 @@ gives the common combination a name.) Seeded to every hospital by `pnpm migrate 
   staff profile, otherwise the hospital's general consultation tariff.
 - **Billing** → the charge is there to finalize and **collect** — same person, no hand-off.
 
-_(Pay-before-lab gating and the pharmacy budget/override are the next slice — see the pending
-design decision.)_
+_(The pharmacy wallet/budget with doctor override is the next slice — Phase 4B-ii.)_
 
-_(Payment-status badges and route-to-room land in Phase 4 with the payment-gated flow.)_
+## 27 · Worklist payment badge (paid before the lab runs) (⏳ eyeball)
+
+**Why:** a technician about to run a test should see whether it has been paid for — but the system
+must not hard-block them (an emergency, or a zero-tariff government patient, still gets run). So the
+worklist now shows an advisory **PAID / UNPAID** badge per order, traced order → charge → invoice. It
+is a status flag only (no amounts), so it is reachable with `order:read` — a lab technician sees it
+without the counter's `billing:read`. Verified live (2026-07-18): `GET /billing/order-payments`
+returns `unbilled` for an order with no charge.
+
+### PB1 · The badge
+
+- Open **Worklist** → each order shows, next to its status: **paid** (green), **unpaid** (red),
+  **no charge** (zero-tariff / free), or **not billed** (no charge raised yet). No badge appears if
+  the viewer's account cannot read billing status — the list still works.
+- Register a walk-in, order a lab test, **collect payment** for it (Billing) → the test's badge turns
+  **paid**. Before payment it reads **unpaid**; the technician can still run it (advisory, not a gate).

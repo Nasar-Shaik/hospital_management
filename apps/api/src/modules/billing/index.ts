@@ -30,10 +30,12 @@ export {
   listServices,
   getInvoice,
   collectionsReport,
+  orderPaymentStatus,
   type Charge,
   type Invoice,
   type ServiceItem,
   type PostChargeInput,
+  type OrderPaymentState,
 } from "./billing.service.js";
 export type { CollectionsReport } from "./billing.repository.js";
 
