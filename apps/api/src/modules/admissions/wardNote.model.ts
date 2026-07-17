@@ -28,8 +28,13 @@ import { auditPlugin } from "../../core/db/plugins/auditPlugin.js";
  * back. It is the ONLY thing the next doctor to see this patient is likely to read, and
  * for a patient who goes back to a village clinic it is the entire medical record of the
  * stay.
+ * `outcome_note` — the record of a NON-routine ending: LAMA, absconded, or a death. A
+ * routine discharge gets a summary; these get the account of what happened instead — the
+ * risks explained before a patient left against advice, when an absence was discovered, or
+ * the circumstances of a death. Statutorily it is the note that matters most, so the
+ * outcome path writes it and cannot skip it.
  */
-export const WARD_NOTE_TYPES = ["progress", "discharge_summary"] as const;
+export const WARD_NOTE_TYPES = ["progress", "discharge_summary", "outcome_note"] as const;
 export type WardNoteType = (typeof WARD_NOTE_TYPES)[number];
 
 export interface WardNoteDoc {

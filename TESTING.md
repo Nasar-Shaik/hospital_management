@@ -937,3 +937,39 @@ against the running API:
 
 To re-run by hand: sign in as two roles in two tabs, reload each, and confirm each keeps its own role;
 then sign out of one and confirm the other is unaffected.
+
+---
+
+## 17 · IPD terminal outcomes — telling a death from a homecoming
+
+**Why:** every inpatient stay used to end as a plain "discharge", so death, a patient leaving against
+medical advice, and an absconder all read alike in the record — and every census, ALOS and mortality
+figure counted them alike. The stay now closes carrying WHICH of four endings it was
+(`discharged | lama | absconded | deceased`), and the disposition rides on `patient.discharged` so those
+figures can finally tell them apart. Bed-days bill the same for all four — the bed was occupied until the
+ending happened, whichever it was.
+
+- **Preconditions:** an IPD edition (`module.ops.ipd`), a patient admitted to a bed (do the admission flow
+  in §ADMISSION). You need `admission:discharge`.
+
+### T1 · Routine discharge is unchanged
+
+- `POST /api/v1/encounters/:id/discharge` with a summary body still works exactly as before and now records
+  disposition `discharged`. Confirm the encounter is `closed`, `dischargedAt` is set, `disposition:
+"discharged"`, and the discharge summary exists.
+
+### T2 · Non-routine ending — LAMA / absconded / deceased
+
+- `POST /api/v1/encounters/:id/outcome` with `{ "outcome": "deceased", "text": "…circumstances / cause…" }`
+  (also try `"lama"` and `"absconded"`).
+- **Expect:** 201 with the outcome note; the encounter is now `closed` with `disposition` set to what you
+  sent and `dischargedAt` recorded; a ward note of type `outcome_note` holds the account (`GET
+/encounters/:id/notes?type=outcome_note`).
+- **Record is honest:** `discharged` is NOT accepted here (400) — a routine discharge must go through
+  `/discharge` with its summary; and `/outcome` refuses a stay that is not an open IP admission
+  (HMS-STATE-001), the same guard discharge uses.
+
+### T3 · The bed still bills
+
+- After any T1/T2 ending on a bedded patient, the bed-day charges post from `patient.discharged` exactly as
+  before — a death or a LAMA is billed for the nights the bed was occupied, not waived.

@@ -26,6 +26,7 @@ import * as controller from "./admission.controller.js";
 import {
   addNoteSchema,
   dischargeSchema,
+  outcomeSchema,
   idParamSchema,
   listNotesQuerySchema,
 } from "./admission.schema.js";
@@ -61,6 +62,20 @@ export function admissionRouter(): Router {
     validate(idParamSchema, "params"),
     validate(dischargeSchema),
     asyncHandler(controller.discharge),
+  );
+
+  /**
+   * Ends the stay WITHOUT a routine discharge — LAMA, absconded, or a death. Same authority
+   * as discharge (`admission:discharge`): whoever may end a stay records how it ended. The
+   * outcome note is written and the encounter closes carrying its true disposition.
+   */
+  router.post(
+    "/encounters/:id/outcome",
+    authenticate(),
+    authorize(PERMISSIONS.ADMISSION_DISCHARGE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(outcomeSchema),
+    asyncHandler(controller.recordOutcome),
   );
 
   return router;

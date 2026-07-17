@@ -28,12 +28,25 @@ export const dischargeSchema = z
   })
   .strict();
 
+/**
+ * A non-routine ending: LAMA, absconded, or a death. `discharged` is deliberately NOT an
+ * option here — a routine discharge goes through `POST .../discharge` with its summary.
+ */
+export const outcomeSchema = z
+  .object({
+    outcome: z.enum(["lama", "absconded", "deceased"]),
+    /** The account of what happened. REQUIRED — this note IS the record of the ending. */
+    text: z.string().min(1).max(20_000),
+  })
+  .strict();
+
 export const listNotesQuerySchema = z
-  .object({ type: z.enum(["progress", "discharge_summary"]).optional() })
+  .object({ type: z.enum(["progress", "discharge_summary", "outcome_note"]).optional() })
   .strict();
 
 export const idParamSchema = z.object({ id: objectId }).strict();
 
 export type AddNoteBody = z.infer<typeof addNoteSchema>;
 export type DischargeBody = z.infer<typeof dischargeSchema>;
+export type OutcomeBody = z.infer<typeof outcomeSchema>;
 export type ListNotesQuery = z.infer<typeof listNotesQuerySchema>;

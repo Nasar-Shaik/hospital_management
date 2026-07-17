@@ -15,11 +15,14 @@ export { admissionRouter } from "./admission.routes.js";
 export {
   addNote,
   dischargeWithSummary,
+  recordOutcome,
   notesFor,
   dischargeSummaryFor,
   type WardNote,
   type AddNoteInput,
   type DischargeInput,
+  type OutcomeInput,
+  type TerminalOutcome,
 } from "./admission.service.js";
 
 export { WARD_NOTE_TYPES, type WardNoteType } from "./wardNote.model.js";

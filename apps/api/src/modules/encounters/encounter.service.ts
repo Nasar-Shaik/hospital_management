@@ -29,6 +29,7 @@ import {
   canTransition,
   isOpen,
   isQueued,
+  type DischargeDisposition,
   type EncounterClass,
   type EncounterOrigin,
   type EncounterStatus,
@@ -515,8 +516,19 @@ export async function transferDoctor(
  * The bed-day charges land from that event, for every night not yet billed. They are
  * posted from `dischargedAt` as recorded HERE, not from the consumer's clock: a
  * redelivery an hour later must bill the same stay, not a longer one.
+ *
+ * ── EVERY WAY A STAY CAN END GOES THROUGH THIS ONE DOOR ─────────────────────
+ * `disposition` says which one it was — a routine discharge, LAMA, absconded, or a death.
+ * All four close the encounter and occupied the bed until they happened, so all four bill
+ * their bed-days; they differ in the RECORD, not the mechanics. The disposition rides on
+ * the event so the census, ALOS and mortality figures can tell a death from a homecoming
+ * instead of counting them alike.
  */
-export async function dischargePatient(id: string, reason?: string): Promise<repo.Encounter> {
+export async function dischargePatient(
+  id: string,
+  disposition: DischargeDisposition,
+  reason?: string,
+): Promise<repo.Encounter> {
   const ctx = getContext();
 
   return withTransaction(async (session) => {
@@ -548,10 +560,12 @@ export async function dischargePatient(id: string, reason?: string): Promise<rep
         to: "closed",
         at: dischargedAt,
         ...(ctx.userId ? { by: ctx.userId } : {}),
-        ...(reason ? { reason } : {}),
+        // The disposition is the reason the stay ended; keep an explicit reason too when one
+        // was given (e.g. the cause of death), but never lose which of the four it was.
+        reason: reason ?? disposition,
       },
       session,
-      { dischargedAt },
+      { dischargedAt, disposition },
     );
     if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
 
@@ -562,6 +576,7 @@ export async function dischargePatient(id: string, reason?: string): Promise<rep
           encounterId: updated.id,
           episodeId: updated.episodeId,
           patientId: updated.patientId,
+          disposition,
           admittedAt: (updated.admittedAt ?? updated.arrivedAt).toISOString(),
           dischargedAt: dischargedAt.toISOString(),
           ...(updated.bed

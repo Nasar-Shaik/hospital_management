@@ -65,6 +65,23 @@ export const ENCOUNTER_STATUSES = [
 export type EncounterStatus = (typeof ENCOUNTER_STATUSES)[number];
 
 /**
+ * How an inpatient stay ENDED.
+ *
+ * The `status` becomes `closed` for all four, but they are NOT the same event, and a
+ * record that files death, a patient leaving against medical advice, and an absconder
+ * all under "discharged" is a false record. This distinction is what every mortality
+ * figure, LAMA rate, and census reconciliation is read from, and it is a statutory
+ * requirement for a death — so it is a first-class field, not a note anyone might skip.
+ *
+ * - `discharged`  routine — the patient goes home with a summary in hand.
+ * - `lama`        Left Against Medical Advice — the patient chose to leave, risks explained.
+ * - `absconded`   left without notice and without being seen to go; discovered missing.
+ * - `deceased`    the patient died during the stay.
+ */
+export const DISCHARGE_DISPOSITIONS = ["discharged", "lama", "absconded", "deceased"] as const;
+export type DischargeDisposition = (typeof DISCHARGE_DISPOSITIONS)[number];
+
+/**
  * STATE_MACHINE_CATALOG §14, verbatim. The ONE graph that serves every
  * organization type — private, clinic, government, diagnostic centre.
  *
@@ -218,6 +235,11 @@ export interface EncounterDoc {
   admittedAt?: Date;
   /** Set when the patient actually leaves. The other end of that clock. */
   dischargedAt?: Date;
+  /**
+   * How the stay ended — written together with `dischargedAt` when the IP encounter closes.
+   * Absent while the stay is open, and on OP/ER encounters (which are closed, not discharged).
+   */
+  disposition?: DischargeDisposition;
   /** The OP encounter this admission came out of, so the story can be walked backwards. */
   admittedFrom?: Types.ObjectId;
 
@@ -266,6 +288,7 @@ const encounterSchema = new Schema<EncounterDoc>(
 
     admittedAt: { type: Date },
     dischargedAt: { type: Date },
+    disposition: { type: String, enum: DISCHARGE_DISPOSITIONS },
     admittedFrom: { type: Schema.Types.ObjectId },
 
     createdBy: { type: String },

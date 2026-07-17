@@ -43,9 +43,11 @@ export {
   ENCOUNTER_STATUSES,
   ENCOUNTER_ORIGINS,
   ENCOUNTER_CLASSES,
+  DISCHARGE_DISPOSITIONS,
   canTransition,
   isOpen,
   type EncounterStatus,
   type EncounterOrigin,
   type EncounterClass,
+  type DischargeDisposition,
 } from "./encounter.model.js";

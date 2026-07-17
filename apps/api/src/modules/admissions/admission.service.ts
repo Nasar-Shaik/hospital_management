@@ -13,7 +13,11 @@
  * tax paid in bugs. ADR-0013 was written to kill exactly that shape.
  */
 import { AppError } from "../../core/errors/appError.js";
-import { getEncounter, dischargePatient as closeTheStay } from "../encounters/index.js";
+import {
+  getEncounter,
+  dischargePatient as closeTheStay,
+  type DischargeDisposition,
+} from "../encounters/index.js";
 import * as repo from "./wardNote.repository.js";
 
 export type { WardNote } from "./wardNote.repository.js";
@@ -95,11 +99,64 @@ export async function dischargeWithSummary(
     ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
   });
 
-  // Now the stay ends: the encounter closes and `patient.discharged` fires, which is what
-  // posts every bed-day not yet billed.
+  // Now the stay ends: the encounter closes with disposition `discharged` and
+  // `patient.discharged` fires, which is what posts every bed-day not yet billed.
   await closeTheStay(encounter.id, "discharged");
 
   return { summary, encounterId: encounter.id };
+}
+
+/** LAMA, absconded, or a death — the ways a stay ends that are NOT a routine discharge. */
+export type TerminalOutcome = Exclude<DischargeDisposition, "discharged">;
+
+export interface OutcomeInput {
+  encounterId: string;
+  outcome: TerminalOutcome;
+  /**
+   * The account of what happened — the risks explained before the patient left against
+   * advice, when an absence was discovered, or the circumstances of a death. Required:
+   * this note is the record, and a non-routine ending with no account of it is the very
+   * gap this feature exists to close.
+   */
+  text: string;
+}
+
+/**
+ * The stay ends without a routine discharge — the patient left against advice, absconded,
+ * or died.
+ *
+ * ── WHY THIS IS A SEPARATE DOOR FROM `dischargeWithSummary` ──────────────────
+ * A routine discharge produces a summary the patient carries home. None of these three do:
+ * there is no patient to hand it to, or there should never have been a homegoing document
+ * at all. Filing them as an ordinary discharge — which is what happened before this — is a
+ * false record, and for a death it is a false statutory record. So they get their own note
+ * (`outcome_note`) and their own disposition, and the encounter closes carrying WHICH of
+ * the four endings it was, not a uniform "discharged".
+ *
+ * The note is written BEFORE the stay closes, for the same reason the summary is: if the
+ * encounter closed first, `requireOpenAdmission` would refuse the note and the ending would
+ * have no account at all. The worst case this way is a note on a stay still marked open,
+ * which the ward can see and close again — recoverable, unlike a silent, permanent gap.
+ */
+export async function recordOutcome(
+  input: OutcomeInput,
+): Promise<{ note: repo.WardNote; encounterId: string }> {
+  const encounter = await requireOpenAdmission(input.encounterId, "discharge");
+
+  const note = await repo.create({
+    encounterId: encounter.id,
+    patientId: encounter.patientId,
+    episodeId: encounter.episodeId,
+    type: "outcome_note",
+    text: input.text,
+    ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+  });
+
+  // The stay closes carrying its true disposition. `patient.discharged` still fires — the
+  // bed was occupied until this moment, so its bed-days bill exactly as a discharge's do.
+  await closeTheStay(encounter.id, input.outcome);
+
+  return { note, encounterId: encounter.id };
 }
 
 /**

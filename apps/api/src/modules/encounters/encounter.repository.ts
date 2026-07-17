@@ -11,6 +11,7 @@ import {
   getEncounterModel,
   getEpisodeModel,
   isOpen,
+  type DischargeDisposition,
   type EncounterClass,
   type EncounterDoc,
   type EncounterHistoryEntry,
@@ -40,6 +41,7 @@ export interface Encounter {
   bed?: { ward: string; bedCode: string; tariffCode: string };
   admittedAt?: Date;
   dischargedAt?: Date;
+  disposition?: DischargeDisposition;
   admittedFrom?: string;
   history: EncounterHistoryEntry[];
   createdAt: Date;
@@ -66,6 +68,7 @@ function toEncounter(doc: EncounterDoc): Encounter {
     ...(doc.bed ? { bed: doc.bed } : {}),
     ...(doc.admittedAt ? { admittedAt: doc.admittedAt } : {}),
     ...(doc.dischargedAt ? { dischargedAt: doc.dischargedAt } : {}),
+    ...(doc.disposition ? { disposition: doc.disposition } : {}),
     ...(doc.admittedFrom ? { admittedFrom: doc.admittedFrom.toString() } : {}),
   };
 }
