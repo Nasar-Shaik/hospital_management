@@ -1497,3 +1497,39 @@ added to the two dev tenants.
   registered **first**. In **My patients**, the **Express** patient sorts **above** the Normal one and
   carries an **EXPRESS** pill, even though they arrived later. Two express patients keep their own token
   order between themselves.
+
+## 33 · Take payment at reception — finalize ≠ pay (⏳ eyeball UI)
+
+**Why (the bug you hit):** reception could **Finalize** a bill but there was **no way to record
+payment**. Finalizing only freezes the lines into a numbered document; the money is a separate act.
+So a test showed **unpaid** on the worklist and the lab held it — the bill looked "done" but nothing
+had been collected. The reception bill panel is now a proper till: **Pending** (what's owed, with the
+collect box) and **Cleared** (what's been paid).
+
+**Verified live (2026-07-18, sunrise), reproducing the exact case:** order a Blood Glucose test →
+payment status **unpaid**; **finalize** the bill → **still unpaid**; **record payment** of the
+outstanding → **paid**. Only then does the lab worklist offer Accept/Start (§31 C3).
+
+### P1 · Collect payment (Cashier / Front Office / Admin — needs `payment:collect`)
+
+- **Reception** → open a visit's **Bill**. It lists the charges and a **Total**.
+- If it is a **Draft**, press **Finalize bill** (needs `billing:finalize`) — this issues the numbered
+  document. Payment cannot be taken on a draft (by design).
+- A **Pending** panel now shows **₹X due** with an **Amount** box **prefilled to the full
+  outstanding** (editable for a part payment) and a **Method** (cash / card / UPI / net banking) →
+  **Record payment**.
+  - Pay the full amount → the invoice flips to **paid** and moves to **Cleared**; a **part** payment
+    leaves it **finalized** with the remainder still due.
+- **Cleared** lists each payment (method, reference, date) and the total paid, with the invoice
+  number and status.
+
+### P2 · This is what unblocks the lab
+
+- With a lab test ordered but the bill only **finalized**, the **Worklist** still shows **unpaid** and
+  holds it (§31 C3). Come back to reception, **Record payment** → the worklist badge turns **paid** and
+  Accept / Start appear. That is the end-to-end reception → pay → lab flow.
+
+> Note on collecting the **consultation at registration and the tests separately**: this build settles
+> them on **one visit invoice** (finalize once, then collect — full or part payments allowed). Splitting
+> a visit into a consultation bill and a separate tests bill is per-batch invoicing — a deliberate
+> billing change (the invoice is a frozen document by design) — and is a focused follow-up if wanted.

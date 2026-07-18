@@ -30,7 +30,7 @@ import {
   type DoctorRef,
   type Patient,
 } from "@medicore/api-client";
-import { rupees } from "../../lib/money";
+import { rupees, toPaise } from "../../lib/money";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
@@ -63,12 +63,29 @@ function nextActions(status: EncounterStatus): { label: string; action: string }
   }
 }
 
-/** The running bill for one visit. Reception is asked "what do I owe?" all day. */
+const PAYMENT_METHODS = ["cash", "card", "upi", "netbanking"] as const;
+
+/**
+ * The bill AND the till for one visit — what the desk owes, and taking the money for it.
+ *
+ * ── FINALIZE ≠ PAY ──────────────────────────────────────────────────────────
+ * Finalizing FREEZES the lines into a numbered document; it does NOT take a rupee. Payment is
+ * a second, separate act (and a separate permission — money crossing the counter). Conflating
+ * the two is the trap the old panel fell into: a bill could be finalized and look "done" while
+ * nothing had actually been collected, which is exactly why a paid-before-lab test stayed held.
+ *
+ * So this panel is two plain sections — PENDING (what is still owed) and CLEARED (what has been
+ * paid) — with the collect box in Pending, its amount PREFILLED to the outstanding balance and
+ * editable for a part payment.
+ */
 function BillPanel({ encounterId }: { encounterId: string }) {
   const { api, can } = useAuth();
   const [bill, setBill] = useState<Bill | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState<(typeof PAYMENT_METHODS)[number]>("cash");
 
   const load = useCallback(() => {
     void api
@@ -81,8 +98,21 @@ function BillPanel({ encounterId }: { encounterId: string }) {
 
   useEffect(load, [load]);
 
+  const invoice = bill?.invoice;
+  const paid = invoice?.paid ?? 0;
+  const frozen = invoice && invoice.status !== "draft";
+  // Outstanding is only meaningful once the bill is a document — a draft is not payable.
+  const outstanding = frozen ? Math.max(0, invoice.total - paid) : 0;
+
+  // Prefill the collect box with the whole outstanding — the common case is "pay it all". The
+  // clerk can edit it down for a part payment.
+  useEffect(() => {
+    if (outstanding > 0) setAmount((outstanding / 100).toFixed(2));
+  }, [outstanding]);
+
   async function finalize() {
     setBusy(true);
+    setError(null);
     try {
       await api.finalizeBill(encounterId);
       load();
@@ -93,16 +123,40 @@ function BillPanel({ encounterId }: { encounterId: string }) {
     }
   }
 
-  if (error) return <p className="text-xs text-[var(--color-danger)]">{error}</p>;
+  async function collect() {
+    if (!invoice) return;
+    const paise = toPaise(amount);
+    if (paise <= 0) {
+      setError("Enter an amount greater than zero.");
+      return;
+    }
+    if (paise > outstanding) {
+      setError(`That is more than the ${rupees(outstanding)} outstanding.`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordPayment(invoice.id, { amount: paise, method });
+      load();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not record the payment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !bill) return <p className="text-xs text-[var(--color-danger)]">{error}</p>;
   if (!bill) return <p className="text-xs text-[var(--color-fg-subtle)]">Loading bill…</p>;
   if (bill.lines.length === 0) {
     return <p className="text-xs text-[var(--color-fg-subtle)]">Nothing charged yet.</p>;
   }
 
-  const frozen = bill.invoice && bill.invoice.status !== "draft";
-
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+    <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+      {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+
+      {/* The charges */}
       <table className="w-full text-left text-xs">
         <tbody className="divide-y divide-[var(--color-border)]">
           {bill.lines.map((l, i) => (
@@ -113,12 +167,6 @@ function BillPanel({ encounterId }: { encounterId: string }) {
               </td>
               <td className="py-1.5 text-right font-medium text-[var(--color-fg)]">
                 {rupees(l.amount)}
-                {/*
-                 * A government hospital's line reads "₹0.00" while the care was worth
-                 * something. Showing the list price alongside is what lets the state
-                 * cost the encounter — and it is the clearest possible proof to a
-                 * customer that free-to-the-patient is a TARIFF, not a missing feature.
-                 */}
                 {l.amount === 0 && l.listPrice > 0 && (
                   <span className="ml-1 font-normal text-[var(--color-fg-subtle)] line-through">
                     {rupees(l.listPrice)}
@@ -139,25 +187,99 @@ function BillPanel({ encounterId }: { encounterId: string }) {
         </tfoot>
       </table>
 
-      <div className="mt-3 flex items-center justify-between gap-2">
-        {bill.invoice?.number ? (
-          <Badge tone={bill.invoice.status === "paid" ? "success" : "brand"}>
-            {bill.invoice.number} · {bill.invoice.status}
-          </Badge>
-        ) : (
-          <span className="text-xs text-[var(--color-fg-subtle)]">Draft — not yet issued</span>
-        )}
-
-        {/* Finalizing FREEZES the lines. It is a separate permission because it is the
-            moment the bill becomes a document somebody is handed. */}
-        {!frozen && (
+      {/* Draft — must be finalized before money can be taken (finalize freezes the lines). */}
+      {!frozen && (
+        <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
+          <span className="text-xs text-[var(--color-fg-subtle)]">
+            Draft — issue the bill to take payment.
+          </span>
           <PermissionGate can={can} permission="billing:finalize">
             <Button variant="secondary" disabled={busy} onClick={() => void finalize()}>
               Finalize bill
             </Button>
           </PermissionGate>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* PENDING — what is still owed, and the box to collect it. */}
+      {frozen && outstanding > 0 && (
+        <div className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-bg)] p-2.5">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-semibold tracking-wide text-[var(--color-warning)] uppercase">
+              Pending
+            </span>
+            <span className="text-sm font-semibold text-[var(--color-fg)]">
+              {rupees(outstanding)} due
+            </span>
+          </div>
+          <PermissionGate can={can} permission="payment:collect">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="flex flex-col gap-0.5 text-[10px] text-[var(--color-fg-muted)]">
+                Amount (₹)
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className="w-28 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                />
+              </label>
+              <label className="flex flex-col gap-0.5 text-[10px] text-[var(--color-fg-muted)]">
+                Method
+                <select
+                  value={method}
+                  onChange={(e) => setMethod(e.target.value as (typeof PAYMENT_METHODS)[number])}
+                  className="rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                >
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m === "netbanking" ? "Net banking" : m.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button disabled={busy} onClick={() => void collect()}>
+                {busy ? "Saving…" : "Record payment"}
+              </Button>
+            </div>
+          </PermissionGate>
+        </div>
+      )}
+
+      {/* CLEARED — what has been paid, and how. */}
+      {frozen && (
+        <div className="border-t border-[var(--color-border)] pt-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+              Cleared
+            </span>
+            <Badge tone={invoice.status === "paid" ? "success" : "brand"}>
+              {invoice.number ?? "issued"} · {invoice.status}
+            </Badge>
+          </div>
+          {paid > 0 ? (
+            <ul className="space-y-0.5 text-xs text-[var(--color-fg-muted)]">
+              {invoice.payments.map((p, i) => (
+                <li key={i} className="flex justify-between">
+                  <span>
+                    {p.method}
+                    {p.reference ? ` · ${p.reference}` : ""} ·{" "}
+                    {new Date(p.at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                  </span>
+                  <span className="font-medium text-[var(--color-fg)]">{rupees(p.amount)}</span>
+                </li>
+              ))}
+              <li className="flex justify-between border-t border-[var(--color-border)] pt-1 font-semibold text-[var(--color-fg)]">
+                <span>Paid</span>
+                <span>{rupees(paid)}</span>
+              </li>
+            </ul>
+          ) : (
+            <p className="text-xs text-[var(--color-fg-subtle)]">Nothing collected yet.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
