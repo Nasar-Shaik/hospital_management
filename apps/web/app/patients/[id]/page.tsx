@@ -446,7 +446,7 @@ function Visits({ encounters, who }: { encounters: Encounter[]; who: (id?: strin
     (a, b) => new Date(b.arrivedAt).getTime() - new Date(a.arrivedAt).getTime(),
   );
   return (
-    <Rows head={["Date", "Type", "Doctor", "Status"]}>
+    <Rows head={["Date", "Type", "Doctor", "Status", ""]}>
       {sorted.map((e) => (
         <tr key={e.id}>
           <Td>{fmtDate(e.arrivedAt)}</Td>
@@ -457,6 +457,16 @@ function Visits({ encounters, who }: { encounters: Encounter[]; who: (id?: strin
           <Td>
             {ENCOUNTER_LABEL[e.status] ?? e.status}
             {e.disposition ? ` · ${e.disposition}` : ""}
+          </Td>
+          <Td>
+            <a
+              href={`/opd-slip/${e.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[var(--color-brand-600)] hover:underline"
+            >
+              OPD slip ↗
+            </a>
           </Td>
         </tr>
       ))}

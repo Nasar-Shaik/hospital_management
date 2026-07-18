@@ -62,6 +62,19 @@ export const cancelEncounterSchema = z.object({ reason: z.string().min(3).max(50
 export const closeEncounterSchema = z.object({ reason: z.string().max(500).optional() }).strict();
 
 /**
+ * The OP visit summary for the OPD slip. Both optional and both may be an EMPTY string — that is a
+ * deliberate clear (the doctor wiped the box), which the service turns into `$unset`.
+ */
+export const visitSummarySchema = z
+  .object({
+    diagnosis: z.string().max(2000).optional(),
+    advice: z.string().max(2000).optional(),
+  })
+  .strict();
+
+export type VisitSummaryBody = z.infer<typeof visitSummarySchema>;
+
+/**
  * Admitting a patient.
  *
  * `tariffCode` is what the bed-day is billed at, and it is chosen by the person admitting

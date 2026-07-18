@@ -35,6 +35,7 @@ import {
   idParamSchema,
   listEncountersQuerySchema,
   startEncounterSchema,
+  visitSummarySchema,
 } from "./encounter.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_OPD } as const;
@@ -181,6 +182,19 @@ export function encounterRouter(): Router {
     validate(idParamSchema, "params"),
     validate(closeEncounterSchema),
     asyncHandler(controller.closeEncounter),
+  );
+
+  /**
+   * The doctor's OP visit summary (diagnosis / advice) for the OPD slip. `emr:write` — it is
+   * clinical documentation, the same authority as a ward note, not queue management.
+   */
+  router.post(
+    "/encounters/:id/summary",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_WRITE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(visitSummarySchema),
+    asyncHandler(controller.recordVisitSummary),
   );
 
   router.post(

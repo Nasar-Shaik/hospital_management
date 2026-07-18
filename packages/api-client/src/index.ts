@@ -509,6 +509,9 @@ export interface Encounter {
   /** A paid fast-track OP visit — sorts above normal patients in the doctor's queue. */
   express?: boolean;
   reason?: string;
+  /** The doctor's OP visit summary, for the OPD slip. */
+  diagnosis?: string;
+  advice?: string;
   branchId?: string;
   arrivedAt: string;
   closedAt?: string;
@@ -1649,6 +1652,17 @@ export class ApiClient {
 
   closeEncounter(id: string, reason?: string): Promise<Encounter> {
     return this.request<Encounter>("POST", `/api/v1/encounters/${id}/close`, { reason });
+  }
+
+  /**
+   * Records the doctor's OP visit summary (diagnosis / advice) for the OPD slip. An empty string
+   * clears the field. Needs `emr:write`.
+   */
+  recordVisitSummary(
+    id: string,
+    input: { diagnosis?: string; advice?: string },
+  ): Promise<Encounter> {
+    return this.request<Encounter>("POST", `/api/v1/encounters/${id}/summary`, input);
   }
 
   cancelEncounter(id: string, reason: string): Promise<Encounter> {

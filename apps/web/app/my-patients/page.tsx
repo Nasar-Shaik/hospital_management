@@ -1469,6 +1469,15 @@ function MyPatients() {
                           Close visit
                         </Button>
                       )}
+                    {/* The take-home OPD slip — opens as a clean printable sheet in a new tab. */}
+                    <a
+                      href={`/opd-slip/${selected.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm font-medium text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)]"
+                    >
+                      OPD slip ↗
+                    </a>
                   </div>
                 </div>
 
@@ -1538,6 +1547,21 @@ function MyPatients() {
                         onSigned={() => {
                           setNotice("Prescription signed — it is on the pharmacy counter now.");
                           loadPrescriptions(selected.id);
+                        }}
+                      />
+                    </CollapsibleCard>
+                  </PermissionGate>
+
+                  <PermissionGate can={can} permission="emr:write">
+                    <CollapsibleCard title="Visit summary" defaultOpen={false}>
+                      <p className="mb-3 text-xs text-[var(--color-fg-muted)]">
+                        The diagnosis and advice printed on the patient&apos;s OPD slip.
+                      </p>
+                      <VisitSummary
+                        encounter={selected}
+                        onSaved={() => {
+                          setNotice("Visit summary saved — it prints on the OPD slip.");
+                          void load();
                         }}
                       />
                     </CollapsibleCard>
@@ -1631,6 +1655,65 @@ function CollapsibleCard({
       </button>
       {open && <div className="px-5 pb-5">{children}</div>}
     </Card>
+  );
+}
+
+/**
+ * The doctor's OP visit summary — diagnosis and advice, for the OPD slip the patient takes home.
+ * Seeds from what is already recorded and re-seeds when the doctor switches to another patient.
+ */
+function VisitSummary({ encounter, onSaved }: { encounter: Encounter; onSaved: () => void }) {
+  const { api } = useAuth();
+  const [diagnosis, setDiagnosis] = useState(encounter.diagnosis ?? "");
+  const [advice, setAdvice] = useState(encounter.advice ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDiagnosis(encounter.diagnosis ?? "");
+    setAdvice(encounter.advice ?? "");
+  }, [encounter.id, encounter.diagnosis, encounter.advice]);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordVisitSummary(encounter.id, { diagnosis, advice });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not save the summary.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Diagnosis
+        <textarea
+          value={diagnosis}
+          onChange={(e) => setDiagnosis(e.target.value)}
+          rows={2}
+          placeholder="Clinical impression…"
+          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+        />
+      </label>
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Advice
+        <textarea
+          value={advice}
+          onChange={(e) => setAdvice(e.target.value)}
+          rows={2}
+          placeholder="Rest, diet, follow-up…"
+          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+        />
+      </label>
+      <Button disabled={busy} onClick={() => void save()}>
+        {busy ? "Saving…" : "Save summary"}
+      </Button>
+    </div>
   );
 }
 

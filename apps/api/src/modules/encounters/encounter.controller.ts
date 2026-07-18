@@ -12,6 +12,7 @@ import type {
   ListEncountersQuery,
   StartEncounterBody,
   TransferBody,
+  VisitSummaryBody,
 } from "./encounter.schema.js";
 
 function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
@@ -103,6 +104,13 @@ export const closeEncounter: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   const { reason } = req.body as { reason?: string };
   ok(res, await encounters.closeEncounter(id, reason));
+};
+
+/** The doctor records the OP visit summary (diagnosis / advice) for the OPD slip. */
+export const recordVisitSummary: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as VisitSummaryBody;
+  ok(res, await encounters.recordVisitSummary(id, body));
 };
 
 export const cancelEncounter: RequestHandler = async (req, res) => {

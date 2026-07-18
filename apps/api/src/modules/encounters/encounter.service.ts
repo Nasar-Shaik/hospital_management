@@ -667,6 +667,40 @@ export const markLeftWithoutBeingSeen = (id: string): Promise<repo.Encounter> =>
 
 export const getEncounter = (id: string): Promise<repo.Encounter | undefined> => repo.findById(id);
 
+export interface VisitSummaryInput {
+  diagnosis?: string;
+  advice?: string;
+}
+
+/**
+ * Records the doctor's OP visit summary (diagnosis / advice) for the OPD slip.
+ *
+ * Only the fields the caller SENT are touched — omitting `advice` leaves it as it was. An empty
+ * string is a deliberate CLEAR (the doctor wiped the box), so it `$unset`s the field rather than
+ * storing "" and printing a blank labelled line on the slip.
+ */
+export async function recordVisitSummary(
+  id: string,
+  input: VisitSummaryInput,
+): Promise<repo.Encounter> {
+  const current = await repo.findById(id);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+  const set: { diagnosis?: string; advice?: string } = {};
+  const unset: { diagnosis?: 1; advice?: 1 } = {};
+  for (const key of ["diagnosis", "advice"] as const) {
+    const value = input[key];
+    if (value === undefined) continue;
+    const trimmed = value.trim();
+    if (trimmed) set[key] = trimmed;
+    else unset[key] = 1;
+  }
+
+  const updated = await repo.setVisitSummary(id, set, unset);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+  return updated;
+}
+
 export const listEncounters = repo.list;
 export const getOpenEncounterFor = repo.findOpenForPatient;
 

@@ -1533,3 +1533,37 @@ outstanding → **paid**. Only then does the lab worklist offer Accept/Start (§
 > them on **one visit invoice** (finalize once, then collect — full or part payments allowed). Splitting
 > a visit into a consultation bill and a separate tests bill is per-batch invoicing — a deliberate
 > billing change (the invoice is a frozen document by design) — and is a focused follow-up if wanted.
+
+## 34 · OPD slip — the take-home summary (⏳ eyeball UI)
+
+**Why:** at checkout the patient should walk out with one printed sheet — who saw them, the diagnosis,
+what was tested and found, what was prescribed, the advice, and what it cost — on the hospital's
+letterhead with its seal and the doctor's signature block. It is **composed** from data that already
+exists (the encounter, its orders + results, its prescriptions, its bill) plus the hospital's own site
+branding, and renders **outside the app shell** so it prints as a clean A4 sheet.
+
+**New backend (verified live, sunrise):** the doctor records a visit **diagnosis** and **advice** —
+`POST /encounters/:id/summary` (needs `emr:write`) → both persist on the encounter and print on the
+slip. All the slip's other data (orders, prescriptions, bill) is already per-encounter.
+
+### S1 · Record the visit summary (Doctor, `drrao`)
+
+- **My patients** → call a patient in → open the **Visit summary** section → type a **Diagnosis** and
+  **Advice** → **Save summary**. (Optional — a slip prints fine from the reason, tests and
+  prescriptions without it.)
+
+### S2 · Open & print the slip
+
+- From **My patients** (consult header), **Reception** (each register row), or a patient profile's
+  **Visits** tab, click **OPD slip ↗** → a clean printable page opens in a new tab with:
+  - **Hospital header** — name, address, phone, and a circular **seal** in the hospital's accent
+    colour (from Settings → Public website branding).
+  - **Patient** (name, UHID, age/sex) and **doctor**; visit date and token; an **EXPRESS** pill if it
+    was a fast-track visit.
+  - **Chief complaint → Diagnosis → Investigations** (each test with its result or "See report") **→
+    Rx** (a medicines table: drug, dose, route, frequency, days, instructions) **→ Advice**.
+  - **Bill** — itemised charges, **Total / Paid / Balance**, and the invoice number (shown to anyone
+    with `billing:read`; a doctor's view simply omits the money section).
+  - A **signature block** with the doctor's name and a **Print / Save PDF** button (hidden on the
+    printout).
+- **Print / Save PDF** → the toolbar and app chrome drop away and it prints as a one-page A4 document.

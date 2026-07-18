@@ -37,6 +37,9 @@ export interface Encounter {
   /** A paid fast-track OP visit — sorts above normal patients in the doctor's queue. */
   express?: boolean;
   reason?: string;
+  /** The doctor's OP visit summary — printed on the OPD slip. */
+  diagnosis?: string;
+  advice?: string;
   branchId?: string;
   arrivedAt: Date;
   closedAt?: Date;
@@ -67,6 +70,8 @@ function toEncounter(doc: EncounterDoc): Encounter {
     ...(doc.token !== undefined ? { token: doc.token } : {}),
     ...(doc.express ? { express: true } : {}),
     ...(doc.reason ? { reason: doc.reason } : {}),
+    ...(doc.diagnosis ? { diagnosis: doc.diagnosis } : {}),
+    ...(doc.advice ? { advice: doc.advice } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
     ...(doc.closedAt ? { closedAt: doc.closedAt } : {}),
     ...(doc.bed ? { bed: doc.bed } : {}),
@@ -203,6 +208,25 @@ export async function setDoctor(
     )
     .lean<EncounterDoc>();
 
+  return doc ? toEncounter(doc) : undefined;
+}
+
+/**
+ * Records the doctor's OP visit summary (diagnosis / advice) for the OPD slip. A plain `$set` of
+ * whichever fields were supplied — clearing a field is sending an empty string, which the service
+ * translates to `$unset` so the slip does not print a stale line.
+ */
+export async function setVisitSummary(
+  id: string,
+  set: { diagnosis?: string; advice?: string },
+  unset: { diagnosis?: 1; advice?: 1 },
+): Promise<Encounter | undefined> {
+  const update: Record<string, unknown> = {};
+  if (Object.keys(set).length > 0) update.$set = set;
+  if (Object.keys(unset).length > 0) update.$unset = unset;
+  const doc = await getEncounterModel(getTenantDb())
+    .findOneAndUpdate({ _id: id }, update, { new: true })
+    .lean<EncounterDoc>();
   return doc ? toEncounter(doc) : undefined;
 }
 

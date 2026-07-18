@@ -191,6 +191,16 @@ export interface EncounterDoc {
   reason?: string;
 
   /**
+   * The doctor's OP visit summary — recorded for the OPD slip the patient takes home. `diagnosis`
+   * is the clinical impression; `advice` is the free-text instructions (rest, diet, follow-up).
+   * Prescriptions and their per-line instructions live on the prescription; these two are the
+   * narrative around them. Optional: a slip prints fine from the reason, tests and prescriptions
+   * alone, and a busy OPD may never fill them.
+   */
+  diagnosis?: string;
+  advice?: string;
+
+  /**
    * TRUE while the encounter is live. Derived from `status` — never set by hand.
    *
    * ── THIS FIELD IS AN INVARIANT, NOT A CONVENIENCE ───────────────────────────
@@ -278,6 +288,8 @@ const encounterSchema = new Schema<EncounterDoc>(
     token: { type: Number },
     express: { type: Boolean },
     reason: { type: String, trim: true, maxlength: 500 },
+    diagnosis: { type: String, trim: true, maxlength: 2000 },
+    advice: { type: String, trim: true, maxlength: 2000 },
 
     // `default: undefined`, never `false` — see the interface. A stored `false`
     // would sit in the unique index and lock the patient out of ever returning.

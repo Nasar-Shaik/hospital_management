@@ -643,6 +643,15 @@ function Reception() {
                               {openBill === e.id ? "Hide bill" : "Bill"}
                             </Button>
                           </PermissionGate>
+                          {/* The take-home OPD slip — opens as a clean printable sheet. */}
+                          <a
+                            href={`/opd-slip/${e.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center rounded-lg px-2 py-1 text-sm text-[var(--color-brand-700)] hover:underline"
+                          >
+                            OPD slip ↗
+                          </a>
                         </div>
                       </td>
                     </tr>
