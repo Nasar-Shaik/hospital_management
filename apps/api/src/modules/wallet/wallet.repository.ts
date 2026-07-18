@@ -79,6 +79,103 @@ export async function listEntries(patientId: string, limit = 50): Promise<Wallet
   return docs.map(toEntry);
 }
 
+/* ── Reporting: the advance register (period on movement date, half-open) ───── */
+
+export interface WalletMethodRow {
+  method: string;
+  amount: number;
+  count: number;
+}
+
+export interface WalletRegister {
+  /** Advances COLLECTED in the period — real money in (mostly admission advances). Paise. */
+  deposits: { total: number; count: number; byMethod: WalletMethodRow[] };
+  /** Advances REFUNDED in the period — money handed back (leftover on discharge). Paise. */
+  refunds: { total: number; count: number; byMethod: WalletMethodRow[] };
+  /** Advance APPLIED to bills in the period (wallet debits) — NOT new money, a transfer. Paise. */
+  utilized: { total: number; count: number };
+  /** Advance the hospital HOLDS right now, summed across all patients — a liability. Point-in-time. */
+  outstandingHeld: number;
+}
+
+/**
+ * The advance register for a period `[from, to)` — deposits, refunds and utilisation.
+ *
+ * The distinction this report exists to make: a DEPOSIT is real money crossing the counter, but a
+ * UTILISATION (a bill settled from advance) is NOT — it is that same money, collected earlier,
+ * moving from the patient's advance to the hospital's revenue. Counting utilisation as income would
+ * double-count against the deposit. So deposits/refunds carry a `byMethod` breakdown (cash/card/upi)
+ * for the drawer, and utilisation is reported on its own line, plainly labelled as a transfer.
+ *
+ * `outstandingHeld` is deliberately point-in-time (the sum of every current balance), not period-
+ * bound: "how much of other people's money are we holding right now?" is a liability question, and a
+ * liability is a snapshot, not a flow.
+ */
+export async function walletRegister(from: Date, to: Date): Promise<WalletRegister> {
+  const entries = getWalletEntryModel(getTenantDb());
+
+  const facet = await entries.aggregate<{
+    deposits: { _id: string; amount: number; count: number }[];
+    refunds: { _id: string; amount: number; count: number }[];
+    utilized: { amount: number; count: number }[];
+  }>([
+    { $match: { at: { $gte: from, $lt: to } } },
+    {
+      $facet: {
+        deposits: [
+          { $match: { type: "deposit" } },
+          {
+            $group: {
+              _id: { $ifNull: ["$method", "other"] },
+              amount: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+        ],
+        refunds: [
+          { $match: { type: "refund" } },
+          {
+            $group: {
+              _id: { $ifNull: ["$method", "other"] },
+              amount: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+        ],
+        utilized: [
+          { $match: { type: "debit" } },
+          { $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+        ],
+      },
+    },
+  ]);
+
+  const f = facet[0];
+  const rows = (r: { _id: string; amount: number; count: number }[]): WalletMethodRow[] =>
+    r.map((x) => ({ method: x._id, amount: x.amount, count: x.count }));
+  const sum = (r: WalletMethodRow[]): { total: number; count: number } =>
+    r.reduce((a, x) => ({ total: a.total + x.amount, count: a.count + x.count }), {
+      total: 0,
+      count: 0,
+    });
+
+  const depositRows = rows(f?.deposits ?? []);
+  const refundRows = rows(f?.refunds ?? []);
+
+  const held = await getWalletAccountModel(getTenantDb()).aggregate<{ total: number }>([
+    { $group: { _id: null, total: { $sum: "$balance" } } },
+  ]);
+
+  return {
+    deposits: { ...sum(depositRows), byMethod: depositRows },
+    refunds: { ...sum(refundRows), byMethod: refundRows },
+    utilized: { total: f?.utilized[0]?.amount ?? 0, count: f?.utilized[0]?.count ?? 0 },
+    outstandingHeld: held[0]?.total ?? 0,
+  };
+}
+
 /* ── Movements (each writes account + ledger in one session) ────────────────── */
 
 export interface MovementMeta {

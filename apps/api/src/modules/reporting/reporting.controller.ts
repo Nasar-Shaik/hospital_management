@@ -128,6 +128,26 @@ export const collections: RequestHandler = async (req, res) => {
   ok(res, report);
 };
 
+/**
+ * The advance register — admission advances in, utilised and refunded, plus the balance held.
+ * The CSV's principal table is deposits by method (the drawer view); utilisation and the current
+ * liability are the summary a screen shows around it.
+ */
+export const walletRegister: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.walletRegister(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "advance-register",
+      ["Method", "Advances collected (INR)", "Deposits"],
+      report.deposits.byMethod.map((m) => [m.method, rupees(m.amount), m.count]),
+    );
+    return;
+  }
+  ok(res, report);
+};
+
 export const dischargeOutcomes: RequestHandler = async (req, res) => {
   const { range, csv } = rangeOf(req);
   const report = await reporting.dischargeOutcomes(range);

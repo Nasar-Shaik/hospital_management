@@ -16,8 +16,11 @@ export {
   deposit,
   refund,
   debitForInvoice,
+  walletReport,
   type WalletView,
   type WalletEntry,
+  type WalletRegister,
+  type WalletMethodRow,
   type DepositInput,
   type RefundInput,
 } from "./wallet.service.js";

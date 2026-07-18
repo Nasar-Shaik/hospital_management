@@ -51,6 +51,7 @@ export function reportingRouter(): Router {
   report("/reports/doctor-load", controller.doctorLoad);
   report("/reports/diagnostics", controller.diagnostics);
   report("/reports/collections", controller.collections);
+  report("/reports/wallet", controller.walletRegister);
   report("/reports/discharge-outcomes", controller.dischargeOutcomes, IPD_FEATURE);
 
   return router;

@@ -795,11 +795,34 @@ export interface DiagnosticsReport {
 }
 
 export interface CollectionsReport {
-  /** Paise. */
+  /** Paise. Direct counter collections — EXCLUDES bills settled from advance. */
   total: number;
   count: number;
   byMonth: { month: string; amount: number; count: number }[];
   byMethod: { method: string; amount: number; count: number }[];
+  /** Paise. Bills settled from advance in the period — shown apart so it is not double-counted. */
+  settledFromAdvance: number;
+}
+
+/** A row of the advance register broken down by how the advance was collected. */
+export interface WalletMethodRow {
+  method: string;
+  amount: number;
+  count: number;
+}
+
+/**
+ * The advance (wallet) register for a period. Amounts are PAISE.
+ *
+ * `deposits`/`refunds` are real money movements at the counter; `utilized` is advance APPLIED to
+ * bills (a transfer, not new income); `outstandingHeld` is the advance the hospital holds right
+ * now across all patients — a liability, point-in-time rather than period-bound.
+ */
+export interface WalletRegister {
+  deposits: { total: number; count: number; byMethod: WalletMethodRow[] };
+  refunds: { total: number; count: number; byMethod: WalletMethodRow[] };
+  utilized: { total: number; count: number };
+  outstandingHeld: number;
 }
 
 /** How inpatient stays ended in the period — the discharge / mortality register. */
@@ -1790,6 +1813,11 @@ export class ApiClient {
 
   reportCollections(range: ReportRange): Promise<CollectionsReport> {
     return this.request<CollectionsReport>("GET", `/api/v1/reports/collections${rangeQs(range)}`);
+  }
+
+  /** The advance (wallet) register — admission advances in, utilised, refunded, and held. */
+  reportWallet(range: ReportRange): Promise<WalletRegister> {
+    return this.request<WalletRegister>("GET", `/api/v1/reports/wallet${rangeQs(range)}`);
   }
 
   reportDischargeOutcomes(range: ReportRange): Promise<DischargeRegister> {

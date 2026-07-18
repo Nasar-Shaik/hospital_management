@@ -1347,3 +1347,48 @@ in the **database query** (`balance: { $gte: amount }`), so two cashiers cannot 
 - Click it → the invoice's paid/outstanding move, its status can reach **paid**, and the wallet balance
   drops by the same amount (a `debit` row in the ledger). If the advance only partly covers the bill,
   the rest stays owed and can be collected by another method.
+
+## 29 · Audit reports — advance register, and collections that don't double-count (⏳ eyeball UI)
+
+**Why:** once "wallet" is a way to pay a bill, a naive collections report double-counts. A ₹500 cash
+advance is real money in the drawer; settling a bill "from advance" later is that **same** ₹500 moving
+from the patient's advance to revenue — not a second ₹500. So the two reports are kept apart, each with
+one meaning: **Collections** = money that crossed the counter directly (cash/card/UPI, wallet
+EXCLUDED); **Advances** = the admission-advance story (collected, utilised, refunded, held). The wallet
+is mostly an **admission** tool; OPD/walk-in patients pay per test directly, and those are collections.
+
+**The reconciliation an auditor can trust:**
+`money actually received = Collections (counter) + Advances collected − Advances refunded`.
+"Utilised against bills" and "Settled from advance" are the SAME figure — a transfer, never new income.
+
+**Backend verified live (2026-07-18, sunrise), reconciles to the ₹ test transactions above:**
+
+- `GET /reports/wallet` → deposits ₹1300 (upi ₹800 + cash ₹500), refunds ₹200, **utilised ₹500**,
+  **held ₹600**. Check: `deposits − refunds − utilised = held` (1300 − 200 − 500 = 600). ✓
+- `GET /reports/collections` → counter **total ₹0**, **settledFromAdvance ₹500**. The one bill paid so
+  far was paid from advance, so it is correctly OUT of the counter total and shown only as context. ✓
+  (Before the fix this ₹500 would have inflated "total received".)
+
+### R1 · Advances report (Reports → Advances, needs `report:view`)
+
+- Pick a period → four figures: **Advances collected**, **Utilised against bills**, **Refunded**,
+  **Currently held**. Below them, "collected by method" and "refunds by method" tables (cash/card/UPI).
+- Read the one-line note: _utilised_ is a transfer to revenue (already counted at deposit), _currently
+  held_ is a point-in-time liability (balance owed back to patients), not a period total.
+- **Export CSV** → the advance-register file lists advances collected by method.
+
+### R2 · Collections report now separates counter cash from advance
+
+- Reports → **Collections** → three figures: **Collected at counter** (direct cash/card/UPI),
+  **Payments taken**, **Settled from advance**. The note explains the last is shown for context only,
+  counted in Advances — never added to the counter total. "By method" no longer lists `wallet`.
+
+### R3 · End-to-end reconciliation walkthrough
+
+1. As Cashier/Front-Office, **deposit ₹1000 cash** as an admission advance on a patient → Advances
+   report: _collected_ +₹1000, _held_ +₹1000; Collections unchanged.
+2. Run up a bill on that patient (consult + a test), finalize it, **Pay from advance** ₹600 → Advances:
+   _utilised_ ₹600, _held_ ₹400; Collections: _settled from advance_ ₹600, _counter total_ unchanged.
+3. **Refund ₹400** on discharge → Advances: _refunded_ ₹400, _held_ ₹0.
+4. A second patient pays a ₹300 bill in **cash** at the counter → Collections: _counter total_ +₹300;
+   Advances untouched. The two reports never overlap.

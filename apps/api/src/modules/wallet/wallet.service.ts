@@ -15,7 +15,12 @@ import { getPatient } from "../patients/index.js";
 import * as repo from "./wallet.repository.js";
 import type { ClientSession } from "mongoose";
 
-export type { WalletEntry } from "./wallet.repository.js";
+export type { WalletEntry, WalletRegister, WalletMethodRow } from "./wallet.repository.js";
+
+/** The advance register for a period — deposits, refunds, utilisation and the current liability. */
+export function walletReport(range: { from: Date; to: Date }): Promise<repo.WalletRegister> {
+  return repo.walletRegister(range.from, range.to);
+}
 
 export interface WalletView {
   patientId: string;

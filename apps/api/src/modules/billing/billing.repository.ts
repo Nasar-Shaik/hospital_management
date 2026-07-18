@@ -202,12 +202,18 @@ export async function updateService(
 /* ── Reporting: the collections register (period on payment date, half-open) ── */
 
 export interface CollectionsReport {
-  /** Total money RECEIVED in the period, in paise. */
+  /** Total money RECEIVED at the counter in the period, in paise. Excludes wallet settlements. */
   total: number;
-  /** Number of individual payments taken. */
+  /** Number of individual payments taken (direct, non-wallet). */
   count: number;
   byMonth: { month: string; amount: number; count: number }[];
   byMethod: { method: string; amount: number; count: number }[];
+  /**
+   * Paise. Bills SETTLED FROM ADVANCE in the period (`method: "wallet"`). Reported apart from
+   * `total` on purpose — this money already crossed the counter when it was deposited, so counting
+   * it here as well would inflate the day's takings. See the wallet register for the advance story.
+   */
+  settledFromAdvance: number;
 }
 
 /**
@@ -226,15 +232,22 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
     total: { amount: number; count: number }[];
     byMonth: { _id: string; amount: number; count: number }[];
     byMethod: { _id: string; amount: number; count: number }[];
+    fromAdvance: { amount: number }[];
   }>([
     { $unwind: "$payments" },
     { $match: { "payments.at": { $gte: from, $lt: to } } },
     {
       $facet: {
+        // Every figure below is DIRECT collection only — money that crossed the counter here. A
+        // `method: "wallet"` payment is a bill settled from an advance already banked at deposit
+        // time; folding it in would double-count it, so the drawer views exclude it and it is
+        // surfaced apart in `fromAdvance`.
         total: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
           { $group: { _id: null, amount: { $sum: "$payments.amount" }, count: { $sum: 1 } } },
         ],
         byMonth: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
           {
             $group: {
               _id: { $dateToString: { format: "%Y-%m", date: "$payments.at" } },
@@ -245,6 +258,7 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
           { $sort: { _id: 1 } },
         ],
         byMethod: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
           {
             $group: {
               _id: "$payments.method",
@@ -253,6 +267,10 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
             },
           },
           { $sort: { amount: -1 } },
+        ],
+        fromAdvance: [
+          { $match: { "payments.method": "wallet" } },
+          { $group: { _id: null, amount: { $sum: "$payments.amount" } } },
         ],
       },
     },
@@ -263,6 +281,7 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
     count: f?.total[0]?.count ?? 0,
     byMonth: (f?.byMonth ?? []).map((r) => ({ month: r._id, amount: r.amount, count: r.count })),
     byMethod: (f?.byMethod ?? []).map((r) => ({ method: r._id, amount: r.amount, count: r.count })),
+    settledFromAdvance: f?.fromAdvance[0]?.amount ?? 0,
   };
 }
 

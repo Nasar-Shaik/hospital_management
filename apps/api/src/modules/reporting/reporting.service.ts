@@ -22,6 +22,7 @@ import {
 } from "../encounters/index.js";
 import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
 import { collectionsReport, type CollectionsReport } from "../billing/index.js";
+import { walletReport, type WalletRegister } from "../wallet/index.js";
 import { getById as getUser } from "../users/index.js";
 import { encountersByDoctor } from "../encounters/index.js";
 import { ordersByUser } from "../orders/index.js";
@@ -34,6 +35,7 @@ export type {
   DiagnosticsReport,
   CollectionsReport,
   DischargeRegister,
+  WalletRegister,
 };
 
 export interface DateRange {
@@ -61,6 +63,15 @@ export const patientVisits = (range: DateRange): Promise<VisitReport> =>
 
 export const collections = (range: DateRange): Promise<CollectionsReport> =>
   collectionsReport(range.from, range.to);
+
+/**
+ * The advance register — admission advances collected, refunded, utilised against bills, and the
+ * balance the hospital currently holds. The counterpart to `collections`: money that came in as an
+ * advance and how it was drawn down, kept apart from direct counter collections so neither figure
+ * double-counts the other.
+ */
+export const walletRegister = (range: DateRange): Promise<WalletRegister> =>
+  walletReport({ from: range.from, to: range.to });
 
 /** How inpatient stays ended in the period — routine discharges, LAMA, absconded, deaths. */
 export const dischargeOutcomes = (range: DateRange): Promise<DischargeRegister> =>

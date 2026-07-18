@@ -21,13 +21,15 @@ import {
   type ReportRange,
   type StockRegisterRow,
   type VisitReport,
+  type WalletRegister,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
-type Tab = "stock" | "visits" | "doctors" | "diagnostics" | "collections" | "discharges";
+type Tab =
+  "stock" | "visits" | "doctors" | "diagnostics" | "collections" | "advances" | "discharges";
 
 const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "stock", label: "Pharmacy stock", slug: "pharmacy-stock" },
@@ -35,6 +37,7 @@ const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "doctors", label: "Doctor load", slug: "doctor-load" },
   { id: "diagnostics", label: "Diagnostics", slug: "diagnostics" },
   { id: "collections", label: "Collections", slug: "collections" },
+  { id: "advances", label: "Advances", slug: "wallet" },
   { id: "discharges", label: "Discharges", slug: "discharge-outcomes" },
 ];
 
@@ -144,6 +147,7 @@ function ReportsPage() {
   const [doctors, setDoctors] = useState<DoctorLoadRow[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null);
   const [collections, setCollections] = useState<CollectionsReport | null>(null);
+  const [advances, setAdvances] = useState<WalletRegister | null>(null);
   const [discharges, setDischarges] = useState<DischargeRegister | null>(null);
 
   const range: ReportRange = useMemo(
@@ -160,6 +164,7 @@ function ReportsPage() {
       else if (tab === "doctors") setDoctors(await api.reportDoctorLoad(range));
       else if (tab === "diagnostics") setDiagnostics(await api.reportDiagnostics(range));
       else if (tab === "collections") setCollections(await api.reportCollections(range));
+      else if (tab === "advances") setAdvances(await api.reportWallet(range));
       else if (tab === "discharges") setDischarges(await api.reportDischargeOutcomes(range));
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : "Could not load the report.");
@@ -443,12 +448,70 @@ function ReportsPage() {
             </div>
           )}
 
+          {tab === "advances" && advances && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Stat label="Advances collected" value={rupees(advances.deposits.total)} />
+                <Stat label="Utilised against bills" value={rupees(advances.utilized.total)} />
+                <Stat label="Refunded" value={rupees(advances.refunds.total)} />
+                <Stat label="Currently held" value={rupees(advances.outstandingHeld)} />
+              </div>
+              {/* The advance register is a liability story: money the hospital holds on patients'
+                  behalf. "Utilised" is a transfer to revenue, not new income; "currently held" is a
+                  point-in-time balance, not a period total. */}
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                Admission advances the hospital holds on patients’ behalf. “Utilised against bills”
+                is that money moving to revenue as care is billed — a transfer, already counted when
+                it was deposited. “Currently held” is the balance owed to patients right now, not a
+                total for the period.
+              </p>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    Advances collected by method
+                  </h3>
+                  <ReportTable
+                    headers={["Method", "Collected", "Deposits"]}
+                    rows={advances.deposits.byMethod.map((m) => [
+                      m.method,
+                      rupees(m.amount),
+                      m.count,
+                    ])}
+                    empty="No advances collected in this period."
+                  />
+                </Card>
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    Refunds by method
+                  </h3>
+                  <ReportTable
+                    headers={["Method", "Refunded", "Refunds"]}
+                    rows={advances.refunds.byMethod.map((m) => [
+                      m.method,
+                      rupees(m.amount),
+                      m.count,
+                    ])}
+                    empty="No refunds in this period."
+                  />
+                </Card>
+              </div>
+            </div>
+          )}
+
           {tab === "collections" && collections && (
             <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Stat label="Total received" value={rupees(collections.total)} />
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Stat label="Collected at counter" value={rupees(collections.total)} />
                 <Stat label="Payments taken" value={String(collections.count)} />
+                <Stat label="Settled from advance" value={rupees(collections.settledFromAdvance)} />
               </div>
+              {/* Say plainly what "collected" does and does not include — the one sentence that keeps
+                  an auditor from adding the advance figure twice. */}
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                “Collected at counter” is direct payment (cash, card, UPI). “Settled from advance”
+                was collected earlier as an admission advance and is shown here only for context —
+                it is counted in the Advances report, not added to the counter total.
+              </p>
               <div className="grid gap-4 lg:grid-cols-2">
                 <Card>
                   <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
