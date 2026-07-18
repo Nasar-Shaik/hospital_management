@@ -635,6 +635,51 @@ export interface ServiceItem {
   active: boolean;
 }
 
+/* ── Patient wallet (advance balance) ──────────────────────────────────────── */
+
+export type WalletEntryType = "deposit" | "debit" | "refund" | "reversal";
+
+/** One movement of the patient's advance. `amount` is PAISE; `type` carries the sign. */
+export interface WalletEntry {
+  id: string;
+  patientId: string;
+  type: WalletEntryType;
+  amount: number;
+  /** Paise. The balance this movement left behind. */
+  balanceAfter: number;
+  method?: string;
+  reference?: string;
+  reason?: string;
+  invoiceId?: string;
+  encounterId?: string;
+  by?: string;
+  at: string;
+}
+
+/** The patient's advance balance and recent statement. `balance` is PAISE. */
+export interface Wallet {
+  patientId: string;
+  balance: number;
+  entries: WalletEntry[];
+}
+
+export interface WalletDepositInput {
+  /** Paise. */
+  amount: number;
+  method: string;
+  reference?: string;
+  reason?: string;
+  encounterId?: string;
+}
+
+export interface WalletRefundInput {
+  /** Paise. */
+  amount: number;
+  method: string;
+  reference?: string;
+  reason?: string;
+}
+
 /**
  * What the hospital can DO — the order pad's view. No price, deliberately.
  *
@@ -2020,6 +2065,34 @@ export class ApiClient {
     input: { amount: number; method: string; reference?: string },
   ): Promise<Invoice> {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, input);
+  }
+
+  /**
+   * Settles a bill from the patient's ADVANCE. A convenience over `recordPayment` — it is the
+   * same endpoint with `method: "wallet"`, which draws the money from the wallet atomically.
+   */
+  payFromWallet(invoiceId: string, amount: number): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, {
+      amount,
+      method: "wallet",
+    });
+  }
+
+  /* ── wallet (patient advance) ── */
+
+  /** The patient's advance balance + recent statement. Needs `wallet:manage`. */
+  getWallet(patientId: string): Promise<Wallet> {
+    return this.request<Wallet>("GET", `/api/v1/patients/${patientId}/wallet`);
+  }
+
+  /** Takes an advance (OP or admission). `amount` is PAISE. Needs `wallet:manage`. */
+  depositToWallet(patientId: string, input: WalletDepositInput): Promise<Wallet> {
+    return this.request<Wallet>("POST", `/api/v1/patients/${patientId}/wallet/deposits`, input);
+  }
+
+  /** Refunds advance to the patient (leftover on discharge). `amount` is PAISE. */
+  refundFromWallet(patientId: string, input: WalletRefundInput): Promise<Wallet> {
+    return this.request<Wallet>("POST", `/api/v1/patients/${patientId}/wallet/refunds`, input);
   }
 
   /* ── rbac ── */

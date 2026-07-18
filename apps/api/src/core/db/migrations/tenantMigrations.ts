@@ -1009,4 +1009,35 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0023-patient-wallet",
+    description: "Patient wallet — one advance-balance account per patient, plus its ledger",
+    up: async (db) => {
+      // ONE wallet per patient. The unique index is what makes the deposit upsert a singleton:
+      // the repository upserts on `{ tenantId, patientId }` and trusts this to reject a second
+      // account rather than silently keeping two competing balances (the same shape as
+      // `one_site_per_tenant`). If it cannot build because two accounts already share a patient,
+      // that is the very corruption it exists to prevent — fold one into the other and re-run.
+      await db
+        .collection("walletAccounts")
+        .createIndex(
+          { tenantId: 1, patientId: 1 },
+          { unique: true, name: "one_wallet_per_patient", background: true },
+        );
+      // The statement read is "this patient's movements, newest first".
+      await db
+        .collection("walletEntries")
+        .createIndex({ tenantId: 1, patientId: 1, at: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("walletAccounts")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("walletEntries")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

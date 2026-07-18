@@ -29,7 +29,10 @@ export const voidChargeSchema = z.object({ reason: z.string().min(3).max(500) })
 export const recordPaymentSchema = z
   .object({
     amount: paise.refine((v) => v > 0, "a payment of nothing is not a payment"),
-    method: z.enum(["cash", "card", "upi", "netbanking", "cheque", "insurance"]),
+    // `wallet` draws the money from the patient's advance rather than a drawer — the billing
+    // service settles it atomically against the wallet (see recordPayment). The rest are the
+    // ways money crosses the counter directly.
+    method: z.enum(["cash", "card", "upi", "netbanking", "cheque", "insurance", "wallet"]),
     reference: z.string().max(120).optional(),
   })
   .strict();

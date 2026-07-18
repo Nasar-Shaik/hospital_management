@@ -23,11 +23,13 @@ import {
   type Patient,
   type Prescription,
   type ReportMeta,
+  type Wallet,
+  type WalletEntry,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { Protected } from "../../../components/Protected";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
-import { rupees } from "../../../lib/money";
+import { rupees, toPaise } from "../../../lib/money";
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -90,10 +92,11 @@ const ORDER_TONE: Record<string, "neutral" | "warning" | "success" | "brand"> = 
 
 /* ── page ────────────────────────────────────────────────────────────────────── */
 
-type TabKey = "timeline" | "visits" | "tests" | "prescriptions" | "bills";
+type TabKey = "timeline" | "visits" | "tests" | "prescriptions" | "bills" | "wallet";
 
 function Profile() {
   const { can, api } = useAuth();
+  const canWallet = can("wallet:manage");
   const params = useParams<{ id: string }>();
   const id = params.id;
 
@@ -104,6 +107,7 @@ function Profile() {
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [reports, setReports] = useState<ReportMeta[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [wallet, setWallet] = useState<Wallet | null>(null);
   const [doctors, setDoctors] = useState<Map<string, string>>(new Map());
 
   const [loading, setLoading] = useState(true);
@@ -145,6 +149,12 @@ function Profile() {
       setReports(rep);
       setInvoices(inv.items);
       setDoctors(new Map(docs.map((d) => [d.id, d.name])));
+
+      // The wallet is only fetched for staff who may see it (cashier / front office); a
+      // clinician's profile view simply has no advance panel, rather than a 403 in the console.
+      if (canWallet) {
+        setWallet(await soft(api.getWallet(id), null as Wallet | null));
+      }
     } catch (err) {
       setError(
         err instanceof ApiClientError && err.code === "HMS-GEN-404"
@@ -154,7 +164,7 @@ function Profile() {
     } finally {
       setLoading(false);
     }
-  }, [api, id]);
+  }, [api, id, canWallet]);
 
   useEffect(() => {
     void load();
@@ -197,6 +207,7 @@ function Profile() {
     { key: "tests", label: "Tests", count: orders.length },
     { key: "prescriptions", label: "Prescriptions", count: prescriptions.length },
     { key: "bills", label: "Bills", count: invoices.length },
+    ...(canWallet ? [{ key: "wallet" as const, label: "Wallet" }] : []),
   ];
 
   return (
@@ -230,6 +241,16 @@ function Profile() {
           </div>
 
           <div className="flex flex-col items-end gap-2">
+            {canWallet && wallet && (
+              <button
+                type="button"
+                onClick={() => setTab("wallet")}
+                className="rounded-lg bg-[var(--color-success-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--color-success)]"
+                title="Patient advance balance"
+              >
+                Advance {rupees(wallet.balance)} →
+              </button>
+            )}
             {dues > 0 && (
               <button
                 type="button"
@@ -306,7 +327,18 @@ function Profile() {
           <Tests orders={orders} reportByOrder={reportByOrder} who={who} api={api} />
         )}
         {tab === "prescriptions" && <Prescriptions prescriptions={prescriptions} who={who} />}
-        {tab === "bills" && <Bills invoices={invoices} />}
+        {tab === "bills" && (
+          <Bills
+            invoices={invoices}
+            balance={wallet?.balance ?? 0}
+            canPayFromWallet={canWallet && (wallet?.balance ?? 0) > 0}
+            api={api}
+            reload={load}
+          />
+        )}
+        {tab === "wallet" && canWallet && (
+          <WalletPanel patientId={id} wallet={wallet} dues={dues} api={api} reload={load} />
+        )}
       </div>
     </Shell>
   );
@@ -549,7 +581,43 @@ function Prescriptions({
   );
 }
 
-function Bills({ invoices }: { invoices: Invoice[] }) {
+function Bills({
+  invoices,
+  balance,
+  canPayFromWallet,
+  api,
+  reload,
+}: {
+  invoices: Invoice[];
+  balance: number;
+  canPayFromWallet: boolean;
+  api: ReturnType<typeof useAuth>["api"];
+  reload: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function payFromAdvance(invoiceId: string, outstanding: number) {
+    // Draw whatever the advance can cover, up to the outstanding amount. The rest, if any,
+    // stays owed and can be collected by another method.
+    const amount = Math.min(outstanding, balance);
+    if (amount <= 0) return;
+    setBusy(invoiceId);
+    setError(null);
+    try {
+      await api.payFromWallet(invoiceId, amount);
+      await reload();
+    } catch (err) {
+      setError(
+        err instanceof ApiClientError
+          ? err.message
+          : "Could not settle this bill from the advance.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (invoices.length === 0) return <Empty>No bills.</Empty>;
   const sorted = [...invoices].sort((a, b) =>
     a.finalizedAt && b.finalizedAt
@@ -557,31 +625,273 @@ function Bills({ invoices }: { invoices: Invoice[] }) {
       : 0,
   );
   return (
-    <Rows head={["Invoice", "Date", "Total", "Paid", "Outstanding", "Status"]}>
-      {sorted.map((i) => {
-        const outstanding = Math.max(0, i.total - i.paid);
-        return (
-          <tr key={i.id}>
-            <Td className="font-mono text-xs">{i.number ?? "draft"}</Td>
-            <Td>{fmtDate(i.finalizedAt)}</Td>
-            <Td>{rupees(i.total)}</Td>
-            <Td>{rupees(i.paid)}</Td>
-            <Td className={outstanding > 0 ? "font-medium text-[var(--color-warning)]" : ""}>
-              {rupees(outstanding)}
-            </Td>
-            <Td>
-              <Badge
-                tone={
-                  i.status === "paid" ? "success" : i.status === "finalized" ? "warning" : "neutral"
-                }
-              >
-                {i.status}
-              </Badge>
-            </Td>
-          </tr>
-        );
-      })}
-    </Rows>
+    <div className="space-y-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+      <Rows head={["Invoice", "Date", "Total", "Paid", "Outstanding", "Status", ""]}>
+        {sorted.map((i) => {
+          const outstanding = Math.max(0, i.total - i.paid);
+          const settleable = canPayFromWallet && i.status === "finalized" && outstanding > 0;
+          return (
+            <tr key={i.id}>
+              <Td className="font-mono text-xs">{i.number ?? "draft"}</Td>
+              <Td>{fmtDate(i.finalizedAt)}</Td>
+              <Td>{rupees(i.total)}</Td>
+              <Td>{rupees(i.paid)}</Td>
+              <Td className={outstanding > 0 ? "font-medium text-[var(--color-warning)]" : ""}>
+                {rupees(outstanding)}
+              </Td>
+              <Td>
+                <Badge
+                  tone={
+                    i.status === "paid"
+                      ? "success"
+                      : i.status === "finalized"
+                        ? "warning"
+                        : "neutral"
+                  }
+                >
+                  {i.status}
+                </Badge>
+              </Td>
+              <Td>
+                {settleable && (
+                  <button
+                    type="button"
+                    disabled={busy === i.id}
+                    onClick={() => void payFromAdvance(i.id, outstanding)}
+                    className="rounded-md bg-[var(--color-success-bg)] px-2.5 py-1 text-xs font-semibold text-[var(--color-success)] hover:opacity-80 disabled:opacity-50"
+                  >
+                    {busy === i.id
+                      ? "Settling…"
+                      : `Pay ${rupees(Math.min(outstanding, balance))} from advance`}
+                  </button>
+                )}
+              </Td>
+            </tr>
+          );
+        })}
+      </Rows>
+    </div>
+  );
+}
+
+/* ── Wallet ──────────────────────────────────────────────────────────────────── */
+
+const ENTRY_TONE: Record<string, string> = {
+  deposit: "text-[var(--color-success)]",
+  reversal: "text-[var(--color-success)]",
+  debit: "text-[var(--color-warning)]",
+  refund: "text-[var(--color-fg-muted)]",
+};
+
+const ENTRY_LABEL: Record<string, string> = {
+  deposit: "Advance in",
+  reversal: "Reversal",
+  debit: "Bill settled",
+  refund: "Refund out",
+};
+
+function WalletPanel({
+  patientId,
+  wallet,
+  dues,
+  api,
+  reload,
+}: {
+  patientId: string;
+  wallet: Wallet | null;
+  dues: number;
+  api: ReturnType<typeof useAuth>["api"];
+  reload: () => Promise<void>;
+}) {
+  const balance = wallet?.balance ?? 0;
+  const entries = wallet?.entries ?? [];
+
+  const [mode, setMode] = useState<"deposit" | "refund" | null>(null);
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("cash");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setMode(null);
+    setAmount("");
+    setReason("");
+    setMethod("cash");
+    setError(null);
+  }
+
+  async function submit() {
+    const paise = toPaise(amount);
+    if (paise <= 0) {
+      setError("Enter an amount greater than zero.");
+      return;
+    }
+    if (mode === "refund" && paise > balance) {
+      setError("A refund cannot exceed the current balance.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "deposit") {
+        await api.depositToWallet(patientId, {
+          amount: paise,
+          method,
+          ...(reason.trim() ? { reason: reason.trim() } : {}),
+        });
+      } else {
+        await api.refundFromWallet(patientId, {
+          amount: paise,
+          method,
+          ...(reason.trim() ? { reason: reason.trim() } : {}),
+        });
+      }
+      reset();
+      await reload();
+    } catch (err) {
+      setError(
+        err instanceof ApiClientError ? err.message : "Could not record this. Please try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // How the advance stands against what is currently owed — the question the desk actually asks.
+  const coverage = balance - dues;
+
+  return (
+    <div className="space-y-5">
+      {/* Balance card */}
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-4 bg-[var(--color-success-bg)] p-6">
+          <div>
+            <p className="text-xs font-semibold tracking-wide text-[var(--color-success)] uppercase">
+              Advance balance
+            </p>
+            <p className="mt-1 text-3xl font-bold text-[var(--color-fg)]">{rupees(balance)}</p>
+            {dues > 0 && (
+              <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
+                {coverage >= 0
+                  ? `Covers current dues of ${rupees(dues)}`
+                  : `Short of current dues by ${rupees(-coverage)}`}
+              </p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={() => setMode("deposit")}>Add advance</Button>
+            <button
+              type="button"
+              onClick={() => setMode("refund")}
+              disabled={balance <= 0}
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-4 py-2 text-sm font-medium text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)] disabled:opacity-50"
+            >
+              Refund
+            </button>
+          </div>
+        </div>
+
+        {/* Deposit / refund form */}
+        {mode && (
+          <div className="border-t border-[var(--color-border)] p-5">
+            <p className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
+              {mode === "deposit" ? "Collect advance" : "Refund advance"}
+            </p>
+            {error && (
+              <div className="mb-3">
+                <Alert tone="danger">{error}</Alert>
+              </div>
+            )}
+            <div className="flex flex-wrap items-end gap-3">
+              <Field label="Amount (₹)">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-32 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm"
+                />
+              </Field>
+              <Field label="Method">
+                <select
+                  value={method}
+                  onChange={(e) => setMethod(e.target.value)}
+                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="upi">UPI</option>
+                  <option value="netbanking">Net banking</option>
+                </select>
+              </Field>
+              <Field label="Reason (optional)">
+                <input
+                  type="text"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder={mode === "deposit" ? "e.g. Admission advance" : "e.g. On discharge"}
+                  className="w-52 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm"
+                />
+              </Field>
+              <div className="flex gap-2">
+                <Button onClick={() => void submit()} disabled={busy}>
+                  {busy ? "Saving…" : mode === "deposit" ? "Take advance" : "Refund"}
+                </Button>
+                <button
+                  type="button"
+                  onClick={reset}
+                  className="rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Ledger */}
+      {entries.length === 0 ? (
+        <Empty>No wallet activity yet. Collect an advance to open the wallet.</Empty>
+      ) : (
+        <Rows head={["Date", "Movement", "Amount", "Balance", "Details"]}>
+          {entries.map((e: WalletEntry) => {
+            const sign = e.type === "deposit" || e.type === "reversal" ? "+" : "−";
+            return (
+              <tr key={e.id}>
+                <Td>{fmtDate(e.at)}</Td>
+                <Td>
+                  <span className={`font-medium ${ENTRY_TONE[e.type] ?? ""}`}>
+                    {ENTRY_LABEL[e.type] ?? e.type}
+                  </span>
+                </Td>
+                <Td className={`font-medium ${ENTRY_TONE[e.type] ?? ""}`}>
+                  {sign}
+                  {rupees(e.amount)}
+                </Td>
+                <Td>{rupees(e.balanceAfter)}</Td>
+                <Td className="text-xs">
+                  {[e.reason, e.method].filter(Boolean).join(" · ") || "—"}
+                </Td>
+              </tr>
+            );
+          })}
+        </Rows>
+      )}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--color-fg-subtle)]">{label}</span>
+      {children}
+    </label>
   );
 }
 

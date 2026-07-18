@@ -18,13 +18,16 @@
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { withTransaction } from "../../core/db/transaction.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
+import { debitForInvoice as debitWalletForInvoice } from "../wallet/index.js";
 import * as repo from "./billing.repository.js";
 import {
   INVOICE_TRANSITIONS,
   type ChargeCategory,
   type InvoiceLine,
   type InvoiceStatus,
+  type PaymentEntry,
 } from "./billing.model.js";
 
 const logger = createLogger({ service: "billing" });
@@ -315,22 +318,44 @@ export async function recordPayment(
     });
   }
 
-  const updated = await repo.addPayment(
-    invoiceId,
-    {
-      amount: input.amount,
-      method: input.method,
-      at: new Date(),
-      ...(input.reference ? { reference: input.reference } : {}),
-      ...(ctx.userId ? { by: ctx.userId } : {}),
-    },
-    status,
-    paid,
-  );
+  const payment: PaymentEntry = {
+    amount: input.amount,
+    method: input.method,
+    at: new Date(),
+    ...(input.reference ? { reference: input.reference } : {}),
+    ...(ctx.userId ? { by: ctx.userId } : {}),
+  };
+
+  /**
+   * ── SETTLING FROM THE PATIENT'S ADVANCE ─────────────────────────────────────
+   * `method: "wallet"` draws the money from the advance the desk collected earlier (an OP or
+   * admission advance). The wallet debit and the invoice payment are ONE transaction: the
+   * patient is never debited for a payment that did not post, nor credited on a bill that was
+   * not paid. An insufficient balance throws (422) and rolls the whole thing back — nothing is
+   * half-done. A cash/card payment takes the ordinary single-document path below.
+   */
+  if (input.method === WALLET_METHOD) {
+    const updated = await withTransaction(async (session) => {
+      await debitWalletForInvoice(session, {
+        patientId: invoice.patientId,
+        amount: input.amount,
+        invoiceId,
+        ...(invoice.encounterId ? { encounterId: invoice.encounterId } : {}),
+      });
+      return repo.addPayment(invoiceId, payment, status, paid, session);
+    });
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+    return updated;
+  }
+
+  const updated = await repo.addPayment(invoiceId, payment, status, paid);
   if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
 
   return updated;
 }
+
+/** The payment method that draws from the patient's advance rather than a drawer. */
+const WALLET_METHOD = "wallet";
 
 /** Whether the work an order represents has been PAID for — shown on the lab/imaging worklist. */
 export type OrderPaymentState = "paid" | "unpaid" | "unbilled" | "free";

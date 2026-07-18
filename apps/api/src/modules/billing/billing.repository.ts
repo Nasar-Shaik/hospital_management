@@ -452,12 +452,13 @@ export async function addPayment(
   payment: PaymentEntry,
   status: InvoiceStatus,
   paid: number,
+  session?: ClientSession,
 ): Promise<Invoice | undefined> {
   const doc = await getInvoiceModel(getTenantDb())
     .findOneAndUpdate(
       { _id: id },
       { $push: { payments: payment }, $set: { paid, status } },
-      { new: true },
+      { new: true, ...(session ? { session } : {}) },
     )
     .lean<InvoiceDoc>();
   return doc ? toInvoice(doc) : undefined;

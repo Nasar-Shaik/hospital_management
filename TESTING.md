@@ -1308,3 +1308,42 @@ returns `unbilled` for an order with no charge.
   the viewer's account cannot read billing status — the list still works.
 - Register a walk-in, order a lab test, **collect payment** for it (Billing) → the test's badge turns
   **paid**. Before payment it reads **unpaid**; the technician can still run it (advisory, not a gate).
+
+## 28 · Patient wallet — advance balance (OP & admission), settle bills from it (⏳ eyeball UI)
+
+**Why:** a hospital takes money BEFORE the care is costed — an OP advance at reception, and (the case
+this was built for) an **admission advance** when a doctor decides to admit. That money is credit the
+patient holds; every treatment cost is settled against it, and the leftover is refunded on discharge.
+The wallet is a per-patient stored-value account: an authoritative `walletAccounts` balance plus an
+immutable `walletEntries` ledger, both moved together inside one transaction. The balance guard lives
+in the **database query** (`balance: { $gte: amount }`), so two cashiers cannot both spend the same
+₹500. Gated on `wallet:manage` (CASHIER, FRONT_OFFICE, TENANT_ADMIN).
+
+**Backend verified live (2026-07-18, sunrise):**
+
+- Deposit ₹500 (reason "Admission advance") → balance `50000`, ledger row carries `balanceAfter` + `by`.
+- Partial refund ₹200 → balance `30000`, ledger `[refund, deposit]`.
+- **Over-refund** (more than balance) → **422 "Insufficient wallet balance"** — the atomic guard holds.
+- Paise-not-rupees fat-finger (amount `5000000000`) → **400** (capped at ₹10,00,000 per transaction).
+- **Settle a bill from advance:** deposit ₹800 → pay a finalized ₹500 invoice with `method: "wallet"`
+  → invoice goes **paid** (`paid 50000`, payment method `wallet`), wallet balance drops `80000 → 30000`,
+  ledger gains a `debit` of `50000`. The debit and the invoice payment are one transaction — an
+  insufficient balance throws and rolls **both** back (nothing half-done).
+
+### W1 · The wallet panel (Cashier / Front Office login)
+
+- Open a patient profile → a green **Advance ₹X** pill sits in the header next to any **Dues** pill,
+  and a **Wallet** tab appears (only for `wallet:manage` — a doctor's view has neither).
+- Wallet tab → a big **balance card**. When the patient owes money it reads "Covers current dues of ₹X"
+  or "Short of current dues by ₹X". Below it, the full ledger (movement, +/− amount, running balance).
+- **Add advance** → enter ₹, method (cash/card/UPI/net-banking), optional reason ("Admission advance")
+  → the balance and ledger update. **Refund** → hands money back; disabled at zero balance, and a
+  refund larger than the balance is refused.
+
+### W2 · Settling a bill from the advance
+
+- Deposit an advance, then open the **Bills** tab → a finalized invoice with an outstanding amount and a
+  positive balance shows a **"Pay ₹X from advance"** button (X = min(outstanding, balance)).
+- Click it → the invoice's paid/outstanding move, its status can reach **paid**, and the wallet balance
+  drops by the same amount (a `debit` row in the ledger). If the advance only partly covers the bill,
+  the rest stays owed and can be collected by another method.
