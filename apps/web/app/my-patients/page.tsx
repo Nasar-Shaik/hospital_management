@@ -1017,7 +1017,9 @@ function AdmitOrTransfer({
     setError(null);
     try {
       await api.admitPatient(encounter.id, { ward, bedCode, tariffCode });
-      onDone("Admitted. This visit is closed and the stay is on the ward list.");
+      onDone(
+        "Admitted. This visit is closed and the stay is on the ward list. Send the patient to reception to pay the admission advance.",
+      );
       setMode("none");
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not admit the patient.");

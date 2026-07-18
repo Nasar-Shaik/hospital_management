@@ -27,7 +27,7 @@ import {
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
-import { rupees } from "../../lib/money";
+import { rupees, toPaise } from "../../lib/money";
 
 function when(iso: string): string {
   return new Date(iso).toLocaleString([], {
@@ -305,6 +305,140 @@ function OutcomeForm({
   );
 }
 
+/**
+ * The advance panel — where the admission advance is collected and watched.
+ *
+ * This is the wallet surfaced at the moment it matters: a patient is admitted, and the desk
+ * holds a deposit against a bill that grows by the day. It shows the balance against what the
+ * stay owes so the cashier knows when to ask for more, and it collects a top-up in place. Gated
+ * on `wallet:manage` (cashier / front office), so a doctor's ward round never sees it. `stayOwes`
+ * is the IP encounter's running bill, passed in only when the viewer may read billing.
+ */
+function WardAdvance({ patientId, stayOwes }: { patientId: string; stayOwes: number | null }) {
+  const { api } = useAuth();
+  const [balance, setBalance] = useState<number | null>(null);
+  const [open, setOpen] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("cash");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    void api
+      .getWallet(patientId)
+      .then((w) => setBalance(w.balance))
+      .catch(() => setBalance(null));
+  }, [api, patientId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function collect() {
+    const paise = toPaise(amount);
+    if (paise <= 0) {
+      setError("Enter an amount greater than zero.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const w = await api.depositToWallet(patientId, {
+        amount: paise,
+        method,
+        reason: "Admission advance",
+      });
+      setBalance(w.balance);
+      setAmount("");
+      setOpen(false);
+      setNotice(`Advance collected. Balance ${rupees(w.balance)}.`);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not collect the advance.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Held minus owed: positive is what is left to cover further care, negative is the shortfall the
+  // desk should collect. Only meaningful when the viewer can see the bill.
+  const cover = balance !== null && stayOwes !== null ? balance - stayOwes : null;
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--color-fg)]">Admission advance</h3>
+          <p className="mt-1 text-2xl font-bold text-[var(--color-fg)]">
+            {balance === null ? "—" : rupees(balance)}
+          </p>
+          {cover !== null && (
+            <p
+              className={`mt-1 text-xs ${cover >= 0 ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"}`}
+            >
+              {cover >= 0
+                ? `Covers the ${rupees(stayOwes ?? 0)} this stay owes`
+                : `Short of the ${rupees(stayOwes ?? 0)} owed by ${rupees(-cover)} — collect more`}
+            </p>
+          )}
+        </div>
+        {!open && (
+          <Button variant="secondary" onClick={() => setOpen(true)}>
+            Collect advance
+          </Button>
+        )}
+      </div>
+
+      {notice && <p className="mt-2 text-xs text-[var(--color-success)]">{notice}</p>}
+
+      {open && (
+        <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+          {error && (
+            <div className="mb-3">
+              <Alert tone="danger">{error}</Alert>
+            </div>
+          )}
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-xs text-[var(--color-fg-muted)]">
+              Amount (₹)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+                className="w-32 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-[var(--color-fg-muted)]">
+              Method
+              <select
+                value={method}
+                onChange={(e) => setMethod(e.target.value)}
+                className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+              >
+                <option value="cash">Cash</option>
+                <option value="card">Card</option>
+                <option value="upi">UPI</option>
+                <option value="netbanking">Net banking</option>
+              </select>
+            </label>
+            <div className="flex gap-2">
+              <Button disabled={busy} onClick={() => void collect()}>
+                {busy ? "Saving…" : "Take advance"}
+              </Button>
+              <Button variant="secondary" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function Ward() {
   const { api, can } = useAuth();
 
@@ -478,6 +612,10 @@ function Ward() {
                   </PermissionGate>
                 </div>
               </Card>
+
+              <PermissionGate can={can} permission="wallet:manage">
+                <WardAdvance patientId={selected.patientId} stayOwes={bill?.total ?? null} />
+              </PermissionGate>
 
               <PermissionGate can={can} permission="emr:write">
                 <Card className="p-5">

@@ -1392,3 +1392,31 @@ is mostly an **admission** tool; OPD/walk-in patients pay per test directly, and
 3. **Refund ₹400** on discharge → Advances: _refunded_ ₹400, _held_ ₹0.
 4. A second patient pays a ₹300 bill in **cash** at the counter → Collections: _counter total_ +₹300;
    Advances untouched. The two reports never overlap.
+
+## 30 · Admission → advance, at the moment it happens (⏳ eyeball UI)
+
+**Why:** the wallet is mostly an ADMISSION tool, so it should appear where a patient is admitted, not
+only buried in the patient profile. Two touches: the doctor's admit confirmation now tells them to
+**send the patient to reception for the advance**, and the **Ward chart** carries an **Admission
+advance** panel — balance, whether it covers what the stay owes, and a one-click **Collect advance** —
+for staff who hold `wallet:manage` (cashier / front office). A doctor's ward round never sees it. This
+is frontend only; it reuses the wallet endpoints proven in §28.
+
+### A1 · The admit nudge (Doctor login, `drrao`)
+
+- **My patients** → open a patient in a visit → **Admit to a bed** → pick bed class + number → **Admit**.
+- The success message reads: _"Admitted … Send the patient to reception to pay the admission advance."_
+  The visit closes and the patient appears on the **Ward** list.
+
+### A2 · The advance panel on the ward (Cashier login, `cashier`)
+
+- **Ward** → pick the admitted patient → below the header, an **Admission advance** card shows the
+  current balance (₹0 for a fresh admission).
+- It reads **"Short of the ₹X owed by ₹Y — collect more"** when the running stay bill exceeds the
+  advance, or **"Covers the ₹X this stay owes"** in green once the advance is enough. (The "owed"
+  figure needs `billing:read`, which the cashier holds; a login without it just sees the balance.)
+- **Collect advance** → amount + method (reason is stamped "Admission advance") → **Take advance** →
+  the balance jumps and the coverage line re-colours. The deposit shows in the patient's Wallet tab
+  ledger and in the **Advances** report (§29).
+- A **doctor** opening the same ward chart sees the notes and (no) bill, but **no advance panel** — it
+  is the cash counter's job, not the clinician's.
