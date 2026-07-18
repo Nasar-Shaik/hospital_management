@@ -1388,6 +1388,11 @@ function MyPatients() {
                       <span className="truncate text-sm text-[var(--color-fg)]">
                         {nameOf(e.patientId)}
                       </span>
+                      {e.express && (
+                        <span className="ml-auto shrink-0 rounded-full bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">
+                          Express
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 flex items-center gap-2">
                       <Badge

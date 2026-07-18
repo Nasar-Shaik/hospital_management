@@ -1467,3 +1467,33 @@ frontend, no backend change.
   their own work). The card carries an _"awaiting verification"_ note until a pathologist/radiologist
   verifies and releases it; once **released** it reads _"visible to the doctor."_ The In-progress tab
   now holds only work actively being run.
+
+## 32 · Express OP — paid fast-track visit (⏳ eyeball UI)
+
+**Why:** some patients pay to be seen ahead of the queue. Reception marks the visit **Normal** or
+**Express**; Express floats the patient above normal patients in the doctor's list (each group still in
+token order) and adds an **express surcharge** on top of the consultation fee. It is a first-class
+field on the encounter, priced through the same event-driven billing as the consultation — so
+zero-tariff government hospitals flatten it to ₹0 like everything else, and a missing tariff never
+blocks the visit.
+
+**Backend verified live (2026-07-18, sunrise):** registering a visit with `express: true` →
+`encounter.express = true`, and the bill carries **two** consultation lines — `CONSULT_GEN` ₹500 +
+`CONSULT_EXPRESS` ₹200 = ₹700. The `CONSULT_EXPRESS` tariff (₹200) is seeded for new hospitals and was
+added to the two dev tenants.
+
+### E1 · Register an express visit (Reception / Front Office)
+
+- **Reception** → choose a patient and doctor → under **Visit type** pick **Express (fast-track)** (a
+  warning line explains the surcharge) → **Register arrival**. The confirmation notes the express
+  surcharge is on the bill. Leaving it **Normal** behaves exactly as before.
+- In **Who came in**, an express visit shows an **EXPRESS** pill next to the patient's name.
+- Open that visit's **Bill** → two consultation lines: the consultation + **Express OP Surcharge**.
+  (A zero-tariff hospital shows both at ₹0.)
+
+### E2 · Express jumps the queue (Doctor, `drrao`)
+
+- Queue two patients to the same doctor — one **Normal**, one **Express** — with the Normal one
+  registered **first**. In **My patients**, the **Express** patient sorts **above** the Normal one and
+  carries an **EXPRESS** pill, even though they arrived later. Two express patients keep their own token
+  order between themselves.

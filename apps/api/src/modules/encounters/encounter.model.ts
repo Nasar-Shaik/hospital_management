@@ -181,6 +181,13 @@ export interface EncounterDoc {
    */
   token?: number;
 
+  /**
+   * A paid fast-track OP visit. `true` floats the patient above normal patients in the
+   * doctor's queue (still token-ordered within each group) and earns an express surcharge on
+   * top of the consultation fee. Absent/false is an ordinary visit.
+   */
+  express?: boolean;
+
   reason?: string;
 
   /**
@@ -269,6 +276,7 @@ const encounterSchema = new Schema<EncounterDoc>(
     departmentId: { type: String },
 
     token: { type: Number },
+    express: { type: Boolean },
     reason: { type: String, trim: true, maxlength: 500 },
 
     // `default: undefined`, never `false` — see the interface. A stored `false`

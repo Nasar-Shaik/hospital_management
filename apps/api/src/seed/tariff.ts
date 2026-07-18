@@ -49,6 +49,13 @@ export const DEFAULT_TARIFF: TariffSeed[] = [
     category: "consultation",
     price: 25_000,
   },
+  // The fast-track surcharge, added on top of the consultation for an express OP visit.
+  {
+    code: "CONSULT_EXPRESS",
+    name: "Express OP Surcharge",
+    category: "consultation",
+    price: 20_000,
+  },
 
   // Laboratory
   { code: "CBC", name: "Complete Blood Count", category: "lab", price: 35_000 },

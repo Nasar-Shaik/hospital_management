@@ -47,6 +47,8 @@ export interface StartEncounterInput {
   departmentId?: string;
   appointmentId?: string;
   reason?: string;
+  /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
+  express?: boolean;
   branchId?: string;
 }
 
@@ -168,6 +170,7 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
           class: input.class ?? "OP",
           status,
           ...(token !== undefined ? { token } : {}),
+          ...(input.express ? { express: true } : {}),
           ...(input.doctorId ? { doctorId: input.doctorId } : {}),
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.appointmentId ? { appointmentId: input.appointmentId } : {}),
@@ -190,6 +193,9 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
             origin: encounter.origin,
             class: encounter.class,
             ...(encounter.token !== undefined ? { token: encounter.token } : {}),
+            // Carried so the billing consumer can add the express surcharge — money lives in
+            // billing, and the clinical module only says WHAT happened (a paid fast-track visit).
+            ...(encounter.express ? { express: true } : {}),
             ...(encounter.doctorId ? { doctorId: encounter.doctorId } : {}),
             ...(encounter.departmentId ? { departmentId: encounter.departmentId } : {}),
           },

@@ -34,6 +34,13 @@ const logger = createLogger({ service: "billing-consumers" });
 const CONSULTATION_CODE = "CONSULT_GEN";
 
 /**
+ * The surcharge for a paid fast-track (express) OP visit. A SEPARATE line from the consultation
+ * itself, so the bill and the collections report show the express upgrade for what it is rather
+ * than hiding it inside a larger consult fee. Zero-tariff still flattens it to ₹0 in `postCharge`.
+ */
+const EXPRESS_CODE = "CONSULT_EXPRESS";
+
+/**
  * A patient arrived → the consultation fee.
  *
  * Charged on arrival rather than when the doctor calls them in, because that is when a
@@ -79,6 +86,25 @@ async function onEncounterStarted(event: DomainEvent): Promise<void> {
     ...(fee !== undefined ? { unitPrice: fee } : {}),
     ...(typeof event.branchId === "string" ? { branchId: event.branchId } : {}),
   });
+
+  /**
+   * A paid fast-track visit earns an express surcharge, on its own line. Same idempotency as the
+   * consultation — the code differs, so `(sourceId=encounterId, code=CONSULT_EXPRESS)` is a second
+   * unique key on the same encounter and a redelivered event never charges it twice. A missing
+   * `CONSULT_EXPRESS` tariff posts at ₹0 with a warning rather than blocking the visit (postCharge).
+   */
+  if (event.payload.express === true) {
+    await postCharge({
+      encounterId,
+      patientId,
+      episodeId,
+      code: EXPRESS_CODE,
+      category: "consultation",
+      source: "encounter",
+      sourceId: encounterId,
+      ...(typeof event.branchId === "string" ? { branchId: event.branchId } : {}),
+    });
+  }
 }
 
 /**

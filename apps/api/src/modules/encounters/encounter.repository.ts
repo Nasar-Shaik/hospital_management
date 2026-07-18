@@ -34,6 +34,8 @@ export interface Encounter {
   doctorId?: string;
   departmentId?: string;
   token?: number;
+  /** A paid fast-track OP visit — sorts above normal patients in the doctor's queue. */
+  express?: boolean;
   reason?: string;
   branchId?: string;
   arrivedAt: Date;
@@ -63,6 +65,7 @@ function toEncounter(doc: EncounterDoc): Encounter {
     ...(doc.doctorId ? { doctorId: doc.doctorId } : {}),
     ...(doc.departmentId ? { departmentId: doc.departmentId } : {}),
     ...(doc.token !== undefined ? { token: doc.token } : {}),
+    ...(doc.express ? { express: true } : {}),
     ...(doc.reason ? { reason: doc.reason } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
     ...(doc.closedAt ? { closedAt: doc.closedAt } : {}),
@@ -120,6 +123,7 @@ export interface CreateEncounterInput {
   doctorId?: string;
   departmentId?: string;
   token?: number;
+  express?: boolean;
   reason?: string;
   branchId?: string;
   bed?: { ward: string; bedCode: string; tariffCode: string };
@@ -161,6 +165,7 @@ export async function create(
         ...(input.doctorId ? { doctorId: input.doctorId } : {}),
         ...(input.departmentId ? { departmentId: input.departmentId } : {}),
         ...(input.token !== undefined ? { token: input.token } : {}),
+        ...(input.express ? { express: true } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
         ...(input.bed ? { bed: input.bed } : {}),
@@ -328,10 +333,12 @@ export async function list(
 
   const [docs, total] = await Promise.all([
     model
-      // The queue is called in TOKEN order — which is arrival order, which is the
-      // only order a waiting room will accept as fair.
+      // The queue is called in TOKEN order — which is arrival order, which is the only order
+      // a waiting room will accept as fair — EXCEPT that a paid express visit floats above the
+      // normal patients (`express: -1` puts true first), each group still in token order. That
+      // is exactly what the patient paid the express surcharge for.
       .find(query)
-      .sort(filter.queuedOnly ? { token: 1 } : { arrivedAt: -1 })
+      .sort(filter.queuedOnly ? { express: -1, token: 1 } : { arrivedAt: -1 })
       .skip(filter.skip)
       .limit(filter.limit)
       .lean<EncounterDoc[]>(),

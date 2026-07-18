@@ -173,6 +173,9 @@ function Reception() {
   const [patientId, setPatientId] = useState("");
   const [doctorId, setDoctorId] = useState("");
   const [reason, setReason] = useState("");
+  // A paid fast-track visit: the patient is seen ahead of the normal queue and pays an express
+  // surcharge on top of the consultation. Off by default — the ordinary visit is the common one.
+  const [express, setExpress] = useState(false);
 
   const [openBill, setOpenBill] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -243,18 +246,21 @@ function Reception() {
         patientId,
         ...(doctorId ? { doctorId, departmentId: doctorId } : {}),
         ...(reason ? { reason } : {}),
+        ...(express ? { express: true } : {}),
       });
 
       const who = patients.find((p) => p.id === patientId)?.name ?? "Patient";
       const token = result.encounter.token;
+      const fast = result.encounter.express ? " · Express (fast-track)" : "";
 
       setNotice(
         result.resumed
           ? `${who} is already here — ${token ? `token ${String(token)}` : "visit open"}. Resumed their existing visit.`
-          : `${who} registered${token ? ` — token ${String(token)}` : ""}.`,
+          : `${who} registered${token ? ` — token ${String(token)}` : ""}${fast}. The consultation fee is on their bill${express ? " with the express surcharge" : ""}.`,
       );
       setReason("");
       setPatientId("");
+      setExpress(false);
       await load();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not start the visit.");
@@ -359,6 +365,44 @@ function Reception() {
             </label>
           </div>
 
+          {/* Normal vs paid fast-track. Express is a deliberate, priced choice — the patient is
+              seen ahead of the queue and pays a surcharge — so it is two plain buttons, not a
+              checkbox that could be ticked by accident. */}
+          <div className="mt-4">
+            <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">
+              Visit type
+            </span>
+            <div className="inline-flex rounded-lg border border-[var(--color-border-strong)] p-0.5">
+              <button
+                type="button"
+                onClick={() => setExpress(false)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                  !express
+                    ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                    : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                }`}
+              >
+                Normal
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpress(true)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                  express
+                    ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                    : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                }`}
+              >
+                Express (fast-track)
+              </button>
+            </div>
+            {express && (
+              <p className="mt-1.5 text-xs text-[var(--color-warning)]">
+                Seen ahead of the queue. An express surcharge is added to the consultation fee.
+              </p>
+            )}
+          </div>
+
           <div className="mt-4 flex items-center gap-3">
             <Button disabled={busy || !patientId} onClick={() => void startVisit()}>
               {busy ? "Registering…" : "Register arrival"}
@@ -437,6 +481,11 @@ function Reception() {
                         <span className="font-mono text-xs text-[var(--color-fg-muted)]">
                           {uhidOf(e.patientId)}
                         </span>
+                        {e.express && (
+                          <span className="ml-2 rounded-full bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">
+                            Express
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 pr-4 text-[var(--color-fg-muted)]">
                         {doctorOf(e.doctorId ?? e.departmentId)}

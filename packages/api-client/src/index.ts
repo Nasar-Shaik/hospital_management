@@ -506,6 +506,8 @@ export interface Encounter {
   departmentId?: string;
   /** The number the patient is called by. Lives HERE, not on the appointment. */
   token?: number;
+  /** A paid fast-track OP visit — sorts above normal patients in the doctor's queue. */
+  express?: boolean;
   reason?: string;
   branchId?: string;
   arrivedAt: string;
@@ -1590,6 +1592,8 @@ export class ApiClient {
     doctorId?: string;
     departmentId?: string;
     reason?: string;
+    /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
+    express?: boolean;
   }): Promise<StartEncounterResult> {
     return this.request<StartEncounterResult>("POST", "/api/v1/encounters", input);
   }

@@ -23,6 +23,8 @@ export const startEncounterSchema = z
     doctorId: objectId.optional(),
     departmentId: objectId.optional(),
     reason: z.string().max(500).optional(),
+    /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
+    express: z.boolean().default(false),
     branchId: objectId.optional(),
   })
   .strict();
