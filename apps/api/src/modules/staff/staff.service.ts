@@ -186,6 +186,32 @@ export async function listDoctors(): Promise<DoctorRef[]> {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * One doctor as a DOCUMENT needs them — the name and (for the OPD slip) their signature and
+ * qualification. Kept off `listDoctors`, whose whole point is two fields for a dropdown; the slip
+ * fetches exactly one doctor and pays for the signature only then. Gated on `encounter:read`, the
+ * same small authority as the directory.
+ */
+export interface DoctorCard {
+  id: string;
+  name: string;
+  qualification?: string;
+  designation?: string;
+  signature?: string;
+}
+
+export async function getDoctorCard(id: string): Promise<DoctorCard | undefined> {
+  const user = await users.getById(id);
+  if (!user) return undefined;
+  return {
+    id: user.id,
+    name: user.name,
+    ...(user.profile?.qualification ? { qualification: user.profile.qualification } : {}),
+    ...(user.profile?.designation ? { designation: user.profile.designation } : {}),
+    ...(user.profile?.signature ? { signature: user.profile.signature } : {}),
+  };
+}
+
 /** A doctor as the PUBLIC website shows them — name, and what they do. Never contact/HR detail. */
 export interface PublicDoctor {
   id: string;

@@ -67,6 +67,12 @@ export interface StaffProfile {
    * ever exposed (see staff.listPublicDoctors); never contact details or HR fields.
    */
   showOnPublicSite?: boolean;
+  /**
+   * Doctors: a scanned signature as a `data:image/...;base64,…` URI, printed on the OPD slip above
+   * the signature line. Held inline (not a file reference) because it is small, one per doctor, and
+   * changes rarely; bounded in the DTO so it cannot grow into a document-bloating blob.
+   */
+  signature?: string;
 }
 
 export interface UserDoc {
@@ -113,6 +119,8 @@ const userSchema = new Schema<UserDoc>(
         emergencyContactName: { type: String, trim: true, maxlength: 120 },
         emergencyContactPhone: { type: String, trim: true, maxlength: 20 },
         showOnPublicSite: { type: Boolean },
+        // A data-URI signature image. Bounded ~350 KB (base64) — a scanned signature, not a photo.
+        signature: { type: String, maxlength: 350_000 },
       },
       // `default: undefined`, never `{}` — an empty object would make the audit hash-chain
       // see a "profile changed" diff on an untouched record (the trap on duplicateOverride).

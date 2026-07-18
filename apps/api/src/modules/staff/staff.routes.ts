@@ -49,6 +49,16 @@ export function staffRouter(): Router {
     asyncHandler(controller.listDoctors),
   );
 
+  // One doctor's card (name, qualification, signature) for the OPD slip. Same authority as the
+  // directory — a document the desk prints needs the signing doctor, not the personnel file.
+  router.get(
+    "/doctors/:id",
+    authenticate(),
+    authorize(PERMISSIONS.ENCOUNTER_READ),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.getDoctorCard),
+  );
+
   router.get(
     "/users/:id",
     authenticate(),

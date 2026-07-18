@@ -132,6 +132,17 @@ export interface StaffProfile {
   emergencyContactPhone?: string;
   /** Opt-in: feature this person (doctors only) on the hospital's public website. */
   showOnPublicSite?: boolean;
+  /** Doctors: a scanned signature as a `data:image/...;base64,…` URI, printed on the OPD slip. */
+  signature?: string;
+}
+
+/** One doctor as a document needs them — for the OPD slip's signature block. */
+export interface DoctorCard {
+  id: string;
+  name: string;
+  qualification?: string;
+  designation?: string;
+  signature?: string;
 }
 
 export interface StaffMember {
@@ -1346,6 +1357,11 @@ export class ApiClient {
    */
   listDoctors(): Promise<DoctorRef[]> {
     return this.request<DoctorRef[]>("GET", "/api/v1/doctors");
+  }
+
+  /** One doctor's card (name, qualification, signature) — for the OPD slip. Needs `encounter:read`. */
+  getDoctor(id: string): Promise<DoctorCard> {
+    return this.request<DoctorCard>("GET", `/api/v1/doctors/${id}`);
   }
 
   setStaffStatus(id: string, status: "active" | "disabled"): Promise<StaffMember> {

@@ -19,6 +19,7 @@ import { useParams } from "next/navigation";
 import {
   ApiClientError,
   type Bill,
+  type DoctorCard,
   type Encounter,
   type Patient,
   type Prescription,
@@ -72,7 +73,7 @@ function Slip() {
 
   const [encounter, setEncounter] = useState<Encounter | null>(null);
   const [patient, setPatient] = useState<Patient | null>(null);
-  const [doctorName, setDoctorName] = useState<string>("—");
+  const [doctor, setDoctor] = useState<DoctorCard | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [bill, setBill] = useState<Bill | null>(null);
@@ -94,9 +95,11 @@ function Slip() {
       }
       setEncounter(enc);
 
-      const [pat, docs, ords, rx, theBill, theSite] = await Promise.all([
+      const [pat, doc, ords, rx, theBill, theSite] = await Promise.all([
         api.getPatient(enc.patientId),
-        soft(api.listDoctors(), [] as { id: string; name: string }[]),
+        enc.doctorId
+          ? soft(api.getDoctor(enc.doctorId), null as DoctorCard | null)
+          : Promise.resolve(null),
         soft(api.listOrders({ encounterId: id, limit: 100 }), {
           items: [] as Order[],
           meta: { page: 1, limit: 0 },
@@ -107,7 +110,7 @@ function Slip() {
       ]);
 
       setPatient(pat);
-      setDoctorName(docs.find((d) => d.id === enc.doctorId)?.name ?? "—");
+      setDoctor(doc);
       setOrders(ords.items);
       setPrescriptions(rx);
       setBill(theBill);
@@ -250,8 +253,10 @@ function Slip() {
             </div>
           </div>
           <div className="text-right">
-            <div className="font-semibold text-gray-900">Dr {doctorName}</div>
-            <div className="text-xs text-gray-600">Consulting doctor</div>
+            <div className="font-semibold text-gray-900">Dr {doctor?.name ?? "—"}</div>
+            <div className="text-xs text-gray-600">
+              {doctor?.qualification ?? "Consulting doctor"}
+            </div>
           </div>
         </section>
 
@@ -387,9 +392,15 @@ function Slip() {
             Computer-generated OPD summary · printed {fmtDateTime(new Date().toISOString())}
           </p>
           <div className="text-center">
-            <div className="mb-1 h-10" />
+            {/* The doctor's actual scanned signature when they have uploaded one; otherwise a blank
+                space for a wet signature. Either way the printed name sits under the line. */}
+            <div className="mb-1 flex h-10 items-end justify-center">
+              {doctor?.signature ? (
+                <img src={doctor.signature} alt="Signature" className="max-h-10 object-contain" />
+              ) : null}
+            </div>
             <div className="w-48 border-t border-gray-400 pt-1 text-xs text-gray-700">
-              Dr {doctorName}
+              Dr {doctor?.name ?? "—"}
               <div className="text-[10px] text-gray-500">Signature &amp; seal</div>
             </div>
           </div>

@@ -68,6 +68,8 @@ interface FormState {
   emergencyContactPhone: string;
   /** Doctors only: feature this person on the public website. */
   showOnPublicSite: boolean;
+  /** Doctors only: scanned signature as a data-URI image, for the OPD slip. */
+  signature: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -89,6 +91,7 @@ const EMPTY_FORM: FormState = {
   emergencyContactName: "",
   emergencyContactPhone: "",
   showOnPublicSite: false,
+  signature: "",
 };
 
 function formFromMember(m: StaffMember): FormState {
@@ -112,6 +115,7 @@ function formFromMember(m: StaffMember): FormState {
     emergencyContactName: p.emergencyContactName ?? "",
     emergencyContactPhone: p.emergencyContactPhone ?? "",
     showOnPublicSite: p.showOnPublicSite ?? false,
+    signature: p.signature ?? "",
   };
 }
 
@@ -137,6 +141,9 @@ function profileFromForm(f: FormState): StaffProfile {
   // Always sent (not via `put`), because the profile is MERGED server-side: to UN-publish a
   // doctor the `false` has to overwrite the stored `true`, so omitting it would never clear.
   out.showOnPublicSite = f.showOnPublicSite;
+  // Only a valid image data URI goes on the wire (the server enforces this too). Omitted when
+  // blank — the merge keeps any existing signature rather than the empty box wiping it.
+  if (f.signature.startsWith("data:image")) out.signature = f.signature;
   return out;
 }
 
@@ -333,6 +340,43 @@ function StaffForm({
                 </span>
               </span>
             </label>
+          )}
+          {hasSpecialty && (
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+              <span className="text-sm font-medium text-[var(--color-fg)]">Signature</span>
+              <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
+                A scanned signature (PNG/JPG under ~200&nbsp;KB) — printed on this doctor&apos;s OPD
+                slips.
+              </span>
+              <div className="mt-2 flex items-center gap-3">
+                {form.signature.startsWith("data:image") ? (
+                  <img
+                    src={form.signature}
+                    alt="Doctor signature"
+                    className="h-12 rounded border border-[var(--color-border)] bg-white object-contain px-2"
+                  />
+                ) : (
+                  <span className="text-xs text-[var(--color-fg-subtle)]">None uploaded</span>
+                )}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="text-xs"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!file) return;
+                    if (file.size > 200_000) {
+                      window.alert("That image is too large — please use one under 200 KB.");
+                      return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = () => set({ signature: String(reader.result) });
+                    reader.readAsDataURL(file);
+                  }}
+                />
+              </div>
+            </div>
           )}
           {isClinical && (
             <Field
