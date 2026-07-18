@@ -187,15 +187,23 @@ function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
   );
 }
 
-/** Which tab a status belongs to. Pending = not started; In progress = running/awaiting sign-off. */
+/**
+ * Which tab a status belongs to.
+ *
+ * Pending = not started; In progress = actively being run; Completed = the running is DONE. The
+ * technician's job finishes when they record the result, so `completed` and `verified` belong in
+ * Completed from their chair — the second-pair-of-eyes sign-off (verify → release) is a different
+ * person's step, shown as a status label on the card, not a reason to keep the work in "In progress"
+ * where the tech who finished it keeps seeing it. (This was the "it never leaves in-progress" bug.)
+ */
 type WorkTab = "pending" | "inprogress" | "completed";
 
 const TAB_OF: Record<string, WorkTab> = {
   placed: "pending",
   accepted: "pending",
   in_progress: "inprogress",
-  completed: "inprogress",
-  verified: "inprogress",
+  completed: "completed",
+  verified: "completed",
   released: "completed",
 };
 
@@ -226,6 +234,9 @@ function Worklist() {
   const [payment, setPayment] = useState<Record<string, "paid" | "unpaid" | "unbilled" | "free">>(
     {},
   );
+  // Order ids that already have an uploaded report/document. A result can only be marked complete
+  // when there is something to show for it — typed values (Enter result) or an uploaded doc.
+  const [reported, setReported] = useState<Set<string>>(new Set());
 
   const [tab, setTab] = useState<WorkTab>("pending");
   const [search, setSearch] = useState("");
@@ -272,6 +283,18 @@ function Worklist() {
         .orderPaymentStatus(ids)
         .then(setPayment)
         .catch(() => setPayment({}));
+
+      // Which in-progress orders already have an uploaded document, so "Mark complete" (the
+      // upload path) is only offered once there is a document to stand behind it. Reports are read
+      // per patient; failures here just leave the set empty (the tech can still Enter result).
+      const inProgressPatients = [
+        ...new Set(
+          activePage.items.filter((o) => o.status === "in_progress").map((o) => o.patientId),
+        ),
+      ];
+      Promise.all(inProgressPatients.map((pid) => api.listReports(pid).catch(() => [])))
+        .then((lists) => setReported(new Set(lists.flat().map((r) => r.orderId))))
+        .catch(() => setReported(new Set()));
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load the worklist.");
     } finally {
@@ -289,11 +312,19 @@ function Worklist() {
   const since = completedSince(datePreset);
   const pending = active.filter((o) => TAB_OF[o.status] === "pending" && matchesSearch(o));
   const inprogress = active.filter((o) => TAB_OF[o.status] === "inprogress" && matchesSearch(o));
-  const completed = done.filter(
+  // Completed = work whose running is finished: the completed/verified rows still in the active
+  // queue (awaiting the sign-off), plus the released history. The date filter only applies to the
+  // released rows — a just-completed result must show whatever the date preset is, or the tech who
+  // finished it a minute ago would think it vanished.
+  const completedActive = active.filter(
+    (o) => TAB_OF[o.status] === "completed" && matchesSearch(o),
+  );
+  const completedReleased = done.filter(
     (o) =>
       matchesSearch(o) &&
       (since === null || (o.releasedAt ? new Date(o.releasedAt) >= since : true)),
   );
+  const completed = [...completedActive, ...completedReleased];
 
   const tabs: { key: WorkTab; label: string; orders: Order[] }[] = [
     { key: "pending", label: "Pending", orders: pending },
@@ -388,6 +419,8 @@ function Worklist() {
         contentType: file.type || "application/octet-stream",
         dataBase64,
       });
+      // The order now has a document behind it — "Mark complete" becomes available.
+      setReported((prev) => new Set(prev).add(order.id));
       setNotice(`Report uploaded for ${order.name}. The ordering doctor can see it now.`);
     } catch (err) {
       if (err instanceof ApiClientError) {
@@ -519,40 +552,69 @@ function Worklist() {
                   </div>
 
                   <div className="flex flex-wrap gap-1.5">
-                    {/* Only the edges §15 allows, and only for the role that holds them. */}
-                    {o.status === "placed" && can("order:perform") && (
-                      <Button
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() => void act(o, "accept")}
-                      >
-                        Accept
-                      </Button>
-                    )}
-                    {o.status === "accepted" && can("order:perform") && (
-                      <Button
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() => void act(o, "start")}
-                      >
-                        Start
-                      </Button>
-                    )}
-                    {o.status === "in_progress" && can("order:perform") && (
+                    {/*
+                     * ── PAY BEFORE THE LAB RUNS ────────────────────────────────────────────
+                     * An UNPAID test is held: the technician cannot accept, start, record or
+                     * upload against it until the patient has paid at billing. `free` (zero-tariff
+                     * government patient), `unbilled` (no charge raised yet) and `paid` all proceed
+                     * — only a real, raised, unpaid charge holds the work. Cancel is always allowed.
+                     */}
+                    {payment[o.id] === "unpaid" &&
+                    ["placed", "accepted", "in_progress"].includes(o.status) ? (
+                      <span className="inline-flex items-center rounded-md bg-[var(--color-warning-bg)] px-2.5 py-1 text-xs font-medium text-[var(--color-warning)]">
+                        Awaiting payment — held until paid at billing
+                      </span>
+                    ) : (
                       <>
-                        <Button
-                          disabled={busy}
-                          onClick={() => setEntering(entering === o.id ? null : o.id)}
-                        >
-                          {entering === o.id ? "Cancel entry" : "Enter result"}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          disabled={busy}
-                          onClick={() => void act(o, "complete")}
-                        >
-                          Mark complete
-                        </Button>
+                        {/* Only the edges §15 allows, and only for the role that holds them. */}
+                        {o.status === "placed" && can("order:perform") && (
+                          <Button
+                            variant="secondary"
+                            disabled={busy}
+                            onClick={() => void act(o, "accept")}
+                          >
+                            Accept
+                          </Button>
+                        )}
+                        {o.status === "accepted" && can("order:perform") && (
+                          <Button
+                            variant="secondary"
+                            disabled={busy}
+                            onClick={() => void act(o, "start")}
+                          >
+                            Start
+                          </Button>
+                        )}
+                        {o.status === "in_progress" && can("order:perform") && (
+                          <>
+                            <Button
+                              disabled={busy}
+                              onClick={() => setEntering(entering === o.id ? null : o.id)}
+                            >
+                              {entering === o.id ? "Cancel entry" : "Enter result"}
+                            </Button>
+                            {/*
+                             * "Mark complete" is the UPLOAD path — its result is a document, not
+                             * typed values. So it only appears once a report has actually been
+                             * uploaded for this order; otherwise there is nothing to complete
+                             * against, and the tech is directed to Enter result (which itself
+                             * refuses an empty result). No completing on thin air.
+                             */}
+                            {reported.has(o.id) ? (
+                              <Button
+                                variant="secondary"
+                                disabled={busy}
+                                onClick={() => void act(o, "complete")}
+                              >
+                                Mark complete
+                              </Button>
+                            ) : (
+                              <span className="inline-flex items-center rounded-md border border-dashed border-[var(--color-border-strong)] px-2.5 py-1 text-xs text-[var(--color-fg-subtle)]">
+                                Enter result or upload a report to complete
+                              </span>
+                            )}
+                          </>
+                        )}
                       </>
                     )}
                     {/* The SECOND pair of eyes. A technician never sees this button. */}
@@ -572,27 +634,30 @@ function Worklist() {
                       </Button>
                     )}
 
-                    {/* Upload a scanned report — no verify step, straight to the doctor. */}
-                    {o.status !== "cancelled" && can("order:perform") && (
-                      <label
-                        className={`inline-flex cursor-pointer items-center rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] ${
-                          uploading === o.id ? "opacity-50" : ""
-                        }`}
-                      >
-                        {uploading === o.id ? "Uploading…" : "Upload report"}
-                        <input
-                          type="file"
-                          accept="application/pdf,image/*"
-                          className="hidden"
-                          disabled={uploading !== null}
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            e.target.value = ""; // allow re-picking the same file
-                            if (file) void uploadReport(o, file);
-                          }}
-                        />
-                      </label>
-                    )}
+                    {/* Upload a scanned report — no verify step, straight to the doctor. Held
+                        while the test is unpaid, the same as the run itself. */}
+                    {o.status !== "cancelled" &&
+                      can("order:perform") &&
+                      payment[o.id] !== "unpaid" && (
+                        <label
+                          className={`inline-flex cursor-pointer items-center rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] ${
+                            uploading === o.id ? "opacity-50" : ""
+                          }`}
+                        >
+                          {uploading === o.id ? "Uploading…" : "Upload report"}
+                          <input
+                            type="file"
+                            accept="application/pdf,image/*"
+                            className="hidden"
+                            disabled={uploading !== null}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = ""; // allow re-picking the same file
+                              if (file) void uploadReport(o, file);
+                            }}
+                          />
+                        </label>
+                      )}
                   </div>
                 </div>
 

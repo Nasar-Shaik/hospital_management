@@ -1420,3 +1420,50 @@ is frontend only; it reuses the wallet endpoints proven in §28.
   ledger and in the **Advances** report (§29).
 - A **doctor** opening the same ward chart sees the notes and (no) bill, but **no advance panel** — it
   is the cash counter's job, not the clinician's.
+
+## 31 · Consult & worklist flow validations (⏳ eyeball UI)
+
+Four related tightenings across the doctor's consult (My patients) and the lab **Worklist**. All
+frontend, no backend change.
+
+### C1 · Call in before you order or prescribe (Doctor, `drrao`)
+
+- **My patients** → pick a patient who is **in the queue** (not yet called in). The right pane shows
+  only the header with **Call in** and a line: _"Call the patient in to begin … press Call in above."_
+  The **Order** and **Prescribe** pads are **not shown**.
+- Click **Call in** → status becomes _in progress_ → the **Order** and **Prescribe** pads appear.
+  Sending for tests / prescribing is now possible. (You cannot investigate or medicate someone still
+  waiting in the queue.)
+
+### C2 · Collapsible consult sections (Doctor)
+
+- With a patient called in, the panel now stacks **Order**, **Prescribe**, **Allergies**, **Prescribed
+  on this visit**, **Ordered on this visit** as **collapsible cards** (click the title to fold/unfold).
+  Order/Prescribe start open; Allergies and the two history lists start folded with a **count** in the
+  header, so the screen stays short — useful once the patient is sent to the lab.
+
+### C3 · Pay before the lab runs (Lab technician, `labtech`)
+
+- Order a lab test for a patient (as a doctor), do **not** pay for it → **Worklist** shows the test with
+  an **unpaid** badge and, in place of the action buttons, **"Awaiting payment — held until paid at
+  billing."** Accept / Start / Enter result / Upload are all withheld. (Cancel still works.)
+- Collect payment for that test at **Billing** → back on the worklist the badge turns **paid** and the
+  actions appear. A **free** (zero-tariff / government) or **not-billed** test is never held — only a
+  real, raised, unpaid charge is.
+
+### C4 · No completing on thin air (Lab technician)
+
+- A test **in progress** shows **Enter result** and, instead of a bare "Mark complete", the hint
+  **"Enter result or upload a report to complete."**
+- **Enter result** refuses an empty result (the button stays disabled until a summary or a value is
+  typed). **Upload a report** → once a document is attached, **Mark complete** appears and completes the
+  order against that document. There is no way to mark a result complete with nothing entered or
+  uploaded.
+
+### C5 · Completed work reaches the Completed tab (Lab technician) — bug fix
+
+- After **Enter result** (or Mark complete on an uploaded report), the test now moves to the
+  **Completed** tab (previously it was stranded in _In progress_, because a technician cannot verify
+  their own work). The card carries an _"awaiting verification"_ note until a pathologist/radiologist
+  verifies and releases it; once **released** it reads _"visible to the doctor."_ The In-progress tab
+  now holds only work actively being run.

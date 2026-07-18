@@ -20,7 +20,7 @@
  * that is a decision for a hospital to make explicitly, not for this screen to make
  * by accident. `billing:read` is not in the DOCTOR grant.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ApiClientError,
   ALLERGENS,
@@ -1279,6 +1279,9 @@ function MyPatients() {
 
   const selected = waiting.find((e) => e.id === selectedId) ?? null;
   const selectedPatientId = selected?.patientId ?? null;
+  // The consultation has actually started — the patient was CALLED IN. Ordering tests and
+  // prescribing are held until then: you do not investigate or medicate someone still in the queue.
+  const consulting = !!selected && ["in_progress", "awaiting_results"].includes(selected.status);
 
   useEffect(() => {
     if (selectedId) {
@@ -1482,24 +1485,63 @@ function MyPatients() {
                 )}
               </Card>
 
-              <PermissionGate can={can} permission="order:create">
+              {/*
+               * ── CALL IN BEFORE YOU ORDER OR PRESCRIBE ───────────────────────────────
+               * A patient still in the queue has not been seen. Ordering their bloods or
+               * prescribing them a drug before the consultation has started is acting on a
+               * patient the doctor has not called in — so the pads are held until "Call in".
+               */}
+              {!consulting ? (
                 <Card className="p-5">
-                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Order</h3>
-                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
-                    Ordering puts it in that department&apos;s worklist immediately. There is no
-                    &ldquo;send to lab&rdquo; step.
+                  <p className="text-sm text-[var(--color-fg-muted)]">
+                    <strong className="text-[var(--color-fg)]">
+                      Call the patient in to begin.
+                    </strong>{" "}
+                    Ordering tests and prescribing open once the consultation has started — press{" "}
+                    <em>Call in</em> above.
                   </p>
-                  <OrderPad
-                    encounter={selected}
-                    services={services}
-                    onOrdered={() => loadOrders(selected.id)}
-                  />
                 </Card>
-              </PermissionGate>
+              ) : (
+                <>
+                  <PermissionGate can={can} permission="order:create">
+                    <CollapsibleCard title="Order" defaultOpen={selected.status === "in_progress"}>
+                      <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                        Ordering puts it in that department&apos;s worklist immediately. There is no
+                        &ldquo;send to lab&rdquo; step.
+                      </p>
+                      <OrderPad
+                        encounter={selected}
+                        services={services}
+                        onOrdered={() => loadOrders(selected.id)}
+                      />
+                    </CollapsibleCard>
+                  </PermissionGate>
+
+                  <PermissionGate can={can} permission="prescription:sign">
+                    <CollapsibleCard
+                      title="Prescribe"
+                      defaultOpen={selected.status === "in_progress"}
+                    >
+                      <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                        Signing puts it on the pharmacy counter immediately. Nothing is charged
+                        until the drugs are actually handed over.
+                      </p>
+                      <RxPad
+                        encounter={selected}
+                        drugs={drugs}
+                        allergies={allergies}
+                        onSigned={() => {
+                          setNotice("Prescription signed — it is on the pharmacy counter now.");
+                          loadPrescriptions(selected.id);
+                        }}
+                      />
+                    </CollapsibleCard>
+                  </PermissionGate>
+                </>
+              )}
 
               <PermissionGate can={can} permission="allergy:read">
-                <Card className="p-5">
-                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Allergies</h3>
+                <CollapsibleCard title="Allergies" count={allergies.length} defaultOpen={false}>
                   <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
                     Recorded against the patient, seen at every branch. The prescribing check
                     screens against this list.
@@ -1510,44 +1552,27 @@ function MyPatients() {
                     canManage={can("allergy:manage")}
                     onChange={() => loadAllergies(selected.patientId)}
                   />
-                </Card>
+                </CollapsibleCard>
               </PermissionGate>
 
-              <PermissionGate can={can} permission="prescription:sign">
-                <Card className="p-5">
-                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Prescribe</h3>
-                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
-                    Signing puts it on the pharmacy counter immediately. Nothing is charged until
-                    the drugs are actually handed over.
-                  </p>
-                  <RxPad
-                    encounter={selected}
-                    drugs={drugs}
-                    allergies={allergies}
-                    onSigned={() => {
-                      setNotice("Prescription signed — it is on the pharmacy counter now.");
-                      loadPrescriptions(selected.id);
-                    }}
-                  />
-                </Card>
-              </PermissionGate>
-
-              <Card className="p-5">
-                <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
-                  Prescribed on this visit
-                </h3>
+              <CollapsibleCard
+                title="Prescribed on this visit"
+                count={prescriptions.length}
+                defaultOpen={false}
+              >
                 <PrescriptionsForVisit
                   prescriptions={prescriptions}
                   onCancel={(id) => void stopPrescription(id)}
                 />
-              </Card>
+              </CollapsibleCard>
 
-              <Card className="p-5">
-                <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
-                  Ordered on this visit
-                </h3>
+              <CollapsibleCard
+                title="Ordered on this visit"
+                count={orders.length}
+                defaultOpen={false}
+              >
                 <OrdersForVisit orders={orders} />
-              </Card>
+              </CollapsibleCard>
 
               <Card className="p-5">
                 <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Reports</h3>
@@ -1562,6 +1587,45 @@ function MyPatients() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * A titled card that folds away to save vertical space — the consult panel stacks a lot of sections,
+ * and once a patient is at the lab the doctor wants the finished ones out of the way. Self-manages
+ * its open state; the count sits in the header so a folded section still tells you how much is inside.
+ */
+function CollapsibleCard({
+  title,
+  count,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card className="p-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 px-5 py-4 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold text-[var(--color-fg)]">
+          {title}
+          {count !== undefined && count > 0 && (
+            <span className="rounded-full bg-[var(--color-bg-subtle)] px-1.5 py-0.5 text-xs font-normal text-[var(--color-fg-muted)]">
+              {count}
+            </span>
+          )}
+        </span>
+        <span className="text-[var(--color-fg-subtle)]">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div className="px-5 pb-5">{children}</div>}
+    </Card>
   );
 }
 
