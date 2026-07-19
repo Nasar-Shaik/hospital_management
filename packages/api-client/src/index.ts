@@ -29,6 +29,14 @@ export interface ApiClientOptions {
   /** Overrides the `Host` the API sees. Server-side only; browsers ignore it. */
   tenantHost?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Called when a request fails with an EXPIRED/INVALID session (HMS-AUTH-002/003) — the
+   * mid-session case the proactive refresh timer can miss (a laptop asleep past the token's
+   * life). Return `true` if a silent refresh succeeded and the one failed request should be
+   * retried; return `false` to give up (the caller then sends the user to /login). Auth
+   * endpoints (login/refresh/mfa/reset) are excluded so this never recurses on the refresh call.
+   */
+  onUnauthorized?: () => Promise<boolean>;
 }
 
 export class ApiClientError extends Error {
@@ -854,6 +862,21 @@ export interface WalletRegister {
   outstandingHeld: number;
 }
 
+/** One row of the receipts register — a bill payment or an advance deposit taken in the period. */
+export interface ReceiptRow {
+  kind: "bill" | "advance";
+  /** The id to reprint by: an invoice id for a bill, a wallet-entry id for an advance. */
+  refId: string;
+  receiptNo: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  /** Paise received. */
+  amount: number;
+  method?: string;
+  at: string;
+}
+
 /** How inpatient stays ended in the period — the discharge / mortality register. */
 export interface DischargeRegister {
   total: number;
@@ -1162,12 +1185,14 @@ export class ApiClient {
   private readonly credentials: RequestCredentials;
   private readonly tenantHost?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly onUnauthorized?: () => Promise<boolean>;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.getAccessToken = options.getAccessToken;
     this.credentials = options.credentials ?? "include";
     this.tenantHost = options.tenantHost;
+    this.onUnauthorized = options.onUnauthorized;
 
     /**
      * `.bind(globalThis)` is not defensive style — it is the difference between
@@ -1192,10 +1217,21 @@ export class ApiClient {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
+  /**
+   * The unauthenticated auth endpoints. A 401 from these is the answer itself (bad password,
+   * a dead refresh token), never a "your session expired mid-action" — so the interceptor
+   * must skip them, both to avoid recursing on the refresh call and to leave the login form's
+   * own error handling intact.
+   */
+  private isAuthEndpoint(path: string): boolean {
+    return /\/api\/v1\/auth\/(login|refresh|mfa|forgot-password|reset-password)\b/.test(path);
+  }
+
   private async send<T>(
     method: string,
     path: string,
     body?: unknown,
+    retry = true,
   ): Promise<{ data: T; meta?: PageMeta }> {
     const token = this.getAccessToken?.();
 
@@ -1226,13 +1262,22 @@ export class ApiClient {
 
     if (!res.ok || !envelope.success) {
       const err = envelope.error;
-      throw new ApiClientError(
+      const error = new ApiClientError(
         res.status,
         err?.code ?? "HMS-GEN-500",
         err?.message ?? "Request failed",
         err?.details,
         err?.traceId,
       );
+
+      // Session expired mid-action: give the app one chance to refresh silently and replay
+      // this request, so the user never sees a "could not load" on a screen they were using.
+      if (error.isUnauthenticated && retry && this.onUnauthorized && !this.isAuthEndpoint(path)) {
+        const recovered = await this.onUnauthorized();
+        if (recovered) return this.send<T>(method, path, body, false);
+      }
+
+      throw error;
     }
 
     return { data: envelope.data as T, ...(envelope.meta ? { meta: envelope.meta } : {}) };
@@ -1844,6 +1889,44 @@ export class ApiClient {
     return this.request("GET", `/api/v1/billing/order-payments${qs}`);
   }
 
+  /**
+   * PAID / UNPAID (or `free` / `unbilled`) per encounter's CONSULTATION — reception's gate for
+   * "pay the OP fee before joining the doctor's queue". A status flag only (no amounts), reachable
+   * with `encounter:read`. `free` is a zero-tariff (government) patient who owes nothing and queues
+   * at once; `unbilled` means the consultation charge has not posted yet.
+   */
+  consultationPaymentStatus(
+    encounterIds: string[],
+  ): Promise<Record<string, "paid" | "unpaid" | "unbilled" | "free">> {
+    if (encounterIds.length === 0) return Promise.resolve({});
+    const qs = `?encounterIds=${encodeURIComponent(encounterIds.join(","))}`;
+    return this.request("GET", `/api/v1/billing/consultation-payments${qs}`);
+  }
+
+  /**
+   * Per order for the lab worklist: whether the patient is admitted, their advance balance, and this
+   * test's amount — so an admitted patient's test can be settled from advance instead of paid at the
+   * counter. Reachable with `order:read`.
+   */
+  orderSettlementInfo(
+    orderIds: string[],
+  ): Promise<Record<string, { admitted: boolean; advanceBalance: number; amount: number }>> {
+    if (orderIds.length === 0) return Promise.resolve({});
+    const qs = `?orderIds=${encodeURIComponent(orderIds.join(","))}`;
+    return this.request("GET", `/api/v1/billing/order-settlement${qs}`);
+  }
+
+  /**
+   * Settles one admitted-patient test from their advance — the lab tech's "proceed" action. Draws the
+   * test's amount from the wallet (balance may go negative for an inpatient) and marks it paid. Needs
+   * `order:perform`; refuses an OP test (that is paid at the counter).
+   */
+  settleOrderFromAdvance(
+    orderId: string,
+  ): Promise<{ orderId: string; invoiceId: string; advanceBalance: number }> {
+    return this.request("POST", `/api/v1/billing/orders/${orderId}/settle-from-advance`, {});
+  }
+
   reportPharmacyStock(range: ReportRange): Promise<StockRegisterRow[]> {
     return this.request<StockRegisterRow[]>(
       "GET",
@@ -1870,6 +1953,11 @@ export class ApiClient {
   /** The advance (wallet) register — admission advances in, utilised, refunded, and held. */
   reportWallet(range: ReportRange): Promise<WalletRegister> {
     return this.request<WalletRegister>("GET", `/api/v1/reports/wallet${rangeQs(range)}`);
+  }
+
+  /** The receipts register — every payment (bills + advances) taken in the period. Needs `billing:read`. */
+  reportReceipts(range: ReportRange): Promise<ReceiptRow[]> {
+    return this.request<ReceiptRow[]>("GET", `/api/v1/reports/receipts${rangeQs(range)}`);
   }
 
   reportDischargeOutcomes(range: ReportRange): Promise<DischargeRegister> {
@@ -2139,6 +2227,11 @@ export class ApiClient {
     return this.paged<Invoice>(`/api/v1/invoices${qs ? `?${qs}` : ""}`);
   }
 
+  /** One bill by id — for a printable receipt. Needs `billing:read`. */
+  getInvoice(invoiceId: string): Promise<Invoice> {
+    return this.request<Invoice>("GET", `/api/v1/invoices/${invoiceId}`);
+  }
+
   /** Takes money. `amount` is PAISE. Refused on a draft; overpayment is refused. */
   recordPayment(
     invoiceId: string,
@@ -2163,6 +2256,11 @@ export class ApiClient {
   /** The patient's advance balance + recent statement. Needs `wallet:manage`. */
   getWallet(patientId: string): Promise<Wallet> {
     return this.request<Wallet>("GET", `/api/v1/patients/${patientId}/wallet`);
+  }
+
+  /** One wallet ledger entry by id — for reprinting an advance (deposit) receipt. Needs `wallet:manage`. */
+  getWalletEntry(id: string): Promise<WalletEntry> {
+    return this.request<WalletEntry>("GET", `/api/v1/wallet/entries/${id}`);
   }
 
   /** Takes an advance (OP or admission). `amount` is PAISE. Needs `wallet:manage`. */

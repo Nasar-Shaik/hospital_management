@@ -42,10 +42,14 @@ export function apiTarget(): string {
   return apiBaseUrl();
 }
 
-export function browserApi(getAccessToken?: () => string | undefined): ApiClient {
+export function browserApi(
+  getAccessToken?: () => string | undefined,
+  onUnauthorized?: () => Promise<boolean>,
+): ApiClient {
   return createApiClient({
     baseUrl: apiBaseUrl(),
     ...(getAccessToken ? { getAccessToken } : {}),
+    ...(onUnauthorized ? { onUnauthorized } : {}),
     credentials: "include", // the refresh cookie must ride along
   });
 }

@@ -368,6 +368,24 @@ export async function unbilledChargesForEncounter(encounterId: string): Promise<
   return docs.map(toCharge);
 }
 
+/**
+ * The consultation charges across a SET of encounters — for reception's "has the OP fee been
+ * paid?" gate. Filtered to `category: "consultation"` so a later test or pharmacy charge on the
+ * same visit never counts toward whether the patient may join the doctor's queue.
+ */
+export async function consultationChargesForEncounters(encounterIds: string[]): Promise<Charge[]> {
+  if (encounterIds.length === 0) return [];
+  const objectIds = encounterIds.map((id) => new Types.ObjectId(id));
+  const docs = await getChargeModel(getTenantDb())
+    .find({
+      encounterId: { $in: objectIds },
+      category: "consultation",
+      voided: { $ne: true },
+    })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
 /** Every invoice raised on this visit (a visit can have several — consultation, tests, pharmacy). */
 export async function invoicesForEncounter(encounterId: string): Promise<Invoice[]> {
   const docs = await getInvoiceModel(getTenantDb())
@@ -601,24 +619,95 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
  */
 export async function chargesForSources(
   sourceIds: string[],
-): Promise<{ sourceId: string; amount: number; invoiceId?: string }[]> {
+): Promise<{ sourceId: string; amount: number; invoiceId?: string; encounterId: string }[]> {
   if (sourceIds.length === 0) return [];
   const docs = await getChargeModel(getTenantDb())
     .find(
       { sourceId: { $in: sourceIds }, voided: { $ne: true } },
-      { sourceId: 1, amount: 1, invoiceId: 1 },
+      { sourceId: 1, amount: 1, invoiceId: 1, encounterId: 1 },
     )
-    .lean<{ sourceId?: string; amount: number; invoiceId?: Types.ObjectId }[]>();
+    .lean<
+      {
+        sourceId?: string;
+        amount: number;
+        invoiceId?: Types.ObjectId;
+        encounterId: Types.ObjectId;
+      }[]
+    >();
 
   return docs
-    .filter((d): d is { sourceId: string; amount: number; invoiceId?: Types.ObjectId } =>
-      Boolean(d.sourceId),
+    .filter(
+      (
+        d,
+      ): d is {
+        sourceId: string;
+        amount: number;
+        invoiceId?: Types.ObjectId;
+        encounterId: Types.ObjectId;
+      } => Boolean(d.sourceId),
     )
     .map((d) => ({
       sourceId: d.sourceId,
       amount: d.amount,
+      encounterId: d.encounterId.toString(),
       ...(d.invoiceId ? { invoiceId: d.invoiceId.toString() } : {}),
     }));
+}
+
+/** Every live (non-voided) charge caused by one source (an order), in FULL — for settling it. */
+export async function fullChargesForSource(sourceId: string): Promise<Charge[]> {
+  const docs = await getChargeModel(getTenantDb())
+    .find({ sourceId, voided: { $ne: true } })
+    .sort({ postedAt: 1 })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+export interface BillReceipt {
+  invoiceId: string;
+  number?: string;
+  patientId: string;
+  paid: number;
+  total: number;
+  at: Date;
+}
+
+/**
+ * Issued bills with money on them in a period `[from, to)` — the bill half of the receipts register.
+ * Only invoices that have been finalized (so they carry a number) and have taken at least one payment
+ * count as a receipt. Dated by `finalizedAt` — when the bill was raised at the counter.
+ */
+export async function receiptsBetween(from: Date, to: Date): Promise<BillReceipt[]> {
+  const docs = await getInvoiceModel(getTenantDb())
+    .find(
+      {
+        status: { $in: ["finalized", "paid"] },
+        paid: { $gt: 0 },
+        finalizedAt: { $gte: from, $lt: to },
+      },
+      { number: 1, patientId: 1, paid: 1, total: 1, finalizedAt: 1 },
+    )
+    .sort({ finalizedAt: -1 })
+    .limit(500)
+    .lean<
+      {
+        _id: Types.ObjectId;
+        number?: string;
+        patientId: Types.ObjectId;
+        paid: number;
+        total: number;
+        finalizedAt?: Date;
+      }[]
+    >();
+
+  return docs.map((d) => ({
+    invoiceId: d._id.toString(),
+    patientId: d.patientId.toString(),
+    paid: d.paid,
+    total: d.total,
+    at: d.finalizedAt ?? new Date(),
+    ...(d.number ? { number: d.number } : {}),
+  }));
 }
 
 /** The status of a set of invoices by id — for tracing whether a charge has been paid. */

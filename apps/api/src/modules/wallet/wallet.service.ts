@@ -28,6 +28,18 @@ export interface WalletView {
   entries: repo.WalletEntry[];
 }
 
+/** One ledger entry by id — for regenerating an advance (deposit) receipt later. */
+export async function getEntry(id: string): Promise<repo.WalletEntry> {
+  const entry = await repo.findEntryById(id);
+  if (!entry) throw new AppError("HMS-GEN-404", 404, "Receipt not found", { id });
+  return entry;
+}
+
+/** Advances taken in a period — the deposits shown on the receipts register. */
+export function listDeposits(range: { from: Date; to: Date }): Promise<repo.WalletEntry[]> {
+  return repo.depositsBetween(range.from, range.to);
+}
+
 /** The balance and recent statement for a patient. */
 export async function getWallet(patientId: string): Promise<WalletView> {
   await assertPatient(patientId);
@@ -130,20 +142,31 @@ export async function refund(patientId: string, input: RefundInput): Promise<Wal
  */
 export async function debitForInvoice(
   session: ClientSession,
-  args: { patientId: string; amount: number; invoiceId: string; encounterId?: string },
+  args: {
+    patientId: string;
+    amount: number;
+    invoiceId: string;
+    encounterId?: string;
+    /**
+     * The admitted-patient path: let the balance go NEGATIVE rather than refuse the debit, so an
+     * inpatient's test is never held for want of advance (the shortfall is collected later). Off by
+     * default — an OP settlement still cannot overspend.
+     */
+    allowNegative?: boolean;
+  },
 ): Promise<number> {
-  const result = await repo.debit(
-    args.patientId,
-    args.amount,
-    "debit",
-    {
-      invoiceId: args.invoiceId,
-      reason: "Bill settled from advance",
-      ...(args.encounterId ? { encounterId: args.encounterId } : {}),
-    },
-    session,
-  );
+  const meta = {
+    invoiceId: args.invoiceId,
+    reason: "Bill settled from advance",
+    ...(args.encounterId ? { encounterId: args.encounterId } : {}),
+  };
 
+  if (args.allowNegative) {
+    const result = await repo.debitAllowNegative(args.patientId, args.amount, meta, session);
+    return result.balance;
+  }
+
+  const result = await repo.debit(args.patientId, args.amount, "debit", meta, session);
   if (!result) throw insufficient(args.patientId, args.amount);
   return result.balance;
 }

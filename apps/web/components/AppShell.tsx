@@ -94,7 +94,10 @@ const NAVIGATION: NavSection[] = [
   },
   {
     title: "Finance",
-    items: [{ label: "Billing", href: "/billing", permission: "billing:read" }],
+    items: [
+      { label: "Billing", href: "/billing", permission: "billing:read" },
+      { label: "Receipts", href: "/receipts", permission: "billing:read" },
+    ],
   },
 ];
 

@@ -52,6 +52,17 @@ export function reportingRouter(): Router {
   report("/reports/diagnostics", controller.diagnostics);
   report("/reports/collections", controller.collections);
   report("/reports/wallet", controller.walletRegister);
+
+  // The receipts register is a RECONCILIATION view, not a management report: it exists so a cashier
+  // can cross-check a payment they took. So it is gated on `billing:read` (which the counter roles —
+  // cashier, front office — hold, alongside admin and auditor), NOT `report:view`.
+  router.get(
+    "/reports/receipts",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(reportRangeSchema, "query"),
+    asyncHandler(controller.receipts),
+  );
   report("/reports/discharge-outcomes", controller.dischargeOutcomes, IPD_FEATURE);
 
   return router;

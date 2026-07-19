@@ -34,6 +34,41 @@ export const orderPayments: RequestHandler = async (req, res) => {
   ok(res, await billing.orderPaymentStatus(ids));
 };
 
+/**
+ * PAID / UNPAID per ENCOUNTER's consultation (OP fee) — reception's "pay before you queue" gate.
+ * Takes `?encounterIds=a,b,c`. A status flag only (no amounts), so a receptionist holding
+ * `encounter:read` can see whether to route the patient to the cash counter.
+ */
+export const consultationPayments: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.encounterIds === "string" ? req.query.encounterIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  ok(res, await billing.consultationPaymentStatus(ids));
+};
+
+/**
+ * Per order: is the patient admitted, what is their advance balance, and this test's amount — the
+ * lab worklist's "proceed from advance" panel. Takes `?orderIds=a,b,c`. Reachable with `order:read`.
+ */
+export const orderSettlement: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.orderIds === "string" ? req.query.orderIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  ok(res, await billing.orderSettlementInfo(ids));
+};
+
+/** Settles one admitted-patient test from their advance — the lab tech's "proceed" action. */
+export const settleOrderFromAdvance: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.settleOrderFromAdvance(id));
+};
+
 /** The tariff — what this hospital charges for things. Prices included. */
 export const listServices: RequestHandler = async (req, res) => {
   const { category } = req.query as { category?: never };

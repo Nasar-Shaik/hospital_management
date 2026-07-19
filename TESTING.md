@@ -1616,3 +1616,186 @@ tests still pass.
 - Open that doctor's **OPD slip** (§34) → the uploaded signature image appears **above** the signature
   line, over the printed **Dr <name>** and qualification. A doctor with no signature uploaded prints a
   blank space above the line for a wet signature, exactly as before.
+
+## 37 · Session expiry → a clean bounce to login (⏳ eyeball UI)
+
+**Why:** the reported bug — a hospital left a tab open overnight, came back, and pages showed
+"session expired" / "could not load roles" while stranding the user on a dead screen. A page whose
+session has ended should recover silently if it still can, and otherwise send the user to a login
+form that explains what happened — never leave a broken page on display.
+
+**How it works:** the API client now intercepts an expired-session error (`HMS-AUTH-002/003`) on
+ANY request. It asks the auth provider to refresh once; if that succeeds the original request
+replays transparently, if it fails the session is cleared and the user is redirected to
+`/login?reason=expired` (the form then reads that reason and says "your session has expired"). A
+burst of calls firing at once shares a single refresh, not one per request. Auth endpoints
+(login/refresh/mfa/reset) are excluded so a bad password on the login page is untouched.
+
+### H1 · Mid-session expiry recovers or bounces (the reported case)
+
+- Sign in, open **Roles** (or any page). Leave the tab; let the access token expire (or force it —
+  e.g. clear the in-memory token via a reload after the refresh cookie has also expired).
+- Trigger any action that hits the API. **Expected:** either the page loads normally (silent refresh
+  succeeded) OR you land on **/login** with the banner "your session has expired" — you are NEVER
+  left on a page reading "Could not load roles".
+
+### H2 · A still-valid session is not disturbed
+
+- Normal use across several pages with a live session shows no extra redirects and no re-login — the
+  interceptor only fires on a genuine `HMS-AUTH-002/003`.
+
+### H3 · The login form itself still reports bad credentials
+
+- On **/login**, enter a wrong password → you see the normal "invalid credentials" error and stay on
+  the form (the interceptor skips auth endpoints, so it does not loop or redirect).
+
+## 38 · Pay the OP fee before joining the doctor's queue (⏳ eyeball UI)
+
+**Why:** a walked-in patient should not enter the doctor's queue until the consultation (OP) fee is
+settled — the same pay-first discipline the lab already has for tests. The register now hides "Add to
+queue" until the consultation is paid (or is free for a zero-tariff patient).
+
+**How it works:** a new status-only endpoint `GET /billing/consultation-payments?encounterIds=…`
+(reachable with `encounter:read`) returns **paid / unpaid / unbilled / free** per visit, traced
+consultation-charge → invoice — the mirror of the lab's `order-payments`. The register reads it and,
+for an `arrived` visit, draws **"Add to queue"** only when the fee is `paid` or `free`; otherwise it
+shows an **"OP fee due"** chip. Because the fee is drawn on the same visit, `free` (₹0, government)
+queues instantly with no friction. **Separation of duties:** a plain **RECEPTIONIST cannot take
+money** (no `payment:collect`), so they see "Collect at cash counter"; a **CASHIER** or the combined
+**FRONT_OFFICE** login sees **"Collect OP fee"**, which opens the bill panel — issue the bill, record
+the payment — and the moment it is paid, **"Add to queue" appears** (the panel refreshes the gate).
+
+### I1 · Unpaid walk-in is not queueable (as receptionist)
+
+- Sign in as a **RECEPTIONIST**, register a walk-in (Normal). In "Who came in" the row shows an **OP
+  fee due** chip and **"Collect at cash counter"** — there is **no "Add to queue"** button.
+
+### I2 · Collect the fee, then queue (as Front Office / Cashier)
+
+- Sign in as **FRONT_OFFICE** (or a CASHIER for the money step). On the unpaid row click **Collect OP
+  fee** → the bill panel opens → **Issue bill for these** (a numbered bill INV-… is generated) →
+  **Record payment** with the prefilled amount. The row flips to show **Add to queue**; click it and
+  the patient gets a token and moves to `in queue`.
+
+### I3 · A zero-tariff (government) patient queues immediately
+
+- On a government-edition tenant (consultation ₹0), a registered walk-in shows **Add to queue** at
+  once — the gate reads `free`, never "OP fee due".
+
+### I4 · The bill is generated as part of paying
+
+- After I2, the visit carries a numbered consultation bill marked **paid**; it prints on the patient's
+  **OPD slip** (§34) and appears in collections (§29). Tests ordered later bill separately (§35).
+
+## 39 · Payment receipt — the money proof at every counter (⏳ eyeball UI)
+
+**Why:** each payment point in a visit (OP fee, tests, pharmacy) should hand the patient a printable
+receipt. Rather than three documents, all three are one reusable page keyed on the bill.
+
+**How it works:** a standalone print page `/receipt/[invoiceId]` composes the receipt from the invoice
+that already exists — its **number is the receipt number**, its lines are the items, its `payments`
+are the money actually taken — with the hospital's header + seal and a **PAID / PART PAID / DUE**
+stamp. It reads `GET /invoices/:id` (needs `billing:read`, which reception, cashier and pharmacist
+hold). It is deliberately separate from the OPD slip (§34): the slip is the clinical take-home, this
+is the financial record.
+
+### J1 · Receipt from reception
+
+- Reception → open a visit's **Bill** → each issued bill row now has a **Receipt ↗** link → opens a
+  clean printable slip with the hospital header, receipt number, items, total, amount paid + method,
+  and a green **PAID** stamp (or **DUE** when unpaid). **Print / Save PDF** yields an A4 slip with no
+  app chrome.
+- Do it for the **consultation** bill (receipt #1), the **tests** bill (receipt #2), and the
+  **pharmacy** bill (receipt #3) — same page, three bills.
+
+### J2 · Part-paid and unpaid stamps
+
+- A bill paid in part shows **PART PAID** and a **Balance due** line; an unissued/unpaid one shows
+  **DUE**. The stamp colour matches (green / amber / red).
+
+## 40 · Admitted patient — settle a test from the advance (⏳ eyeball UI)
+
+**Why:** an inpatient's advance is collected up front; their x-ray or blood test must not wait at a
+cash counter like an OP test. The lab technician should see the patient is admitted and their advance,
+and proceed by drawing the test straight from that advance — even into a negative balance, so a report
+is never held.
+
+**How it works:** two endpoints, both reachable with the technician's own order permissions.
+`GET /billing/order-settlement?orderIds=…` (`order:read`) returns per order **{ admitted,
+advanceBalance, amount }**. `POST /billing/orders/:id/settle-from-advance` (`order:perform`) bills that
+one test into its own invoice and pays it from the wallet in one transaction — this draws DOWN an
+advance the desk already collected (not new cash), so the technician may do it, and the ledger records
+who. For an **IP** patient the wallet debit is **allowed to go negative**; an **OP** test is refused
+here (pay at the counter). Only the wallet's admitted path can go negative — refunds and OP settles
+still cannot.
+
+### K1 · Admitted test shows advance + proceed
+
+- Admit a patient (ward), collect an advance. As the ordering doctor order a **blood test / x-ray**.
+- Sign in as **LAB_TECHNICIAN** → Worklist. The unpaid test now shows **"Admitted · Advance ₹X"** and
+  a **"Proceed — deduct ₹Y"** button (instead of "Awaiting payment"). Click it → the test flips to
+  **paid**, the advance drops by ₹Y, and Accept/Start/Upload become available.
+
+### K2 · Negative balance never holds a report
+
+- Order a test whose amount **exceeds** the remaining advance. **Proceed** still works; the balance
+  goes **negative (shown in red)** and the notice says the ward should collect the shortfall. The
+  report is not held. Confirm the negative balance on the ward panel / patient Wallet tab.
+
+### K3 · OP test is refused the advance path
+
+- For a normal **OP** patient, the worklist shows the ordinary **"Awaiting payment — pay at billing"**,
+  not the advance panel. (If the settle endpoint is called for an OP order it returns 422.)
+
+## 41 · Errors carry a traceable reference (⏳ eyeball UI)
+
+**Why:** when something fails, we should be able to find the exact cause. Every API error already
+carries a stable `code` and a `traceId` that is stamped on the server log line for that request;
+surfacing them in the UI turns "it didn't work" into a thread back to the one log line.
+
+**How it works:** `lib/errors.ts#describeError` extracts `{ message, reference }` from any thrown value
+(prefers a field-level validation message, then the error message; reference = `code · traceId`). The
+shared **`ErrorAlert`** component renders the message with a small monospaced **`Ref: …`** line.
+Adopted on **reception** and **worklist**; other screens can drop it in the same way.
+
+### L1 · A failure shows a reference
+
+- Force an API error on **reception** or **worklist** (e.g. act on a stale row). The red alert shows
+  the message plus a **`Ref: HMS-… · <traceId>`** line. Search the API logs for that `traceId` and it
+  is the exact request that failed.
+
+## 42 · Advance receipts & the receipts register (⏳ eyeball UI)
+
+**Why:** a patient should get a receipt for EVERY payment — the OP fee, tests, pharmacy (bill
+receipts, §39) and now the **advance** they deposit (OP or admission). And any receipt must be
+findable and re-printable later for verification.
+
+**How it works:** an advance deposit is a wallet entry, so it gets its own printable page
+`/receipt/advance/[entryId]` (same hospital-branded chrome as the bill receipt, a green **RECEIVED**
+stamp, receipt no **`ADV-…`**), fetched via `GET /wallet/entries/:id` (`wallet:manage`). A new
+**Receipts** register (`/receipts`, **Finance** nav, `report:view`) reads
+`GET /reports/receipts?from&to` — which merges issued **bills** and advance **deposits** with patient
+names (reporting composes billing + wallet + patients server-side) — and links each row to its
+printable receipt. Both bill and advance receipts open **in the same tab** (the print pages need the
+signed-in, per-tab-in-dev session) and both have a **← Back** button.
+
+### M1 · Advance deposit gives a receipt
+
+- Ward → a bed → **Admission advance** → **Collect advance** → **Take advance**. The success line
+  now offers **"Print receipt →"** → opens a professional advance receipt with the hospital header,
+  **ADV-…** number, amount, method and a **RECEIVED** stamp. **Print / Save PDF** is clean.
+- Same from a patient's **Wallet** tab: each **deposit** row in the ledger has a **Receipt →** link.
+
+### M2 · The receipts register finds and reprints any receipt
+
+- **Finance → Receipts**. Defaults to today; set a **From/To** range. The table lists every payment —
+  **Bill** rows (INV-…) and **Advance** rows (ADV-…) — with patient, amount and time, newest first,
+  and a running **Total**.
+- **Search** by patient name, UHID or receipt number narrows the loaded period.
+- Click **Receipt →** on any row → the exact printable receipt (bill or advance) reopens — the
+  cross-check / reprint path.
+
+### M3 · Regeneration by id
+
+- The receipt URLs (`/receipt/<invoiceId>` and `/receipt/advance/<entryId>`) are stable — the same
+  receipt reprints whenever opened, so a lost slip is always recoverable.

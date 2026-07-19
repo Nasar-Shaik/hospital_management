@@ -52,6 +52,39 @@ export function billingRouter(): Router {
     asyncHandler(controller.orderPayments),
   );
 
+  /**
+   * PAID / UNPAID per encounter's consultation — reception's pay-before-queue gate. Gated on
+   * `encounter:read`, which the receptionist holds: they must see whether the OP fee is settled
+   * before offering "Add to queue". Status flag only — no amounts, no bill.
+   */
+  router.get(
+    "/billing/consultation-payments",
+    authenticate(),
+    authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
+    asyncHandler(controller.consultationPayments),
+  );
+
+  /**
+   * Admitted-patient settle-from-advance, for the lab worklist. The READ (is the patient admitted,
+   * what is their advance) needs only `order:read`; the ACTION (draw the advance to clear this test)
+   * needs `order:perform` — the technician's own permission, because it draws down an advance the
+   * desk already collected rather than taking new money.
+   */
+  router.get(
+    "/billing/order-settlement",
+    authenticate(),
+    authorize(PERMISSIONS.ORDER_READ, FEATURE),
+    asyncHandler(controller.orderSettlement),
+  );
+
+  router.post(
+    "/billing/orders/:id/settle-from-advance",
+    authenticate(),
+    authorize(PERMISSIONS.ORDER_PERFORM, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.settleOrderFromAdvance),
+  );
+
   /** The price list — the counter's view. */
   router.get(
     "/services",

@@ -34,11 +34,21 @@ import {
 import { rupees, toPaise } from "../../lib/money";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
+
+/** An ISO instant → the `<input type="date">` value for its calendar day (local). */
+function dateInput(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function todayInput(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return dateInput(new Date().toISOString());
+}
+
+/** A friendly "12 Jul" for telling a clerk which day a resumed visit lives on. */
+function dayLabel(iso: string): string {
+  return new Date(iso).toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
 function time(iso: string): string {
@@ -52,17 +62,23 @@ function statusTone(s: EncounterStatus): "success" | "danger" | "brand" | "neutr
   return "neutral";
 }
 
-/** Only the edges §14 actually allows. See the header. */
+/**
+ * Only the edges §14 actually allows. See the header.
+ *
+ * `arrived → in_queue` ("Add to queue") is deliberately NOT here: it is gated on the OP fee being
+ * paid and is rendered separately below, so an unpaid walk-in is never offered the queue button.
+ */
 function nextActions(status: EncounterStatus): { label: string; action: string }[] {
   switch (status) {
-    case "arrived":
-      return [{ label: "Add to queue", action: "queue" }];
     case "in_queue":
       return [{ label: "Left without being seen", action: "left" }];
     default:
       return [];
   }
 }
+
+/** OP-fee status per encounter — the reception pay-before-queue gate. */
+type ConsultPayState = "paid" | "unpaid" | "unbilled" | "free";
 
 const PAYMENT_METHODS = ["cash", "card", "upi", "netbanking"] as const;
 
@@ -81,7 +97,7 @@ const PAYMENT_METHODS = ["cash", "card", "upi", "netbanking"] as const;
  * second, separate act (and permission — money crossing the counter). That separation is what makes
  * the lab's pay-before-run check meaningful: a test runs once ITS bill is paid.
  */
-function BillPanel({ encounterId }: { encounterId: string }) {
+function BillPanel({ encounterId, onChange }: { encounterId: string; onChange?: () => void }) {
   const { api, can } = useAuth();
   const [billing, setBilling] = useState<EncounterBilling | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +120,8 @@ function BillPanel({ encounterId }: { encounterId: string }) {
     try {
       await api.finalizeBill(encounterId);
       load();
+      // The register's payment gate reads from billing too — keep it in step.
+      onChange?.();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not issue the bill.");
     } finally {
@@ -166,7 +184,14 @@ function BillPanel({ encounterId }: { encounterId: string }) {
 
       {/* One row per BILL, each with its own payment state and collect box. */}
       {billing.invoices.map((inv) => (
-        <InvoiceRow key={inv.id} invoice={inv} onPaid={load} />
+        <InvoiceRow
+          key={inv.id}
+          invoice={inv}
+          onPaid={() => {
+            load();
+            onChange?.();
+          }}
+        />
       ))}
 
       {/* The visit's running totals across every bill. */}
@@ -229,9 +254,21 @@ function InvoiceRow({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void 
         <Badge tone={invoice.status === "paid" ? "success" : "brand"}>
           {invoice.number ?? "issued"} · {invoice.status}
         </Badge>
-        <span className="text-xs text-[var(--color-fg-muted)]">
-          {rupees(invoice.paid)} / {rupees(invoice.total)}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-[var(--color-fg-muted)]">
+            {rupees(invoice.paid)} / {rupees(invoice.total)}
+          </span>
+          {/* The printable money receipt for THIS bill — the OP / tests / pharmacy receipt. Opens in
+              the SAME tab: the print pages need the signed-in session, and in dev that session is
+              per-tab (sessionStorage), so a new tab would open without one. The receipt has its own
+              "← Back" button. */}
+          <a
+            href={`/receipt/${invoice.id}`}
+            className="text-xs text-[var(--color-brand-700)] hover:underline"
+          >
+            Receipt →
+          </a>
+        </div>
       </div>
 
       {error && <p className="mt-1 text-xs text-[var(--color-danger)]">{error}</p>}
@@ -281,6 +318,8 @@ function Reception() {
 
   const [day, setDay] = useState(todayInput());
   const [register, setRegister] = useState<Encounter[]>([]);
+  // OP-fee status per encounter, for the pay-before-queue gate. Empty until the register loads.
+  const [consultPaid, setConsultPaid] = useState<Record<string, ConsultPayState>>({});
   const [patients, setPatients] = useState<Patient[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
@@ -292,7 +331,8 @@ function Reception() {
   const [express, setExpress] = useState(false);
 
   const [openBill, setOpenBill] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Holds the raw thrown value, so ErrorAlert can surface its trace reference for support.
+  const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -316,9 +356,7 @@ function Reception() {
     void api
       .listPatients({ limit: 100 })
       .then((page) => setPatients(page.items))
-      .catch((err: unknown) =>
-        setError(err instanceof ApiClientError ? err.message : "Could not load patients."),
-      );
+      .catch((err: unknown) => setError(err));
   }, [api]);
 
   const load = useCallback(async () => {
@@ -326,9 +364,15 @@ function Reception() {
     try {
       const page = await api.listEncounters({ date: day, limit: 100 });
       setRegister(page.items);
+      // The pay-before-queue gate reads the consultation's payment state. One call for the day;
+      // a failure here must not blank the register, so it degrades to "unknown" (gate stays shut).
+      const status = await api
+        .consultationPaymentStatus(page.items.map((e) => e.id))
+        .catch(() => ({}) as Record<string, ConsultPayState>);
+      setConsultPaid(status);
       setError(null);
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not load the register.");
+      setError(err);
     } finally {
       setLoading(false);
     }
@@ -366,18 +410,36 @@ function Reception() {
       const who = patients.find((p) => p.id === patientId)?.name ?? "Patient";
       const token = result.encounter.token;
       const fast = result.encounter.express ? " · Express (fast-track)" : "";
+      const tokenLabel = token ? `token ${String(token)}` : "visit open";
 
-      setNotice(
-        result.resumed
-          ? `${who} is already here — ${token ? `token ${String(token)}` : "visit open"}. Resumed their existing visit.`
-          : `${who} registered${token ? ` — token ${String(token)}` : ""}${fast}. The consultation fee is on their bill${express ? " with the express surcharge" : ""}.`,
-      );
+      // A resumed visit may have arrived on an EARLIER day (a visit left open, e.g. patient
+      // still mid-treatment). If so, the day-filtered register below would show nothing for
+      // today and the clerk would rightly ask "where did they go?". Jump the register to the
+      // day the visit actually lives on, so the patient appears in the list right away.
+      const arrivedDay = dateInput(result.encounter.arrivedAt);
+      const onAnotherDay = result.resumed && arrivedDay !== day;
+
       setReason("");
       setPatientId("");
       setExpress(false);
-      await load();
+
+      if (result.resumed) {
+        setNotice(
+          onAnotherDay
+            ? `${who} already has a visit open from ${dayLabel(result.encounter.arrivedAt)} — ${tokenLabel}. Showing that day so you can find them.`
+            : `${who} is already here — ${tokenLabel}. Resumed their existing visit.`,
+        );
+      } else {
+        setNotice(
+          `${who} registered${token ? ` — token ${String(token)}` : ""}${fast}. The consultation fee is on their bill${express ? " with the express surcharge" : ""}.`,
+        );
+      }
+
+      // Switching the day re-runs the register load via its effect; otherwise reload this day.
+      if (onAnotherDay) setDay(arrivedDay);
+      else await load();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not start the visit.");
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -395,7 +457,7 @@ function Reception() {
       }
       await load();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not update the visit.");
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -415,7 +477,7 @@ function Reception() {
         </p>
       </div>
 
-      {error && <Alert tone="danger">{error}</Alert>}
+      {error != null && <ErrorAlert error={error} fallback="Something went wrong." />}
       {notice && <Alert tone="success">{notice}</Alert>}
 
       {/* ── the walk-in desk ── */}
@@ -557,9 +619,19 @@ function Reception() {
         {loading ? (
           <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
         ) : register.length === 0 ? (
-          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
-            Nobody has come in on this day.
-          </p>
+          <div className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
+            <p>Nobody has come in on this day.</p>
+            <p className="mt-1 text-xs">
+              Looking for someone mid-visit from another day? Find them on the{" "}
+              <a
+                href="/patients"
+                className="text-[var(--color-brand-700)] underline underline-offset-2"
+              >
+                Patients
+              </a>{" "}
+              page.
+            </p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -615,7 +687,41 @@ function Reception() {
                         <Badge tone={statusTone(e.status)}>{e.status.replace(/_/g, " ")}</Badge>
                       </td>
                       <td className="py-2.5">
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {/* PAY BEFORE QUEUE: a walked-in patient joins the doctor's queue only
+                              once the OP fee is settled (or is free — a zero-tariff patient). Until
+                              then the queue button is not drawn; instead the desk is told to take the
+                              fee, or — if this login cannot take money — to send them to the counter. */}
+                          {e.status === "arrived" &&
+                            can("encounter:update") &&
+                            (consultPaid[e.id] === "paid" || consultPaid[e.id] === "free" ? (
+                              <Button
+                                variant="secondary"
+                                disabled={busy}
+                                onClick={() => void act(e, "queue")}
+                              >
+                                Add to queue
+                              </Button>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="rounded-full bg-[var(--color-warning-bg)] px-2 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">
+                                  OP fee due
+                                </span>
+                                {can("payment:collect") ? (
+                                  <Button
+                                    variant="secondary"
+                                    onClick={() => setOpenBill(openBill === e.id ? null : e.id)}
+                                  >
+                                    {openBill === e.id ? "Hide bill" : "Collect OP fee"}
+                                  </Button>
+                                ) : (
+                                  <span className="text-xs text-[var(--color-fg-subtle)]">
+                                    Collect at cash counter
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+
                           {can("encounter:update") &&
                             nextActions(e.status).map((next) => (
                               <Button
@@ -635,14 +741,13 @@ function Reception() {
                               {openBill === e.id ? "Hide bill" : "Bill"}
                             </Button>
                           </PermissionGate>
-                          {/* The take-home OPD slip — opens as a clean printable sheet. */}
+                          {/* The take-home OPD slip — a clean printable sheet. Same tab, so the
+                              signed-in (per-tab, in dev) session is present; it has its own Back button. */}
                           <a
                             href={`/opd-slip/${e.id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
                             className="inline-flex items-center rounded-lg px-2 py-1 text-sm text-[var(--color-brand-700)] hover:underline"
                           >
-                            OPD slip ↗
+                            OPD slip →
                           </a>
                         </div>
                       </td>
@@ -650,7 +755,7 @@ function Reception() {
                     {openBill === e.id && (
                       <tr>
                         <td colSpan={7} className="pb-3">
-                          <BillPanel encounterId={e.id} />
+                          <BillPanel encounterId={e.id} onChange={() => void load()} />
                         </td>
                       </tr>
                     )}

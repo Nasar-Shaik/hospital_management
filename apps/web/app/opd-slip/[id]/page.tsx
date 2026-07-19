@@ -67,7 +67,7 @@ function humanise(code: string): string {
 }
 
 function Slip() {
-  const { api, user } = useAuth();
+  const { api, user, loading: authLoading } = useAuth();
   const params = useParams<{ id: string }>();
   const id = params.id;
 
@@ -127,8 +127,10 @@ function Slip() {
   }, [api, id]);
 
   useEffect(() => {
-    if (user) void load();
-  }, [user, load]);
+    // Wait for the session bootstrap to settle before loading — a hard open (or a dev per-tab tab
+    // with no session yet) would otherwise read `user` as null and never fetch.
+    if (!authLoading && user) void load();
+  }, [authLoading, user, load]);
 
   const accent = site?.accentColor ?? "#0d9488";
   const hospitalName = site?.displayName ?? site?.hospitalName ?? "Hospital";
@@ -138,10 +140,26 @@ function Slip() {
     [prescriptions],
   );
 
-  if (loading) {
+  if (authLoading || (user && loading)) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <span className="h-6 w-6 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="mx-auto max-w-md p-10 text-center text-gray-600">
+        <p className="font-medium text-gray-800">Please sign in to view this slip.</p>
+        <p className="mt-1 text-sm">
+          Open it from within MediCore, where you are already signed in.
+        </p>
+        <div className="mt-4">
+          <a href="/login" className="rounded border border-gray-300 px-4 py-2 text-sm">
+            Go to sign in
+          </a>
+        </div>
       </div>
     );
   }

@@ -13,6 +13,8 @@ export { walletRouter } from "./wallet.routes.js";
 
 export {
   getWallet,
+  getEntry,
+  listDeposits,
   deposit,
   refund,
   debitForInvoice,

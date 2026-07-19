@@ -660,6 +660,27 @@ const PROBES: Record<string, Probe> = {
     method: "get",
     url: "/api/v1/billing/order-payments?orderIds=64b7f0000000000000000001",
   },
+  "GET /api/v1/billing/consultation-payments": {
+    method: "get",
+    url: "/api/v1/billing/consultation-payments?encounterIds=64b7f0000000000000000001",
+  },
+  "GET /api/v1/billing/order-settlement": {
+    method: "get",
+    url: "/api/v1/billing/order-settlement?orderIds=64b7f0000000000000000001",
+  },
+  "GET /api/v1/wallet/entries/:id": {
+    method: "get",
+    url: "/api/v1/wallet/entries/64b7f0000000000000000001",
+  },
+  "GET /api/v1/reports/receipts": {
+    method: "get",
+    url: "/api/v1/reports/receipts?from=2026-07-01&to=2026-07-31",
+  },
+  "POST /api/v1/billing/orders/:id/settle-from-advance": {
+    method: "post",
+    url: "/api/v1/billing/orders/64b7f0000000000000000001/settle-from-advance",
+    body: {},
+  },
   "GET /api/v1/site/settings": { method: "get", url: "/api/v1/site/settings" },
   "PATCH /api/v1/site/settings": { method: "patch", url: "/api/v1/site/settings", body: {} },
   "GET /api/v1/patients/:patientId/wallet": {

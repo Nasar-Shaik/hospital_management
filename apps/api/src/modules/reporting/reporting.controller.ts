@@ -148,6 +148,30 @@ export const walletRegister: RequestHandler = async (req, res) => {
   ok(res, report);
 };
 
+/** The receipts register — every payment taken in the period, for cross-checking a receipt later. */
+export const receipts: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const rows = await reporting.receiptsRegister(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "receipts",
+      ["Receipt No", "Type", "Patient", "UHID", "Amount (INR)", "Method", "Date"],
+      rows.map((r) => [
+        r.receiptNo,
+        r.kind,
+        r.patientName,
+        r.uhid,
+        rupees(r.amount),
+        r.method ?? "",
+        r.at,
+      ]),
+    );
+    return;
+  }
+  ok(res, rows);
+};
+
 export const dischargeOutcomes: RequestHandler = async (req, res) => {
   const { range, csv } = rangeOf(req);
   const report = await reporting.dischargeOutcomes(range);

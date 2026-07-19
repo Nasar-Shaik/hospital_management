@@ -68,6 +68,25 @@ export async function getBalance(patientId: string): Promise<number> {
   return doc?.balance ?? 0;
 }
 
+/** One ledger row by id — for regenerating an advance receipt later. */
+export async function findEntryById(id: string): Promise<WalletEntry | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getWalletEntryModel(getTenantDb())
+    .findById(new Types.ObjectId(id))
+    .lean<WalletEntryDoc>();
+  return doc ? toEntry(doc) : undefined;
+}
+
+/** Advances TAKEN in a period `[from, to)`, newest first — the deposits half of the receipts register. */
+export async function depositsBetween(from: Date, to: Date): Promise<WalletEntry[]> {
+  const docs = await getWalletEntryModel(getTenantDb())
+    .find({ type: "deposit", at: { $gte: from, $lt: to } })
+    .sort({ at: -1 })
+    .limit(500)
+    .lean<WalletEntryDoc[]>();
+  return docs.map(toEntry);
+}
+
 /** The recent ledger, newest first — the statement the desk reads. */
 export async function listEntries(patientId: string, limit = 50): Promise<WalletEntry[]> {
   if (!Types.ObjectId.isValid(patientId)) return [];
@@ -272,6 +291,40 @@ export async function debit(
 
   const [entry] = await getWalletEntryModel(getTenantDb()).create(
     [entryDoc(patientId, type, amount, account.balance, meta)],
+    { session },
+  );
+  if (!entry) throw new Error("wallet ledger insert returned nothing");
+
+  return { balance: account.balance, entry: toEntry(entry) };
+}
+
+/**
+ * Takes money from the wallet WITHOUT the balance guard — the admitted-patient path.
+ *
+ * An inpatient's test must never wait for the advance to be topped up, so this debit is allowed
+ * to drive the balance NEGATIVE (the relatives settle the shortfall later; the negative balance is
+ * itself the record of what is owed). Upsert materialises the account for a patient who has no
+ * advance yet, at a negative balance. Used ONLY for settling an inpatient order from advance — the
+ * ordinary `debit` keeps its guard, so refunds and OP settlements can never go negative.
+ */
+export async function debitAllowNegative(
+  patientId: string,
+  amount: number,
+  meta: MovementMeta,
+  session: ClientSession,
+): Promise<{ balance: number; entry: WalletEntry }> {
+  const account = await getWalletAccountModel(getTenantDb())
+    .findOneAndUpdate(
+      { patientId: new Types.ObjectId(patientId) },
+      { $inc: { balance: -amount } },
+      { new: true, upsert: true, setDefaultsOnInsert: true, session },
+    )
+    .lean<WalletAccountDoc>();
+
+  if (!account) throw new Error("wallet debit (allow-negative) returned nothing");
+
+  const [entry] = await getWalletEntryModel(getTenantDb()).create(
+    [entryDoc(patientId, "debit", amount, account.balance, meta)],
     { session },
   );
   if (!entry) throw new Error("wallet ledger insert returned nothing");

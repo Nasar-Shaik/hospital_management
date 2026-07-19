@@ -323,6 +323,8 @@ function WardAdvance({ patientId, stayOwes }: { patientId: string; stayOwes: num
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The ledger id of the advance just collected — so we can offer its printable receipt.
+  const [receiptId, setReceiptId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     void api
@@ -353,6 +355,8 @@ function WardAdvance({ patientId, stayOwes }: { patientId: string; stayOwes: num
       setAmount("");
       setOpen(false);
       setNotice(`Advance collected. Balance ${rupees(w.balance)}.`);
+      // The newest ledger row is this deposit — offer its receipt.
+      setReceiptId(w.entries[0]?.id ?? null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not collect the advance.");
     } finally {
@@ -389,7 +393,22 @@ function WardAdvance({ patientId, stayOwes }: { patientId: string; stayOwes: num
         )}
       </div>
 
-      {notice && <p className="mt-2 text-xs text-[var(--color-success)]">{notice}</p>}
+      {notice && (
+        <p className="mt-2 text-xs text-[var(--color-success)]">
+          {notice}
+          {receiptId && (
+            <>
+              {" "}
+              <a
+                href={`/receipt/advance/${receiptId}`}
+                className="font-medium text-[var(--color-brand-700)] underline underline-offset-2"
+              >
+                Print receipt →
+              </a>
+            </>
+          )}
+        </p>
+      )}
 
       {open && (
         <div className="mt-4 border-t border-[var(--color-border)] pt-4">

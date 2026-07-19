@@ -31,9 +31,11 @@ export {
   getInvoice,
   collectionsReport,
   orderPaymentStatus,
+  listReceipts,
   type Charge,
   type Invoice,
   type ServiceItem,
+  type BillReceipt,
   type PostChargeInput,
   type OrderPaymentState,
 } from "./billing.service.js";

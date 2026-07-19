@@ -25,6 +25,15 @@ export function walletRouter(): Router {
     asyncHandler(controller.getWallet),
   );
 
+  // One ledger entry by id — reprinting an advance receipt. Sits outside the patient prefix
+  // because a receipt link carries only the entry id.
+  router.get(
+    "/wallet/entries/:id",
+    authenticate(),
+    authorize(PERMISSIONS.WALLET_MANAGE),
+    asyncHandler(controller.getEntry),
+  );
+
   router.post(
     "/patients/:patientId/wallet/deposits",
     authenticate(),

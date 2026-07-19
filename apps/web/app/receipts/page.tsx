@@ -1,0 +1,222 @@
+"use client";
+
+/**
+ * Receipts register — every payment the hospital took in a period, for cross-checking one later.
+ *
+ * It merges the two ways money arrives: BILL payments (the OP fee, tests, pharmacy) and ADVANCE
+ * deposits (an OP or admission advance). Each row carries the id to reprint the exact receipt, so an
+ * auditor who is handed a printed slip can find it here, confirm it, and print it again. Search is
+ * client-side over the loaded period — by patient, UHID or receipt number.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReceiptRow, type ReportRange } from "@medicore/api-client";
+import { useAuth } from "../../components/AuthProvider";
+import { Protected } from "../../components/Protected";
+import { Badge, Card, ErrorAlert } from "../../components/ui";
+import { rupees } from "../../lib/money";
+
+function iso(dateStr: string): string {
+  return new Date(`${dateStr}T00:00:00`).toISOString();
+}
+/** The day AFTER the chosen end date — the half-open upper bound `[from, to)`. */
+function isoNextDay(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString();
+}
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function fmtDateTime(isoStr: string): string {
+  return new Date(isoStr).toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function Receipts() {
+  const { api, can } = useAuth();
+  const today = ymd(new Date());
+
+  const [fromStr, setFromStr] = useState(today);
+  const [toStr, setToStr] = useState(today);
+  const [rows, setRows] = useState<ReceiptRow[]>([]);
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<unknown>(null);
+
+  const range: ReportRange = useMemo(
+    () => ({ from: iso(fromStr), to: isoNextDay(toStr) }),
+    [fromStr, toStr],
+  );
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setRows(await api.reportReceipts(range));
+      setError(null);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, range]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter(
+      (r) =>
+        r.patientName.toLowerCase().includes(needle) ||
+        r.uhid.toLowerCase().includes(needle) ||
+        r.receiptNo.toLowerCase().includes(needle),
+    );
+  }, [rows, q]);
+
+  const total = filtered.reduce((sum, r) => sum + r.amount, 0);
+
+  const hrefOf = (r: ReceiptRow): string =>
+    r.kind === "advance" ? `/receipt/advance/${r.refId}` : `/receipt/${r.refId}`;
+
+  if (!can("billing:read")) {
+    return (
+      <Card className="p-8 text-center text-sm text-[var(--color-fg-muted)]">
+        You do not have permission to view the receipts register.
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Receipts</h1>
+        <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
+          Every payment taken — bills and advances. Search by patient or receipt number, and reprint
+          any receipt for verification.
+        </p>
+      </div>
+
+      {error != null && (
+        <ErrorAlert error={error} fallback="Could not load the receipts register." />
+      )}
+
+      <Card className="p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+              From
+            </span>
+            <input
+              type="date"
+              value={fromStr}
+              max={toStr}
+              onChange={(e) => setFromStr(e.target.value)}
+              className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">To</span>
+            <input
+              type="date"
+              value={toStr}
+              min={fromStr}
+              max={today}
+              onChange={(e) => setToStr(e.target.value)}
+              className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+            />
+          </label>
+          <label className="ml-auto block flex-1 sm:max-w-xs">
+            <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+              Search
+            </span>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Patient, UHID or receipt no…"
+              className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+            />
+          </label>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="mb-3 flex items-center justify-between text-sm">
+          <span className="font-semibold text-[var(--color-fg)]">
+            {filtered.length} {filtered.length === 1 ? "receipt" : "receipts"}
+          </span>
+          <span className="text-[var(--color-fg-muted)]">
+            Total <span className="font-semibold text-[var(--color-fg)]">{rupees(total)}</span>
+          </span>
+        </div>
+
+        {loading ? (
+          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
+        ) : filtered.length === 0 ? (
+          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
+            No receipts in this period.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-subtle)] uppercase">
+                <tr>
+                  <th className="py-2 pr-4">Receipt No</th>
+                  <th className="py-2 pr-4">Type</th>
+                  <th className="py-2 pr-4">Patient</th>
+                  <th className="py-2 pr-4 text-right">Amount</th>
+                  <th className="py-2 pr-4">When</th>
+                  <th className="py-2"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {filtered.map((r) => (
+                  <tr key={`${r.kind}-${r.refId}`}>
+                    <td className="py-2.5 pr-4 font-mono text-xs font-medium text-[var(--color-fg)]">
+                      {r.receiptNo}
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <Badge tone={r.kind === "advance" ? "brand" : "neutral"}>
+                        {r.kind === "advance" ? "Advance" : "Bill"}
+                      </Badge>
+                    </td>
+                    <td className="py-2.5 pr-4">
+                      <span className="text-[var(--color-fg)]">{r.patientName}</span>{" "}
+                      <span className="font-mono text-xs text-[var(--color-fg-muted)]">
+                        {r.uhid}
+                      </span>
+                    </td>
+                    <td className="py-2.5 pr-4 text-right font-medium text-[var(--color-fg)]">
+                      {rupees(r.amount)}
+                    </td>
+                    <td className="py-2.5 pr-4 text-[var(--color-fg-muted)]">
+                      {fmtDateTime(r.at)}
+                    </td>
+                    <td className="py-2.5">
+                      <a href={hrefOf(r)} className="text-[var(--color-brand-700)] hover:underline">
+                        Receipt →
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+export default function ReceiptsPage() {
+  return (
+    <Protected>
+      <Receipts />
+    </Protected>
+  );
+}

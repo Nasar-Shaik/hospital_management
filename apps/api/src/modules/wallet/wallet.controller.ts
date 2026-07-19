@@ -17,6 +17,12 @@ export const getWallet: RequestHandler = async (req, res) => {
   ok(res, await wallet.getWallet(patientId));
 };
 
+/** One ledger entry by id — for reprinting an advance (deposit) receipt later. */
+export const getEntry: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await wallet.getEntry(id));
+};
+
 /** The desk takes an advance (OP advance, admission advance). */
 export const deposit: RequestHandler = async (req, res) => {
   const { patientId } = req.params as { patientId: string };

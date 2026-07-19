@@ -21,8 +21,8 @@ import {
   type DischargeRegister,
 } from "../encounters/index.js";
 import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
-import { collectionsReport, type CollectionsReport } from "../billing/index.js";
-import { walletReport, type WalletRegister } from "../wallet/index.js";
+import { collectionsReport, listReceipts, type CollectionsReport } from "../billing/index.js";
+import { walletReport, listDeposits, type WalletRegister } from "../wallet/index.js";
 import { getById as getUser } from "../users/index.js";
 import { encountersByDoctor } from "../encounters/index.js";
 import { ordersByUser } from "../orders/index.js";
@@ -154,6 +154,67 @@ export interface MyActivity {
     drugs: string[];
     at: string;
   }[];
+}
+
+/* ── Receipts register — every payment taken in a period, for cross-checking ── */
+
+export interface ReceiptRow {
+  /** A bill payment (OP fee, tests, pharmacy) or an advance deposit (OP/admission advance). */
+  kind: "bill" | "advance";
+  /** The id to reprint by: an invoice id for a bill, a wallet-entry id for an advance. */
+  refId: string;
+  /** The receipt number — the invoice number for a bill, `ADV-…` for an advance. */
+  receiptNo: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  /** Paise received. */
+  amount: number;
+  /** Payment method for an advance; blank for a bill (which may span methods). */
+  method?: string;
+  at: string;
+}
+
+/**
+ * Every receipt (money taken) in a period, newest first — the register for cross-checking a payment
+ * later. Merges issued BILLS (consultation, tests, pharmacy) with advance DEPOSITS (OP/admission),
+ * resolving patient names so a clerk can search by person as well as by number. Each row carries the
+ * id needed to reprint the exact receipt.
+ */
+export async function receiptsRegister(range: DateRange): Promise<ReceiptRow[]> {
+  const [bills, deposits] = await Promise.all([listReceipts(range), listDeposits(range)]);
+
+  const patientIds = [
+    ...new Set([...bills.map((b) => b.patientId), ...deposits.map((d) => d.patientId)]),
+  ];
+  const names = new Map((await namesByIds(patientIds)).map((n) => [n.id, n]));
+  const who = (id: string): { name: string; uhid: string } =>
+    names.get(id) ?? { name: "Unknown patient", uhid: "—" };
+
+  const billRows: ReceiptRow[] = bills.map((b) => ({
+    kind: "bill",
+    refId: b.invoiceId,
+    receiptNo: b.number ?? b.invoiceId.slice(-8).toUpperCase(),
+    patientId: b.patientId,
+    patientName: who(b.patientId).name,
+    uhid: who(b.patientId).uhid,
+    amount: b.paid,
+    at: b.at.toISOString(),
+  }));
+
+  const advanceRows: ReceiptRow[] = deposits.map((d) => ({
+    kind: "advance",
+    refId: d.id,
+    receiptNo: `ADV-${d.id.slice(-8).toUpperCase()}`,
+    patientId: d.patientId,
+    patientName: who(d.patientId).name,
+    uhid: who(d.patientId).uhid,
+    amount: d.amount,
+    ...(d.method ? { method: d.method } : {}),
+    at: d.at.toISOString(),
+  }));
+
+  return [...billRows, ...advanceRows].sort((a, b) => b.at.localeCompare(a.at));
 }
 
 export async function myActivity(userId: string, range: DateRange): Promise<MyActivity> {

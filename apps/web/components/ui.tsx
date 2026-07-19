@@ -9,6 +9,7 @@
  * "this could harm someone", not "this button is red".
  */
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { describeError } from "../lib/errors";
 
 export function Button({
   children,
@@ -129,6 +130,34 @@ export function Alert({
       {title && <p className="mb-0.5 font-semibold">{title}</p>}
       {children}
     </div>
+  );
+}
+
+/**
+ * A danger Alert for a caught error that also shows its REFERENCE — the `code · traceId` that maps
+ * to the server log for that request. Accepts any thrown value (an `ApiClientError`, a string, or an
+ * unexpected object); pass a `fallback` for the non-API case. This is how a failure the user sees
+ * becomes a failure we can find: they read back the reference, we grep the logs for the traceId.
+ */
+export function ErrorAlert({
+  error,
+  fallback,
+  title,
+}: {
+  error: unknown;
+  fallback?: string;
+  title?: string;
+}) {
+  const { message, reference } = describeError(error, fallback);
+  return (
+    <Alert tone="danger" {...(title ? { title } : {})}>
+      <span>{message}</span>
+      {reference && (
+        <span className="mt-1 block font-mono text-[11px] break-all opacity-70 select-all">
+          Ref: {reference}
+        </span>
+      )}
+    </Alert>
   );
 }
 

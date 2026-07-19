@@ -1469,14 +1469,13 @@ function MyPatients() {
                           Close visit
                         </Button>
                       )}
-                    {/* The take-home OPD slip — opens as a clean printable sheet in a new tab. */}
+                    {/* The take-home OPD slip — a clean printable sheet. Same tab so the signed-in
+                        (per-tab, in dev) session is present; the slip has its own Back button. */}
                     <a
                       href={`/opd-slip/${selected.id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
                       className="inline-flex items-center rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm font-medium text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)]"
                     >
-                      OPD slip ↗
+                      OPD slip →
                     </a>
                   </div>
                 </div>

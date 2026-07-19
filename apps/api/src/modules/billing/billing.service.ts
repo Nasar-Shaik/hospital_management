@@ -20,7 +20,11 @@ import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
-import { debitForInvoice as debitWalletForInvoice } from "../wallet/index.js";
+import { getEncounter } from "../encounters/index.js";
+import {
+  debitForInvoice as debitWalletForInvoice,
+  getBalance as walletBalance,
+} from "../wallet/index.js";
 import * as repo from "./billing.repository.js";
 import {
   INVOICE_TRANSITIONS,
@@ -32,7 +36,12 @@ import {
 
 const logger = createLogger({ service: "billing" });
 
-export type { Charge, Invoice, ServiceItem } from "./billing.repository.js";
+export type { Charge, Invoice, ServiceItem, BillReceipt } from "./billing.repository.js";
+
+/** Issued bills with money taken in a period — the bill half of the receipts register. */
+export function listReceipts(range: { from: Date; to: Date }): Promise<repo.BillReceipt[]> {
+  return repo.receiptsBetween(range.from, range.to);
+}
 
 export interface PostChargeInput {
   encounterId: string;
@@ -471,4 +480,236 @@ export async function orderPaymentStatus(
     else out[id] = invoiceStatus.get(c.invoiceId) === "paid" ? "paid" : "unpaid";
   }
   return out;
+}
+
+/** Whether the CONSULTATION (OP fee) on a visit has been paid — gates joining the doctor's queue. */
+export type ConsultationPaymentState = "paid" | "unpaid" | "unbilled" | "free";
+
+/**
+ * The OP-fee payment state per encounter, traced consultation-charge → invoice — the reception
+ * gate for "pay before you join the queue".
+ *
+ * `free` is the zero-tariff government patient: the consultation is worth ₹0, so there is nothing
+ * to pay and they queue immediately — never shown as "unpaid" and turned away. `unbilled` means the
+ * consultation charge has not posted yet (the `encounter.started` event is in flight). Like
+ * `orderPaymentStatus` this is a STATUS with no amounts, so it is reachable with `encounter:read` —
+ * the receptionist can see whether to route the patient to the cash counter.
+ */
+export async function consultationPaymentStatus(
+  encounterIds: string[],
+): Promise<Record<string, ConsultationPaymentState>> {
+  const charges = await repo.consultationChargesForEncounters(encounterIds);
+
+  // A visit's consultation may be more than one charge (fee + express surcharge); collapse them.
+  const byEncounter = new Map<string, { amount: number; invoiceId?: string }>();
+  for (const c of charges) {
+    const existing = byEncounter.get(c.encounterId);
+    if (existing) {
+      existing.amount += c.amount;
+      existing.invoiceId = existing.invoiceId ?? c.invoiceId;
+    } else {
+      byEncounter.set(c.encounterId, {
+        amount: c.amount,
+        ...(c.invoiceId ? { invoiceId: c.invoiceId } : {}),
+      });
+    }
+  }
+
+  const invoiceIds = [
+    ...new Set(
+      [...byEncounter.values()].map((v) => v.invoiceId).filter((x): x is string => Boolean(x)),
+    ),
+  ];
+  const invoiceStatus = await repo.invoiceStatusByIds(invoiceIds);
+
+  const out: Record<string, ConsultationPaymentState> = {};
+  for (const id of encounterIds) {
+    const c = byEncounter.get(id);
+    if (!c) out[id] = "unbilled";
+    else if (c.amount === 0) out[id] = "free";
+    else if (!c.invoiceId) out[id] = "unpaid";
+    else out[id] = invoiceStatus.get(c.invoiceId) === "paid" ? "paid" : "unpaid";
+  }
+  return out;
+}
+
+/* ── Admitted patients: settle a test from the advance (never wait for money) ── */
+
+/** Bills a specific set of unbilled charges into their own finalized invoice; returns its id. */
+async function billChargesToInvoice(charges: repo.Charge[]): Promise<string> {
+  const ctx = getContext();
+  const first = charges[0];
+  if (!first) throw new AppError("HMS-STATE-001", 422, "Nothing to bill", {});
+
+  const lines: InvoiceLine[] = charges.map((c) => ({
+    code: c.code,
+    description: c.description,
+    category: c.category,
+    quantity: c.quantity,
+    listPrice: c.listPrice,
+    amount: c.amount,
+  }));
+  const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
+
+  const invoice = await repo.createInvoice({
+    encounterId: first.encounterId,
+    patientId: first.patientId,
+    episodeId: first.episodeId,
+    lines,
+    subtotal,
+    total: subtotal,
+  });
+  const number = await repo.nextInvoiceNumber();
+  const finalized = await repo.updateInvoice(invoice.id, {
+    number,
+    status: "finalized",
+    lines,
+    subtotal,
+    total: subtotal,
+    finalizedAt: new Date(),
+    ...(ctx.userId ? { finalizedBy: ctx.userId } : {}),
+  });
+  if (!finalized) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoice.id });
+  await repo.attachChargesToInvoiceByIds(
+    charges.map((c) => c.id),
+    invoice.id,
+  );
+  return invoice.id;
+}
+
+export interface OrderSettlementInfo {
+  /** The order's patient is on an open inpatient stay — the advance path applies. */
+  admitted: boolean;
+  /** Paise. The patient's advance balance right now (may be negative once tests draw it down). */
+  advanceBalance: number;
+  /** Paise. What this test's charge comes to — the amount the deduction will draw. */
+  amount: number;
+}
+
+/**
+ * For the lab worklist: is each order's patient an admitted (IP) one, and if so what is their
+ * advance balance and this test's amount? Reachable with `order:read` — a status/amount slice, so
+ * the technician can see whether to proceed by drawing the advance, without the billing detail.
+ */
+export async function orderSettlementInfo(
+  orderIds: string[],
+): Promise<Record<string, OrderSettlementInfo>> {
+  const charges = await repo.chargesForSources(orderIds);
+
+  const byOrder = new Map<string, { amount: number; encounterId: string }>();
+  for (const c of charges) {
+    if (!c.sourceId) continue;
+    const existing = byOrder.get(c.sourceId);
+    if (existing) existing.amount += c.amount;
+    else byOrder.set(c.sourceId, { amount: c.amount, encounterId: c.encounterId });
+  }
+
+  const encounterIds = [...new Set([...byOrder.values()].map((v) => v.encounterId))];
+  const encById = new Map<string, { klass: string; patientId: string }>();
+  await Promise.all(
+    encounterIds.map(async (id) => {
+      const enc = await getEncounter(id).catch(() => null);
+      if (enc) encById.set(id, { klass: enc.class, patientId: enc.patientId });
+    }),
+  );
+
+  const patientIds = [...new Set([...encById.values()].map((v) => v.patientId))];
+  const balanceByPatient = new Map<string, number>();
+  await Promise.all(
+    patientIds.map(async (pid) => {
+      balanceByPatient.set(pid, await walletBalance(pid));
+    }),
+  );
+
+  const out: Record<string, OrderSettlementInfo> = {};
+  for (const id of orderIds) {
+    const c = byOrder.get(id);
+    const enc = c ? encById.get(c.encounterId) : undefined;
+    out[id] = {
+      admitted: enc?.klass === "IP",
+      advanceBalance: enc ? (balanceByPatient.get(enc.patientId) ?? 0) : 0,
+      amount: c?.amount ?? 0,
+    };
+  }
+  return out;
+}
+
+export interface OrderSettlementResult {
+  orderId: string;
+  invoiceId: string;
+  /** Paise. The advance balance AFTER the deduction — may be negative for an admitted patient. */
+  advanceBalance: number;
+}
+
+/**
+ * Settles ONE test from the admitted patient's advance, so the lab never waits for money.
+ *
+ * The technician holds `order:perform`, not billing or wallet permissions — but this is not taking
+ * new cash, it is drawing DOWN an advance the desk already collected, so authorising the person in
+ * front of the patient to do it is right, and the ledger records who and when. The balance is
+ * allowed to go NEGATIVE (the relatives settle the shortfall later); a report is never held. This
+ * is IP-only: an OP test is refused here and must be paid at the counter.
+ */
+export async function settleOrderFromAdvance(orderId: string): Promise<OrderSettlementResult> {
+  const charges = await repo.fullChargesForSource(orderId);
+  const first = charges[0];
+  if (!first) {
+    throw new AppError("HMS-STATE-001", 422, "This test has no charge to settle from advance", {
+      orderId,
+    });
+  }
+
+  const encounter = await getEncounter(first.encounterId);
+  if (!encounter) {
+    throw new AppError("HMS-GEN-404", 404, "Visit not found", { encounterId: first.encounterId });
+  }
+  if (encounter.class !== "IP") {
+    throw new AppError(
+      "HMS-STATE-001",
+      422,
+      "Settling from the advance is for admitted (inpatient) patients — collect an OP test at the counter",
+      { orderId, class: encounter.class },
+    );
+  }
+
+  // Make sure this test's charges are on a bill of their own, then settle that bill from advance.
+  const unbilled = charges.filter((c) => !c.invoiceId);
+  const invoiceId =
+    unbilled.length > 0
+      ? await billChargesToInvoice(unbilled)
+      : charges.find((c) => c.invoiceId)?.invoiceId;
+  if (!invoiceId) {
+    throw new AppError("HMS-STATE-001", 422, "This test has no bill to settle", { orderId });
+  }
+
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  const due = invoice.total - invoice.paid;
+  if (due <= 0) {
+    // Already settled — idempotent (a double-click, or reception billed and paid it first).
+    return { orderId, invoiceId, advanceBalance: await walletBalance(invoice.patientId) };
+  }
+
+  const ctx = getContext();
+  const advanceBalance = await withTransaction(async (session) => {
+    const balance = await debitWalletForInvoice(session, {
+      patientId: invoice.patientId,
+      amount: due,
+      invoiceId,
+      encounterId: encounter.id,
+      allowNegative: true,
+    });
+    const payment: PaymentEntry = {
+      amount: due,
+      method: WALLET_METHOD,
+      at: new Date(),
+      ...(ctx.userId ? { by: ctx.userId } : {}),
+    };
+    const updated = await repo.addPayment(invoiceId, payment, "paid", invoice.total, session);
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+    return balance;
+  });
+
+  return { orderId, invoiceId, advanceBalance };
 }

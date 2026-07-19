@@ -459,13 +459,8 @@ function Visits({ encounters, who }: { encounters: Encounter[]; who: (id?: strin
             {e.disposition ? ` · ${e.disposition}` : ""}
           </Td>
           <Td>
-            <a
-              href={`/opd-slip/${e.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[var(--color-brand-600)] hover:underline"
-            >
-              OPD slip ↗
+            <a href={`/opd-slip/${e.id}`} className="text-[var(--color-brand-600)] hover:underline">
+              OPD slip →
             </a>
           </Td>
         </tr>
@@ -886,6 +881,17 @@ function WalletPanel({
                 <Td>{rupees(e.balanceAfter)}</Td>
                 <Td className="text-xs">
                   {[e.reason, e.method].filter(Boolean).join(" · ") || "—"}
+                  {e.type === "deposit" && (
+                    <>
+                      {" · "}
+                      <a
+                        href={`/receipt/advance/${e.id}`}
+                        className="text-[var(--color-brand-700)] hover:underline"
+                      >
+                        Receipt →
+                      </a>
+                    </>
+                  )}
                 </Td>
               </tr>
             );

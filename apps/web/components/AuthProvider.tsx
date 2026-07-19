@@ -73,12 +73,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // never re-render just because a token rotated.
   const accessToken = useRef<string | undefined>(undefined);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Shared in-flight recovery, so a burst of 401s (a page firing several calls at once when the
+  // token has expired) triggers ONE silent refresh, not one per request.
+  const recovering = useRef<Promise<boolean> | null>(null);
+  // The API client is created once; it reaches the current 401 handler through this ref rather
+  // than being rebuilt whenever the handler's closure changes.
+  const onUnauthorizedRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   // The bootstrap refresh, held so React 18 StrictMode's double-invoked mount effect SHARES one
   // request instead of spending a rotating token twice — the second spend would look like token
   // reuse and burn the whole family, logging the user out on every reload.
   const bootstrap = useRef<Promise<TokenPair> | null>(null);
 
-  const api = useMemo(() => browserApi(() => accessToken.current), []);
+  const api = useMemo(
+    () =>
+      browserApi(
+        () => accessToken.current,
+        () => onUnauthorizedRef.current(),
+      ),
+    [],
+  );
 
   /**
    * Schedules a silent refresh shortly BEFORE the access token expires, so a user
@@ -116,6 +129,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     [api, router],
   );
+
+  /**
+   * The API client calls this when a request comes back with an expired/invalid session
+   * (HMS-AUTH-002/003) — the case the proactive timer misses when a machine sleeps past the
+   * token's life. We try ONE silent refresh and let the request replay; if the refresh token
+   * is gone too, the session is genuinely over, so we clear it and send the user to a login
+   * form that says why, rather than leaving a dead "could not load" page on screen.
+   */
+  const handleUnauthorized = useCallback(async (): Promise<boolean> => {
+    const inflight = (recovering.current ??= (async () => {
+      try {
+        const stored = devRefreshToken();
+        if (DEV_MULTI_ACCOUNT && !stored) throw new Error("no per-tab session token");
+        const pair = await api.refresh(stored);
+        accessToken.current = pair.accessToken;
+        setDevRefreshToken(pair.refreshToken);
+        scheduleRefresh(pair.expiresIn);
+        return true;
+      } catch {
+        accessToken.current = undefined;
+        setDevRefreshToken(undefined);
+        setState({ user: null, permissions: [], loading: false });
+        router.replace("/login?reason=expired");
+        return false;
+      }
+    })());
+    try {
+      return await inflight;
+    } finally {
+      if (recovering.current === inflight) recovering.current = null;
+    }
+  }, [api, scheduleRefresh, router]);
+  onUnauthorizedRef.current = handleUnauthorized;
 
   const adopt = useCallback(
     async (pair: {

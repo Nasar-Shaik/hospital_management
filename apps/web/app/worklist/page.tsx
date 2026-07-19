@@ -31,7 +31,15 @@ import {
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
+import { rupees } from "../../lib/money";
+
+/** Per-order settle-from-advance info for admitted patients. */
+interface Settlement {
+  admitted: boolean;
+  advanceBalance: number;
+  amount: number;
+}
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -234,6 +242,8 @@ function Worklist() {
   const [payment, setPayment] = useState<Record<string, "paid" | "unpaid" | "unbilled" | "free">>(
     {},
   );
+  // Admitted-patient settle-from-advance info, keyed by order id (empty for OP patients).
+  const [settlement, setSettlement] = useState<Record<string, Settlement>>({});
   // Order ids that already have an uploaded report/document. A result can only be marked complete
   // when there is something to show for it — typed values (Enter result) or an uploaded doc.
   const [reported, setReported] = useState<Set<string>>(new Set());
@@ -242,7 +252,8 @@ function Worklist() {
   const [search, setSearch] = useState("");
   const [datePreset, setDatePreset] = useState<DatePreset>("today");
 
-  const [error, setError] = useState<string | null>(null);
+  // Holds the raw thrown value, so ErrorAlert can surface its trace reference for support.
+  const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -284,6 +295,13 @@ function Worklist() {
         .then(setPayment)
         .catch(() => setPayment({}));
 
+      // For admitted patients, whether the test can be settled from the advance and the balance to
+      // draw it against. Advisory too — a failure just falls back to the "pay at billing" message.
+      api
+        .orderSettlementInfo(activePage.items.map((o) => o.id))
+        .then(setSettlement)
+        .catch(() => setSettlement({}));
+
       // Which in-progress orders already have an uploaded document, so "Mark complete" (the
       // upload path) is only offered once there is a document to stand behind it. Reports are read
       // per patient; failures here just leave the set empty (the tech can still Enter result).
@@ -296,7 +314,7 @@ function Worklist() {
         .then((lists) => setReported(new Set(lists.flat().map((r) => r.orderId))))
         .catch(() => setReported(new Set()));
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not load the worklist.");
+      setError(err);
     } finally {
       setLoading(false);
     }
@@ -383,11 +401,35 @@ function Worklist() {
         setError(
           required
             ? `You cannot verify a ${order.category} result — that needs "${required}". Ask the specialist for that department.`
-            : err.message,
+            : err,
         );
       } else {
-        setError(err instanceof ApiClientError ? err.message : "Could not update the order.");
+        setError(err);
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Draws an admitted patient's test straight from their advance, so the report never waits for
+   * money to change hands at a counter. The balance may go negative (the ward settles the shortfall
+   * later) — that is the point: an inpatient's test is not held.
+   */
+  async function settleFromAdvance(order: Order) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.settleOrderFromAdvance(order.id);
+      setNotice(
+        `${order.name} settled from advance. Advance now ${rupees(result.advanceBalance)}${
+          result.advanceBalance < 0 ? " — the ward should collect the shortfall." : "."
+        }`,
+      );
+      await load();
+    } catch (err) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -423,12 +465,7 @@ function Worklist() {
       setReported((prev) => new Set(prev).add(order.id));
       setNotice(`Report uploaded for ${order.name}. The ordering doctor can see it now.`);
     } catch (err) {
-      if (err instanceof ApiClientError) {
-        const fieldMsg = Object.values(err.fieldErrors)[0]?.[0];
-        setError(fieldMsg ?? err.message);
-      } else {
-        setError("Could not upload the report.");
-      }
+      setError(err);
     } finally {
       setUploading(null);
     }
@@ -446,7 +483,7 @@ function Worklist() {
         </p>
       </div>
 
-      {error && <Alert tone="danger">{error}</Alert>}
+      {error != null && <ErrorAlert error={error} fallback="Something went wrong." />}
       {notice && <Alert tone="success">{notice}</Alert>}
 
       <div className="flex flex-wrap gap-2">
@@ -561,9 +598,37 @@ function Worklist() {
                      */}
                     {payment[o.id] === "unpaid" &&
                     ["placed", "accepted", "in_progress"].includes(o.status) ? (
-                      <span className="inline-flex items-center rounded-md bg-[var(--color-warning-bg)] px-2.5 py-1 text-xs font-medium text-[var(--color-warning)]">
-                        Awaiting payment — held until paid at billing
-                      </span>
+                      settlement[o.id]?.admitted ? (
+                        /* Admitted patient: draw the test straight from their advance so it never
+                           waits. Shows the balance (red when negative) and the amount to deduct. */
+                        <PermissionGate can={can} permission="order:perform">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-brand-50)] px-2.5 py-1 text-xs font-medium text-[var(--color-brand-700)]">
+                              Admitted · Advance{" "}
+                              <span
+                                className={
+                                  settlement[o.id]!.advanceBalance < 0
+                                    ? "font-semibold text-[var(--color-danger)]"
+                                    : "font-semibold"
+                                }
+                              >
+                                {rupees(settlement[o.id]!.advanceBalance)}
+                              </span>
+                            </span>
+                            <Button
+                              disabled={busy}
+                              onClick={() => void settleFromAdvance(o)}
+                              title="Deduct this test from the patient's advance and proceed"
+                            >
+                              Proceed — deduct {rupees(settlement[o.id]!.amount)}
+                            </Button>
+                          </div>
+                        </PermissionGate>
+                      ) : (
+                        <span className="inline-flex items-center rounded-md bg-[var(--color-warning-bg)] px-2.5 py-1 text-xs font-medium text-[var(--color-warning)]">
+                          Awaiting payment — held until paid at billing
+                        </span>
+                      )
                     ) : (
                       <>
                         {/* Only the edges §15 allows, and only for the role that holds them. */}
