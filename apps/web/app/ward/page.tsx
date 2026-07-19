@@ -618,6 +618,23 @@ function Ward() {
                         Admitted {when(selected.admittedAt)} · day {daysIn(selected.admittedAt)}
                       </p>
                     )}
+                    {/* Printable inpatient documents — the day-wise record and the discharge summary.
+                        Same tab so the signed-in (per-tab, in dev) session is present; each has its
+                        own Back button. */}
+                    <div className="mt-1.5 flex gap-3 text-xs font-medium">
+                      <a
+                        href={`/ip-sheet/${selected.id}`}
+                        className="text-[var(--color-brand-700)] hover:underline"
+                      >
+                        Treatment sheet →
+                      </a>
+                      <a
+                        href={`/discharge-summary/${selected.id}`}
+                        className="text-[var(--color-brand-700)] hover:underline"
+                      >
+                        Discharge summary →
+                      </a>
+                    </div>
                   </div>
                   {/* The IP encounter's own bill. The OP consultation has its own — two
                       encounters, one episode, and that is what makes both billable. */}

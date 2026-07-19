@@ -625,6 +625,21 @@ export interface InvoiceLine {
   amount: number;
 }
 
+/** One posted charge WITH its date — for the day-wise money on the IP treatment sheet. */
+export interface EncounterCharge {
+  id: string;
+  code: string;
+  description: string;
+  category: ChargeCategory;
+  quantity: number;
+  listPrice: number;
+  /** Paise owed. */
+  amount: number;
+  postedAt: string;
+  invoiceId?: string;
+  voided?: boolean;
+}
+
 export interface Invoice {
   id: string;
   encounterId: string;
@@ -2230,6 +2245,11 @@ export class ApiClient {
   /** One bill by id — for a printable receipt. Needs `billing:read`. */
   getInvoice(invoiceId: string): Promise<Invoice> {
     return this.request<Invoice>("GET", `/api/v1/invoices/${invoiceId}`);
+  }
+
+  /** Dated charges for a visit — the day-wise money on the IP treatment sheet. Needs `billing:read`. */
+  getCharges(encounterId: string): Promise<EncounterCharge[]> {
+    return this.request<EncounterCharge[]>("GET", `/api/v1/encounters/${encounterId}/charges`);
   }
 
   /** Takes money. `amount` is PAISE. Refused on a draft; overpayment is refused. */

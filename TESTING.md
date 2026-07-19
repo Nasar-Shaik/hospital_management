@@ -1799,3 +1799,37 @@ signed-in, per-tab-in-dev session) and both have a **← Back** button.
 
 - The receipt URLs (`/receipt/<invoiceId>` and `/receipt/advance/<entryId>`) are stable — the same
   receipt reprints whenever opened, so a lost slip is always recoverable.
+
+## 43 · Inpatient treatment sheet & discharge summary (⏳ eyeball UI)
+
+**Why:** an admitted patient's record is a story told over days, not the one-moment OP slip. Two new
+printable documents cover it: a day-wise **treatment sheet** for the file, and a formal **discharge
+summary** handed over at the end.
+
+**How it works:** both are standalone print pages composed from data that already exists (encounter,
+ward notes, orders, prescriptions, dated charges via new `GET /encounters/:id/charges`, the advance
+ledger, and per-encounter billing), hospital-branded with the seal and the consultant's signature.
+They open **same-tab** (dev per-tab session) and fail gracefully with a sign-in prompt.
+
+### N1 · Treatment sheet is day-wise, money inline
+
+- Admit a patient; add a **ward note**, order a **test**, prescribe a **drug**, and collect an
+  **advance**; on another day (or after a bed-day posts) let more charges accrue.
+- **Ward → the patient → Treatment sheet →**. Expect: an IP header (admitted date, bed, consultant,
+  status) and a **money summary** (advance balance — red if negative — total charges, paid/drawn,
+  outstanding), then **Day 1 … Day N** sections, each grouping that day's **notes, investigations,
+  medications, charges (with a day subtotal) and advance movements**. **Print** gives a clean A4 sheet.
+
+### N2 · Discharge summary reads as a handover + settlement
+
+- Discharge the patient with a summary (ward Discharge form) — or open it before discharge to see the
+  **"Provisional — not yet discharged"** badge.
+- **Ward → the patient → Discharge summary →**. Expect: **final diagnosis**, **course of stay** (the
+  discharge-summary ward note), **discharge medications** table, **advice & follow-up**, and a **final
+  settlement** block — total charges, paid/drawn from advance, advance balance, and either a **balance
+  payable** (red) or a **refund due** (green) or **settled in full**.
+
+### N3 · Not an inpatient
+
+- Opening either page for an OP encounter shows a plain "this is for admitted patients" message, not a
+  broken sheet.

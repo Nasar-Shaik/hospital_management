@@ -672,6 +672,10 @@ const PROBES: Record<string, Probe> = {
     method: "get",
     url: "/api/v1/wallet/entries/64b7f0000000000000000001",
   },
+  "GET /api/v1/encounters/:id/charges": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/charges",
+  },
   "GET /api/v1/reports/receipts": {
     method: "get",
     url: "/api/v1/reports/receipts?from=2026-07-01&to=2026-07-31",

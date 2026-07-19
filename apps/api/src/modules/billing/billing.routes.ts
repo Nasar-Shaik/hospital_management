@@ -169,6 +169,15 @@ export function billingRouter(): Router {
     asyncHandler(controller.getEncounterBilling),
   );
 
+  // Dated charges for a visit — the day-wise money on the IP treatment sheet.
+  router.get(
+    "/encounters/:id/charges",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.encounterCharges),
+  );
+
   router.post(
     "/charges",
     authenticate(),

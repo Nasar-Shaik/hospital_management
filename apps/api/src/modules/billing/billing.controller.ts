@@ -140,6 +140,12 @@ export const getBill: RequestHandler = async (req, res) => {
  * The per-batch billing view — pending charges + every bill on the visit. The desk's collection
  * screen reads this, and the OPD slip and ward totals are computed from it.
  */
+/** Every charge posted on a visit, WITH its date — the day-wise money on the IP treatment sheet. */
+export const encounterCharges: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.getCharges(id));
+};
+
 export const getEncounterBilling: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
 
