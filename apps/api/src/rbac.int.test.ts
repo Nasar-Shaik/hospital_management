@@ -97,6 +97,11 @@ const PUBLIC_ROUTES = new Set([
   "POST /api/v1/auth/login",
   "POST /api/v1/auth/refresh",
   "POST /api/v1/auth/mfa/verify",
+  // Password reset is reached with no session, by definition — the user cannot log in.
+  "POST /api/v1/auth/forgot-password",
+  "POST /api/v1/auth/reset-password",
+  // The hospital's public website content — served to a logged-out visitor (resolved by host).
+  "GET /api/v1/site",
 ]);
 
 /**
@@ -114,6 +119,9 @@ const SELF_SERVICE_ROUTES = new Set([
   "POST /api/v1/auth/mfa/setup",
   "POST /api/v1/auth/mfa/activate",
   "POST /api/v1/auth/mfa/disable",
+  // A clinician's OWN activity for the day — self-scoped to the caller, so no permission (you can
+  // always see what you did). Authenticated, deliberately unpermissioned. See reporting.routes.ts.
+  "GET /api/v1/reports/my-activity",
 ]);
 
 /** A concrete, callable request for each protected route — the matrix's probes. */
@@ -303,6 +311,11 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/encounters/64b7f0000000000000000001/close",
     body: {},
   },
+  "POST /api/v1/encounters/:id/summary": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/summary",
+    body: {},
+  },
   "POST /api/v1/encounters/:id/cancel": {
     method: "post",
     url: "/api/v1/encounters/64b7f0000000000000000001/cancel",
@@ -370,6 +383,10 @@ const PROBES: Record<string, Probe> = {
    * desk must be able to pick a doctor without being handed a personnel file.
    */
   "GET /api/v1/doctors": { method: "get", url: "/api/v1/doctors" },
+  "GET /api/v1/doctors/:id": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001",
+  },
   "GET /api/v1/services": { method: "get", url: "/api/v1/services" },
   /**
    * The catalogue is the DOCTOR's view of the same collection, price-free. It is
@@ -377,6 +394,10 @@ const PROBES: Record<string, Probe> = {
    * `billing:read` — the rate card is not the bill.
    */
   "GET /api/v1/services/catalogue": { method: "get", url: "/api/v1/services/catalogue" },
+  "GET /api/v1/encounters/:id/billing": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/billing",
+  },
   "GET /api/v1/encounters/:id/bill": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/bill",
@@ -434,6 +455,11 @@ const PROBES: Record<string, Probe> = {
   "GET /api/v1/encounters/:id/notes": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/notes",
+  },
+  "POST /api/v1/encounters/:id/outcome": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/outcome",
+    body: { outcome: "lama", text: "matrix probe" },
   },
   "POST /api/v1/encounters/:id/discharge": {
     method: "post",
@@ -621,6 +647,34 @@ const PROBES: Record<string, Probe> = {
   "GET /api/v1/reports/collections": {
     method: "get",
     url: "/api/v1/reports/collections?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/wallet": {
+    method: "get",
+    url: "/api/v1/reports/wallet?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/discharge-outcomes": {
+    method: "get",
+    url: "/api/v1/reports/discharge-outcomes?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/billing/order-payments": {
+    method: "get",
+    url: "/api/v1/billing/order-payments?orderIds=64b7f0000000000000000001",
+  },
+  "GET /api/v1/site/settings": { method: "get", url: "/api/v1/site/settings" },
+  "PATCH /api/v1/site/settings": { method: "patch", url: "/api/v1/site/settings", body: {} },
+  "GET /api/v1/patients/:patientId/wallet": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/wallet",
+  },
+  "POST /api/v1/patients/:patientId/wallet/deposits": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/wallet/deposits",
+    body: { amount: 1000, method: "cash" },
+  },
+  "POST /api/v1/patients/:patientId/wallet/refunds": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/wallet/refunds",
+    body: { amount: 1000, method: "cash" },
   },
 
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
@@ -1288,7 +1342,9 @@ describe("entitlement (layer 1): a hospital cannot use what it did not buy", () 
     // A gate on the read but not the write is worse than no gate: the hospital
     // simply uses the parts that were forgotten.
     for (const [id, probe] of Object.entries(PROBES)) {
-      if (!id.includes("/appointments") && !id.includes("/doctors/")) continue;
+      // Appointment + doctor-SCHEDULE routes are the scheduling feature. The plain doctor
+      // directory and a single doctor's card are core (no plan gate), like `GET /doctors`.
+      if (!id.includes("/appointments") && !id.includes("/schedule")) continue;
 
       const res = await request(app)
         [probe.method](probe.url)

@@ -223,45 +223,63 @@ export async function getRunningBill(encounterId: string): Promise<{
 export async function finalizeInvoice(encounterId: string): Promise<repo.Invoice> {
   const ctx = getContext();
 
-  const existing = await repo.findInvoiceForEncounter(encounterId);
-  if (existing && existing.status !== "draft") {
-    // Already finalized. Hand it back rather than erroring — a cashier who clicks
-    // twice wants the bill, not a stack trace.
-    return existing;
-  }
-
-  const bill = await getRunningBill(encounterId);
-  const charges = await repo.chargesForEncounter(encounterId);
-  const first = charges[0];
+  /**
+   * ── ONE BILL PER BATCH OF CHARGES, NOT ONE PER VISIT ────────────────────────
+   * Finalizing bills the charges NOT YET on any invoice — the consultation at registration, then
+   * the tests once a doctor has ordered them, then the pharmacy — each into its OWN numbered,
+   * frozen document. A charge that arrives after a bill is issued lands on the NEXT bill, never on
+   * the frozen one (STATE_MACHINE_CATALOG §4). This is what lets a patient pay for the consult
+   * before they see the doctor and for the tests afterwards, and it is why the lab's paid-before-run
+   * check can turn green per test.
+   */
+  const unbilled = await repo.unbilledChargesForEncounter(encounterId);
+  const first = unbilled[0];
   if (!first) {
+    // Nothing new to bill. Idempotent — a double-click, or a re-finalize with no fresh charges,
+    // hands back the most recent bill rather than raising an empty one or a stack trace.
+    const invoices = await repo.invoicesForEncounter(encounterId);
+    const latest = invoices[invoices.length - 1];
+    if (latest) return latest;
     throw new AppError("HMS-STATE-001", 422, "Nothing to bill on this visit", { encounterId });
   }
 
-  const invoice =
-    existing ??
-    (await repo.createInvoice({
-      encounterId,
-      patientId: first.patientId,
-      episodeId: first.episodeId,
-      lines: bill.lines,
-      subtotal: bill.subtotal,
-      total: bill.total,
-    }));
+  const lines: InvoiceLine[] = unbilled.map((c) => ({
+    code: c.code,
+    description: c.description,
+    category: c.category,
+    quantity: c.quantity,
+    listPrice: c.listPrice,
+    amount: c.amount,
+  }));
+  const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
+
+  const invoice = await repo.createInvoice({
+    encounterId,
+    patientId: first.patientId,
+    episodeId: first.episodeId,
+    lines,
+    subtotal,
+    total: subtotal,
+  });
 
   const number = await repo.nextInvoiceNumber();
 
   const finalized = await repo.updateInvoice(invoice.id, {
     number,
     status: "finalized",
-    lines: bill.lines,
-    subtotal: bill.subtotal,
-    total: bill.total,
+    lines,
+    subtotal,
+    total: subtotal,
     finalizedAt: new Date(),
     ...(ctx.userId ? { finalizedBy: ctx.userId } : {}),
   });
   if (!finalized) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoice.id });
 
-  await repo.attachChargesToInvoice(encounterId, invoice.id);
+  // Only the charges we just billed — see the repository note on why this is by-id, not by-encounter.
+  await repo.attachChargesToInvoiceByIds(
+    unbilled.map((c) => c.id),
+    invoice.id,
+  );
 
   /**
    * A ₹0 bill is SETTLED the moment it is finalized. A government hospital must not
@@ -275,6 +293,55 @@ export async function finalizeInvoice(encounterId: string): Promise<repo.Invoice
   }
 
   return finalized;
+}
+
+export interface EncounterBilling {
+  /** Charges not yet on any bill — the next bill to raise. */
+  pending: { lines: InvoiceLine[]; total: number };
+  /** Every bill raised on this visit, oldest first, each with its own paid/finalized status. */
+  invoices: repo.Invoice[];
+  /** Paise. Sum of all invoice totals. */
+  totalBilled: number;
+  /** Paise. Sum of all invoice payments. */
+  totalPaid: number;
+  /** Paise. Everything charged on the visit, billed or not. */
+  grandTotal: number;
+  /** Paise. What the visit still owes — pending charges plus the unpaid part of issued bills. */
+  outstanding: number;
+}
+
+/**
+ * The whole billing picture for a visit — the pending (unbilled) charges plus every bill raised,
+ * with their payment state. This is what the reception desk collects against: finalize the pending
+ * batch into a bill, then take the money on each bill. The itemised OPD-slip bill and the ward's
+ * "this stay owes" are read off the same view, so no two screens disagree on what is owed.
+ */
+export async function getEncounterBilling(encounterId: string): Promise<EncounterBilling> {
+  const [unbilled, invoices] = await Promise.all([
+    repo.unbilledChargesForEncounter(encounterId),
+    repo.invoicesForEncounter(encounterId),
+  ]);
+
+  const lines: InvoiceLine[] = unbilled.map((c) => ({
+    code: c.code,
+    description: c.description,
+    category: c.category,
+    quantity: c.quantity,
+    listPrice: c.listPrice,
+    amount: c.amount,
+  }));
+  const pendingTotal = lines.reduce((sum, l) => sum + l.amount, 0);
+  const totalBilled = invoices.reduce((sum, i) => sum + i.total, 0);
+  const totalPaid = invoices.reduce((sum, i) => sum + i.paid, 0);
+
+  return {
+    pending: { lines, total: pendingTotal },
+    invoices,
+    totalBilled,
+    totalPaid,
+    grandTotal: pendingTotal + totalBilled,
+    outstanding: pendingTotal + (totalBilled - totalPaid),
+  };
 }
 
 export interface RecordPaymentInput {

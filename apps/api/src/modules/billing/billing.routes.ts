@@ -123,6 +123,19 @@ export function billingRouter(): Router {
     asyncHandler(controller.getBill),
   );
 
+  /**
+   * The per-batch billing view: the pending (unbilled) charges plus every bill raised on the visit,
+   * with payment state. What the reception desk collects against — finalize the pending batch, then
+   * take money per bill.
+   */
+  router.get(
+    "/encounters/:id/billing",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.getEncounterBilling),
+  );
+
   router.post(
     "/charges",
     authenticate(),

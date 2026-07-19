@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { useParams } from "next/navigation";
 import {
   ApiClientError,
-  type Bill,
+  type EncounterBilling,
   type DoctorCard,
   type Encounter,
   type Patient,
@@ -76,7 +76,7 @@ function Slip() {
   const [doctor, setDoctor] = useState<DoctorCard | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
-  const [bill, setBill] = useState<Bill | null>(null);
+  const [billing, setBilling] = useState<EncounterBilling | null>(null);
   const [site, setSite] = useState<PublicSite | null>(null);
 
   const [loading, setLoading] = useState(true);
@@ -105,7 +105,7 @@ function Slip() {
           meta: { page: 1, limit: 0 },
         }),
         soft(api.listPrescriptions({ encounterId: id, current: true }), [] as Prescription[]),
-        soft(api.getBill(id), null as Bill | null),
+        soft(api.getEncounterBilling(id), null as EncounterBilling | null),
         soft(api.getPublicSite(), null as PublicSite | null),
       ]);
 
@@ -113,7 +113,7 @@ function Slip() {
       setDoctor(doc);
       setOrders(ords.items);
       setPrescriptions(rx);
-      setBill(theBill);
+      setBilling(theBill);
       setSite(theSite);
     } catch (err) {
       setError(
@@ -163,9 +163,17 @@ function Slip() {
     );
   }
 
-  const paid = bill?.invoice?.paid ?? 0;
-  const billTotal = bill?.total ?? 0;
-  const balance = Math.max(0, billTotal - paid);
+  // The whole visit's bill — every issued bill's lines plus anything not yet billed, so the sheet
+  // shows the full cost the patient came for, however many times they paid.
+  const billLines = billing
+    ? [...billing.invoices.flatMap((i) => i.lines), ...billing.pending.lines]
+    : [];
+  const paid = billing?.totalPaid ?? 0;
+  const billTotal = billing?.grandTotal ?? 0;
+  const balance = billing?.outstanding ?? 0;
+  const billNumbers = (billing?.invoices ?? [])
+    .map((i) => i.number)
+    .filter((n): n is string => Boolean(n));
 
   return (
     <div className="opd-root min-h-screen bg-gray-100 py-8 text-gray-900">
@@ -336,12 +344,12 @@ function Slip() {
         </div>
 
         {/* Bill / receipt */}
-        {bill && bill.lines.length > 0 && (
+        {billLines.length > 0 && (
           <section className="mt-5">
             <SectionLabel accent={accent}>Bill</SectionLabel>
             <table className="mt-1 w-full border-collapse text-sm">
               <tbody>
-                {bill.lines.map((l, i) => (
+                {billLines.map((l, i) => (
                   <tr key={`${l.code}-${i}`} className="border-b border-gray-100">
                     <td className="py-1 text-gray-800">{l.description}</td>
                     <td className="py-1 pr-2 text-right text-gray-500">
@@ -378,9 +386,9 @@ function Slip() {
                 )}
               </tfoot>
             </table>
-            {bill.invoice?.number && (
+            {billNumbers.length > 0 && (
               <p className="mt-1 text-xs text-gray-500">
-                Invoice {bill.invoice.number} · {bill.invoice.status}
+                {billNumbers.length > 1 ? "Invoices" : "Invoice"} {billNumbers.join(", ")}
               </p>
             )}
           </section>

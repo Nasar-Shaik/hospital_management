@@ -506,9 +506,11 @@ function Ward() {
         return;
       }
 
+      // Outstanding across every bill on the stay — what the patient still owes, whether or not the
+      // ward charges have been issued as a document yet.
       void api
-        .getBill(encounterId)
-        .then((b) => setBill({ total: b.total }))
+        .getEncounterBilling(encounterId)
+        .then((b) => setBill({ total: b.outstanding }))
         .catch(() => setBill(null));
     },
     [api, can],

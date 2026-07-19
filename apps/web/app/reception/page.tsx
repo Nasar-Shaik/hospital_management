@@ -24,7 +24,8 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   ApiClientError,
-  type Bill,
+  type EncounterBilling,
+  type Invoice,
   type Encounter,
   type EncounterStatus,
   type DoctorRef,
@@ -68,47 +69,34 @@ const PAYMENT_METHODS = ["cash", "card", "upi", "netbanking"] as const;
 /**
  * The bill AND the till for one visit — what the desk owes, and taking the money for it.
  *
- * ── FINALIZE ≠ PAY ──────────────────────────────────────────────────────────
- * Finalizing FREEZES the lines into a numbered document; it does NOT take a rupee. Payment is
- * a second, separate act (and a separate permission — money crossing the counter). Conflating
- * the two is the trap the old panel fell into: a bill could be finalized and look "done" while
- * nothing had actually been collected, which is exactly why a paid-before-lab test stayed held.
+ * ── ONE BILL PER BATCH ──────────────────────────────────────────────────────
+ * A visit is billed in batches: the consultation at registration, the tests once a doctor has
+ * ordered them, the pharmacy after. Each batch is its own numbered document. So this panel has a
+ * PENDING section — charges not yet on any bill, with one button to issue them — and then a row per
+ * BILL, each with its own payment state and collect box. Finalizing a batch never disturbs a bill
+ * already issued (STATE_MACHINE_CATALOG §4).
  *
- * So this panel is two plain sections — PENDING (what is still owed) and CLEARED (what has been
- * paid) — with the collect box in Pending, its amount PREFILLED to the outstanding balance and
- * editable for a part payment.
+ * ── FINALIZE ≠ PAY ──────────────────────────────────────────────────────────
+ * Issuing a bill freezes its lines and gives it a number; it does NOT take a rupee. Payment is a
+ * second, separate act (and permission — money crossing the counter). That separation is what makes
+ * the lab's pay-before-run check meaningful: a test runs once ITS bill is paid.
  */
 function BillPanel({ encounterId }: { encounterId: string }) {
   const { api, can } = useAuth();
-  const [bill, setBill] = useState<Bill | null>(null);
+  const [billing, setBilling] = useState<EncounterBilling | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [amount, setAmount] = useState("");
-  const [method, setMethod] = useState<(typeof PAYMENT_METHODS)[number]>("cash");
-
   const load = useCallback(() => {
     void api
-      .getBill(encounterId)
-      .then(setBill)
+      .getEncounterBilling(encounterId)
+      .then(setBilling)
       .catch((err: unknown) =>
         setError(err instanceof ApiClientError ? err.message : "Could not load the bill."),
       );
   }, [api, encounterId]);
 
   useEffect(load, [load]);
-
-  const invoice = bill?.invoice;
-  const paid = invoice?.paid ?? 0;
-  const frozen = invoice && invoice.status !== "draft";
-  // Outstanding is only meaningful once the bill is a document — a draft is not payable.
-  const outstanding = frozen ? Math.max(0, invoice.total - paid) : 0;
-
-  // Prefill the collect box with the whole outstanding — the common case is "pay it all". The
-  // clerk can edit it down for a part payment.
-  useEffect(() => {
-    if (outstanding > 0) setAmount((outstanding / 100).toFixed(2));
-  }, [outstanding]);
 
   async function finalize() {
     setBusy(true);
@@ -117,14 +105,103 @@ function BillPanel({ encounterId }: { encounterId: string }) {
       await api.finalizeBill(encounterId);
       load();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not finalize the bill.");
+      setError(err instanceof ApiClientError ? err.message : "Could not issue the bill.");
     } finally {
       setBusy(false);
     }
   }
 
+  if (error && !billing) return <p className="text-xs text-[var(--color-danger)]">{error}</p>;
+  if (!billing) return <p className="text-xs text-[var(--color-fg-subtle)]">Loading bill…</p>;
+  if (billing.pending.total === 0 && billing.invoices.length === 0) {
+    return <p className="text-xs text-[var(--color-fg-subtle)]">Nothing charged yet.</p>;
+  }
+
+  const pending = billing.pending;
+
+  return (
+    <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+      {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+
+      {/* PENDING — charges not yet on any bill. One button issues them as a new bill. */}
+      {pending.lines.length > 0 && (
+        <div className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-bg)] p-2.5">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-semibold tracking-wide text-[var(--color-warning)] uppercase">
+              Pending — not yet billed
+            </span>
+            <span className="text-sm font-semibold text-[var(--color-fg)]">
+              {rupees(pending.total)}
+            </span>
+          </div>
+          <table className="w-full text-left text-xs">
+            <tbody className="divide-y divide-[var(--color-border)]/50">
+              {pending.lines.map((l, i) => (
+                <tr key={`${l.code}-${String(i)}`}>
+                  <td className="py-1 pr-3 text-[var(--color-fg)]">{l.description}</td>
+                  <td className="py-1 pr-3 text-right text-[var(--color-fg-muted)]">
+                    {l.quantity > 1 ? `× ${String(l.quantity)}` : ""}
+                  </td>
+                  <td className="py-1 text-right font-medium text-[var(--color-fg)]">
+                    {rupees(l.amount)}
+                    {l.amount === 0 && l.listPrice > 0 && (
+                      <span className="ml-1 font-normal text-[var(--color-fg-subtle)] line-through">
+                        {rupees(l.listPrice)}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="mt-2 flex justify-end">
+            <PermissionGate can={can} permission="billing:finalize">
+              <Button variant="secondary" disabled={busy} onClick={() => void finalize()}>
+                Issue bill for these
+              </Button>
+            </PermissionGate>
+          </div>
+        </div>
+      )}
+
+      {/* One row per BILL, each with its own payment state and collect box. */}
+      {billing.invoices.map((inv) => (
+        <InvoiceRow key={inv.id} invoice={inv} onPaid={load} />
+      ))}
+
+      {/* The visit's running totals across every bill. */}
+      {billing.invoices.length > 0 && (
+        <div className="flex items-center justify-between border-t border-[var(--color-border-strong)] pt-2 text-sm">
+          <span className="font-semibold text-[var(--color-fg)]">Visit total</span>
+          <span className="text-[var(--color-fg-muted)]">
+            {rupees(billing.totalPaid)} paid of {rupees(billing.grandTotal)}
+            {billing.outstanding > 0 && (
+              <span className="ml-1 font-semibold text-[var(--color-warning)]">
+                · {rupees(billing.outstanding)} due
+              </span>
+            )}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One issued bill and its till — the collect box is prefilled to this bill's outstanding balance. */
+function InvoiceRow({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void }) {
+  const { api, can } = useAuth();
+  const outstanding = Math.max(0, invoice.total - invoice.paid);
+  const [amount, setAmount] = useState((outstanding / 100).toFixed(2));
+  const [method, setMethod] = useState<(typeof PAYMENT_METHODS)[number]>("cash");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-seed when this bill's balance changes (a payment landed) so the box always shows what is left.
+  useEffect(() => {
+    setAmount((outstanding / 100).toFixed(2));
+  }, [outstanding]);
+
   async function collect() {
-    if (!invoice) return;
     const paise = toPaise(amount);
     if (paise <= 0) {
       setError("Enter an amount greater than zero.");
@@ -138,7 +215,7 @@ function BillPanel({ encounterId }: { encounterId: string }) {
     setError(null);
     try {
       await api.recordPayment(invoice.id, { amount: paise, method });
-      load();
+      onPaid();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not record the payment.");
     } finally {
@@ -146,139 +223,54 @@ function BillPanel({ encounterId }: { encounterId: string }) {
     }
   }
 
-  if (error && !bill) return <p className="text-xs text-[var(--color-danger)]">{error}</p>;
-  if (!bill) return <p className="text-xs text-[var(--color-fg-subtle)]">Loading bill…</p>;
-  if (bill.lines.length === 0) {
-    return <p className="text-xs text-[var(--color-fg-subtle)]">Nothing charged yet.</p>;
-  }
-
   return (
-    <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
-      {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5">
+      <div className="flex items-center justify-between">
+        <Badge tone={invoice.status === "paid" ? "success" : "brand"}>
+          {invoice.number ?? "issued"} · {invoice.status}
+        </Badge>
+        <span className="text-xs text-[var(--color-fg-muted)]">
+          {rupees(invoice.paid)} / {rupees(invoice.total)}
+        </span>
+      </div>
 
-      {/* The charges */}
-      <table className="w-full text-left text-xs">
-        <tbody className="divide-y divide-[var(--color-border)]">
-          {bill.lines.map((l, i) => (
-            <tr key={`${l.code}-${String(i)}`}>
-              <td className="py-1.5 pr-3 text-[var(--color-fg)]">{l.description}</td>
-              <td className="py-1.5 pr-3 text-right text-[var(--color-fg-muted)]">
-                {l.quantity > 1 ? `× ${String(l.quantity)}` : ""}
-              </td>
-              <td className="py-1.5 text-right font-medium text-[var(--color-fg)]">
-                {rupees(l.amount)}
-                {l.amount === 0 && l.listPrice > 0 && (
-                  <span className="ml-1 font-normal text-[var(--color-fg-subtle)] line-through">
-                    {rupees(l.listPrice)}
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="border-t-2 border-[var(--color-border-strong)]">
-            <td className="pt-2 font-semibold text-[var(--color-fg)]">Total</td>
-            <td />
-            <td className="pt-2 text-right font-semibold text-[var(--color-fg)]">
-              {rupees(bill.total)}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+      {error && <p className="mt-1 text-xs text-[var(--color-danger)]">{error}</p>}
 
-      {/* Draft — must be finalized before money can be taken (finalize freezes the lines). */}
-      {!frozen && (
-        <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
-          <span className="text-xs text-[var(--color-fg-subtle)]">
-            Draft — issue the bill to take payment.
-          </span>
-          <PermissionGate can={can} permission="billing:finalize">
-            <Button variant="secondary" disabled={busy} onClick={() => void finalize()}>
-              Finalize bill
+      {outstanding > 0 ? (
+        <PermissionGate can={can} permission="payment:collect">
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-0.5 text-[10px] text-[var(--color-fg-muted)]">
+              Amount (₹)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                className="w-28 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+            <label className="flex flex-col gap-0.5 text-[10px] text-[var(--color-fg-muted)]">
+              Method
+              <select
+                value={method}
+                onChange={(e) => setMethod(e.target.value as (typeof PAYMENT_METHODS)[number])}
+                className="rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              >
+                {PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {m === "netbanking" ? "Net banking" : m.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button disabled={busy} onClick={() => void collect()}>
+              {busy ? "Saving…" : "Record payment"}
             </Button>
-          </PermissionGate>
-        </div>
-      )}
-
-      {/* PENDING — what is still owed, and the box to collect it. */}
-      {frozen && outstanding > 0 && (
-        <div className="rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-bg)] p-2.5">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-semibold tracking-wide text-[var(--color-warning)] uppercase">
-              Pending
-            </span>
-            <span className="text-sm font-semibold text-[var(--color-fg)]">
-              {rupees(outstanding)} due
-            </span>
           </div>
-          <PermissionGate can={can} permission="payment:collect">
-            <div className="flex flex-wrap items-end gap-2">
-              <label className="flex flex-col gap-0.5 text-[10px] text-[var(--color-fg-muted)]">
-                Amount (₹)
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  className="w-28 rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
-                />
-              </label>
-              <label className="flex flex-col gap-0.5 text-[10px] text-[var(--color-fg-muted)]">
-                Method
-                <select
-                  value={method}
-                  onChange={(e) => setMethod(e.target.value as (typeof PAYMENT_METHODS)[number])}
-                  className="rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
-                >
-                  {PAYMENT_METHODS.map((m) => (
-                    <option key={m} value={m}>
-                      {m === "netbanking" ? "Net banking" : m.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Button disabled={busy} onClick={() => void collect()}>
-                {busy ? "Saving…" : "Record payment"}
-              </Button>
-            </div>
-          </PermissionGate>
-        </div>
-      )}
-
-      {/* CLEARED — what has been paid, and how. */}
-      {frozen && (
-        <div className="border-t border-[var(--color-border)] pt-2.5">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
-              Cleared
-            </span>
-            <Badge tone={invoice.status === "paid" ? "success" : "brand"}>
-              {invoice.number ?? "issued"} · {invoice.status}
-            </Badge>
-          </div>
-          {paid > 0 ? (
-            <ul className="space-y-0.5 text-xs text-[var(--color-fg-muted)]">
-              {invoice.payments.map((p, i) => (
-                <li key={i} className="flex justify-between">
-                  <span>
-                    {p.method}
-                    {p.reference ? ` · ${p.reference}` : ""} ·{" "}
-                    {new Date(p.at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                  </span>
-                  <span className="font-medium text-[var(--color-fg)]">{rupees(p.amount)}</span>
-                </li>
-              ))}
-              <li className="flex justify-between border-t border-[var(--color-border)] pt-1 font-semibold text-[var(--color-fg)]">
-                <span>Paid</span>
-                <span>{rupees(paid)}</span>
-              </li>
-            </ul>
-          ) : (
-            <p className="text-xs text-[var(--color-fg-subtle)]">Nothing collected yet.</p>
-          )}
-        </div>
+        </PermissionGate>
+      ) : (
+        <p className="mt-1 text-xs text-[var(--color-success)]">Paid in full.</p>
       )}
     </div>
   );

@@ -1529,10 +1529,7 @@ outstanding → **paid**. Only then does the lab worklist offer Accept/Start (§
   holds it (§31 C3). Come back to reception, **Record payment** → the worklist badge turns **paid** and
   Accept / Start appear. That is the end-to-end reception → pay → lab flow.
 
-> Note on collecting the **consultation at registration and the tests separately**: this build settles
-> them on **one visit invoice** (finalize once, then collect — full or part payments allowed). Splitting
-> a visit into a consultation bill and a separate tests bill is per-batch invoicing — a deliberate
-> billing change (the invoice is a frozen document by design) — and is a focused follow-up if wanted.
+> Per-batch billing (consultation and tests as **separate** bills) is now built — see §35.
 
 ## 34 · OPD slip — the take-home summary (⏳ eyeball UI)
 
@@ -1567,3 +1564,55 @@ slip. All the slip's other data (orders, prescriptions, bill) is already per-enc
   - A **signature block** with the doctor's name and a **Print / Save PDF** button (hidden on the
     printout).
 - **Print / Save PDF** → the toolbar and app chrome drop away and it prints as a one-page A4 document.
+
+## 35 · Per-batch billing — consultation and tests as separate bills (⏳ eyeball UI)
+
+**Why:** a visit is paid in batches — the consultation at registration, the tests once a doctor has
+ordered them, the pharmacy after. Each batch is its **own numbered bill**, and a charge that arrives
+after a bill is issued lands on the **next** bill, never on the frozen one. This is what lets a patient
+pay to see the doctor, then pay for the tests separately, and it is what makes the lab's paid-before-run
+check turn green **per test**. Built on a per-batch view (`GET /encounters/:id/billing`) that returns
+the pending (unbilled) charges plus every bill raised, with payment state.
+
+**Backend verified live (2026-07-18, sunrise):** register → consultation is **pending ₹500** →
+**issue bill** → `INV-…05 ₹500`. Order a Blood Glucose test → the test is a **new pending ₹120**
+(the consultation bill is untouched) → **issue bill** → a **separate** `INV-…07 ₹120`. Two bills on one
+visit; the test's lab gate keys off its own bill. The frozen-invoice contract and all 663 billing/RBAC
+tests still pass.
+
+### B1 · Two bills on one visit (Cashier / Front Office / Admin)
+
+- **Reception** → register a patient (consultation charge appears) → open **Bill**. A **Pending — not
+  yet billed** panel lists the consultation with **Issue bill for these** → it becomes an issued bill
+  row with a number.
+- **Record payment** on that bill (amount prefilled to its balance) → it reads **paid in full**.
+- Now (as the doctor) order a test for the same visit. Back on the reception **Bill**, the test shows in
+  **Pending** as a fresh batch — the consultation bill is unchanged. **Issue bill for these** →
+  a **second** numbered bill. Pay it → **paid**.
+- The footer shows the **Visit total** — paid vs grand total, and any amount still due across all bills.
+
+### B2 · Each bill unblocks its own tests
+
+- With the test on an **unpaid** second bill, the **Worklist** holds it (§31 C3). Pay **that** bill →
+  the test's badge turns **paid** and the lab can start — even though the consultation bill was paid
+  earlier and separately.
+- The **OPD slip** (§34) and the **ward**'s "this stay owes" now read the whole-visit totals across
+  every bill, so no two screens disagree on what is owed.
+
+## 36 · Doctor signature on the OPD slip (⏳ eyeball UI)
+
+**Why:** a printed OPD slip should carry the doctor's signature, not just their typed name.
+
+**Verified live (2026-07-18):** a signature set on a doctor persists, is returned by the doctor card
+(`GET /doctors/:id`), and a non-image string is refused (400).
+
+### G1 · Upload a signature (Admin, Staff editor)
+
+- **Staff** → edit a **doctor** → the profile form shows a **Signature** field (doctors only) → upload
+  a PNG/JPG under ~200 KB → a preview appears → **Save**.
+
+### G2 · It prints on the slip
+
+- Open that doctor's **OPD slip** (§34) → the uploaded signature image appears **above** the signature
+  line, over the printed **Dr <name>** and qualification. A doctor with no signature uploaded prints a
+  blank space above the line for a wet signature, exactly as before.

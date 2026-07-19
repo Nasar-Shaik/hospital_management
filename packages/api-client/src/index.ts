@@ -632,6 +632,19 @@ export interface Invoice {
   finalizedAt?: string;
 }
 
+/**
+ * The per-batch billing picture for a visit: the pending (unbilled) charges plus every bill raised,
+ * each with its own payment state. Amounts are PAISE.
+ */
+export interface EncounterBilling {
+  pending: { lines: InvoiceLine[]; total: number };
+  invoices: Invoice[];
+  totalBilled: number;
+  totalPaid: number;
+  grandTotal: number;
+  outstanding: number;
+}
+
 /** The running bill for a visit — computed from the ledger until it is finalized. */
 export interface Bill {
   lines: InvoiceLine[];
@@ -1768,6 +1781,11 @@ export class ApiClient {
   /** The running bill for a visit. THE endpoint every login uses. */
   getBill(encounterId: string): Promise<Bill> {
     return this.request<Bill>("GET", `/api/v1/encounters/${encounterId}/bill`);
+  }
+
+  /** The per-batch billing view — pending charges + every bill on the visit. Needs `billing:read`. */
+  getEncounterBilling(encounterId: string): Promise<EncounterBilling> {
+    return this.request<EncounterBilling>("GET", `/api/v1/encounters/${encounterId}/billing`);
   }
 
   /** Freezes the bill and assigns its number. After this the lines cannot move. */

@@ -349,6 +349,35 @@ export async function chargesForEncounter(encounterId: string): Promise<Charge[]
 }
 
 /**
+ * The charges on this visit NOT yet on any invoice — the "pending" bill.
+ *
+ * Per-batch billing is built on this: a charge with no `invoiceId` has not been billed, so it is
+ * what the next bill covers. Finalizing moves this set onto a fresh invoice; anything ordered after
+ * that is a new pending set for the next bill. Voided charges are excluded — a reversed charge is
+ * not owed.
+ */
+export async function unbilledChargesForEncounter(encounterId: string): Promise<Charge[]> {
+  const docs = await getChargeModel(getTenantDb())
+    .find({
+      encounterId: new Types.ObjectId(encounterId),
+      voided: { $ne: true },
+      invoiceId: { $exists: false },
+    })
+    .sort({ postedAt: 1 })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+/** Every invoice raised on this visit (a visit can have several — consultation, tests, pharmacy). */
+export async function invoicesForEncounter(encounterId: string): Promise<Invoice[]> {
+  const docs = await getInvoiceModel(getTenantDb())
+    .find({ encounterId: new Types.ObjectId(encounterId), status: { $ne: "cancelled" } })
+    .sort({ createdAt: 1 })
+    .lean<InvoiceDoc[]>();
+  return docs.map(toInvoice);
+}
+
+/**
  * Reverses every unbilled charge raised by one cause — the order that was cancelled.
  *
  * Only charges NOT yet on a finalized invoice: once the bill is in the patient's hand,
@@ -481,6 +510,28 @@ export async function addPayment(
     )
     .lean<InvoiceDoc>();
   return doc ? toInvoice(doc) : undefined;
+}
+
+/**
+ * Attaches a SPECIFIC set of charges (by id) to the invoice they were frozen into. Used by
+ * per-batch finalize: only the charges whose lines went on this invoice are marked billed, so a
+ * charge that arrives between reading the pending set and this write is NOT swept onto a bill it is
+ * not on. The `invoiceId: { $exists: false }` guard keeps it idempotent.
+ */
+export async function attachChargesToInvoiceByIds(
+  chargeIds: string[],
+  invoiceId: string,
+  session?: ClientSession,
+): Promise<void> {
+  if (chargeIds.length === 0) return;
+  await getChargeModel(getTenantDb()).updateMany(
+    {
+      _id: { $in: chargeIds.map((id) => new Types.ObjectId(id)) },
+      invoiceId: { $exists: false },
+    },
+    { $set: { invoiceId: new Types.ObjectId(invoiceId) } },
+    session ? { session } : {},
+  );
 }
 
 /** Attaches charges to the invoice they were frozen into. */

@@ -101,6 +101,19 @@ export const getBill: RequestHandler = async (req, res) => {
   ok(res, await billing.getRunningBill(id));
 };
 
+/**
+ * The per-batch billing view — pending charges + every bill on the visit. The desk's collection
+ * screen reads this, and the OPD slip and ward totals are computed from it.
+ */
+export const getEncounterBilling: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+
+  const encounter = await getEncounter(id);
+  if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+  ok(res, await billing.getEncounterBilling(id));
+};
+
 /** Manual charge — the desk adds something the system did not raise for itself. */
 export const postCharge: RequestHandler = async (req, res) => {
   const body = req.body as PostChargeBody;
