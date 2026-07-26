@@ -19,6 +19,7 @@ import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { ThemeToggle } from "@medicore/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
+import { LicenseBanner } from "./LicenseBanner";
 import { useAuth } from "./AuthProvider";
 import { Badge, Button } from "./ui";
 
@@ -244,6 +245,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
+
+        <LicenseBanner />
 
         <main className="flex-1 overflow-x-auto p-6 lg:p-8">{children}</main>
       </div>
