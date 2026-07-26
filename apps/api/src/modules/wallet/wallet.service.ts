@@ -11,6 +11,7 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { withTransaction } from "../../core/db/transaction.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { getPatient } from "../patients/index.js";
 import * as repo from "./wallet.repository.js";
 import type { ClientSession } from "mongoose";
@@ -72,6 +73,10 @@ export async function deposit(patientId: string, input: DepositInput): Promise<W
     });
   }
 
+  // Money crossed the desk AT a branch — stamp the one the clerk is working in (ADR-0015),
+  // so the advance register and any reconciliation attribute it to the right site.
+  const branchId = await writeBranchId();
+
   const { balance } = await withTransaction((session) =>
     repo.credit(
       patientId,
@@ -79,6 +84,7 @@ export async function deposit(patientId: string, input: DepositInput): Promise<W
       "deposit",
       {
         method: input.method,
+        ...(branchId ? { branchId } : {}),
         ...(input.reference ? { reference: input.reference } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.encounterId ? { encounterId: input.encounterId } : {}),
@@ -110,6 +116,9 @@ export async function refund(patientId: string, input: RefundInput): Promise<Wal
     });
   }
 
+  // A refund is a desk movement too — attribute it to the branch handing the money back.
+  const branchId = await writeBranchId();
+
   const result = await withTransaction((session) =>
     repo.debit(
       patientId,
@@ -117,6 +126,7 @@ export async function refund(patientId: string, input: RefundInput): Promise<Wal
       "refund",
       {
         method: input.method,
+        ...(branchId ? { branchId } : {}),
         ...(input.reference ? { reference: input.reference } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
       },

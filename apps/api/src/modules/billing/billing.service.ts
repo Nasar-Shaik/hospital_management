@@ -21,6 +21,7 @@ import { getContext } from "../../core/context/requestContext.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
 import { getEncounter } from "../encounters/index.js";
+import { getBranch } from "../branches/index.js";
 import {
   debitForInvoice as debitWalletForInvoice,
   getBalance as walletBalance,
@@ -294,6 +295,17 @@ export async function getRunningBill(encounterId: string): Promise<{
 }
 
 /**
+ * The series an invoice belongs to (ADR-0015) — resolved from the branch its charges
+ * were raised in. Branchless charges (a hospital that predates branches) resolve to the
+ * empty descriptor, so numbering stays on the original tenant-wide series.
+ */
+async function invoiceBranchOf(branchId?: string): Promise<repo.InvoiceBranch> {
+  if (!branchId) return {};
+  const branch = await getBranch(branchId);
+  return branch ? { branchId, branchCode: branch.code, isMain: branch.isMain } : { branchId };
+}
+
+/**
  * Freezes the bill and gives it a number.
  *
  * After this the lines cannot move: an invoice that can be edited once it is in a
@@ -341,9 +353,11 @@ export async function finalizeInvoice(encounterId: string): Promise<repo.Invoice
     lines,
     subtotal,
     total: subtotal,
+    // The invoice belongs to the branch its charges were raised in (ADR-0015).
+    ...(first.branchId ? { branchId: first.branchId } : {}),
   });
 
-  const number = await repo.nextInvoiceNumber();
+  const number = await repo.nextInvoiceNumber(await invoiceBranchOf(first.branchId));
 
   const finalized = await repo.updateInvoice(invoice.id, {
     number,
@@ -630,8 +644,9 @@ async function billChargesToInvoice(charges: repo.Charge[]): Promise<string> {
     lines,
     subtotal,
     total: subtotal,
+    ...(first.branchId ? { branchId: first.branchId } : {}),
   });
-  const number = await repo.nextInvoiceNumber();
+  const number = await repo.nextInvoiceNumber(await invoiceBranchOf(first.branchId));
   const finalized = await repo.updateInvoice(invoice.id, {
     number,
     status: "finalized",

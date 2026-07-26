@@ -48,6 +48,8 @@ export interface Charge {
   amount: number;
   source: ChargeSource;
   sourceId?: string;
+  /** The branch this charge was raised in (ADR-0015) — the invoice covering it inherits it. */
+  branchId?: string;
   /** Consultation charges: whose consultation it was. Drives the free-follow-up lookup. */
   doctorId?: string;
   postedBy?: string;
@@ -101,6 +103,7 @@ function toCharge(d: ChargeDoc): Charge {
     source: d.source,
     postedAt: d.postedAt,
     ...(d.sourceId ? { sourceId: d.sourceId } : {}),
+    ...(d.branchId ? { branchId: d.branchId } : {}),
     ...(d.doctorId ? { doctorId: d.doctorId } : {}),
     ...(d.postedBy ? { postedBy: d.postedBy } : {}),
     ...(d.invoiceId ? { invoiceId: d.invoiceId.toString() } : {}),
@@ -517,29 +520,55 @@ export async function createInvoice(
   return toInvoice(doc);
 }
 
+/** Who this invoice is FOR — decides which series numbers it (ADR-0015). */
+export interface InvoiceBranch {
+  branchId?: string;
+  branchCode?: string;
+  isMain?: boolean;
+}
+
 /**
  * The invoice number.
  *
- * Atomic `$inc` on a per-year counter — the same mechanism as the UHID and the queue
- * token, and for the same reason: two cashiers finalizing at the same instant must not
- * both be handed `INV-2026-0042`. A duplicate invoice number is a tax problem, not a
- * display bug.
+ * Atomic `$inc` on a counter — the same mechanism as the UHID and the queue token, and
+ * for the same reason: two cashiers finalizing at the same instant must not both be
+ * handed `INV-2026-0042`. A duplicate invoice number is a tax problem, not a display bug.
+ *
+ * ── PER-BRANCH SERIES (ADR-0015) ─────────────────────────────────────────────
+ * A branch is usually a separate place of supply, so it wants its OWN running series,
+ * not a slice of a tenant-wide one. So each NON-MAIN branch gets its own counter
+ * (`invoice:{branchId}:{year}`) and its code in the number (`INV-CHN-2026-00042`).
+ *
+ * The MAIN branch — and any hospital that predates branches (no `branchId`) — stays on
+ * the original tenant-wide counter (`invoice:{year}`) and the original format
+ * (`INV-2026-00042`). That is deliberate, not laziness: a single-site hospital sees NO
+ * change, and a hospital that opens a second branch does not restart or reformat the
+ * numbers its first site has already issued. The two namespaces (coded vs not) can never
+ * collide, so the tenant-wide uniqueness index still holds.
  */
-export async function nextInvoiceNumber(session?: ClientSession): Promise<string> {
+export async function nextInvoiceNumber(
+  branch: InvoiceBranch = {},
+  session?: ClientSession,
+): Promise<string> {
   const ctx = getContext();
   const year = new Date().getFullYear();
+
+  // Only a NON-MAIN branch gets its own series; Main and branchless share the original one.
+  const ownSeries = Boolean(branch.branchId && branch.branchCode && !branch.isMain);
+  const counterId = ownSeries ? `invoice:${branch.branchId}:${year}` : `invoice:${year}`;
 
   const result = await ctx.connection
     .collection<{ _id: string; tenantId: string; seq: number }>("counters")
     .findOneAndUpdate(
-      { _id: `invoice:${year}` },
+      { _id: counterId },
       { $inc: { seq: 1 }, $setOnInsert: { tenantId: ctx.tenantId } },
       { upsert: true, returnDocument: "after", ...(session ? { session } : {}) },
     );
 
   const seq = result?.seq;
   if (typeof seq !== "number") throw new Error("invoice number allocation failed");
-  return `INV-${String(year)}-${String(seq).padStart(5, "0")}`;
+  const prefix = ownSeries ? `INV-${branch.branchCode}-` : "INV-";
+  return `${prefix}${String(year)}-${String(seq).padStart(5, "0")}`;
 }
 
 export async function updateInvoice(
