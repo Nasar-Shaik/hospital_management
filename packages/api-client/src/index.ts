@@ -28,6 +28,12 @@ export interface ApiClientOptions {
   credentials?: RequestCredentials;
   /** Overrides the `Host` the API sees. Server-side only; browsers ignore it. */
   tenantHost?: string;
+  /**
+   * Returns the active branch id to act in (ADR-0015), or `undefined`/`"all"` for aggregate mode.
+   * Read on EVERY request and sent as `X-Active-Branch`, so switching branch takes effect
+   * immediately without rebuilding the client — the same live-read pattern as the access token.
+   */
+  getActiveBranch?: () => string | undefined;
   fetchImpl?: typeof fetch;
   /**
    * Called when a request fails with an EXPIRED/INVALID session (HMS-AUTH-002/003) — the
@@ -388,6 +394,101 @@ export interface Allergy {
   refutedBy?: string;
   refutedAt?: string;
   refutedReason?: string;
+}
+
+/* ── Branches (ADR-0015) ──────────────────────────────────────────────────────── */
+
+export type BranchStatus = "active" | "inactive";
+
+export interface Branch {
+  id: string;
+  name: string;
+  code: string;
+  status: BranchStatus;
+  isMain: boolean;
+  address?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  timezone?: string;
+  gstin?: string;
+}
+
+/** What `GET /me/branches` returns — the switcher's data. */
+export interface MyBranches {
+  /** The branches the signed-in user may act in. */
+  branches: Branch[];
+  /** Whether the user may pick "All branches" (aggregate) — true only with more than one. */
+  canAggregate: boolean;
+}
+
+export interface CreateBranchInput {
+  name: string;
+  code: string;
+  address?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  timezone?: string;
+  gstin?: string;
+}
+
+export interface UpdateBranchInput {
+  name?: string;
+  status?: BranchStatus;
+  address?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  timezone?: string;
+  gstin?: string;
+}
+
+/* ── Vitals ─────────────────────────────────────────────────────────────────── */
+
+export const TRIAGE_LEVELS = ["routine", "urgent", "critical"] as const;
+export type TriageLevel = (typeof TRIAGE_LEVELS)[number];
+
+/** The measurable fields of a reading, in the order a chart reads them. */
+export const VITAL_FIELDS = [
+  "systolic",
+  "diastolic",
+  "pulse",
+  "respiratoryRate",
+  "temperature",
+  "spo2",
+  "weightKg",
+  "heightCm",
+  "painScore",
+] as const;
+export type VitalField = (typeof VITAL_FIELDS)[number];
+
+/** Where a measurement sits against its ADULT reference range. Advisory only — never blocking. */
+export type VitalFlag = "low" | "normal" | "high";
+
+/** What the caller sends. Every measurement is optional; at least one must be present. */
+export interface RecordVitalsInput extends Partial<Record<VitalField, number>> {
+  triageLevel?: TriageLevel;
+  notes?: string;
+  /** ISO date-time. Omit for "now"; supply it to catch a paper chart up. */
+  recordedAt?: string;
+}
+
+/**
+ * One charted set of observations, with the API's assessment of it.
+ *
+ * Units are fixed: temperature °C, weight kg, height cm, BP mmHg. `flags` and `bmi` are DERIVED
+ * by the API so the ranges live in exactly one place — never re-implement them in a client.
+ */
+export interface VitalsReading extends Partial<Record<VitalField, number>> {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  triageLevel?: TriageLevel;
+  notes?: string;
+  recordedBy: string;
+  recordedAt: string;
+  flags: Partial<Record<VitalField, VitalFlag>>;
+  /** True when any recorded value is outside its adult reference range. */
+  abnormal: boolean;
+  bmi?: number;
 }
 
 /** A diagnostic report file's metadata (never its bytes). */
@@ -757,6 +858,11 @@ export interface TariffItem {
   category: ChargeCategory;
   /** Paise. */
   price: number;
+  /**
+   * Consultation entries only: how many days this fee buys free revisits to the SAME doctor
+   * ("OP validity"). Absent or 0 means every visit is charged.
+   */
+  followUpDays?: number;
   active: boolean;
 }
 
@@ -766,10 +872,12 @@ export interface CreateTariffInput {
   category: ChargeCategory;
   /** Paise. */
   price: number;
+  followUpDays?: number;
 }
 export interface UpdateTariffInput {
   name?: string;
   price?: number;
+  followUpDays?: number;
   active?: boolean;
 }
 
@@ -1199,6 +1307,7 @@ export class ApiClient {
   private readonly getAccessToken?: () => string | undefined;
   private readonly credentials: RequestCredentials;
   private readonly tenantHost?: string;
+  private readonly getActiveBranch?: () => string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly onUnauthorized?: () => Promise<boolean>;
 
@@ -1207,6 +1316,7 @@ export class ApiClient {
     this.getAccessToken = options.getAccessToken;
     this.credentials = options.credentials ?? "include";
     this.tenantHost = options.tenantHost;
+    this.getActiveBranch = options.getActiveBranch;
     this.onUnauthorized = options.onUnauthorized;
 
     /**
@@ -1253,6 +1363,9 @@ export class ApiClient {
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (token) headers.authorization = `Bearer ${token}`;
     if (this.tenantHost) headers.host = this.tenantHost;
+    // The branch this request acts in (ADR-0015). Absent ⇒ the server treats it as aggregate mode.
+    const activeBranch = this.getActiveBranch?.();
+    if (activeBranch) headers["x-active-branch"] = activeBranch;
 
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
@@ -1422,6 +1535,17 @@ export class ApiClient {
   }
 
   /**
+   * Sets which BRANCHES a staff member works in, for one role (ADR-0015). Needs `user:assign-role`.
+   *
+   * An EMPTY `branchIds` means "all branches" (a hospital-wide binding); a non-empty list confines
+   * them to exactly those sites. Re-assigning the same role updates the binding, so this is how a
+   * receptionist is moved from one branch to another.
+   */
+  assignStaffRole(userId: string, roleCode: string, branchIds: string[]): Promise<void> {
+    return this.request<void>("POST", `/api/v1/users/${userId}/roles`, { roleCode, branchIds });
+  }
+
+  /**
    * Who a patient can be sent to. Needs `encounter:read`, NOT `user:read`.
    *
    * The front desk must be able to pick a doctor without being handed every
@@ -1509,6 +1633,46 @@ export class ApiClient {
   /** Rules an allergy out. It stops firing the prescribing check but stays on the record. */
   refuteAllergy(id: string, reason: string): Promise<Allergy> {
     return this.request<Allergy>("POST", `/api/v1/allergies/${id}/refute`, { reason });
+  }
+
+  /* ── branches (ADR-0015) ── */
+
+  /** The branches the signed-in user may act in, for the switcher. Self-service (no permission). */
+  listMyBranches(): Promise<MyBranches> {
+    return this.request<MyBranches>("GET", "/api/v1/me/branches");
+  }
+
+  /** Every branch of the hospital — the admin list. Needs `branch:manage`. */
+  listBranches(): Promise<Branch[]> {
+    return this.request<Branch[]>("GET", "/api/v1/branches");
+  }
+
+  /** Creates a branch (enforces the tenant's branch cap). Needs `branch:manage`. */
+  createBranch(input: CreateBranchInput): Promise<Branch> {
+    return this.request<Branch>("POST", "/api/v1/branches", input);
+  }
+
+  /** Edits a branch — rename, deactivate, contact details. Needs `branch:manage`. */
+  updateBranch(id: string, input: UpdateBranchInput): Promise<Branch> {
+    return this.request<Branch>("PATCH", `/api/v1/branches/${id}`, input);
+  }
+
+  /* ── vitals ── */
+
+  /** Charts one set of observations against a visit. Needs `vitals:record`. */
+  recordVitals(encounterId: string, input: RecordVitalsInput): Promise<VitalsReading> {
+    return this.request<VitalsReading>("POST", `/api/v1/encounters/${encounterId}/vitals`, input);
+  }
+
+  /** Every reading on one visit, oldest first — the visit's chart. */
+  listEncounterVitals(encounterId: string): Promise<VitalsReading[]> {
+    return this.request<VitalsReading[]>("GET", `/api/v1/encounters/${encounterId}/vitals`);
+  }
+
+  /** A patient's recent readings across visits, newest first — the trend. */
+  listPatientVitals(patientId: string, limit?: number): Promise<VitalsReading[]> {
+    const qs = limit ? `?limit=${String(limit)}` : "";
+    return this.request<VitalsReading[]>("GET", `/api/v1/patients/${patientId}/vitals${qs}`);
   }
 
   /* ── diagnostic reports ── */

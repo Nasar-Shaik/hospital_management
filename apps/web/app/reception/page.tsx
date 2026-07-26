@@ -695,13 +695,24 @@ function Reception() {
                           {e.status === "arrived" &&
                             can("encounter:update") &&
                             (consultPaid[e.id] === "paid" || consultPaid[e.id] === "free" ? (
-                              <Button
-                                variant="secondary"
-                                disabled={busy}
-                                onClick={() => void act(e, "queue")}
-                              >
-                                Add to queue
-                              </Button>
+                              <>
+                                <Button
+                                  variant="secondary"
+                                  disabled={busy}
+                                  onClick={() => void act(e, "queue")}
+                                >
+                                  Add to queue
+                                </Button>
+                                {/* A ₹0 consultation — a free follow-up inside the tariff's OP
+                                    validity, or a zero-tariff patient. Said out loud so the desk
+                                    knows the fee was WAIVED, not forgotten. The bill panel names
+                                    which, on the charge line itself. */}
+                                {consultPaid[e.id] === "free" && (
+                                  <span className="rounded-full bg-[var(--color-bg-subtle)] px-2 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-fg-muted)] uppercase">
+                                    No fee
+                                  </span>
+                                )}
+                              </>
                             ) : (
                               <span className="inline-flex items-center gap-1.5">
                                 <span className="rounded-full bg-[var(--color-warning-bg)] px-2 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">

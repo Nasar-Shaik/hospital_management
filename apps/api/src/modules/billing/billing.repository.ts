@@ -30,6 +30,8 @@ export interface ServiceItem {
   name: string;
   category: ChargeCategory;
   price: number;
+  /** Consultation only: days this fee buys free revisits to the same doctor. Absent/0 = none. */
+  followUpDays?: number;
   active: boolean;
 }
 
@@ -46,6 +48,8 @@ export interface Charge {
   amount: number;
   source: ChargeSource;
   sourceId?: string;
+  /** Consultation charges: whose consultation it was. Drives the free-follow-up lookup. */
+  doctorId?: string;
   postedBy?: string;
   postedAt: Date;
   invoiceId?: string;
@@ -77,6 +81,7 @@ function toServiceItem(d: ServiceItemDoc): ServiceItem {
     name: d.name,
     category: d.category,
     price: d.price,
+    ...(typeof d.followUpDays === "number" ? { followUpDays: d.followUpDays } : {}),
     active: d.active,
   };
 }
@@ -96,6 +101,7 @@ function toCharge(d: ChargeDoc): Charge {
     source: d.source,
     postedAt: d.postedAt,
     ...(d.sourceId ? { sourceId: d.sourceId } : {}),
+    ...(d.doctorId ? { doctorId: d.doctorId } : {}),
     ...(d.postedBy ? { postedBy: d.postedBy } : {}),
     ...(d.invoiceId ? { invoiceId: d.invoiceId.toString() } : {}),
     ...(d.voided ? { voided: true } : {}),
@@ -166,6 +172,8 @@ export interface CreateServiceInput {
   category: ChargeCategory;
   /** Paise. */
   price: number;
+  /** Consultation only: days of free revisits this fee buys. */
+  followUpDays?: number;
 }
 
 export async function createService(input: CreateServiceInput): Promise<ServiceItem> {
@@ -176,6 +184,7 @@ export async function createService(input: CreateServiceInput): Promise<ServiceI
     name: input.name,
     category: input.category,
     price: input.price,
+    ...(input.followUpDays !== undefined ? { followUpDays: input.followUpDays } : {}),
     active: true,
   });
   return toServiceItem(doc.toObject() as ServiceItemDoc);
@@ -185,6 +194,7 @@ export async function createService(input: CreateServiceInput): Promise<ServiceI
 export interface UpdateServiceInput {
   name?: string;
   price?: number;
+  followUpDays?: number;
   active?: boolean;
 }
 
@@ -300,6 +310,7 @@ export interface PostChargeInput {
   source: ChargeSource;
   sourceId?: string;
   branchId?: string;
+  doctorId?: string;
 }
 
 /**
@@ -330,6 +341,7 @@ export async function postCharge(input: PostChargeInput, session?: ClientSession
         postedAt: new Date(),
         ...(input.sourceId ? { sourceId: input.sourceId } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(input.doctorId ? { doctorId: input.doctorId } : {}),
         ...(ctx.userId ? { postedBy: ctx.userId } : {}),
       },
     ],
@@ -382,6 +394,34 @@ export async function consultationChargesForEncounters(encounterIds: string[]): 
       category: "consultation",
       voided: { $ne: true },
     })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+/**
+ * Consultations this patient has already been CHARGED for with one doctor since `since` —
+ * newest first. The raw material of the free-follow-up rule (`consultationFollowUp`).
+ *
+ * Only charges with an `amount > 0` qualify: a ₹0 line is either a government zero-tariff visit or
+ * a follow-up that was itself waived, and neither can father a further free visit. Letting a waived
+ * visit extend the window would make the entitlement roll forward for ever off a single payment.
+ */
+export async function paidConsultationsForDoctor(input: {
+  patientId: string;
+  doctorId: string;
+  since: Date;
+}): Promise<Charge[]> {
+  if (!Types.ObjectId.isValid(input.patientId)) return [];
+  const docs = await getChargeModel(getTenantDb())
+    .find({
+      patientId: new Types.ObjectId(input.patientId),
+      doctorId: input.doctorId,
+      category: "consultation",
+      voided: { $ne: true },
+      amount: { $gt: 0 },
+      postedAt: { $gte: input.since },
+    })
+    .sort({ postedAt: -1 })
     .lean<ChargeDoc[]>();
   return docs.map(toCharge);
 }

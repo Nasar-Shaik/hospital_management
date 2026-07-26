@@ -51,7 +51,11 @@ function LoginForm() {
    * It also outranks the real error: once they submit and get the password wrong,
    * that message replaces this one rather than sitting in a stack of two alerts.
    */
-  const expired = params.get("reason") === "expired";
+  const reason = params.get("reason");
+  const expired = reason === "expired";
+  // A timeout is a security sign-out, not an error — the person walked away. It reads differently
+  // from an ordinary expired session ("we ended it on purpose"), so it gets its own line.
+  const timedOut = reason === "timeout";
 
   const destination = params.get("next") ?? "/dashboard";
 
@@ -155,12 +159,20 @@ function LoginForm() {
               <Alert tone="danger">{error}</Alert>
             </div>
           ) : (
-            expired &&
-            !mfaToken && (
+            !mfaToken &&
+            (timedOut ? (
               <div className="mb-4">
-                <Alert tone="info">Your session ended. Please sign in again.</Alert>
+                <Alert tone="info">
+                  You were signed out after a period of inactivity. Please sign in again.
+                </Alert>
               </div>
-            )
+            ) : (
+              expired && (
+                <div className="mb-4">
+                  <Alert tone="info">Your session ended. Please sign in again.</Alert>
+                </div>
+              )
+            ))
           )}
 
           {mfaToken ? (

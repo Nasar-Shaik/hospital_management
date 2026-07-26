@@ -40,8 +40,10 @@ import {
   type PrescriptionLineInput,
   type ReportMeta,
   type SafetyAlert,
+  type VitalsReading,
   type DoctorRef,
 } from "@medicore/api-client";
+import { VitalsPanel } from "../../components/Vitals";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
@@ -1164,6 +1166,7 @@ function MyPatients() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [allergies, setAllergies] = useState<Allergy[]>([]);
+  const [vitals, setVitals] = useState<VitalsReading[]>([]);
   const [reports, setReports] = useState<ReportMeta[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
@@ -1266,6 +1269,17 @@ function MyPatients() {
     [api],
   );
 
+  /** This VISIT's observations — what the nurse charted before the patient came in. */
+  const loadVitals = useCallback(
+    (encounterId: string) => {
+      void api
+        .listEncounterVitals(encounterId)
+        .then(setVitals)
+        .catch(() => setVitals([]));
+    },
+    [api],
+  );
+
   /** Reports too are the PATIENT'S — every visit, so the doctor sees prior results. */
   const loadReports = useCallback(
     (patientId: string) => {
@@ -1287,8 +1301,9 @@ function MyPatients() {
     if (selectedId) {
       loadOrders(selectedId);
       loadPrescriptions(selectedId);
+      loadVitals(selectedId);
     }
-  }, [selectedId, loadOrders, loadPrescriptions]);
+  }, [selectedId, loadOrders, loadPrescriptions, loadVitals]);
 
   useEffect(() => {
     if (selectedPatientId) {
@@ -1497,6 +1512,29 @@ function MyPatients() {
                   </Alert>
                 )}
               </Card>
+
+              {/*
+               * Observations come FIRST, and outside the "called in" gate. A nurse charts them
+               * while the patient waits, and an abnormal set is exactly what should make a doctor
+               * call someone in ahead of their turn — so the doctor must be able to see them
+               * before the consultation starts, not after.
+               */}
+              <PermissionGate can={can} permission="emr:read">
+                <CollapsibleCard
+                  title="Vitals"
+                  count={vitals.length}
+                  defaultOpen={vitals.some((v) => v.abnormal)}
+                >
+                  <VitalsPanel
+                    api={api}
+                    encounterId={selected.id}
+                    readings={vitals}
+                    canRecord={can("vitals:record")}
+                    onSaved={() => loadVitals(selected.id)}
+                    emptyHint="No observations charted for this visit yet."
+                  />
+                </CollapsibleCard>
+              </PermissionGate>
 
               {/*
                * ── CALL IN BEFORE YOU ORDER OR PRESCRIBE ───────────────────────────────

@@ -122,6 +122,9 @@ const SELF_SERVICE_ROUTES = new Set([
   // A clinician's OWN activity for the day — self-scoped to the caller, so no permission (you can
   // always see what you did). Authenticated, deliberately unpermissioned. See reporting.routes.ts.
   "GET /api/v1/reports/my-activity",
+  // The branch switcher — the caller's OWN allowed branches, like `/auth/me`. Self-service,
+  // authenticated, deliberately unpermissioned (ADR-0015). See branch.routes.ts.
+  "GET /api/v1/me/branches",
 ]);
 
 /** A concrete, callable request for each protected route — the matrix's probes. */
@@ -555,6 +558,42 @@ const PROBES: Record<string, Probe> = {
     method: "post",
     url: "/api/v1/allergies/64b7f0000000000000000001/refute",
     body: { reason: "matrix probe" },
+  },
+
+  /*
+   * ── Vitals ─────────────────────────────────────────────────────────────────
+   * `vitals:record` writes (nurses above all, and doctors); `emr:read` reads, because a
+   * reading is clinical PHI — the desk can see THAT a visit exists without being shown the
+   * patient's blood pressure.
+   */
+  "POST /api/v1/encounters/:encounterId/vitals": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/vitals",
+    body: { pulse: 72 },
+  },
+  "GET /api/v1/encounters/:encounterId/vitals": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/vitals",
+  },
+  "GET /api/v1/patients/:patientId/vitals": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/vitals",
+  },
+
+  /* ── Branches (ADR-0015) — the admin surface is `branch:manage`; the switcher is self-service. */
+  "GET /api/v1/branches": {
+    method: "get",
+    url: "/api/v1/branches",
+  },
+  "POST /api/v1/branches": {
+    method: "post",
+    url: "/api/v1/branches",
+    body: { name: "Matrix Probe Branch", code: "MPB" },
+  },
+  "PATCH /api/v1/branches/:id": {
+    method: "patch",
+    url: "/api/v1/branches/64b7f0000000000000000001",
+    body: { name: "Renamed" },
   },
 
   /* ── Diagnostic reports ─────────────────────────────────────────────────────

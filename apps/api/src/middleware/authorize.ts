@@ -119,6 +119,14 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
             userId: auth.userId,
           };
 
+          // ── the ACTIVE branch (ADR-0015) ──────────────────────────────────
+          // The one site this request acts in, chosen by the client via `X-Active-Branch` and
+          // validated HERE against the live allowed set — never trusted from the header alone, for
+          // the same reason scope is read live: a user moved off a branch must not keep acting in it
+          // by sending its id. An absent or not-permitted value leaves it undefined (All mode), which
+          // is exactly today's behaviour — so shipping this is a no-op until a branch is selected.
+          ctx.activeBranchId = resolveActiveBranch(req, branchIds, allBranches);
+
           next();
         } catch (err) {
           next(err);
@@ -155,6 +163,28 @@ export function requireFeature(feature: FeatureFlag) {
 }
 
 /**
+ * Reads and validates the `X-Active-Branch` header against the caller's allowed set (ADR-0015).
+ *
+ * Returns the chosen branch id when it is one the caller may reach, otherwise `undefined` — which
+ * means "no single branch selected" (All mode). It never throws: an absent header is the ordinary
+ * case (an old client, a single-branch tenant), and a header naming a branch the caller cannot reach
+ * is treated as "not selected" rather than an error, so a stale selection fails SAFE (to the
+ * caller's own scope) instead of leaking or 500-ing.
+ */
+function resolveActiveBranch(
+  req: Request,
+  branchIds: string[],
+  allBranches: boolean,
+): string | undefined {
+  const raw = req.header("x-active-branch")?.trim();
+  // Absent, or the explicit "all" sentinel → aggregate across the allowed set (All mode).
+  if (!raw || raw.toLowerCase() === "all") return undefined;
+  // A hospital-wide binding may act in any branch; a confined one only in its own.
+  if (allBranches || branchIds.includes(raw)) return raw;
+  return undefined;
+}
+
+/**
  * The row-scope filter for repositories — layer 3.
  *
  * Turns the caller's scope into a Mongo query fragment:
@@ -182,21 +212,31 @@ export function requireFeature(feature: FeatureFlag) {
  * so a cleared list can never silently become "the whole hospital".
  */
 export function scopeFilter(ownField = "createdBy"): Record<string, unknown> {
-  const scope = getContext().scope;
+  const ctx = getContext();
+  const scope = ctx.scope;
   if (!scope) return {};
 
-  switch (scope.level) {
-    case "own":
-      return { [ownField]: scope.userId };
-    case "branch":
-      // (a) not confined to any branch — the hospital-wide binding.
-      if (scope.allBranches) return {};
-      // (b) confined, but to nothing. An impossible filter, deliberately.
-      if (scope.branchIds.length === 0) return { branchId: { $in: [] } };
-      return { branchId: { $in: scope.branchIds } };
-    case "tenant":
-    case "global":
-    default:
-      return {};
+  // `own` overrides everything else: your own rows, whatever branch you are viewing.
+  if (scope.level === "own") return { [ownField]: scope.userId };
+
+  // The ALLOWED-branch constraint from the caller's binding (ADR-0010, unchanged).
+  let allowed: Record<string, unknown> = {};
+  if (scope.level === "branch") {
+    // (b) confined, but to nothing. An impossible filter, deliberately.
+    if (!scope.allBranches && scope.branchIds.length === 0) return { branchId: { $in: [] } };
+    // (a) confined to specific branches; hospital-wide bindings add nothing here.
+    if (!scope.allBranches) allowed = { branchId: { $in: scope.branchIds } };
   }
+  // tenant / global add no branch constraint of their own.
+
+  // ── the ACTIVE branch narrows the read (ADR-0015) ───────────────────────────
+  // When the caller has selected ONE branch, they see that branch — even for a tenant-scoped
+  // resource, because narrowing to a site is exactly what selecting it means. `activeBranchId` was
+  // already validated ⊆ the allowed set in `authorize`, so it can only narrow, never widen. Only
+  // branch-bearing repositories call `scopeFilter` (allergies, tenant-wide by design, do not), so
+  // filtering by `branchId` here is always meaningful.
+  if (ctx.activeBranchId) return { branchId: ctx.activeBranchId };
+
+  // No single branch chosen → aggregate across whatever the binding allows (today's behaviour).
+  return allowed;
 }

@@ -1833,3 +1833,168 @@ They open **same-tab** (dev per-tab session) and fail gracefully with a sign-in 
 
 - Opening either page for an OP encounter shows a plain "this is for admitted patients" message, not a
   broken sheet.
+
+## 44 · Session model: workstation inactivity lock (⏳ eyeball UI)
+
+Background: access token = 15 min (silently auto-refreshed), refresh/session = 30 days ABSOLUTE
+(rotation does not extend it — `apps/api/src/config/env.ts`, `auth.service.ts`). Returning within 30
+days lands you on the dashboard with no login — that is a correct "keep me signed in" session. The
+inactivity lock (`components/IdleGuard.tsx`, `lib/idle.ts`) is the separate workstation control.
+
+For a fast manual test, set `NEXT_PUBLIC_IDLE_TIMEOUT_MINUTES=1` and
+`NEXT_PUBLIC_IDLE_WARN_SECONDS=20` in `apps/web/.env`, then restart the web app.
+
+### O1 · Warning then auto sign-out
+
+- Sign in, then do nothing (don't move the mouse) for ~40s → the "Still there?" dialog appears with a
+  live countdown. Keep waiting → at 0 you are signed out and land on `/login?reason=timeout` showing
+  "You were signed out after a period of inactivity."
+- The session is genuinely gone: pressing Back / reloading a protected page does NOT restore it (logout
+  revoked the refresh family server-side).
+
+### O2 · "Stay signed in" resets the clock
+
+- Let the dialog appear, click **Stay signed in** → dialog closes, you remain on the page, and the
+  timer restarts (no sign-out until another full idle period passes). A jiggled mouse while the dialog
+  is open does NOT dismiss it — only the button does.
+
+### O3 · Machine sleep / background tab
+
+- With the dialog logic armed, switch to another tab (or lock the laptop) for longer than the idle
+  limit, then return → you are signed out on the spot (the check runs on focus/visibility, not only on
+  a timer that a sleeping machine never fires).
+
+### O4 · Public pages and login are unaffected
+
+- The lock never arms when signed out: the hospital public site (`/`) and `/login` can sit idle
+  indefinitely with no dialog.
+- Set `NEXT_PUBLIC_IDLE_TIMEOUT_MINUTES=0` → the lock is fully disabled (no dialog ever). Restore to
+  `30` for normal use.
+
+## 45 · Free follow-up within the OP validity (⏳ eyeball UI)
+
+The consultation tariff carries `followUpDays` ("OP validity"). A revisit to the SAME doctor inside
+that window, where the first consultation was actually PAID, posts the consultation at ₹0 instead of
+charging again. Run `pnpm --filter @medicore/api migrate -- --all` first (migration `0024`).
+
+Setup: **Tariff → CONSULT_GEN → edit** → set **OP validity (days) = 15** → save. The row shows a
+`15-day follow-up` badge.
+
+### P1 · First visit is charged, follow-up is free
+
+- Register patient P with Dr A → reception shows **OP fee due**. Collect it (invoice → paid).
+- Register P again with **Dr A** (same day or a few days later) → the consultation posts at **₹0**,
+  reception shows **Add to queue** with a **No fee** chip, and no cash-counter detour.
+- Open that visit's bill → the line reads
+  `Consultation — free follow-up (within 15 days of <date of the first visit>)`.
+
+### P2 · The four conditions
+
+- **Different doctor**: register P with **Dr B** → charged the normal fee (the window is per-doctor).
+- **Unpaid original**: new patient Q, register with Dr A but do NOT pay → register Q again with Dr A →
+  still **charged** (an unpaid consult entitles nobody to a free one).
+- **Outside the window**: set validity to `1`, and revisit after the window has passed → charged again.
+- **A waiver does not extend itself**: after a free follow-up, the NEXT visit is still measured from
+  the original PAID consultation, not from the free one (a ₹0 line never opens a new window).
+
+### P3 · Off by default / turning it off
+
+- Set OP validity to blank or `0` → every visit is charged again, immediately. This is the default for
+  any hospital that never configures it, and for all existing tariffs.
+
+### P4 · Express is still chargeable
+
+- A follow-up patient registered as **express** pays the express surcharge (a fast-track is a separate
+  purchase) while the consultation line itself remains ₹0.
+
+## 46 · Vitals & observations (⏳ eyeball UI)
+
+New `vitals` module. Run `pnpm --filter @medicore/api migrate -- --all` first (migration `0025`).
+Permissions: **`vitals:record`** to chart (NURSE, DOCTOR — reception does NOT have it),
+**`emr:read`** to read (a receptionist must not see a patient's blood pressure).
+
+### Q1 · A nurse charts observations
+
+- Sign in as a **nurse**. Open **Patients → a patient with an open visit → Vitals** tab.
+- The form appears with the current visit named above it. Enter BP `130/85`, pulse `92`,
+  temperature `38.2`, SpO₂ `96` → **Save observations**.
+- The reading appears under "Most recent" with **BP, temperature flagged** (arrow + colour) and an
+  **"Outside normal range"** badge. Pulse and SpO₂ read as normal.
+- Enter only a pulse and save → it saves fine (a partial set is valid). Save with every box blank →
+  refused with "Enter at least one observation".
+
+### Q2 · The doctor sees them at the point of care
+
+- Sign in as the **doctor**, open **My patients → that patient**. The **Vitals** card is present and
+  **already expanded** because the reading is abnormal. It sits ABOVE the "Call the patient in"
+  gate — a doctor must be able to read obs before deciding to call someone in early.
+- Weight + height on one reading → **BMI** is shown, derived by the API.
+
+### Q3 · Entry guards
+
+- Enter systolic `80` and diastolic `120` → refused: "diastolic must be lower than systolic". This is
+  the commonest vitals typo and it silently corrupts every trend once charted.
+- A temperature of `50` or a pulse of `500` is refused as implausible; a systolic of `250` is
+  ACCEPTED — a hypertensive emergency must be chartable.
+
+### Q4 · Inpatient day sheet
+
+- For an admitted patient, chart obs on two different days, then open **Ward → patient →
+  Treatment sheet**. Each day leads with an **Observations** line —
+  `BP 130/85 ↑ · HR 92 · T 38.2 ↑ · SpO2 96%` — before the progress notes.
+- **Print it**: the arrows survive on a monochrome ward printer (abnormality is never colour-only).
+
+### Q5 · Reads are gated
+
+- Sign in as a **receptionist**: the patient profile shows **no Vitals tab** (no `emr:read`), and
+  `GET /api/v1/patients/<id>/vitals` returns **403**.
+
+### Q6 · Append-only
+
+- There is no edit or delete control anywhere. A wrong reading is corrected by charting a new one —
+  the sequence IS the chart, and a doctor may have prescribed against the old value.
+
+## 47 · Multi-branch — the active-branch context (ADR-0015) (⏳ eyeball UI)
+
+Branches are physical sites of one tenant, sharing its DB, patient UHID and staff. Run
+`pnpm --filter @medicore/api migrate -- --all` first (migration `0026` + the Main Branch seed +
+backfill). A super-admin sets a tenant's cap via `limits.maxBranches` on the master record.
+
+### R1 · Backward compatibility (single-branch)
+
+- An existing hospital after `migrate --all` has ONE branch, **Main Branch**, and every historical
+  record now belongs to it (the seed backfills `patients/encounters/orders/charges/…`). Everything
+  works exactly as before; the header switcher does NOT appear (nothing to choose).
+
+### R2 · Create branches
+
+- **Administration → Branches** (needs `branch:manage`). Add "Apollo Chennai" (code `CHN`). Adding
+  beyond `maxBranches` fails with **HMS-PLAN-001** ("Plan limit reached", metric `branches`).
+- The Main Branch shows a **Main** badge and cannot be deactivated.
+
+### R3 · The switcher + write stamping
+
+- With ≥2 branches, the header shows a **branch switcher**. Pick "Apollo Chennai" → the app refreshes;
+  every list now shows Chennai only.
+- Register a patient / start an encounter while Chennai is active → the record is stamped
+  `branchId = Chennai`. Switch to "Main Branch" → that patient is NOT in Main's reception list, but IS
+  found by UHID search (identity is tenant-wide).
+- An admin who can reach several branches and selects **All branches**, then tries to create a
+  record → the write is refused with **HMS-BRANCH-001** ("pick a branch"). Reads still aggregate.
+
+### R4 · All-branches aggregate
+
+- Select **All branches** (offered only to users whose binding reaches >1). Reports/dashboards and
+  lists aggregate across every branch. Select one branch → the same screens scope to it.
+
+### R5 · Branch-confined staff
+
+- Give a receptionist `branchScope: branches` + only Chennai (Roles/staff binding). They see only
+  Chennai's patients and queue; the switcher shows just Chennai; writes stamp Chennai automatically
+  (no prompt — a single-branch user never chooses).
+
+### R6 · Reads scope live
+
+- A hospital-wide user selecting Chennai sees Chennai; the selection is validated against the live
+  allowed set every request, so a stale `X-Active-Branch` for a branch they lost access to is ignored
+  (falls back to their own scope), never leaked.

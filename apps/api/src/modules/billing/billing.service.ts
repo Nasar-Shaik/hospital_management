@@ -43,6 +43,75 @@ export function listReceipts(range: { from: Date; to: Date }): Promise<repo.Bill
   return repo.receiptsBetween(range.from, range.to);
 }
 
+/* ── Free follow-up ("OP validity") ────────────────────────────────────────── */
+
+/** A patient's live entitlement to see one doctor again without paying. */
+export interface FollowUpEntitlement {
+  /** The consultation charge that was paid and opened the window. */
+  originChargeId: string;
+  /** When that consultation was paid for. */
+  since: Date;
+  /** Last moment the free revisit applies — inclusive. */
+  until: Date;
+  /** The window the tariff grants, in days. Quoted on the charge description and the receipt. */
+  days: number;
+}
+
+/**
+ * Is this patient still inside a paid consultation's follow-up window with THIS doctor?
+ *
+ * ── THE RULE, AND WHY EACH CLAUSE IS THERE ──────────────────────────────────
+ * A hospital that advertises "free follow-up within 15 days" means: you paid to see Dr Rao, so
+ * seeing Dr Rao again about the same problem within 15 days costs nothing. Four conditions make
+ * that honest, and each one closes a way the hospital would otherwise lose money or a patient
+ * would be wrongly charged:
+ *
+ *   1. SAME DOCTOR. The fee bought that consultant's time and their duty to follow the case
+ *      through. It does not buy a free consultation with a different specialist in another
+ *      department, which is a new clinical problem and a new fee.
+ *   2. THE ORIGINAL WAS ACTUALLY PAID. An unpaid consultation entitles nobody to a free one —
+ *      otherwise "register, don't pay, come back tomorrow" is free care for ever.
+ *   3. THE ORIGINAL WAS CHARGEABLE (`amount > 0`, enforced in the repository query). A waived
+ *      follow-up must not itself grant another window, or one payment rolls forward indefinitely.
+ *   4. INSIDE THE WINDOW, measured from when that consultation was POSTED.
+ *
+ * Returns undefined when the tariff grants no window (`followUpDays` absent or 0) — the safe
+ * default, and what every hospital that never configures this keeps getting.
+ */
+export async function consultationFollowUp(input: {
+  patientId: string;
+  doctorId: string;
+  /** The tariff code the consultation bills under — carries the window. */
+  code: string;
+  /** "Now" for the visit being registered; passed in so a redelivered event judges the same instant. */
+  at: Date;
+}): Promise<FollowUpEntitlement | undefined> {
+  const service = await repo.findServiceByCode(input.code);
+  const days = service?.followUpDays ?? 0;
+  if (days <= 0) return undefined;
+
+  const since = new Date(input.at.getTime() - days * 86_400_000);
+  const candidates = await repo.paidConsultationsForDoctor({
+    patientId: input.patientId,
+    doctorId: input.doctorId,
+    since,
+  });
+  if (candidates.length === 0) return undefined;
+
+  // Only consultations that reached a PAID invoice count (clause 2). Billed-but-unpaid and
+  // never-billed both fail, which is the same test reception's pay gate applies.
+  const invoiceIds = [...new Set(candidates.map((c) => c.invoiceId).filter(Boolean))] as string[];
+  const status = await repo.invoiceStatusByIds(invoiceIds);
+
+  for (const charge of candidates) {
+    if (!charge.invoiceId || status.get(charge.invoiceId) !== "paid") continue;
+    const until = new Date(charge.postedAt.getTime() + days * 86_400_000);
+    if (until.getTime() < input.at.getTime()) continue;
+    return { originChargeId: charge.id, since: charge.postedAt, until, days };
+  }
+  return undefined;
+}
+
 export interface PostChargeInput {
   encounterId: string;
   patientId: string;
@@ -58,6 +127,8 @@ export interface PostChargeInput {
   branchId?: string;
   /** Overrides the tariff — the pharmacy knows the price of the batch it dispensed. */
   unitPrice?: number;
+  /** Consultation charges: whose consultation. Recorded so the follow-up rule can find it later. */
+  doctorId?: string;
 }
 
 /**
@@ -114,6 +185,7 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
       source: input.source,
       ...(input.sourceId ? { sourceId: input.sourceId } : {}),
       ...(input.branchId ? { branchId: input.branchId } : {}),
+      ...(input.doctorId ? { doctorId: input.doctorId } : {}),
     });
   } catch (err) {
     if (!repo.isDuplicateKey(err)) throw err;

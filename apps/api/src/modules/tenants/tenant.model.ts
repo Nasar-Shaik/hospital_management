@@ -34,6 +34,17 @@ export interface TenantSubscription {
   seats?: number;
 }
 
+/**
+ * Platform-set limits for this hospital (ADR-0015). A limit is a SALES control, set by the
+ * super-admin at provisioning — the tenant admin cannot raise it. It lives on the master record,
+ * not in the tenant DB, for the same reason the plan does: a hospital must not be able to edit what
+ * it is allowed to buy.
+ */
+export interface TenantLimits {
+  /** How many branches this tenant may create. Default 1 — a single-site hospital. */
+  maxBranches?: number;
+}
+
 export interface TenantDoc {
   _id: Types.ObjectId;
   hospitalName: string;
@@ -43,6 +54,7 @@ export interface TenantDoc {
   dbUri?: string;
   customDomain?: string;
   subscription: TenantSubscription;
+  limits?: TenantLimits;
   status: TenantStatus;
   region?: string;
   /**
@@ -81,6 +93,9 @@ const tenantSchema = new Schema<TenantDoc>(
       planCode: { type: String },
       status: { type: String },
       seats: { type: Number },
+    },
+    limits: {
+      maxBranches: { type: Number, min: 1 },
     },
     status: { type: String, enum: TENANT_STATUSES, required: true, default: "provisioning" },
     region: { type: String },

@@ -43,6 +43,8 @@ export interface TenantRegistryEntry {
   organizationType?: OrganizationType;
   /** This hospital's deliberate deviations from its preset. Never a preset snapshot. */
   encounterPolicy?: Partial<EncounterPolicy>;
+  /** Platform-set cap on how many branches this tenant may create (ADR-0015). Absent ⇒ 1. */
+  maxBranches?: number;
 }
 
 /**
@@ -70,6 +72,7 @@ function toEntry(doc: TenantDoc): TenantRegistryEntry {
     ...(doc.subscription?.planCode ? { planCode: doc.subscription.planCode } : {}),
     ...(doc.organizationType ? { organizationType: doc.organizationType } : {}),
     ...(doc.encounterPolicy ? { encounterPolicy: doc.encounterPolicy } : {}),
+    ...(typeof doc.limits?.maxBranches === "number" ? { maxBranches: doc.limits.maxBranches } : {}),
   };
 }
 

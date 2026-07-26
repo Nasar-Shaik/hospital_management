@@ -38,6 +38,7 @@ import {
   type TokenPair,
 } from "@medicore/api-client";
 import { browserApi } from "../lib/api";
+import { getActiveBranchId } from "../lib/activeBranch";
 import {
   DEV_MULTI_ACCOUNT,
   devRefreshToken,
@@ -55,7 +56,8 @@ interface AuthState {
 interface AuthContextValue extends AuthState {
   login: (email: string, password: string) => Promise<LoginResult>;
   completeMfa: (mfaToken: string, code: string) => Promise<void>;
-  logout: () => Promise<void>;
+  /** Ends the session server-side and clears the client. `redirectTo` overrides the default /login. */
+  logout: (opts?: { redirectTo?: string }) => Promise<void>;
   /** Does the user hold this permission? UI gating only — never a security boundary. */
   can: (permission: string) => boolean;
   refreshUser: () => Promise<void>;
@@ -89,6 +91,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       browserApi(
         () => accessToken.current,
         () => onUnauthorizedRef.current(),
+        // The active branch is read live on every request (ADR-0015), so switching branch takes
+        // effect without rebuilding the client — the same pattern as the access token.
+        () => getActiveBranchId(),
       ),
     [],
   );
@@ -242,22 +247,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api, adopt],
   );
 
-  const logout = useCallback(async () => {
-    try {
-      await api.logout();
-    } catch (err) {
-      // A failed logout must still clear the client. Leaving a user "logged in"
-      // on screen because the network blipped is the worst possible outcome.
-      if (!(err instanceof ApiClientError)) throw err;
-    } finally {
-      if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      accessToken.current = undefined;
-      // Dev-only: drop THIS tab's stored session so a reload does not revive it.
-      setDevRefreshToken(undefined);
-      setState({ user: null, permissions: [], loading: false });
-      router.replace("/login");
-    }
-  }, [api, router]);
+  const logout = useCallback(
+    async (opts?: { redirectTo?: string }) => {
+      try {
+        await api.logout();
+      } catch (err) {
+        // A failed logout must still clear the client. Leaving a user "logged in"
+        // on screen because the network blipped is the worst possible outcome.
+        if (!(err instanceof ApiClientError)) throw err;
+      } finally {
+        if (refreshTimer.current) clearTimeout(refreshTimer.current);
+        accessToken.current = undefined;
+        // Dev-only: drop THIS tab's stored session so a reload does not revive it.
+        setDevRefreshToken(undefined);
+        setState({ user: null, permissions: [], loading: false });
+        router.replace(opts?.redirectTo ?? "/login");
+      }
+    },
+    [api, router],
+  );
 
   const refreshUser = useCallback(async () => {
     const me = await api.me();

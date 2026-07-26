@@ -44,6 +44,7 @@ import { medicineConsumers } from "../../modules/medicines/index.js";
 import { patientConsumers } from "../../modules/patients/index.js";
 import { encounterConsumers } from "../../modules/encounters/index.js";
 import { allergyConsumers } from "../../modules/allergies/index.js";
+import { vitalsConsumers } from "../../modules/vitals/index.js";
 import { dispenseConsumers } from "../../modules/pharmacy/index.js";
 import { wardNoteConsumers } from "../../modules/admissions/index.js";
 import { reportConsumers } from "../../modules/reports/index.js";
@@ -80,6 +81,7 @@ const MODULES: ModuleConsumers[] = [
   // (appointments, orders, prescriptions, billing) also handle it; these are the rest.
   encounterConsumers,
   allergyConsumers,
+  vitalsConsumers,
   dispenseConsumers,
   wardNoteConsumers,
   reportConsumers,

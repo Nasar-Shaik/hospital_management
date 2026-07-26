@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { ThemeProvider, themeInitScript } from "@medicore/ui";
 import { AuthProvider } from "../components/AuthProvider";
+import { BranchProvider } from "../components/BranchProvider";
+import { IdleGuard } from "../components/IdleGuard";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -33,7 +35,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body className="antialiased">
         <ThemeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <BranchProvider>
+              <IdleGuard />
+              {children}
+            </BranchProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

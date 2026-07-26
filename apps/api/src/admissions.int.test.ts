@@ -12,7 +12,7 @@
  *   4. A TRANSFER IS A HANDOVER — it requires a reason and it lands in the history.
  *   5. THE SAME CODE ADMITS A GOVERNMENT PATIENT FOR ₹0, with listPrice intact.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -258,6 +258,24 @@ beforeAll(async () => {
   Object.assign(pvt, await setup(PVT, "private_hospital"));
   Object.assign(gov, await setup(GOV, "government_hospital"));
 }, 180_000);
+
+/**
+ * Free every bed between tests.
+ *
+ * The suite deliberately reuses one bed (`A-12`) across most tests — each test is a fresh patient
+ * admitted to the same ward — and the product correctly refuses a second open stay in an occupied
+ * bed (`one_open_stay_per_bed`, migration 0020). Without this reset only the FIRST admit to A-12
+ * would ever succeed and every later test would fail with "that bed is already occupied". That is a
+ * test-isolation gap, not a product bug: a real ward does not re-use an occupied bed, and the
+ * database is right to say so. So we release the beds — by removing the open IP stays each test
+ * created — before the next test runs. Raw deletes on purpose: this is fixture teardown, not a
+ * clinical discharge, and it must not fire audit hooks or emit events.
+ */
+beforeEach(async () => {
+  for (const h of [pvt, gov]) {
+    if (h.connection) await h.connection.collection("encounters").deleteMany({ class: "IP" });
+  }
+});
 
 afterAll(async () => {
   await closeAllTenantConnections();

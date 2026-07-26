@@ -64,6 +64,8 @@ export const createServiceSchema = z
     category: z.enum(CHARGE_CATEGORIES),
     /** Paise — non-negative whole number. */
     price: z.number().int().min(0).max(1_000_000_000),
+    /** Consultation only: days of free revisits. 0 (or absent) = every visit is charged. */
+    followUpDays: z.number().int().min(0).max(365).optional(),
   })
   .strict();
 
@@ -71,6 +73,7 @@ export const updateServiceSchema = z
   .object({
     name: z.string().trim().min(1).max(200).optional(),
     price: z.number().int().min(0).max(1_000_000_000).optional(),
+    followUpDays: z.number().int().min(0).max(365).optional(),
     active: z.boolean().optional(),
   })
   .strict()

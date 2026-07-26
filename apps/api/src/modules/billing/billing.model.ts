@@ -50,6 +50,16 @@ export interface ServiceItemDoc {
   category: ChargeCategory;
   /** Paise. The list price of this service at THIS hospital. */
   price: number;
+  /**
+   * Consultation only: how many days this fee keeps the patient entitled to see the SAME doctor
+   * again for free (the "OP validity" every hospital advertises — pay once, revisit within N days).
+   *
+   * It lives on the tariff entry because it is a property of what the fee BUYS, and the price list
+   * is the one page where a hospital already decides what a consultation is worth. Absent or 0
+   * means no free follow-up: every visit is charged, which is the safe default for an existing
+   * hospital that never configured one.
+   */
+  followUpDays?: number;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -62,6 +72,7 @@ const serviceItemSchema = new Schema<ServiceItemDoc>(
     name: { type: String, required: true, trim: true, maxlength: 200 },
     category: { type: String, enum: CHARGE_CATEGORIES, required: true },
     price: { type: Number, required: true, min: 0 },
+    followUpDays: { type: Number, min: 0, max: 365 },
     active: { type: Boolean, required: true, default: true },
   },
   { timestamps: true, collection: "serviceItems", autoIndex: false },
@@ -107,6 +118,17 @@ export interface ChargeDoc {
    */
   sourceId?: string;
 
+  /**
+   * Consultation charges only: WHOSE consultation this was.
+   *
+   * Denormalised onto the charge because the free-follow-up rule asks a money question — "has this
+   * patient already paid to see THIS doctor recently?" — and it must be answerable inside billing,
+   * from billing's own collection. Joining out to encounters to discover the doctor would put a
+   * clinical read on the hot path of every registration and blur a module boundary for a fact the
+   * charge can simply carry.
+   */
+  doctorId?: string;
+
   postedBy?: string;
   postedAt: Date;
 
@@ -140,6 +162,8 @@ const chargeSchema = new Schema<ChargeDoc>(
 
     source: { type: String, enum: CHARGE_SOURCES, required: true },
     sourceId: { type: String },
+
+    doctorId: { type: String },
 
     postedBy: { type: String },
     postedAt: { type: Date, required: true },

@@ -19,6 +19,7 @@
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
@@ -145,6 +146,15 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
     });
   }
 
+  /**
+   * The TREATING branch (ADR-0015) — the site this visit happens at, which is the active branch and
+   * NOT necessarily where the patient was first registered (a patient may be seen at any branch). An
+   * appointment-originated visit carries its slot's branch in `input.branchId`; a walk-in resolves
+   * the active one. Everything the visit spawns downstream — orders, charges, prescriptions, vitals —
+   * inherits this branch through the events it publishes.
+   */
+  const branchId = input.branchId ?? (await writeBranchId());
+
   try {
     return await withTransaction(async (session) => {
       const episodeId = await repo.createEpisode(input.patientId, session, input.reason);
@@ -175,7 +185,7 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.appointmentId ? { appointmentId: input.appointmentId } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
         },
         session,
       );
@@ -199,7 +209,7 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
             ...(encounter.doctorId ? { doctorId: encounter.doctorId } : {}),
             ...(encounter.departmentId ? { departmentId: encounter.departmentId } : {}),
           },
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
         },
         session,
       );

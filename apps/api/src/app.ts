@@ -29,6 +29,8 @@ import { pharmacyRouter } from "./modules/pharmacy/index.js";
 import { medicineRouter } from "./modules/medicines/index.js";
 import { admissionRouter } from "./modules/admissions/index.js";
 import { allergyRouter } from "./modules/allergies/index.js";
+import { branchRouter } from "./modules/branches/index.js";
+import { vitalsRouter } from "./modules/vitals/index.js";
 import { reportRouter } from "./modules/reports/index.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
@@ -156,6 +158,8 @@ export function createApp(logger: Logger): Express {
   v1Router.use(medicineRouter());
   v1Router.use(admissionRouter());
   v1Router.use(allergyRouter());
+  v1Router.use(vitalsRouter());
+  v1Router.use(branchRouter());
   v1Router.use(reportRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());

@@ -1040,4 +1040,79 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0024-consultation-follow-up",
+    description: "Index the free-follow-up lookup: this patient's paid consultations with a doctor",
+    up: async (db) => {
+      /**
+       * Every OP registration now asks "has this patient already paid to see this doctor inside
+       * the tariff's validity window?" — so that question is on the hot path of the busiest action
+       * in the hospital and must not be a collection scan. The key order matches the query's shape
+       * (equality on patient + doctor + category, then a range on the date, sorted newest first).
+       *
+       * Partial on `doctorId` because only consultation charges carry one: the index then covers
+       * a small slice of `charges` rather than every bed-night and drug ever billed.
+       */
+      await db.collection("charges").createIndex(
+        { tenantId: 1, patientId: 1, doctorId: 1, category: 1, postedAt: -1 },
+        {
+          name: "consultation_follow_up_lookup",
+          partialFilterExpression: { doctorId: { $exists: true } },
+          background: true,
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("charges")
+        .dropIndex("consultation_follow_up_lookup")
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0025-vitals",
+    description: "Vitals chart — observations per visit, and a patient's trend across visits",
+    up: async (db) => {
+      // "The chart for this visit", oldest first. The sort is ascending in the repository, but
+      // an index serves either direction, so one index covers both reads.
+      await db
+        .collection("vitals")
+        .createIndex({ tenantId: 1, encounterId: 1, recordedAt: 1 }, { background: true });
+      // "This person's trend", newest first, across every visit and branch.
+      await db
+        .collection("vitals")
+        .createIndex({ tenantId: 1, patientId: 1, recordedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("vitals")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0026-branches",
+    description:
+      "Branches — a tenant's physical sites (ADR-0015). The Main Branch is SEEDED, not " +
+      "created here, because a migration has no tenant context; this owns only the collection " +
+      "and its indexes.",
+    up: async (db) => {
+      await db.createCollection("branches").catch(() => undefined);
+      // Branch codes are the human key on a report and must be unique within a hospital.
+      await db
+        .collection("branches")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_code_per_tenant", background: true },
+        );
+      // The switcher and the "which is home?" lookup both read by tenant + main flag.
+      await db.collection("branches").createIndex({ tenantId: 1, isMain: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("branches")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

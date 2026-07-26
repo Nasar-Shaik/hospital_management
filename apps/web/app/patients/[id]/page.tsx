@@ -23,12 +23,14 @@ import {
   type Patient,
   type Prescription,
   type ReportMeta,
+  type VitalsReading,
   type Wallet,
   type WalletEntry,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { Protected } from "../../../components/Protected";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
+import { VitalsByVisit } from "../../../components/PatientVitals";
 import { rupees, toPaise } from "../../../lib/money";
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
@@ -92,11 +94,13 @@ const ORDER_TONE: Record<string, "neutral" | "warning" | "success" | "brand"> = 
 
 /* ── page ────────────────────────────────────────────────────────────────────── */
 
-type TabKey = "timeline" | "visits" | "tests" | "prescriptions" | "bills" | "wallet";
+type TabKey = "timeline" | "visits" | "vitals" | "tests" | "prescriptions" | "bills" | "wallet";
 
 function Profile() {
   const { can, api } = useAuth();
   const canWallet = can("wallet:manage");
+  const canReadVitals = can("emr:read");
+  const canRecordVitals = can("vitals:record");
   const params = useParams<{ id: string }>();
   const id = params.id;
 
@@ -109,6 +113,7 @@ function Profile() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [doctors, setDoctors] = useState<Map<string, string>>(new Map());
+  const [vitals, setVitals] = useState<VitalsReading[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +127,7 @@ function Profile() {
       // permission on one strand (e.g. billing) must not blank the whole page, so each
       // optional strand tolerates a failure and simply shows empty.
       const soft = <T,>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback);
-      const [pat, alg, enc, ord, rx, rep, inv, docs] = await Promise.all([
+      const [pat, alg, enc, ord, rx, rep, inv, docs, vit] = await Promise.all([
         api.getPatient(id),
         soft(api.listAllergies(id), [] as Allergy[]),
         soft(api.listEncounters({ patientId: id, limit: 100 }), {
@@ -140,6 +145,8 @@ function Profile() {
           meta: { page: 1, limit: 0 },
         }),
         soft(api.listDoctors(), [] as { id: string; name: string }[]),
+        // Vitals are clinical PHI behind `emr:read` — a desk user simply sees no tab.
+        canReadVitals ? soft(api.listPatientVitals(id, 50), [] as VitalsReading[]) : [],
       ]);
       setPatient(pat);
       setAllergies(alg.filter((a) => a.status === "active"));
@@ -149,6 +156,7 @@ function Profile() {
       setReports(rep);
       setInvoices(inv.items);
       setDoctors(new Map(docs.map((d) => [d.id, d.name])));
+      setVitals(vit);
 
       // The wallet is only fetched for staff who may see it (cashier / front office); a
       // clinician's profile view simply has no advance panel, rather than a 403 in the console.
@@ -164,7 +172,7 @@ function Profile() {
     } finally {
       setLoading(false);
     }
-  }, [api, id, canWallet]);
+  }, [api, id, canWallet, canReadVitals]);
 
   useEffect(() => {
     void load();
@@ -204,6 +212,7 @@ function Profile() {
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: "timeline", label: "Timeline" },
     { key: "visits", label: "Visits", count: encounters.length },
+    ...(canReadVitals ? [{ key: "vitals" as const, label: "Vitals", count: vitals.length }] : []),
     { key: "tests", label: "Tests", count: orders.length },
     { key: "prescriptions", label: "Prescriptions", count: prescriptions.length },
     { key: "bills", label: "Bills", count: invoices.length },
@@ -323,6 +332,15 @@ function Profile() {
           />
         )}
         {tab === "visits" && <Visits encounters={encounters} who={who} />}
+        {tab === "vitals" && (
+          <VitalsByVisit
+            api={api}
+            readings={vitals}
+            encounters={encounters}
+            canRecord={canRecordVitals}
+            onSaved={(r) => setVitals((prev) => [r, ...prev])}
+          />
+        )}
         {tab === "tests" && (
           <Tests orders={orders} reportByOrder={reportByOrder} who={who} api={api} />
         )}

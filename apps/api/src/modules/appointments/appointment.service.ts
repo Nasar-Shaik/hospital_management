@@ -22,6 +22,7 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
@@ -141,6 +142,10 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
     });
   }
 
+  // The branch this appointment is booked AT (ADR-0015) — the site the patient will be seen. The
+  // encounter created from it later inherits this branch.
+  const branchId = input.branchId ?? (await writeBranchId());
+
   try {
     return await withTransaction(async (session) => {
       // No availability check. The unique index decides — see the header.
@@ -150,7 +155,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
           doctorId: input.doctorId,
           startAt: slot.startAt,
           endAt: slot.endAt,
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
           ...(ctx.userId ? { bookedBy: ctx.userId } : {}),
@@ -170,7 +175,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
             doctorId: appointment.doctorId,
             startAt: appointment.startAt.toISOString(),
           },
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
         },
         session,
       );

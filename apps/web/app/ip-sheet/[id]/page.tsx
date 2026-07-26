@@ -29,6 +29,8 @@ import {
   type PublicSite,
   type Wallet,
   type WalletEntry,
+  type VitalField,
+  type VitalsReading,
   type WardNote,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
@@ -84,6 +86,7 @@ function walletLabel(type: WalletEntry["type"]): string {
 
 interface DayBucket {
   key: string;
+  vitals: VitalsReading[];
   notes: WardNote[];
   orders: Order[];
   prescriptions: Prescription[];
@@ -100,6 +103,7 @@ function Sheet() {
   const [patient, setPatient] = useState<Patient | null>(null);
   const [doctor, setDoctor] = useState<DoctorCard | null>(null);
   const [notes, setNotes] = useState<WardNote[]>([]);
+  const [vitals, setVitals] = useState<VitalsReading[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [charges, setCharges] = useState<EncounterCharge[]>([]);
@@ -125,12 +129,13 @@ function Sheet() {
         return;
       }
 
-      const [pat, doc, wn, ords, rx, chg, wal, bill, theSite] = await Promise.all([
+      const [pat, doc, wn, vit, ords, rx, chg, wal, bill, theSite] = await Promise.all([
         api.getPatient(enc.patientId),
         enc.doctorId
           ? soft(api.getDoctor(enc.doctorId), null as DoctorCard | null)
           : Promise.resolve(null),
         soft(api.listWardNotes(id), [] as WardNote[]),
+        soft(api.listEncounterVitals(id), [] as VitalsReading[]),
         soft(api.listOrders({ encounterId: id, limit: 100 }), {
           items: [] as Order[],
           meta: { page: 1, limit: 0 },
@@ -145,6 +150,7 @@ function Sheet() {
       setPatient(pat);
       setDoctor(doc);
       setNotes(wn);
+      setVitals(vit);
       setOrders(ords.items);
       setPrescriptions(rx);
       setCharges(chg.filter((c) => !c.voided));
@@ -189,12 +195,13 @@ function Sheet() {
     const bucket = (key: string): DayBucket => {
       let b = map.get(key);
       if (!b) {
-        b = { key, notes: [], orders: [], prescriptions: [], charges: [], wallet: [] };
+        b = { key, vitals: [], notes: [], orders: [], prescriptions: [], charges: [], wallet: [] };
         map.set(key, b);
       }
       return b;
     };
     if (stayFrom) bucket(dayKey(stayFrom)); // the admission day always shows, even if quiet
+    vitals.forEach((v) => bucket(dayKey(v.recordedAt)).vitals.push(v));
     notes.forEach((n) => bucket(dayKey(n.at)).notes.push(n));
     orders.forEach((o) => bucket(dayKey(o.orderedAt)).orders.push(o));
     prescriptions.forEach((p) =>
@@ -203,7 +210,7 @@ function Sheet() {
     charges.forEach((c) => bucket(dayKey(c.postedAt)).charges.push(c));
     stayWalletEntries.forEach((e) => bucket(dayKey(e.at)).wallet.push(e));
     return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
-  }, [notes, orders, prescriptions, charges, stayWalletEntries, stayFrom]);
+  }, [vitals, notes, orders, prescriptions, charges, stayWalletEntries, stayFrom]);
 
   if (authLoading || (user && loading)) {
     return (
@@ -416,6 +423,34 @@ function Sheet() {
 }
 
 /** One day of the stay. */
+/**
+ * One reading as a single charted line — "BP 130/85 ↑ · HR 92 · T 38.2 ↑ · SpO2 96% · RR 18".
+ *
+ * Only what was actually measured appears; a blank is a measurement that was not taken, and
+ * printing "—" for it would fill a ward chart with noise. Arrows come from the API's own flags,
+ * so the sheet and the screen agree about what is abnormal.
+ */
+function obsLine(v: VitalsReading): string {
+  const mark = (field: VitalField) =>
+    v.flags[field] === "high" ? " \u2191" : v.flags[field] === "low" ? " \u2193" : "";
+
+  const parts: string[] = [];
+  if (v.systolic !== undefined || v.diastolic !== undefined) {
+    parts.push(
+      `BP ${String(v.systolic ?? "\u2014")}/${String(v.diastolic ?? "\u2014")}${mark("systolic") || mark("diastolic")}`,
+    );
+  }
+  if (v.pulse !== undefined) parts.push(`HR ${String(v.pulse)}${mark("pulse")}`);
+  if (v.temperature !== undefined)
+    parts.push(`T ${String(v.temperature)}\u00b0C${mark("temperature")}`);
+  if (v.spo2 !== undefined) parts.push(`SpO2 ${String(v.spo2)}%${mark("spo2")}`);
+  if (v.respiratoryRate !== undefined)
+    parts.push(`RR ${String(v.respiratoryRate)}${mark("respiratoryRate")}`);
+  if (v.weightKg !== undefined) parts.push(`Wt ${String(v.weightKg)}kg`);
+  if (v.painScore !== undefined) parts.push(`Pain ${String(v.painScore)}/10`);
+  return parts.join(" \u00b7 ");
+}
+
 function Day({
   bucket,
   index,
@@ -451,6 +486,29 @@ function Day({
       </div>
 
       <div className="mt-2 space-y-2.5 text-sm">
+        {/*
+          The observation round leads the day, the way it does on a paper chart: the nurse's
+          obs are the first thing written and the first thing anyone reading the day looks for.
+          Out-of-range values carry an arrow, never colour alone — this sheet gets PRINTED, and
+          most ward printers are monochrome.
+        */}
+        {bucket.vitals.map((v) => (
+          <div key={v.id} className="flex gap-2">
+            <span className="w-12 shrink-0 text-xs text-gray-400">{time(v.recordedAt)}</span>
+            <div>
+              <span className="text-[11px] font-semibold tracking-wide text-gray-500 uppercase">
+                Observations
+              </span>
+              <p className="text-gray-800">
+                {obsLine(v)}
+                {v.triageLevel && v.triageLevel !== "routine" && (
+                  <span className="ml-1.5 font-semibold uppercase">· {v.triageLevel}</span>
+                )}
+              </p>
+              {v.notes && <p className="text-xs text-gray-500">{v.notes}</p>}
+            </div>
+          </div>
+        ))}
         {bucket.notes.map((n) => (
           <div key={n.id} className="flex gap-2">
             <span className="w-12 shrink-0 text-xs text-gray-400">{time(n.at)}</span>

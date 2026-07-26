@@ -21,7 +21,7 @@ import { calendarDaysStarted } from "../../core/time/day.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { onPatientsMerged } from "../../core/events/patientMerge.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
-import { postCharge, reverseChargesFor } from "./billing.service.js";
+import { consultationFollowUp, postCharge, reverseChargesFor } from "./billing.service.js";
 import { repointPatient } from "./billing.repository.js";
 import type { ChargeCategory } from "./billing.model.js";
 // A pricing INPUT: the doctor's own consultation fee. Read through the users module's public
@@ -39,6 +39,23 @@ const CONSULTATION_CODE = "CONSULT_GEN";
  * than hiding it inside a larger consult fee. Zero-tariff still flattens it to ₹0 in `postCharge`.
  */
 const EXPRESS_CODE = "CONSULT_EXPRESS";
+
+/**
+ * When the event says it happened, falling back to now if the stamp is unusable.
+ *
+ * The follow-up window is judged against THIS, not `new Date()`: at-least-once delivery means a
+ * retry hours later must reach the same verdict as the first attempt, or a visit could be charged
+ * on one delivery and waived on the next.
+ */
+function eventTime(event: DomainEvent): Date {
+  const at = new Date(event.occurredAt);
+  return Number.isNaN(at.getTime()) ? new Date() : at;
+}
+
+/** `12 Jul 2026` — the date a waiver quotes back on the bill, so the patient can check it. */
+function formatDay(date: Date): string {
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
 
 /**
  * A patient arrived → the consultation fee.
@@ -72,6 +89,35 @@ async function onEncounterStarted(event: DomainEvent): Promise<void> {
   const doctorId = typeof event.payload.doctorId === "string" ? event.payload.doctorId : undefined;
   const fee = doctorId ? await doctorConsultationFee(doctorId) : undefined;
 
+  /**
+   * ── FREE FOLLOW-UP WITHIN THE TARIFF'S VALIDITY ("OP validity") ─────────────
+   * A patient revisiting the SAME doctor inside the window their last PAID consultation bought
+   * is not charged again. The visit is still registered, still charged, and still invoiced — at
+   * ₹0, with the reason and the origin window written into the line.
+   *
+   * Posting a ₹0 line rather than posting nothing is the load-bearing choice. It keeps the
+   * consultation on the bill (so the record shows the patient was seen and what it was worth),
+   * it keeps `one_charge_per_cause` idempotency intact, and — because reception's pay gate
+   * already reads a ₹0 consultation as `free` — the follow-up patient walks straight to the
+   * doctor's queue with no cash-counter detour and no new gate logic anywhere.
+   *
+   * `event.occurredAt` (not `new Date()`) anchors the window so a redelivered event judges the
+   * same instant and cannot flip a visit from charged to free hours later.
+   */
+  const waiver =
+    doctorId !== undefined
+      ? await consultationFollowUp({
+          patientId,
+          doctorId,
+          code: CONSULTATION_CODE,
+          at: eventTime(event),
+        }).catch((err: unknown) => {
+          // Never let a pricing lookup fail a registration — charge the ordinary fee instead.
+          logger.warn({ encounterId, err }, "follow-up check failed — charging the normal fee");
+          return undefined;
+        })
+      : undefined;
+
   await postCharge({
     encounterId,
     patientId,
@@ -82,10 +128,25 @@ async function onEncounterStarted(event: DomainEvent): Promise<void> {
     // The encounter IS the cause. One consultation fee per visit, enforced by the
     // unique index on (sourceId, code).
     sourceId: encounterId,
-    // The doctor's own rate when they set one; otherwise postCharge falls back to the tariff.
-    ...(fee !== undefined ? { unitPrice: fee } : {}),
+    ...(doctorId ? { doctorId } : {}),
+    ...(waiver
+      ? {
+          unitPrice: 0,
+          description: `Consultation — free follow-up (within ${String(waiver.days)} days of ${formatDay(waiver.since)})`,
+        }
+      : // The doctor's own rate when they set one; otherwise postCharge falls back to the tariff.
+        fee !== undefined
+        ? { unitPrice: fee }
+        : {}),
     ...(typeof event.branchId === "string" ? { branchId: event.branchId } : {}),
   });
+
+  if (waiver) {
+    logger.info(
+      { encounterId, doctorId, originChargeId: waiver.originChargeId, days: waiver.days },
+      "consultation waived — revisit inside the follow-up window",
+    );
+  }
 
   /**
    * A paid fast-track visit earns an express surcharge, on its own line. Same idempotency as the

@@ -19,6 +19,7 @@ import {
   PatientNotFoundError,
 } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { recordAudit } from "../../core/audit/auditWriter.js";
 import { publish } from "../../core/events/outbox.js";
@@ -124,6 +125,14 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
 
   const overridden = blocking && input.force === true;
 
+  /**
+   * The REGISTERING branch (ADR-0015). A patient's IDENTITY is tenant-level — one UHID across every
+   * branch, treatable anywhere — so this is provenance and the default list scope, never an
+   * ownership wall. Resolved once, before the transaction: a caller who can reach several branches
+   * and has selected none is asked to pick one (HMS-BRANCH-001).
+   */
+  const branchId = input.branchId ?? (await writeBranchId());
+
   return withTransaction(async (session) => {
     const uhid = await repo.nextUhid(session);
 
@@ -134,7 +143,7 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
         gender: input.gender,
         ...(input.dob ? { dob: input.dob } : {}),
         ...(input.bloodGroup ? { bloodGroup: input.bloodGroup } : {}),
-        ...(input.branchId ? { branchId: input.branchId } : {}),
+        branchId,
         ...(input.contact ? { contact: input.contact } : {}),
         ...(input.address ? { address: input.address } : {}),
         ...(ctx.userId ? { registeredBy: ctx.userId } : {}),
@@ -196,7 +205,7 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
           name: patient.name,
           channel: "front-desk",
         },
-        ...(input.branchId ? { branchId: input.branchId } : {}),
+        branchId,
       },
       session,
     );

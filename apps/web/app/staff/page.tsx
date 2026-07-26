@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import {
   ApiClientError,
   STAFF_GENDERS,
+  type Branch,
   type Role,
   type StaffMember,
   type StaffProfile,
@@ -70,6 +71,10 @@ interface FormState {
   showOnPublicSite: boolean;
   /** Doctors only: scanned signature as a data-URI image, for the OPD slip. */
   signature: string;
+  /** Branch access (ADR-0015): true = every branch; false = only `branchIds`. */
+  allBranches: boolean;
+  /** The specific branches this person works in — meaningful only when `allBranches` is false. */
+  branchIds: string[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -92,6 +97,8 @@ const EMPTY_FORM: FormState = {
   emergencyContactPhone: "",
   showOnPublicSite: false,
   signature: "",
+  allBranches: true,
+  branchIds: [],
 };
 
 function formFromMember(m: StaffMember): FormState {
@@ -116,6 +123,9 @@ function formFromMember(m: StaffMember): FormState {
     emergencyContactPhone: p.emergencyContactPhone ?? "",
     showOnPublicSite: p.showOnPublicSite ?? false,
     signature: p.signature ?? "",
+    // An empty branch list is a hospital-wide binding ("all branches"); a non-empty one confines.
+    allBranches: (m.branchIds ?? []).length === 0,
+    branchIds: m.branchIds ?? [],
   };
 }
 
@@ -214,6 +224,7 @@ function StaffForm({
   mode,
   initial,
   roles,
+  branches,
   onSubmit,
   saving,
   fieldErrors,
@@ -221,6 +232,7 @@ function StaffForm({
   mode: "create" | "edit";
   initial: FormState;
   roles: Role[];
+  branches: Branch[];
   onSubmit: (f: FormState) => void;
   saving: boolean;
   fieldErrors: Record<string, string[]>;
@@ -229,6 +241,13 @@ function StaffForm({
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
   const isClinical = CLINICAL_ROLES.has(form.role);
   const hasSpecialty = SPECIALTY_ROLES.has(form.role);
+
+  const toggleBranch = (id: string) =>
+    set({
+      branchIds: form.branchIds.includes(id)
+        ? form.branchIds.filter((b) => b !== id)
+        : [...form.branchIds, id],
+    });
 
   return (
     <form
@@ -283,6 +302,67 @@ function StaffForm({
           </p>
         )}
       </div>
+
+      {/*
+        Branch access (ADR-0015). Shown only when the hospital actually has more than one site —
+        a single-branch hospital never needs to think about this, and the binding stays "all".
+        "All branches" is the hospital-wide binding (admins, directors); "Specific branches"
+        confines a receptionist or nurse to where they work.
+      */}
+      {branches.length > 1 && (
+        <div>
+          <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+            Branch access
+          </p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-[var(--color-fg)]">
+              <input
+                type="radio"
+                name="branch-access"
+                checked={form.allBranches}
+                onChange={() => set({ allBranches: true })}
+              />
+              All branches
+              <span className="text-xs text-[var(--color-fg-muted)]">
+                — works across every site, and may switch between them
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-[var(--color-fg)]">
+              <input
+                type="radio"
+                name="branch-access"
+                checked={!form.allBranches}
+                onChange={() => set({ allBranches: false })}
+              />
+              Specific branches
+            </label>
+
+            {!form.allBranches && (
+              <div className="ml-6 mt-1 grid gap-1.5 sm:grid-cols-2">
+                {branches.map((b) => (
+                  <label
+                    key={b.id}
+                    className="flex items-center gap-2 text-sm text-[var(--color-fg)]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.branchIds.includes(b.id)}
+                      onChange={() => toggleBranch(b.id)}
+                    />
+                    {b.name}
+                    <span className="text-xs text-[var(--color-fg-subtle)]">{b.code}</span>
+                  </label>
+                ))}
+                {form.branchIds.length === 0 && (
+                  <p className="text-xs text-[var(--color-danger)] sm:col-span-2">
+                    Pick at least one branch, or choose “All branches”.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div>
         <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
@@ -469,8 +549,16 @@ function DetailRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function StaffDetail({ member }: { member: StaffMember }) {
+function StaffDetail({ member, branches }: { member: StaffMember; branches: Branch[] }) {
   const p = member.profile ?? {};
+  // Empty binding = the whole hospital; otherwise the named sites (falling back to the id if a
+  // branch was since renamed away). Only worth showing once a hospital actually has branches.
+  const branchAccess =
+    branches.length > 1
+      ? member.branchIds.length === 0
+        ? "All branches"
+        : member.branchIds.map((id) => branches.find((b) => b.id === id)?.name ?? id).join(", ")
+      : undefined;
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -508,6 +596,7 @@ function StaffDetail({ member }: { member: StaffMember }) {
         <DetailRow label="Address" value={p.address} />
         <DetailRow label="Emergency contact" value={p.emergencyContactName} />
         <DetailRow label="Emergency phone" value={p.emergencyContactPhone} />
+        <DetailRow label="Branch access" value={branchAccess} />
         <DetailRow label="Two-step verification" value={member.mfaEnabled ? "On" : "Off"} />
         <DetailRow
           label="Last sign-in"
@@ -525,6 +614,7 @@ function StaffDirectory() {
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [error, setError] = useState<string | null>(null);
@@ -567,6 +657,16 @@ function StaffDirectory() {
       .catch(() => setRoles([]));
   }, [api, can]);
 
+  // The branch list drives the "which sites?" picker. It needs `branch:manage`; an admin who
+  // cannot see branches simply gets no branch picker and every hire stays hospital-wide.
+  useEffect(() => {
+    if (!can("branch:manage")) return;
+    void api
+      .listBranches()
+      .then((all) => setBranches(all.filter((b) => b.status === "active")))
+      .catch(() => setBranches([]));
+  }, [api, can]);
+
   async function create(f: FormState) {
     setSaving(true);
     setFieldErrors({});
@@ -581,6 +681,11 @@ function StaffDirectory() {
         ...(f.employeeId.trim() ? { employeeId: f.employeeId.trim() } : {}),
         ...(Object.keys(profile).length ? { profile } : {}),
       });
+      // Confine to specific branches, if chosen. "All branches" needs no call — a new binding is
+      // hospital-wide by default. Only meaningful once the role and >1 branch both exist.
+      if (f.role && !f.allBranches && f.branchIds.length > 0) {
+        await api.assignStaffRole(result.user.id, f.role, f.branchIds);
+      }
       setCreated({
         email: result.user.email,
         ...(result.temporaryPassword ? { password: result.temporaryPassword } : {}),
@@ -601,6 +706,13 @@ function StaffDirectory() {
 
   async function saveEdit(f: FormState) {
     if (!editing) return;
+
+    // Guard the one invalid branch state before we touch the server.
+    if (branches.length > 1 && !f.allBranches && f.branchIds.length === 0) {
+      setError("Pick at least one branch, or choose “All branches”.");
+      return;
+    }
+
     setSaving(true);
     setFieldErrors({});
     try {
@@ -610,6 +722,12 @@ function StaffDirectory() {
         ...(f.employeeId.trim() ? { employeeId: f.employeeId.trim() } : {}),
         profile: profileFromForm(f),
       });
+      // Update branch access on the member's role. Re-assigning the same role updates the binding;
+      // an empty list resets it to "all branches". Skipped for a member with no role to bind to.
+      const role = editing.roles[0];
+      if (role && branches.length > 1) {
+        await api.assignStaffRole(editing.id, role, f.allBranches ? [] : f.branchIds);
+      }
       setEditing(null);
       await load();
     } catch (err) {
@@ -830,6 +948,7 @@ function StaffDirectory() {
             mode="create"
             initial={EMPTY_FORM}
             roles={roles}
+            branches={branches}
             onSubmit={(f) => void create(f)}
             saving={saving}
             fieldErrors={fieldErrors}
@@ -843,6 +962,7 @@ function StaffDirectory() {
             mode="edit"
             initial={formFromMember(editing)}
             roles={roles}
+            branches={branches}
             onSubmit={(f) => void saveEdit(f)}
             saving={saving}
             fieldErrors={fieldErrors}
@@ -852,7 +972,7 @@ function StaffDirectory() {
 
       {viewing && (
         <Modal title="Staff profile" onClose={() => setViewing(null)}>
-          <StaffDetail member={viewing} />
+          <StaffDetail member={viewing} branches={branches} />
         </Modal>
       )}
     </div>

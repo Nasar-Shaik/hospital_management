@@ -22,6 +22,7 @@ import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
+import { seedMainBranch } from "../seed/mainBranch.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
@@ -134,6 +135,12 @@ async function main(): Promise<void> {
     result.tenant.hospitalName,
   );
   logger.info({ siteSeeded }, "site settings seeded");
+
+  // The hospital's first physical site — its Main Branch (ADR-0015). Every operational record from
+  // the first minute is stamped with a real branch, and a single-site hospital never has to think
+  // about branches at all: it simply has one.
+  const mainBranch = await seedMainBranch(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ branchId: mainBranch.branchId }, "main branch seeded");
 
   if (admin.generatedPassword) {
     // Deliberately on stdout, not through the logger: logs are shipped, indexed

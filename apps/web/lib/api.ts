@@ -45,11 +45,13 @@ export function apiTarget(): string {
 export function browserApi(
   getAccessToken?: () => string | undefined,
   onUnauthorized?: () => Promise<boolean>,
+  getActiveBranch?: () => string | undefined,
 ): ApiClient {
   return createApiClient({
     baseUrl: apiBaseUrl(),
     ...(getAccessToken ? { getAccessToken } : {}),
     ...(onUnauthorized ? { onUnauthorized } : {}),
+    ...(getActiveBranch ? { getActiveBranch } : {}),
     credentials: "include", // the refresh cookie must ride along
   });
 }

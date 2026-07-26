@@ -18,6 +18,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import { ThemeToggle } from "@medicore/ui";
+import { BranchSwitcher } from "./BranchSwitcher";
 import { useAuth } from "./AuthProvider";
 import { Badge, Button } from "./ui";
 
@@ -51,7 +52,7 @@ const NAVIGATION: NavSection[] = [
       { label: "Reports", href: "/reports", permission: "report:view" },
       { label: "Activity trail", href: "/audit", permission: "audit:view" },
       { label: "Hospital profile", href: "/settings", permission: "hospital:manage", soon: true },
-      { label: "Branches", href: "/branches", permission: "branch:manage", soon: true },
+      { label: "Branches", href: "/branches", permission: "branch:manage" },
     ],
   },
   /**
@@ -186,6 +187,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-3">
+            <BranchSwitcher />
             <ThemeToggle />
 
             <div className="relative">

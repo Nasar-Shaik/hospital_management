@@ -27,6 +27,7 @@ import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
+import { seedMainBranch } from "../seed/mainBranch.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
 
 const logger = createLogger({ service: "migrate-cli" });
@@ -63,6 +64,7 @@ interface Outcome {
   tariffAdded: number;
   formularyAdded: number;
   siteSeeded: boolean;
+  mainBranchBackfilled?: number;
   error?: string;
 }
 
@@ -105,6 +107,9 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     connection,
     tenant.hospitalName,
   );
+  // The Main Branch (ADR-0015). Idempotent: creates one for a tenant provisioned before branches
+  // existed, and adopts its pre-branch operational rows into it. A no-op on the second run.
+  const mainBranch = await seedMainBranch(tenant.id, tenant.slug, connection);
 
   return {
     slug: tenant.slug,
@@ -115,6 +120,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     tariffAdded,
     formularyAdded,
     siteSeeded,
+    mainBranchBackfilled: Object.values(mainBranch.backfilled).reduce((a, b) => a + b, 0),
   };
 }
 
