@@ -39,10 +39,16 @@ import { seedTariff } from "../../seed/tariff.js";
 import {
   provisionTenant,
   transitionStatus,
+  setLimits as setTenantLimits,
+  setLicense as setTenantLicense,
+  setCustomDomain as setTenantCustomDomain,
+  effectiveLicenseState,
   getById as getTenantById,
   listServable,
   type TenantRegistryEntry,
   type TenantStatus,
+  type LicensePatch,
+  type LicenseRuntimeState,
 } from "../tenants/index.js";
 import { changePlan, getSubscription, listPlans } from "../subscriptions/index.js";
 import * as repo from "./platform.repository.js";
@@ -151,6 +157,16 @@ export async function changeOperatorPassword(
 
 /* ── the fleet ────────────────────────────────────────────────────────────── */
 
+/** Licence view for the console — the runtime state plus what it takes to renew (ADR-0016). */
+export interface LicenseView {
+  state: LicenseRuntimeState | "PERPETUAL";
+  /** ISO expiry, or absent when perpetual. */
+  expiresAt?: string;
+  /** ACTIVE: days until expiry. GRACE: days until access is cut. EXPIRED: 0. Perpetual: null. */
+  daysRemaining: number | null;
+  plan?: string;
+}
+
 export interface HospitalSummary {
   id: string;
   slug: string;
@@ -158,8 +174,23 @@ export interface HospitalSummary {
   status: TenantStatus;
   planCode?: string;
   databaseName: string;
+  /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /** Custom domain (ADR-0005), when one is attached. */
+  customDomain?: string;
+  /** Tenure (ADR-0016). Perpetual for hospitals with no expiry set. */
+  license: LicenseView;
   /** Where this hospital is reachable — assembled here so no UI has to guess. */
   url: string;
+}
+
+function licenseViewOf(tenant: TenantRegistryEntry): LicenseView {
+  if (tenant.licenseExpiresAt == null) return { state: "PERPETUAL", daysRemaining: null };
+  const { state, daysRemaining } = effectiveLicenseState({
+    expiresAt: tenant.licenseExpiresAt,
+    graceUntil: tenant.licenseGraceUntil,
+  });
+  return { state, daysRemaining, expiresAt: new Date(tenant.licenseExpiresAt).toISOString() };
 }
 
 function hospitalUrl(slug: string, baseDomain: string): string {
@@ -180,6 +211,9 @@ function toSummary(tenant: TenantRegistryEntry, baseDomain: string): HospitalSum
     status: tenant.status,
     ...(tenant.planCode ? { planCode: tenant.planCode } : {}),
     databaseName: tenant.databaseName,
+    ...(typeof tenant.maxBranches === "number" ? { maxBranches: tenant.maxBranches } : {}),
+    ...(tenant.customDomain ? { customDomain: tenant.customDomain } : {}),
+    license: licenseViewOf(tenant),
     url: hospitalUrl(tenant.slug, baseDomain),
   };
 }
@@ -246,6 +280,16 @@ export interface CreateHospitalInput {
    * consumption and per-patient cost even when nobody pays.
    */
   organizationType?: OrganizationType;
+  /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /** Custom domain (ADR-0005) — a bare hostname resolving to this hospital. */
+  customDomain?: string;
+  /** Tenure at creation (ADR-0016). Absent ⇒ the default trial window. */
+  licensePlan?: string;
+  /** ISO expiry. Wins over `trialDays`. */
+  licenseExpiresAt?: string;
+  trialDays?: number;
+  graceDays?: number;
 }
 
 export interface CreateHospitalResult {
@@ -271,11 +315,28 @@ export async function createHospital(
   context: { ip?: string; traceId?: string },
   baseDomain: string,
 ): Promise<CreateHospitalResult> {
+  const hasLicenseInput =
+    input.licenseExpiresAt != null ||
+    input.trialDays != null ||
+    input.licensePlan != null ||
+    input.graceDays != null;
   const result = await provisionTenant({
     slug: input.slug,
     hospitalName: input.hospitalName,
     planCode: input.planCode,
     trial: input.trial ?? false,
+    ...(typeof input.maxBranches === "number" ? { maxBranches: input.maxBranches } : {}),
+    ...(input.customDomain ? { customDomain: input.customDomain.trim().toLowerCase() } : {}),
+    ...(hasLicenseInput
+      ? {
+          license: {
+            ...(input.licensePlan ? { plan: input.licensePlan } : {}),
+            ...(input.licenseExpiresAt ? { expiresAt: new Date(input.licenseExpiresAt) } : {}),
+            ...(input.trialDays != null ? { trialDays: input.trialDays } : {}),
+            ...(input.graceDays != null ? { graceDays: input.graceDays } : {}),
+          },
+        }
+      : {}),
     ...(input.organizationType ? { organizationType: input.organizationType } : {}),
   });
 
@@ -436,6 +497,97 @@ export async function setHospitalPlan(
   });
 
   return view;
+}
+
+/**
+ * Raises/lowers a hospital's supported-branches cap (ADR-0015). Lowering never
+ * deletes a branch — the create-time cap simply refuses new ones until it is raised
+ * again, which is how a branch is "stopped" (e.g. for non-payment) without data loss.
+ */
+export async function setHospitalLimits(
+  tenantId: string,
+  limits: { maxBranches: number },
+  actor: { id: string; email: string },
+  context: { ip?: string; traceId?: string },
+  baseDomain: string,
+): Promise<HospitalSummary> {
+  const tenant = await getTenantById(tenantId);
+  if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
+
+  const updated = await setTenantLimits(tenantId, limits);
+
+  await repo.recordPlatformAudit({
+    action: "platform.hospital.limitsChanged",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    tenantSlug: tenant.slug,
+    meta: { from: tenant.maxBranches ?? 1, to: limits.maxBranches },
+    ...context,
+  });
+
+  return toSummary(updated, baseDomain);
+}
+
+/**
+ * Sets / renews / extends a hospital's licence (ADR-0016). The expiry is denormalised
+ * onto the registry cache by the tenant service, so a renewal un-blocks an expired
+ * hospital on its very next request — no status change, no redeploy.
+ */
+export async function setHospitalLicense(
+  tenantId: string,
+  patch: LicensePatch,
+  actor: { id: string; email: string },
+  context: { ip?: string; traceId?: string },
+  baseDomain: string,
+): Promise<HospitalSummary> {
+  const tenant = await getTenantById(tenantId);
+  if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
+
+  const { tenant: updated, license } = await setTenantLicense(tenantId, patch);
+
+  await repo.recordPlatformAudit({
+    action: "platform.hospital.licenseChanged",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    tenantSlug: tenant.slug,
+    meta: {
+      expiresAt: license.expiresAt ? new Date(license.expiresAt).toISOString() : null,
+      plan: license.plan,
+      ...(patch.extendDays != null ? { extendedDays: patch.extendDays } : {}),
+    },
+    ...context,
+  });
+
+  return toSummary(updated, baseDomain);
+}
+
+/**
+ * Attaches / replaces / clears a hospital's custom domain (ADR-0005). Pass `null` to
+ * detach. The tenant service refuses a host already owned by another hospital and
+ * busts both the old and new host caches.
+ */
+export async function setHospitalDomain(
+  tenantId: string,
+  customDomain: string | null,
+  actor: { id: string; email: string },
+  context: { ip?: string; traceId?: string },
+  baseDomain: string,
+): Promise<HospitalSummary> {
+  const tenant = await getTenantById(tenantId);
+  if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
+
+  const updated = await setTenantCustomDomain(tenantId, customDomain);
+
+  await repo.recordPlatformAudit({
+    action: "platform.hospital.domainChanged",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    tenantSlug: tenant.slug,
+    meta: { from: tenant.customDomain ?? null, to: updated.customDomain ?? null },
+    ...context,
+  });
+
+  return toSummary(updated, baseDomain);
 }
 
 /**

@@ -11,11 +11,38 @@
 import type { NextFunction, Request, Response } from "express";
 import { getTenantConnection } from "../core/db/connectionManager.js";
 import { runWithContext } from "../core/context/requestContext.js";
-import { TenantNotFoundError, TenantSuspendedError } from "../core/errors/appError.js";
+import {
+  LicenseExpiredError,
+  TenantNotFoundError,
+  TenantSuspendedError,
+} from "../core/errors/appError.js";
 import { SERVABLE_TENANT_STATUSES } from "../modules/tenants/tenant.model.js";
+import { effectiveLicenseState } from "../modules/tenants/license.js";
 import { findByCustomDomain, findBySlug } from "../modules/tenants/tenant.repository.js";
 import type { TenantRegistryEntry } from "../modules/tenants/tenant.repository.js";
 import { env } from "../config/env.js";
+
+/**
+ * Surface the licence state on every response so the tenant UI can show a renewal
+ * banner (ADR-0016). `ACTIVE` within `LICENSE_WARN_DAYS` of expiry becomes `EXPIRING`
+ * (a pre-expiry heads-up); past expiry but inside grace is `GRACE`. A hard-expired
+ * licence never reaches here — the gate above has already refused the request.
+ */
+function setLicenseHeaders(res: Response, tenant: TenantRegistryEntry): void {
+  if (tenant.licenseExpiresAt == null) return; // perpetual — no banner, no headers
+  const { state, daysRemaining } = effectiveLicenseState({
+    expiresAt: tenant.licenseExpiresAt,
+    graceUntil: tenant.licenseGraceUntil,
+  });
+  const headerState =
+    state === "ACTIVE" && daysRemaining != null && daysRemaining <= env.LICENSE_WARN_DAYS
+      ? "EXPIRING"
+      : state;
+  res.setHeader("X-License-State", headerState);
+  res.setHeader("X-License-Days-Left", String(daysRemaining ?? ""));
+  // A browser fetch can only READ these cross-origin (dev: :3000 → :4000) if they are exposed.
+  res.setHeader("Access-Control-Expose-Headers", "X-License-State, X-License-Days-Left");
+}
 
 /** Strips port, lowercases. `apollo.paperlesstech.in:3000` → `apollo.paperlesstech.in`. */
 export function normalizeHost(hostHeader: string | undefined): string {
@@ -63,6 +90,20 @@ export function resolveTenant() {
         if (!SERVABLE_TENANT_STATUSES.includes(tenant.status)) {
           throw new TenantSuspendedError({ host, status: tenant.status });
         }
+
+        // Licence gate (ADR-0016) — INDEPENDENT of status. A hospital whose licence
+        // lapsed past grace is blocked until the operator renews, whatever its status.
+        // One integer compare on the cached expiry; no master round-trip.
+        if (tenant.licenseExpiresAt != null) {
+          const { state } = effectiveLicenseState({
+            expiresAt: tenant.licenseExpiresAt,
+            graceUntil: tenant.licenseGraceUntil,
+          });
+          if (state === "EXPIRED") throw new LicenseExpiredError({ host });
+        }
+
+        // Within grace / near expiry: served, but tell the UI so it can warn.
+        setLicenseHeaders(res, tenant);
 
         const connection = await getTenantConnection({
           id: tenant.id,

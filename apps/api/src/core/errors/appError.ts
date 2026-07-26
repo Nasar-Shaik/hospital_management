@@ -89,6 +89,17 @@ export class TenantSuspendedError extends AppError {
   }
 }
 
+/**
+ * HMS-TEN-005 — the tenant's LICENCE has lapsed past its grace window (ADR-0016).
+ * Distinct from HMS-TEN-002 (operator suspend): the fix is renewal, not reactivation,
+ * and it self-heals the moment the operator extends the expiry.
+ */
+export class LicenseExpiredError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-TEN-005", 403, "Subscription expired", details);
+  }
+}
+
 /** HMS-TEN-003 — JWT tenant claim does not match the host-resolved tenant (Doc 04 §2.2.1 step 4). */
 export class TenantMismatchError extends AppError {
   constructor(details?: unknown) {

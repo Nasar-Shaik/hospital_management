@@ -16,7 +16,13 @@ import { AppError } from "../../core/errors/appError.js";
 import { tenantDatabaseName } from "../../config/env.js";
 import * as repo from "./tenant.repository.js";
 import type { TenantRegistryEntry } from "./tenant.repository.js";
-import type { TenantStatus } from "./tenant.model.js";
+import type { TenantLicense, TenantStatus } from "./tenant.model.js";
+import {
+  applyLicensePatch,
+  buildProvisionLicense,
+  type LicensePatch,
+  type LicenseProvisionInput,
+} from "./license.js";
 
 /** Legal transitions — STATE_MACHINE_CATALOG §11. Anything absent here is rejected. */
 const ALLOWED_TRANSITIONS: Record<TenantStatus, readonly TenantStatus[]> = {
@@ -96,6 +102,13 @@ export interface ProvisionTenantInput {
   organizationType?: OrganizationType;
   /** Start in trial rather than active (Doc 07 §5.4). */
   trial?: boolean;
+  /** Platform cap on branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /**
+   * Tenure to create the hospital with (ADR-0016). Absent ⇒ a default trial licence
+   * (LICENSE_DEFAULT_TRIAL_DAYS) so a new hospital is never accidentally perpetual.
+   */
+  license?: LicenseProvisionInput;
 }
 
 export interface ProvisionResult {
@@ -132,6 +145,10 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
     ...(input.region ? { region: input.region } : {}),
     ...(input.planCode ? { planCode: input.planCode } : {}),
     ...(input.organizationType ? { organizationType: input.organizationType } : {}),
+    ...(typeof input.maxBranches === "number" ? { maxBranches: input.maxBranches } : {}),
+    // Always seed a licence: a hospital with no expiry is perpetual, which must be a
+    // deliberate operator choice, never the accident of a forgotten field.
+    license: buildProvisionLicense(input.license),
   });
 
   // Creating the DB = connecting to it and writing; Mongo materializes it lazily.
@@ -179,6 +196,72 @@ export async function migrateTenant(tenantId: string): Promise<string[]> {
     ...(tenant.dbUri ? { dbUri: tenant.dbUri } : {}),
   });
   return migrateTenantDb(db, tenantMigrations);
+}
+
+/**
+ * Raise/lower the platform branch cap (ADR-0015). Lowering below the number of
+ * branches a tenant already has does NOT delete anything — the create-time cap
+ * (`branches` module, HMS-PLAN-001) simply refuses further branches until it is
+ * raised again. `maxBranches` must be at least 1: every hospital has a Main branch.
+ */
+export async function setLimits(
+  tenantId: string,
+  limits: { maxBranches?: number },
+): Promise<TenantRegistryEntry> {
+  if (typeof limits.maxBranches === "number" && limits.maxBranches < 1) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      maxBranches: "must be at least 1 — every hospital has a Main branch",
+    });
+  }
+  const updated = await repo.updateLimits(tenantId, limits);
+  if (!updated) throw new AppError("HMS-TEN-001", 404, "Organization not found", { tenantId });
+  return updated;
+}
+
+/**
+ * Set / renew / extend a hospital's licence (ADR-0016) and propagate to the registry
+ * cache so the new expiry gates on the very next request. `extendDays` bumps the
+ * expiry from the LATER of now / the current expiry, so a renewal never shortens an
+ * already-future licence.
+ */
+export async function setLicense(
+  tenantId: string,
+  patch: LicensePatch,
+): Promise<{ tenant: TenantRegistryEntry; license: TenantLicense }> {
+  const current = await repo.findLicense(tenantId);
+  const license = applyLicensePatch(current, patch);
+  const updated = await repo.updateLicense(tenantId, license);
+  if (!updated) throw new AppError("HMS-TEN-001", 404, "Organization not found", { tenantId });
+  return { tenant: updated, license };
+}
+
+/**
+ * Attach, replace, or clear a hospital's custom domain (ADR-0005: the hostname IS the
+ * tenant, so a custom domain is just a second host that resolves to it). Refuses a
+ * host already owned by another hospital — two tenants cannot share one hostname.
+ * Pass `null` to detach. DNS/TLS for the host is an operational step outside this call.
+ */
+export async function setCustomDomain(
+  tenantId: string,
+  customDomain: string | null,
+): Promise<TenantRegistryEntry> {
+  const host = customDomain?.trim().toLowerCase() || null;
+  if (host) {
+    if (host.includes("/") || host.includes(":") || !host.includes(".")) {
+      throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+        customDomain: "must be a bare hostname such as care.hospital.com",
+      });
+    }
+    const owner = await repo.customDomainOwner(host);
+    if (owner && owner !== tenantId) {
+      throw new AppError("HMS-VAL-001", 409, "Domain already in use", {
+        customDomain: `"${host}" already routes to another hospital`,
+      });
+    }
+  }
+  const updated = await repo.updateCustomDomain(tenantId, host);
+  if (!updated) throw new AppError("HMS-TEN-001", 404, "Organization not found", { tenantId });
+  return updated;
 }
 
 export const getBySlug = repo.findBySlug;

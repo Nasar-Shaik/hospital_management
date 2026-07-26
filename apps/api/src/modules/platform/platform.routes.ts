@@ -33,6 +33,9 @@ import * as controller from "./platform.controller.js";
 import {
   createHospitalSchema,
   createOperatorSchema,
+  hospitalDomainSchema,
+  hospitalLicenseSchema,
+  hospitalLimitsSchema,
   hospitalPlanSchema,
   hospitalStatusSchema,
   issueAdminSchema,
@@ -91,6 +94,34 @@ export function platformRouter(): Router {
     superAdmin,
     validate(hospitalPlanSchema),
     asyncHandler(controller.setPlan),
+  );
+
+  // Supported branches (ADR-0015) — a sales control the tenant admin cannot raise.
+  router.post(
+    "/hospitals/:id/limits",
+    auth,
+    superAdmin,
+    validate(hospitalLimitsSchema),
+    asyncHandler(controller.setLimits),
+  );
+
+  // Licence tenure (ADR-0016) — set / renew / extend. A renewal un-blocks an expired
+  // hospital on its next request; no status change needed.
+  router.post(
+    "/hospitals/:id/license",
+    auth,
+    superAdmin,
+    validate(hospitalLicenseSchema),
+    asyncHandler(controller.setLicense),
+  );
+
+  // Custom domain (ADR-0005) — attach / replace / detach a hostname for this hospital.
+  router.post(
+    "/hospitals/:id/domain",
+    auth,
+    superAdmin,
+    validate(hospitalDomainSchema),
+    asyncHandler(controller.setDomain),
   );
 
   /**

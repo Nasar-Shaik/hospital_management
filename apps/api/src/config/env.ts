@@ -118,6 +118,19 @@ const envSchema = z.object({
    */
   TENANT_MISS_CACHE_TTL_SECONDS: z.coerce.number().int().default(30),
 
+  /**
+   * Per-tenant licence (tenure) defaults — ADR-0016. A licence is a validity window
+   * (`validFrom → expiresAt`) plus a grace window (`graceDays` after expiry). It is
+   * INDEPENDENT of the tenant status (operator suspend) and of the edition/plan:
+   * the edition says what a hospital may use, the licence says until when.
+   */
+  /** A freshly provisioned hospital gets this many trial days when no expiry is set. */
+  LICENSE_DEFAULT_TRIAL_DAYS: z.coerce.number().int().min(1).default(14),
+  /** Days after `expiresAt` a hospital still runs (banner shown, access not yet cut). */
+  LICENSE_DEFAULT_GRACE_DAYS: z.coerce.number().int().min(0).default(7),
+  /** Within this many days of expiry, the tenant UI shows the "expires in N days" banner. */
+  LICENSE_WARN_DAYS: z.coerce.number().int().min(1).default(10),
+
   /** Connection Manager guardrails (Doc 04 §2.2.1; PROJECT_MEMORY assumption A3). */
   TENANT_MAX_CONNECTIONS: z.coerce.number().int().default(200),
   TENANT_CONNECTION_IDLE_MS: z.coerce.number().int().default(600_000),

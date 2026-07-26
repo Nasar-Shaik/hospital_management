@@ -14,8 +14,10 @@ import {
   getTenantModel,
   SERVABLE_TENANT_STATUSES,
   type TenantDoc,
+  type TenantLicense,
   type TenantStatus,
 } from "./tenant.model.js";
+import { computeGraceUntil } from "./license.js";
 
 /** Plain, cacheable projection of a registry entry — what resolution needs. */
 export interface TenantRegistryEntry {
@@ -45,6 +47,14 @@ export interface TenantRegistryEntry {
   encounterPolicy?: Partial<EncounterPolicy>;
   /** Platform-set cap on how many branches this tenant may create (ADR-0015). Absent ⇒ 1. */
   maxBranches?: number;
+  /**
+   * Licence expiry denormalised as epoch milliseconds (ADR-0016), so the request gate
+   * (`resolveTenant`) decides with a single integer compare on the hot path — no master
+   * round-trip, and expiry fires to the second. Absent ⇒ perpetual (never expires).
+   */
+  licenseExpiresAt?: number;
+  /** `expiresAt + graceDays` in epoch ms — the instant access is actually cut. */
+  licenseGraceUntil?: number;
 }
 
 /**
@@ -60,6 +70,8 @@ export function policyOf(tenant: TenantRegistryEntry): EncounterPolicy {
 }
 
 function toEntry(doc: TenantDoc): TenantRegistryEntry {
+  const expiresAt = doc.license?.expiresAt ? new Date(doc.license.expiresAt) : null;
+  const graceUntil = computeGraceUntil(expiresAt, doc.license?.graceDays);
   return {
     id: doc._id.toString(),
     hospitalName: doc.hospitalName,
@@ -73,6 +85,8 @@ function toEntry(doc: TenantDoc): TenantRegistryEntry {
     ...(doc.organizationType ? { organizationType: doc.organizationType } : {}),
     ...(doc.encounterPolicy ? { encounterPolicy: doc.encounterPolicy } : {}),
     ...(typeof doc.limits?.maxBranches === "number" ? { maxBranches: doc.limits.maxBranches } : {}),
+    ...(expiresAt ? { licenseExpiresAt: expiresAt.getTime() } : {}),
+    ...(graceUntil ? { licenseGraceUntil: graceUntil.getTime() } : {}),
   };
 }
 
@@ -171,6 +185,10 @@ export async function create(input: {
   region?: string;
   planCode?: string;
   organizationType?: OrganizationType;
+  /** Platform branch cap (ADR-0015). Absent ⇒ single-site. */
+  maxBranches?: number;
+  /** Tenure (ADR-0016). Absent ⇒ the provisioning flow seeds a trial. */
+  license?: TenantLicense;
 }): Promise<TenantRegistryEntry> {
   const Tenant = await getTenantModel();
   const doc = await Tenant.create({
@@ -181,6 +199,10 @@ export async function create(input: {
     ...(input.customDomain ? { customDomain: input.customDomain } : {}),
     ...(input.region ? { region: input.region } : {}),
     subscription: input.planCode ? { planCode: input.planCode } : {},
+    ...(typeof input.maxBranches === "number"
+      ? { limits: { maxBranches: input.maxBranches } }
+      : {}),
+    ...(input.license ? { license: input.license } : {}),
     status: "provisioning",
   });
 
@@ -222,6 +244,86 @@ export async function updateStatus(
   const entry = toEntry(doc);
   await invalidate(entry);
   return entry;
+}
+
+/** The current stored licence for one tenant — the shape `setLicense` patches. */
+export async function findLicense(id: string): Promise<TenantLicense | undefined> {
+  const Tenant = await getTenantModel();
+  const doc = await Tenant.findById(id).select("license").lean<Pick<TenantDoc, "license">>().exec();
+  return doc?.license ?? undefined;
+}
+
+/** Raise/lower the branch cap (ADR-0015). Busts the registry cache so it takes effect at once. */
+export async function updateLimits(
+  id: string,
+  limits: { maxBranches?: number },
+): Promise<TenantRegistryEntry | undefined> {
+  const Tenant = await getTenantModel();
+  const doc = await Tenant.findByIdAndUpdate(
+    id,
+    { $set: { "limits.maxBranches": limits.maxBranches } },
+    { new: true },
+  )
+    .lean<TenantDoc>()
+    .exec();
+  if (!doc) return undefined;
+  const entry = toEntry(doc);
+  await invalidate(entry);
+  return entry;
+}
+
+/** Set/renew a tenant's licence (ADR-0016). Busts the cache so the new expiry gates at once. */
+export async function updateLicense(
+  id: string,
+  license: TenantLicense,
+): Promise<TenantRegistryEntry | undefined> {
+  const Tenant = await getTenantModel();
+  const doc = await Tenant.findByIdAndUpdate(id, { $set: { license } }, { new: true })
+    .lean<TenantDoc>()
+    .exec();
+  if (!doc) return undefined;
+  const entry = toEntry(doc);
+  await invalidate(entry);
+  return entry;
+}
+
+/**
+ * Attach/replace/clear a hospital's custom domain. Busts BOTH the old and the new
+ * domain cache keys — a stale positive on the old host would keep routing a domain
+ * the operator just detached.
+ */
+export async function updateCustomDomain(
+  id: string,
+  customDomain: string | null,
+): Promise<TenantRegistryEntry | undefined> {
+  const Tenant = await getTenantModel();
+  const before = await Tenant.findById(id)
+    .select("customDomain")
+    .lean<Pick<TenantDoc, "customDomain">>()
+    .exec();
+  const doc = await Tenant.findByIdAndUpdate(
+    id,
+    customDomain ? { $set: { customDomain } } : { $unset: { customDomain: "" } },
+    { new: true },
+  )
+    .lean<TenantDoc>()
+    .exec();
+  if (!doc) return undefined;
+  const entry = toEntry(doc);
+  const oldDomain = before?.customDomain;
+  if (oldDomain && oldDomain !== customDomain) await cacheDel(cacheKeys.tenantByDomain(oldDomain));
+  await invalidate(entry);
+  return entry;
+}
+
+/** True when another tenant already owns this custom domain — the caller refuses the write. */
+export async function customDomainOwner(host: string): Promise<string | undefined> {
+  const Tenant = await getTenantModel();
+  const doc = await Tenant.findOne({ customDomain: host })
+    .select("_id")
+    .lean<{ _id: unknown }>()
+    .exec();
+  return doc ? String(doc._id) : undefined;
 }
 
 /**

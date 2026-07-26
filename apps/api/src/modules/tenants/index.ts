@@ -12,12 +12,25 @@ export {
   provisionTenant,
   transitionStatus,
   migrateTenant,
+  setLimits,
+  setLicense,
+  setCustomDomain,
   getBySlug,
   getById,
   InvalidTenantTransitionError,
   type ProvisionTenantInput,
   type ProvisionResult,
 } from "./tenant.service.js";
+
+/** Licence (tenure) logic + types — ADR-0016. Used by the request gate and the console. */
+export {
+  effectiveLicenseState,
+  type LicenseEvaluation,
+  type LicenseRuntimeState,
+  type LicensePatch,
+  type LicenseProvisionInput,
+} from "./license.js";
+export { LICENSE_STATUSES, type LicenseStatus, type TenantLicense } from "./tenant.model.js";
 
 /** Fleet loops (outbox relay, audit anchoring, migrations) walk every servable hospital. */
 export { listServable } from "./tenant.repository.js";

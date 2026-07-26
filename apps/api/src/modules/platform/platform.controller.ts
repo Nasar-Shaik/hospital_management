@@ -95,6 +95,66 @@ export const setPlan: RequestHandler = async (req, res) => {
   ok(res, await service.setHospitalPlan(req.params.id ?? "", planCode, actor, context));
 };
 
+export const setLimits: RequestHandler = async (req, res) => {
+  const { actor, context } = actorOf(req);
+  const { maxBranches } = req.body as { maxBranches: number };
+  ok(
+    res,
+    await service.setHospitalLimits(
+      req.params.id ?? "",
+      { maxBranches },
+      actor,
+      context,
+      env.TENANT_BASE_DOMAIN,
+    ),
+  );
+};
+
+export const setLicense: RequestHandler = async (req, res) => {
+  const { actor, context } = actorOf(req);
+  const body = req.body as {
+    plan?: string;
+    status?: "TRIAL" | "ACTIVE" | "EXPIRED" | "CANCELLED";
+    expiresAt?: string;
+    graceDays?: number;
+    extendDays?: number;
+    notes?: string;
+  };
+  const patch = {
+    ...(body.plan != null ? { plan: body.plan } : {}),
+    ...(body.status != null ? { status: body.status } : {}),
+    ...(body.expiresAt != null ? { expiresAt: new Date(body.expiresAt) } : {}),
+    ...(body.graceDays != null ? { graceDays: body.graceDays } : {}),
+    ...(body.extendDays != null ? { extendDays: body.extendDays } : {}),
+    ...(body.notes != null ? { notes: body.notes } : {}),
+  };
+  ok(
+    res,
+    await service.setHospitalLicense(
+      req.params.id ?? "",
+      patch,
+      actor,
+      context,
+      env.TENANT_BASE_DOMAIN,
+    ),
+  );
+};
+
+export const setDomain: RequestHandler = async (req, res) => {
+  const { actor, context } = actorOf(req);
+  const { customDomain } = req.body as { customDomain: string | null };
+  ok(
+    res,
+    await service.setHospitalDomain(
+      req.params.id ?? "",
+      customDomain,
+      actor,
+      context,
+      env.TENANT_BASE_DOMAIN,
+    ),
+  );
+};
+
 export const issueAdmin: RequestHandler = async (req, res) => {
   const { actor, context } = actorOf(req);
   const input = req.body as { email: string; name?: string };

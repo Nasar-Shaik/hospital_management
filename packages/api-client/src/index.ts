@@ -19,6 +19,16 @@
  */
 import type { ApiEnvelope, PageMeta } from "@medicore/types";
 
+/**
+ * The licence state the API stamps on every response (ADR-0016), for the renewal banner.
+ * `EXPIRING` = active but within the warning window; `GRACE` = past expiry, still served.
+ * (A hard-`EXPIRED` licence never produces a normal response — the request is refused.)
+ */
+export interface LicenseHeader {
+  state: "ACTIVE" | "EXPIRING" | "GRACE";
+  daysLeft: number | null;
+}
+
 export interface ApiClientOptions {
   /** Absolute (`http://apollo.paperlesstech.in:4000`) or same-origin (`""`). */
   baseUrl: string;
@@ -35,6 +45,13 @@ export interface ApiClientOptions {
    */
   getActiveBranch?: () => string | undefined;
   fetchImpl?: typeof fetch;
+  /**
+   * Called after every response with the licence state the API stamps on it (ADR-0016),
+   * read from the `X-License-State` / `X-License-Days-Left` headers. `null` when the
+   * response carried no licence headers (a perpetual hospital, or a non-tenant call).
+   * The web app uses this to drive the renewal banner without polling.
+   */
+  onLicenseState?: (state: LicenseHeader | null) => void;
   /**
    * Called when a request fails with an EXPIRED/INVALID session (HMS-AUTH-002/003) — the
    * mid-session case the proactive refresh timer can miss (a laptop asleep past the token's
@@ -1266,6 +1283,18 @@ export interface OperatorSession {
   };
 }
 
+/** Runtime licence state for the console (ADR-0016). */
+export type LicenseRuntimeState = "ACTIVE" | "GRACE" | "EXPIRED" | "EXPIRING" | "PERPETUAL";
+
+export interface HospitalLicense {
+  state: LicenseRuntimeState;
+  /** ISO expiry; absent when perpetual. */
+  expiresAt?: string;
+  /** ACTIVE: days to expiry. GRACE: days until access is cut. EXPIRED: 0. Perpetual: null. */
+  daysRemaining: number | null;
+  plan?: string;
+}
+
 export interface Hospital {
   id: string;
   slug: string;
@@ -1273,6 +1302,12 @@ export interface Hospital {
   status: "provisioning" | "trial" | "active" | "suspended" | "terminated";
   planCode?: string;
   databaseName: string;
+  /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /** Custom domain (ADR-0005), when attached. */
+  customDomain?: string;
+  /** Tenure (ADR-0016) — perpetual when no expiry is set. */
+  license: HospitalLicense;
   /** Where this hospital is reachable — assembled by the API so no UI has to guess. */
   url: string;
 }
@@ -1300,6 +1335,15 @@ export interface OperatorAuditEntry {
   ip?: string;
 }
 
+/** Parse the licence headers off a response, or null when the response carried none. */
+function readLicenseHeader(res: { headers: Headers }): LicenseHeader | null {
+  const state = res.headers.get("x-license-state");
+  if (state !== "ACTIVE" && state !== "EXPIRING" && state !== "GRACE") return null;
+  const raw = res.headers.get("x-license-days-left");
+  const days = raw != null && raw !== "" ? Number(raw) : null;
+  return { state, daysLeft: Number.isFinite(days) ? days : null };
+}
+
 /* ── the client ───────────────────────────────────────────────────────────── */
 
 export class ApiClient {
@@ -1310,6 +1354,7 @@ export class ApiClient {
   private readonly getActiveBranch?: () => string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly onUnauthorized?: () => Promise<boolean>;
+  private readonly onLicenseState?: (state: LicenseHeader | null) => void;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -1318,6 +1363,7 @@ export class ApiClient {
     this.tenantHost = options.tenantHost;
     this.getActiveBranch = options.getActiveBranch;
     this.onUnauthorized = options.onUnauthorized;
+    this.onLicenseState = options.onLicenseState;
 
     /**
      * `.bind(globalThis)` is not defensive style — it is the difference between
@@ -1374,6 +1420,10 @@ export class ApiClient {
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store",
     });
+
+    // Licence state rides on EVERY tenant response (ADR-0016); surface it so the UI can
+    // show a renewal banner without a dedicated poll. Absent ⇒ perpetual / non-tenant call.
+    if (this.onLicenseState) this.onLicenseState(readLicenseHeader(res));
 
     let envelope: ApiEnvelope<T>;
     try {
@@ -2522,6 +2572,15 @@ export class ApiClient {
     adminEmail: string;
     adminName?: string;
     trial?: boolean;
+    /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+    maxBranches?: number;
+    /** Custom domain (ADR-0005) — a bare hostname resolving to this hospital. */
+    customDomain?: string;
+    /** Licence (ADR-0016): give an ISO `licenseExpiresAt` OR `trialDays`; omit both for the default trial. */
+    licensePlan?: string;
+    licenseExpiresAt?: string;
+    trialDays?: number;
+    graceDays?: number;
   }): Promise<{ hospital: Hospital; admin: { email: string; temporaryPassword?: string } }> {
     return this.request("POST", "/api/platform/v1/hospitals", input);
   }
@@ -2532,6 +2591,39 @@ export class ApiClient {
 
   setHospitalPlan(id: string, planCode: string): Promise<unknown> {
     return this.request("POST", `/api/platform/v1/hospitals/${id}/plan`, { planCode });
+  }
+
+  /** Raise/lower the supported-branches cap (ADR-0015). Never below 1 (the Main branch). */
+  setHospitalLimits(id: string, maxBranches: number): Promise<Hospital> {
+    return this.request<Hospital>("POST", `/api/platform/v1/hospitals/${id}/limits`, {
+      maxBranches,
+    });
+  }
+
+  /**
+   * Set / renew / extend a hospital's licence (ADR-0016). `extendDays` bumps expiry from
+   * the later of now / current expiry; `expiresAt` sets it outright. A renewal un-blocks
+   * an expired hospital on its next request.
+   */
+  setHospitalLicense(
+    id: string,
+    patch: {
+      plan?: string;
+      status?: "TRIAL" | "ACTIVE" | "EXPIRED" | "CANCELLED";
+      expiresAt?: string;
+      graceDays?: number;
+      extendDays?: number;
+      notes?: string;
+    },
+  ): Promise<Hospital> {
+    return this.request<Hospital>("POST", `/api/platform/v1/hospitals/${id}/license`, patch);
+  }
+
+  /** Attach / replace / clear a custom domain (ADR-0005). Pass null to detach. */
+  setHospitalDomain(id: string, customDomain: string | null): Promise<Hospital> {
+    return this.request<Hospital>("POST", `/api/platform/v1/hospitals/${id}/domain`, {
+      customDomain,
+    });
   }
 
   /** The "we're locked out" call. Returns a temporary password, shown once. */

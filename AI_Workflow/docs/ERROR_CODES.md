@@ -19,6 +19,7 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-TEN-002    | 403  | Organization suspended                       | Contact support/billing                        | no            |
 | HMS-TEN-003    | 403  | Tenant mismatch                              | Token does not belong to this domain; re-login | no            |
 | HMS-TEN-004    | 503  | Tenant database unavailable                  | Automatic failover in progress                 | yes (backoff) |
+| HMS-TEN-005    | 403  | Subscription expired (licence past grace)    | Operator must renew the licence (ADR-0016)     | no            |
 | HMS-BRANCH-001 | 400  | No active branch selected for a write        | Pick a branch in the switcher (ADR-0015)       | no            |
 | HMS-PLAN-001   | 402  | Plan limit reached (`details.metric`)        | Upgrade edition or free capacity               | no            |
 | HMS-PLAN-002   | 403  | Feature not in your edition                  | Upgrade path in `details.requiredEdition`      | no            |
