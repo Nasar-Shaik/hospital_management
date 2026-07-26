@@ -23,6 +23,50 @@ function statusColor(status: Hospital["status"]): string {
   return "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)]";
 }
 
+/** Colour + human label for a hospital's licence state (ADR-0016). */
+function licenseBadge(license: Hospital["license"]): { className: string; label: string } {
+  const days = license.daysRemaining;
+  const on = (n: number | null) => (n == null ? "" : ` · ${String(n)}d`);
+  switch (license.state) {
+    case "PERPETUAL":
+      return {
+        className: "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)]",
+        label: "Perpetual",
+      };
+    case "EXPIRED":
+      return {
+        className: "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
+        label: "Expired",
+      };
+    case "GRACE":
+      return {
+        className: "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
+        label: `Grace${on(days)}`,
+      };
+    default:
+      // ACTIVE — amber when close to expiry, green otherwise.
+      return days != null && days <= 10
+        ? {
+            className: "bg-[var(--color-warning-bg)] text-[var(--color-warning)]",
+            label: `Expiring${on(days)}`,
+          }
+        : {
+            className: "bg-[var(--color-success-bg)] text-[var(--color-success)]",
+            label: `Active${on(days)}`,
+          };
+  }
+}
+
+/** ISO expiry → a short, unambiguous date for the console. */
+function shortDate(iso?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /* ── login ────────────────────────────────────────────────────────────────── */
 
 function OperatorLogin() {
@@ -122,6 +166,10 @@ function Console() {
     hospitalName: "",
     planCode: "PLAN_CLINIC",
     adminEmail: "",
+    maxBranches: "1",
+    licenseExpiresAt: "",
+    graceDays: "",
+    customDomain: "",
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
@@ -155,14 +203,40 @@ function Console() {
     setFieldErrors({});
     setError(null);
     try {
-      const result = await api.createHospital(form);
+      // `licenseExpiresAt` is a date input (YYYY-MM-DD); the API wants an ISO datetime —
+      // end-of-day, so a licence bought "until the 30th" is valid through all of the 30th.
+      const expiresIso = form.licenseExpiresAt
+        ? new Date(`${form.licenseExpiresAt}T23:59:59`).toISOString()
+        : undefined;
+      const branches = Number(form.maxBranches);
+      const grace = form.graceDays.trim() === "" ? undefined : Number(form.graceDays);
+      const domain = form.customDomain.trim().toLowerCase();
+      const result = await api.createHospital({
+        slug: form.slug,
+        hospitalName: form.hospitalName,
+        planCode: form.planCode,
+        adminEmail: form.adminEmail,
+        ...(Number.isFinite(branches) && branches > 1 ? { maxBranches: branches } : {}),
+        ...(domain ? { customDomain: domain } : {}),
+        ...(expiresIso ? { licenseExpiresAt: expiresIso } : {}),
+        ...(grace != null && Number.isFinite(grace) ? { graceDays: grace } : {}),
+      });
       setCreated({
         hospital: result.hospital,
         email: result.admin.email,
         ...(result.admin.temporaryPassword ? { password: result.admin.temporaryPassword } : {}),
       });
       setShowForm(false);
-      setForm({ slug: "", hospitalName: "", planCode: "PLAN_CLINIC", adminEmail: "" });
+      setForm({
+        slug: "",
+        hospitalName: "",
+        planCode: "PLAN_CLINIC",
+        adminEmail: "",
+        maxBranches: "1",
+        licenseExpiresAt: "",
+        graceDays: "",
+        customDomain: "",
+      });
       await load();
     } catch (err) {
       if (err instanceof ApiClientError && err.fieldErrors) setFieldErrors(err.fieldErrors);
@@ -203,6 +277,65 @@ function Console() {
       setCreated({ hospital, email: result.email, password: result.temporaryPassword });
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not issue the administrator.");
+    }
+  }
+
+  async function changeBranches(hospital: Hospital) {
+    const current = hospital.maxBranches ?? 1;
+    const answer = window.prompt(
+      `Supported branches for ${hospital.hospitalName}.\n\nLowering this does NOT delete branches — it just stops new ones being created until raised again.`,
+      String(current),
+    );
+    if (answer == null) return;
+    const n = Number(answer.trim());
+    if (!Number.isFinite(n) || n < 1) {
+      setError("Supported branches must be a whole number of at least 1.");
+      return;
+    }
+    setError(null);
+    try {
+      await api.setHospitalLimits(hospital.id, n);
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof ApiClientError ? err.message : "Could not update supported branches.",
+      );
+    }
+  }
+
+  async function extendLicense(hospital: Hospital) {
+    const answer = window.prompt(
+      `Extend ${hospital.hospitalName}'s licence by how many days?\n\nCounts from the later of today or the current expiry, so it never shortens an active licence.`,
+      "365",
+    );
+    if (answer == null) return;
+    const days = Number(answer.trim());
+    if (!Number.isFinite(days) || days < 1) {
+      setError("Enter a whole number of days (1 or more).");
+      return;
+    }
+    setError(null);
+    try {
+      await api.setHospitalLicense(hospital.id, { extendDays: days });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not extend the licence.");
+    }
+  }
+
+  async function changeDomain(hospital: Hospital) {
+    const answer = window.prompt(
+      `Custom domain for ${hospital.hospitalName}.\n\nA bare hostname (e.g. care.hospital.com) that resolves to this hospital. Clear the box to detach. DNS/TLS is set up separately.`,
+      hospital.customDomain ?? "",
+    );
+    if (answer == null) return;
+    const domain = answer.trim().toLowerCase();
+    setError(null);
+    try {
+      await api.setHospitalDomain(hospital.id, domain === "" ? null : domain);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not update the custom domain.");
     }
   }
 
@@ -353,6 +486,70 @@ function Console() {
                   className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
                 />
               </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-[var(--color-fg)]">
+                  Supported branches
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={form.maxBranches}
+                  onChange={(e) => setForm({ ...form, maxBranches: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
+                />
+                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
+                  How many branches this hospital may create. 1 = single-site. Raise it any time.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-[var(--color-fg)]">
+                  Licence valid until
+                </span>
+                <input
+                  type="date"
+                  value={form.licenseExpiresAt}
+                  onChange={(e) => setForm({ ...form, licenseExpiresAt: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
+                />
+                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
+                  Leave blank for a default trial. After this date (plus grace) the hospital is
+                  blocked until you extend.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-[var(--color-fg)]">Grace days</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={form.graceDays}
+                  onChange={(e) => setForm({ ...form, graceDays: e.target.value })}
+                  placeholder="default"
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
+                />
+                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
+                  Days after expiry the hospital still runs (with a renewal banner) before access is
+                  cut.
+                </span>
+              </label>
+
+              <label className="block sm:col-span-2">
+                <span className="text-sm font-medium text-[var(--color-fg)]">
+                  Custom domain <span className="text-[var(--color-fg-muted)]">(optional)</span>
+                </span>
+                <input
+                  value={form.customDomain}
+                  onChange={(e) => setForm({ ...form, customDomain: e.target.value.toLowerCase() })}
+                  placeholder="care.hospital.com"
+                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 font-mono text-sm"
+                />
+                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
+                  A hostname that resolves to this hospital, in addition to its subdomain. DNS/TLS
+                  is set up separately.
+                </span>
+              </label>
             </div>
 
             <div className="flex gap-2">
@@ -381,105 +578,149 @@ function Console() {
                 <th className="px-4 py-3 font-medium">Hospital</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Edition</th>
-                <th className="px-4 py-3 font-medium">Database</th>
+                <th className="px-4 py-3 font-medium">Licence</th>
+                <th className="px-4 py-3 font-medium">Branches</th>
                 {isSuperAdmin && <th className="px-4 py-3 font-medium">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border)]">
               {loading && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-subtle)]">
+                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-subtle)]">
                     Loading the fleet…
                   </td>
                 </tr>
               )}
 
               {!loading &&
-                hospitals.map((hospital) => (
-                  <tr key={hospital.id}>
-                    <td className="px-4 py-3">
-                      <span className="block font-medium text-[var(--color-fg)]">
-                        {hospital.hospitalName}
-                      </span>
-                      <a
-                        href={hospital.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-mono text-xs text-[var(--color-fg-muted)] underline"
-                      >
-                        {hospital.url}
-                      </a>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`rounded-md px-2 py-0.5 text-xs font-medium ${statusColor(hospital.status)}`}
-                      >
-                        {hospital.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {isSuperAdmin ? (
-                        <select
-                          value={hospital.planCode ?? ""}
-                          onChange={(e) => void changePlan(hospital, e.target.value)}
-                          className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs"
-                        >
-                          <option value="">— none —</option>
-                          {editions.map((edition) => (
-                            <option key={edition.code} value={edition.code}>
-                              {edition.name}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="text-[var(--color-fg-muted)]">
-                          {hospital.planCode ?? "—"}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-subtle)]">
-                      {hospital.databaseName}
-                    </td>
-                    {isSuperAdmin && (
+                hospitals.map((hospital) => {
+                  const lic = licenseBadge(hospital.license);
+                  return (
+                    <tr key={hospital.id}>
                       <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => void issueAdmin(hospital)}
-                            className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
-                          >
-                            Issue admin
-                          </button>
-                          {hospital.status === "suspended" ? (
-                            <button
-                              onClick={() => void changeStatus(hospital, "active")}
-                              className="rounded-md border border-[var(--color-success)] px-2 py-1 text-xs text-[var(--color-success)] hover:bg-[var(--color-success-bg)]"
-                            >
-                              Reactivate
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => {
-                                // Suspension takes the hospital OFFLINE — every member
-                                // of their staff loses access immediately. Never a
-                                // one-click action.
-                                if (
-                                  window.confirm(
-                                    `Suspend ${hospital.hospitalName}?\n\nEvery member of their staff will be unable to log in, immediately. This is for non-payment or a security incident — it is not a pause button.`,
-                                  )
-                                ) {
-                                  void changeStatus(hospital, "suspended");
-                                }
-                              }}
-                              className="rounded-md border border-[var(--color-danger)] px-2 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]"
-                            >
-                              Suspend
-                            </button>
-                          )}
-                        </div>
+                        <span className="block font-medium text-[var(--color-fg)]">
+                          {hospital.hospitalName}
+                        </span>
+                        <a
+                          href={hospital.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-xs text-[var(--color-fg-muted)] underline"
+                        >
+                          {hospital.url}
+                        </a>
+                        {hospital.customDomain && (
+                          <span className="mt-0.5 block font-mono text-xs text-[var(--color-fg-subtle)]">
+                            ↳ {hospital.customDomain}
+                          </span>
+                        )}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-xs font-medium ${statusColor(hospital.status)}`}
+                        >
+                          {hospital.status}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {isSuperAdmin ? (
+                          <select
+                            value={hospital.planCode ?? ""}
+                            onChange={(e) => void changePlan(hospital, e.target.value)}
+                            className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs"
+                          >
+                            <option value="">— none —</option>
+                            {editions.map((edition) => (
+                              <option key={edition.code} value={edition.code}>
+                                {edition.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-[var(--color-fg-muted)]">
+                            {hospital.planCode ?? "—"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-xs font-medium ${lic.className}`}
+                          title={
+                            hospital.license.expiresAt
+                              ? `Valid until ${shortDate(hospital.license.expiresAt)}`
+                              : "No expiry set"
+                          }
+                        >
+                          {lic.label}
+                        </span>
+                        <span className="mt-0.5 block text-xs text-[var(--color-fg-subtle)]">
+                          {hospital.license.state === "PERPETUAL"
+                            ? "no expiry"
+                            : shortDate(hospital.license.expiresAt)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-[var(--color-fg-muted)]">
+                        {hospital.maxBranches ?? 1}
+                      </td>
+                      {isSuperAdmin && (
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => void extendLicense(hospital)}
+                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
+                            >
+                              Extend licence
+                            </button>
+                            <button
+                              onClick={() => void changeBranches(hospital)}
+                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
+                            >
+                              Branches
+                            </button>
+                            <button
+                              onClick={() => void changeDomain(hospital)}
+                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
+                            >
+                              Domain
+                            </button>
+                            <button
+                              onClick={() => void issueAdmin(hospital)}
+                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
+                            >
+                              Issue admin
+                            </button>
+                            {hospital.status === "suspended" ? (
+                              <button
+                                onClick={() => void changeStatus(hospital, "active")}
+                                className="rounded-md border border-[var(--color-success)] px-2 py-1 text-xs text-[var(--color-success)] hover:bg-[var(--color-success-bg)]"
+                              >
+                                Reactivate
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  // Suspension takes the hospital OFFLINE — every member
+                                  // of their staff loses access immediately. Never a
+                                  // one-click action.
+                                  if (
+                                    window.confirm(
+                                      `Suspend ${hospital.hospitalName}?\n\nEvery member of their staff will be unable to log in, immediately. This is for non-payment or a security incident — it is not a pause button.`,
+                                    )
+                                  ) {
+                                    void changeStatus(hospital, "suspended");
+                                  }
+                                }}
+                                className="rounded-md border border-[var(--color-danger)] px-2 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]"
+                              >
+                                Suspend
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
         </div>
