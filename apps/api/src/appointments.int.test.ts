@@ -187,8 +187,14 @@ describe("booking", () => {
   });
 
   it("refuses a slot in the past", async () => {
+    // A real 09:00 Monday slot (so the doctor works then — this isolates the "past"
+    // rejection from "no such slot"), but a PAST one. Two weeks back, not one:
+    // `clinicDay` is *next* Monday, so `clinicDay - 7` is *this* Monday — which is
+    // today when the suite runs on a Monday, and "today 09:00" is still in the future
+    // before 9am, so the booking would (correctly) be accepted and the test flake.
+    // `clinicDay - 14` is always a Monday strictly in the past.
     const past = new Date(clinicDay);
-    past.setDate(past.getDate() - 7);
+    past.setDate(past.getDate() - 14);
     past.setHours(9, 0, 0, 0);
 
     await auth(request(app).post("/api/v1/appointments"))
