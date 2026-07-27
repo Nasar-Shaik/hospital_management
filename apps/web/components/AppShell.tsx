@@ -55,6 +55,7 @@ const NAVIGATION: NavSection[] = [
       { label: "Activity trail", href: "/audit", permission: "audit:view" },
       { label: "Hospital profile", href: "/settings", permission: "hospital:manage", soon: true },
       { label: "Branches", href: "/branches", permission: "branch:manage" },
+      { label: "Departments", href: "/departments", permission: "department:manage" },
       { label: "API keys", href: "/settings/api-keys", permission: "apikey:manage" },
     ],
   },

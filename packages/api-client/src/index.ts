@@ -478,6 +478,46 @@ export interface UpdateBranchInput {
   gstin?: string;
 }
 
+/* ── departments (B2/B3) ── */
+
+export type DepartmentKind =
+  "clinical" | "diagnostic" | "nursing" | "pharmacy" | "support" | "administrative";
+export type DepartmentStatus = "active" | "inactive";
+
+export interface Department {
+  id: string;
+  name: string;
+  code: string;
+  kind: DepartmentKind;
+  status: DepartmentStatus;
+  /** The parent unit, when this is a sub-department. Absent means a top-level department. */
+  parentId?: string;
+  /** The department head — a staff user id. */
+  headStaffId?: string;
+  description?: string;
+  /** The parent's name, denormalized for the tree view. */
+  parentName?: string;
+}
+
+export interface CreateDepartmentInput {
+  name: string;
+  code: string;
+  kind: DepartmentKind;
+  parentId?: string;
+  headStaffId?: string;
+  description?: string;
+}
+
+export interface UpdateDepartmentInput {
+  name?: string;
+  kind?: DepartmentKind;
+  status?: DepartmentStatus;
+  /** `null` detaches the parent/head; omit to leave unchanged. */
+  parentId?: string | null;
+  headStaffId?: string | null;
+  description?: string;
+}
+
 /* ── Vitals ─────────────────────────────────────────────────────────────────── */
 
 export const TRIAGE_LEVELS = ["routine", "urgent", "critical"] as const;
@@ -1887,6 +1927,23 @@ export class ApiClient {
   /** Edits a branch — rename, deactivate, contact details. Needs `branch:manage`. */
   updateBranch(id: string, input: UpdateBranchInput): Promise<Branch> {
     return this.request<Branch>("PATCH", `/api/v1/branches/${id}`, input);
+  }
+
+  /* ── departments (B2/B3) ── */
+
+  /** Every department of the hospital, each with its parent's name. Needs `patient:read`. */
+  listDepartments(): Promise<Department[]> {
+    return this.request<Department[]>("GET", "/api/v1/departments");
+  }
+
+  /** Creates a department (optionally under a parent). Needs `department:manage`. */
+  createDepartment(input: CreateDepartmentInput): Promise<Department> {
+    return this.request<Department>("POST", "/api/v1/departments", input);
+  }
+
+  /** Edits a department — rename, re-parent, deactivate. Needs `department:manage`. */
+  updateDepartment(id: string, input: UpdateDepartmentInput): Promise<Department> {
+    return this.request<Department>("PATCH", `/api/v1/departments/${id}`, input);
   }
 
   /* ── vitals ── */

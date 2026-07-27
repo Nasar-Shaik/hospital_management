@@ -601,6 +601,21 @@ const PROBES: Record<string, Probe> = {
     body: { name: "Renamed" },
   },
 
+  /* ── Departments (B2/B3) — the org chart. READ is the broad `patient:read` (reception routes a
+   * patient into a department; every clinical role reads the queue board). WRITE is
+   * `department:manage` (shaping the org chart — TENANT_ADMIN). */
+  "GET /api/v1/departments": { method: "get", url: "/api/v1/departments" },
+  "POST /api/v1/departments": {
+    method: "post",
+    url: "/api/v1/departments",
+    body: { name: "Matrix Department", code: "MPD", kind: "clinical" },
+  },
+  "PATCH /api/v1/departments/:id": {
+    method: "patch",
+    url: "/api/v1/departments/64b7f0000000000000000001",
+    body: { name: "Renamed Department" },
+  },
+
   /* ── Bed inventory & board (B4) ──────────────────────────────────────────────
    * READS are `emr:read` (the doctor about to admit and the nurse on the ward both see the free
    * beds); WRITES are `bed:manage` (configuring the estate — TENANT_ADMIN, not the ward staff).

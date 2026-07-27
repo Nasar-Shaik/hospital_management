@@ -1204,4 +1204,40 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0030-departments",
+    description:
+      "Departments (B2/B3) — the tenant-wide catalogue of organisational units and their " +
+      "parent/child hierarchy. This owns only the collection and its indexes.",
+    up: async (db) => {
+      await db.createCollection("departments").catch(() => undefined);
+
+      /**
+       * A department code is unique PER TENANT — a service line spans every site, so the code is a
+       * tenant-wide human key (the same shape as `one_code_per_tenant` on `branches`). If this
+       * cannot build because two departments already share a code, fold one into the other and
+       * re-run.
+       */
+      await db
+        .collection("departments")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_department_code_per_tenant", background: true },
+        );
+      // The children-of lookup and the tree read filter by parent.
+      await db
+        .collection("departments")
+        .createIndex({ tenantId: 1, parentId: 1 }, { background: true });
+      // The admin list sorts by name.
+      await db
+        .collection("departments")
+        .createIndex({ tenantId: 1, name: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("departments")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];
