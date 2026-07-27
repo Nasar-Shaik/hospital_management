@@ -63,6 +63,14 @@ samp {
     transform: translateX(100%);
   }
 }
+@keyframes mc-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
 
 .mc-fade-in {
   animation: mc-fade-in var(--dur) var(--ease-standard) both;
@@ -72,6 +80,9 @@ samp {
 }
 .mc-slide-up {
   animation: mc-slide-up var(--dur-slow) var(--ease-emphasized) both;
+}
+.mc-drawer-in {
+  animation: mc-drawer-in var(--dur-slow) var(--ease-emphasized) both;
 }
 
 /**
