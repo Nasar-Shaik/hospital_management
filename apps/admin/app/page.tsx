@@ -3,61 +3,58 @@
 /**
  * The operator console (Doc 02 A1).
  *
- * One page, because there is one job: see every hospital, create a new one with
- * its administrator, change what a hospital pays, and take one offline when you
- * must. A console that buries these behind navigation is a console nobody can use
- * at 2am when a customer is locked out.
+ * One job: see every hospital, create a new one with its administrator, change what a hospital pays,
+ * configure its tenure and estate, and take one offline when you must. A console that buries these
+ * behind navigation is a console nobody can use at 2am when a customer is locked out.
  *
- * What is NOT here, and must never be: any view of patient data. An operator
- * manages the container. The contents belong to the hospital.
+ * ── NO BROWSER DIALOGS ──────────────────────────────────────────────────────
+ * Every configuration action used to be a `window.prompt` / `window.confirm`. Those are unstyled,
+ * un-brandable, and impossible to validate as the operator types. They are gone: a click on a
+ * hospital opens a DETAIL DRAWER with proper forms, and the one destructive action (suspend) asks
+ * with an in-app confirmation, not the browser's.
+ *
+ * What is NOT here, and must never be: any view of patient data. An operator manages the container.
+ * The contents belong to the hospital.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { ApiClientError, type Edition, type Hospital } from "@medicore/api-client";
+import {
+  ApiClientError,
+  type Edition,
+  type Hospital,
+  type HospitalDetail,
+} from "@medicore/api-client";
 import { ThemeToggle } from "@medicore/ui";
 import { OperatorProvider, useOperator } from "../lib/operator";
+import { Badge, Button, ConfirmDialog, Drawer, Field, Modal } from "../components/ui";
 
-function statusColor(status: Hospital["status"]): string {
-  if (status === "active") return "bg-[var(--color-success-bg)] text-[var(--color-success)]";
-  if (status === "trial") return "bg-[var(--color-warning-bg)] text-[var(--color-warning)]";
-  if (status === "suspended") return "bg-[var(--color-danger-bg)] text-[var(--color-danger)]";
-  return "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)]";
+function statusTone(status: Hospital["status"]): "success" | "warning" | "danger" | "neutral" {
+  if (status === "active") return "success";
+  if (status === "trial") return "warning";
+  if (status === "suspended") return "danger";
+  return "neutral";
 }
 
-/** Colour + human label for a hospital's licence state (ADR-0016). */
-function licenseBadge(license: Hospital["license"]): { className: string; label: string } {
+/** Tone + human label for a hospital's licence state (ADR-0016). */
+function licenseBadge(license: Hospital["license"]): {
+  tone: "success" | "warning" | "danger" | "neutral";
+  label: string;
+} {
   const days = license.daysRemaining;
   const on = (n: number | null) => (n == null ? "" : ` · ${String(n)}d`);
   switch (license.state) {
     case "PERPETUAL":
-      return {
-        className: "bg-[var(--color-bg-subtle)] text-[var(--color-fg-muted)]",
-        label: "Perpetual",
-      };
+      return { tone: "neutral", label: "Perpetual" };
     case "EXPIRED":
-      return {
-        className: "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
-        label: "Expired",
-      };
+      return { tone: "danger", label: "Expired" };
     case "GRACE":
-      return {
-        className: "bg-[var(--color-danger-bg)] text-[var(--color-danger)]",
-        label: `Grace${on(days)}`,
-      };
+      return { tone: "danger", label: `Grace${on(days)}` };
     default:
-      // ACTIVE — amber when close to expiry, green otherwise.
       return days != null && days <= 10
-        ? {
-            className: "bg-[var(--color-warning-bg)] text-[var(--color-warning)]",
-            label: `Expiring${on(days)}`,
-          }
-        : {
-            className: "bg-[var(--color-success-bg)] text-[var(--color-success)]",
-            label: `Active${on(days)}`,
-          };
+        ? { tone: "warning", label: `Expiring${on(days)}` }
+        : { tone: "success", label: `Active${on(days)}` };
   }
 }
 
-/** ISO expiry → a short, unambiguous date for the console. */
 function shortDate(iso?: string): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString(undefined, {
@@ -83,8 +80,8 @@ function OperatorLogin() {
     try {
       await login(email, password);
     } catch (err) {
-      // One message for every failure. The operator list is short and extremely
-      // valuable, so this form must not become a way to discover who works here.
+      // One message for every failure — the operator list is short and valuable; this form must
+      // not become a way to discover who works here.
       setError(
         err instanceof ApiClientError
           ? "Incorrect email or password."
@@ -99,68 +96,454 @@ function OperatorLogin() {
     <main className="flex min-h-screen items-center justify-center bg-[var(--color-bg-subtle)] px-4">
       <form onSubmit={submit} className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-lg font-bold text-[var(--color-fg)]">
+          <div
+            className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl text-lg font-bold text-[var(--color-on-accent)] shadow-[var(--shadow-sm)]"
+            style={{ background: "var(--gradient-brand)" }}
+          >
             P
           </div>
-          <h1 className="text-xl font-semibold text-[var(--color-fg)]">Operator console</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-[var(--color-fg)]">
+            Operator console
+          </h1>
           <p className="mt-1 text-sm text-[var(--color-fg-subtle)]">
             PaperlessTech platform — staff only.
           </p>
         </div>
 
-        <div className="space-y-4 rounded-xl bg-[var(--color-bg-elevated)] p-6 shadow-xl">
+        <div className="space-y-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-6 shadow-[var(--shadow-lg)]">
           {error && (
             <p className="rounded-lg bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
               {error}
             </p>
           )}
-
-          <label className="block">
-            <span className="text-sm font-medium text-[var(--color-fg)]">Email</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-            />
-          </label>
-
-          <label className="block">
-            <span className="text-sm font-medium text-[var(--color-fg)]">Password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-            />
-          </label>
-
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-full rounded-lg bg-[var(--color-fg)] py-2.5 text-sm font-medium text-[var(--color-bg)] disabled:opacity-60"
-          >
-            {busy ? "Signing in…" : "Sign in"}
-          </button>
+          <Field
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+          <Field
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+          <Button type="submit" loading={busy} className="w-full">
+            Sign in
+          </Button>
         </div>
       </form>
     </main>
   );
 }
 
-/* ── the fleet ────────────────────────────────────────────────────────────── */
+/* ── tenant detail + configuration drawer ────────────────────────────────────── */
 
-function Console() {
-  const { api, operator, isSuperAdmin, logout } = useOperator();
+type Created = { hospital: Hospital; email: string; password?: string };
 
-  const [hospitals, setHospitals] = useState<Hospital[]>([]);
-  const [editions, setEditions] = useState<Edition[]>([]);
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-2">
+      <dt className="shrink-0 text-sm text-[var(--color-fg-muted)]">{label}</dt>
+      <dd className="min-w-0 text-right text-sm font-medium text-[var(--color-fg)]">{children}</dd>
+    </div>
+  );
+}
+
+/** One self-contained config action: a labelled control with its own Apply button + feedback. */
+function ConfigBlock({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] p-4">
+      <p className="text-sm font-medium text-[var(--color-fg)]">{title}</p>
+      {hint && <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">{hint}</p>}
+      <div className="mt-3">{children}</div>
+    </div>
+  );
+}
+
+function TenantDrawer({
+  hospital,
+  editions,
+  isSuperAdmin,
+  onClose,
+  onChanged,
+  onIssued,
+}: {
+  hospital: Hospital;
+  editions: Edition[];
+  isSuperAdmin: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+  onIssued: (c: Created) => void;
+}) {
+  const { api } = useOperator();
+  const [detail, setDetail] = useState<HospitalDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirmSuspend, setConfirmSuspend] = useState(false);
+  // The drawer opens in VIEW mode (a prefilled, read-only record); the operator clicks Edit to
+  // configure. The two states keep a routine "just checking on them" from ever being a mis-click
+  // away from re-pricing a hospital.
+  const [editing, setEditing] = useState(false);
 
-  const [showForm, setShowForm] = useState(false);
+  // Editable fields, seeded from the row and re-seeded when the detail loads.
+  const [branches, setBranches] = useState(String(hospital.maxBranches ?? 1));
+  const [domain, setDomain] = useState(hospital.customDomain ?? "");
+  const [extendDays, setExtendDays] = useState("365");
+  const [adminEmail, setAdminEmail] = useState("");
+
+  const reload = useCallback(async () => {
+    try {
+      const d = await api.getHospital(hospital.id);
+      setDetail(d);
+      setBranches(String(d.maxBranches ?? 1));
+      setDomain(d.customDomain ?? "");
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not load the hospital.");
+    }
+  }, [api, hospital.id]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function run(key: string, fn: () => Promise<unknown>) {
+    setBusy(key);
+    setError(null);
+    try {
+      await fn();
+      await reload();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Something went wrong.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const h = detail ?? hospital;
+  const lic = licenseBadge(h.license);
+
+  return (
+    <Drawer
+      title={h.hospitalName}
+      subtitle={
+        <a href={h.url} target="_blank" rel="noreferrer" className="font-mono text-xs underline">
+          {h.url}
+        </a>
+      }
+      onClose={onClose}
+    >
+      <div className="space-y-6">
+        {error && (
+          <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
+            {error}
+          </div>
+        )}
+
+        {/* View ⇄ Edit toggle — configuration is hidden until the operator asks to change it. */}
+        {isSuperAdmin && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-[var(--color-fg-muted)]">
+              {editing ? "Editing configuration" : "Viewing details"}
+            </span>
+            <Button
+              variant={editing ? "secondary" : "primary"}
+              size="sm"
+              onClick={() => setEditing((v) => !v)}
+            >
+              {editing ? "Done" : "Edit configuration"}
+            </Button>
+          </div>
+        )}
+
+        {/* Overview */}
+        <dl className="divide-y divide-[var(--color-border)] rounded-xl border border-[var(--color-border)] px-4">
+          <Row label="Status">
+            <Badge tone={statusTone(h.status)} dot>
+              {h.status}
+            </Badge>
+          </Row>
+          <Row label="Licence">
+            <span className="inline-flex items-center gap-2">
+              <Badge tone={lic.tone}>{lic.label}</Badge>
+              <span className="text-xs text-[var(--color-fg-subtle)]">
+                {h.license.state === "PERPETUAL" ? "no expiry" : shortDate(h.license.expiresAt)}
+              </span>
+            </span>
+          </Row>
+          <Row label="Edition">{h.planCode ?? "—"}</Row>
+          <Row label="Supported branches">{h.maxBranches ?? 1}</Row>
+          {h.customDomain && <Row label="Custom domain">{h.customDomain}</Row>}
+          <Row label="Database">
+            <span className="font-mono text-xs text-[var(--color-fg-muted)]">{h.databaseName}</span>
+          </Row>
+        </dl>
+
+        {/* Usage meters (real data) */}
+        {detail && detail.usage.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+              Usage
+            </p>
+            <div className="space-y-2.5 rounded-xl border border-[var(--color-border)] p-4">
+              {detail.usage.map((u) => {
+                const pct = u.limit ? Math.min(100, Math.round((u.used / u.limit) * 100)) : 0;
+                const barTone = u.exceeded
+                  ? "bg-[var(--color-danger)]"
+                  : u.warning
+                    ? "bg-[var(--color-warning)]"
+                    : "bg-[var(--color-brand-600)]";
+                return (
+                  <div key={u.metric}>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-[var(--color-fg-muted)] capitalize">
+                        {u.metric.replace(/_/g, " ")}
+                      </span>
+                      <span className="font-medium tabular-nums text-[var(--color-fg)]">
+                        {u.used}
+                        {u.limit != null ? ` / ${u.limit}` : ""}
+                      </span>
+                    </div>
+                    {u.limit != null && (
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-subtle)]">
+                        <div
+                          className={`h-full rounded-full ${barTone}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Configuration — super admin only, and only once they have clicked Edit. */}
+        {isSuperAdmin && editing && (
+          <div className="space-y-3">
+            <p className="text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+              Configuration
+            </p>
+
+            <ConfigBlock
+              title="Edition"
+              hint="Changes what this hospital may use. A downgrade is refused if they exceed the new limits."
+            >
+              <select
+                value={h.planCode ?? ""}
+                onChange={(e) =>
+                  void run("plan", () => api.setHospitalPlan(hospital.id, e.target.value))
+                }
+                disabled={busy === "plan"}
+                className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm"
+              >
+                <option value="">— none —</option>
+                {editions.map((ed) => (
+                  <option key={ed.code} value={ed.code}>
+                    {ed.name}
+                  </option>
+                ))}
+              </select>
+            </ConfigBlock>
+
+            <ConfigBlock
+              title="Extend licence"
+              hint="Counts from the later of today or the current expiry, so it never shortens an active licence."
+            >
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={extendDays}
+                  onChange={(e) => setExtendDays(e.target.value)}
+                  className="w-28 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === "licence"}
+                  onClick={() => {
+                    const days = Number(extendDays.trim());
+                    if (!Number.isFinite(days) || days < 1) {
+                      setError("Enter a whole number of days (1 or more).");
+                      return;
+                    }
+                    void run("licence", () =>
+                      api.setHospitalLicense(hospital.id, { extendDays: days }),
+                    );
+                  }}
+                >
+                  Extend by {extendDays || "…"} days
+                </Button>
+              </div>
+            </ConfigBlock>
+
+            <ConfigBlock
+              title="Supported branches"
+              hint="Lowering this does not delete branches — it just stops new ones until raised again."
+            >
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  value={branches}
+                  onChange={(e) => setBranches(e.target.value)}
+                  className="w-28 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === "branches"}
+                  onClick={() => {
+                    const n = Number(branches.trim());
+                    if (!Number.isFinite(n) || n < 1) {
+                      setError("Supported branches must be a whole number of at least 1.");
+                      return;
+                    }
+                    void run("branches", () => api.setHospitalLimits(hospital.id, n));
+                  }}
+                >
+                  Save
+                </Button>
+              </div>
+            </ConfigBlock>
+
+            <ConfigBlock
+              title="Custom domain"
+              hint="A bare hostname that resolves to this hospital. Clear the box to detach. DNS/TLS is set up separately."
+            >
+              <div className="flex gap-2">
+                <input
+                  value={domain}
+                  onChange={(e) => setDomain(e.target.value.toLowerCase())}
+                  placeholder="care.hospital.com"
+                  className="min-w-0 flex-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 font-mono text-sm"
+                />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === "domain"}
+                  onClick={() => {
+                    const d = domain.trim().toLowerCase();
+                    void run("domain", () =>
+                      api.setHospitalDomain(hospital.id, d === "" ? null : d),
+                    );
+                  }}
+                >
+                  Save
+                </Button>
+              </div>
+            </ConfigBlock>
+
+            <ConfigBlock
+              title="Issue an administrator"
+              hint="Creates a fresh admin login for this hospital — the temporary password is shown once."
+            >
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  placeholder="admin@hospital.com"
+                  className="min-w-0 flex-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm"
+                />
+                <Button
+                  size="sm"
+                  loading={busy === "admin"}
+                  disabled={!adminEmail.trim()}
+                  onClick={() =>
+                    void run("admin", async () => {
+                      const result = await api.issueHospitalAdmin(hospital.id, {
+                        email: adminEmail.trim(),
+                      });
+                      onIssued({
+                        hospital: h,
+                        email: result.email,
+                        password: result.temporaryPassword,
+                      });
+                      setAdminEmail("");
+                    })
+                  }
+                >
+                  Issue
+                </Button>
+              </div>
+            </ConfigBlock>
+
+            {/* Status — the one destructive action, behind a real confirmation. */}
+            <ConfigBlock
+              title="Access"
+              hint="Suspension takes the hospital offline immediately — for non-payment or a security incident, not a pause button."
+            >
+              {h.status === "suspended" ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === "status"}
+                  onClick={() =>
+                    void run("status", () => api.setHospitalStatus(hospital.id, "active"))
+                  }
+                >
+                  Reactivate hospital
+                </Button>
+              ) : (
+                <Button variant="danger" size="sm" onClick={() => setConfirmSuspend(true)}>
+                  Suspend hospital
+                </Button>
+              )}
+            </ConfigBlock>
+          </div>
+        )}
+      </div>
+
+      {confirmSuspend && (
+        <ConfirmDialog
+          title={`Suspend ${h.hospitalName}?`}
+          body={
+            <>
+              Every member of their staff will be unable to log in, <strong>immediately</strong>.
+              This is for non-payment or a security incident — it is not a pause button.
+            </>
+          }
+          confirmLabel="Suspend hospital"
+          busy={busy === "status"}
+          onCancel={() => setConfirmSuspend(false)}
+          onConfirm={() =>
+            void run("status", async () => {
+              await api.setHospitalStatus(hospital.id, "suspended");
+              setConfirmSuspend(false);
+            })
+          }
+        />
+      )}
+    </Drawer>
+  );
+}
+
+/* ── create modal ─────────────────────────────────────────────────────────────── */
+
+function NewHospitalModal({
+  editions,
+  onClose,
+  onCreated,
+}: {
+  editions: Edition[];
+  onClose: () => void;
+  onCreated: (c: Created) => void;
+}) {
+  const { api } = useOperator();
   const [form, setForm] = useState({
     slug: "",
     hospitalName: "",
@@ -172,12 +555,161 @@ function Console() {
     customDomain: "",
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [created, setCreated] = useState<{
-    hospital: Hospital;
-    email: string;
-    password?: string;
-  } | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setFieldErrors({});
+    setError(null);
+    try {
+      // A date input (YYYY-MM-DD) → ISO end-of-day, so a licence "until the 30th" is valid through it.
+      const expiresIso = form.licenseExpiresAt
+        ? new Date(`${form.licenseExpiresAt}T23:59:59`).toISOString()
+        : undefined;
+      const branches = Number(form.maxBranches);
+      const grace = form.graceDays.trim() === "" ? undefined : Number(form.graceDays);
+      const dom = form.customDomain.trim().toLowerCase();
+      const result = await api.createHospital({
+        slug: form.slug,
+        hospitalName: form.hospitalName,
+        planCode: form.planCode,
+        adminEmail: form.adminEmail,
+        ...(Number.isFinite(branches) && branches > 1 ? { maxBranches: branches } : {}),
+        ...(dom ? { customDomain: dom } : {}),
+        ...(expiresIso ? { licenseExpiresAt: expiresIso } : {}),
+        ...(grace != null && Number.isFinite(grace) ? { graceDays: grace } : {}),
+      });
+      onCreated({
+        hospital: result.hospital,
+        email: result.admin.email,
+        ...(result.admin.temporaryPassword ? { password: result.admin.temporaryPassword } : {}),
+      });
+    } catch (err) {
+      if (err instanceof ApiClientError && err.fieldErrors) setFieldErrors(err.fieldErrors);
+      setError(err instanceof ApiClientError ? err.message : "Could not create the hospital.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+
+  return (
+    <Modal title="New hospital" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-5">
+        <p className="text-sm text-[var(--color-fg-muted)]">
+          Creates the database, runs its migrations, seeds the roles and issues the first
+          administrator — one operation. A hospital without an administrator is a room locked from
+          the inside.
+        </p>
+        {error && (
+          <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger-bg)] px-3 py-2 text-sm text-[var(--color-danger)]">
+            {error}
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Hospital name"
+            value={form.hospitalName}
+            onChange={(e) => set({ hospitalName: e.target.value })}
+            required
+          />
+          <Field
+            label="Address (slug) — permanent"
+            value={form.slug}
+            onChange={(e) => set({ slug: e.target.value.toLowerCase() })}
+            required
+            placeholder="sunrise"
+            className="font-mono"
+            {...(fieldErrors.slug?.[0] ? { error: fieldErrors.slug[0] } : {})}
+            hint="Becomes their hostname AND their database name. It cannot be changed later."
+          />
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">Edition</span>
+            <select
+              value={form.planCode}
+              onChange={(e) => set({ planCode: e.target.value })}
+              className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm"
+            >
+              {editions.map((ed) => (
+                <option key={ed.code} value={ed.code}>
+                  {ed.name}
+                  {ed.limits.maxUsers ? ` — ${String(ed.limits.maxUsers)} seats` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Field
+            label="First administrator (email)"
+            type="email"
+            value={form.adminEmail}
+            onChange={(e) => set({ adminEmail: e.target.value })}
+            required
+          />
+          <Field
+            label="Supported branches"
+            type="number"
+            min={1}
+            value={form.maxBranches}
+            onChange={(e) => set({ maxBranches: e.target.value })}
+            hint="How many branches this hospital may create. 1 = single-site. Raise it any time."
+          />
+          <Field
+            label="Licence valid until"
+            type="date"
+            value={form.licenseExpiresAt}
+            onChange={(e) => set({ licenseExpiresAt: e.target.value })}
+            hint="Blank = default trial. After this (plus grace) the hospital is blocked until extended."
+          />
+          <Field
+            label="Grace days"
+            type="number"
+            min={0}
+            value={form.graceDays}
+            onChange={(e) => set({ graceDays: e.target.value })}
+            placeholder="default"
+            hint="Days after expiry the hospital still runs (with a renewal banner) before access is cut."
+          />
+          <Field
+            label="Custom domain (optional)"
+            value={form.customDomain}
+            onChange={(e) => set({ customDomain: e.target.value.toLowerCase() })}
+            placeholder="care.hospital.com"
+            className="font-mono"
+            hint="A hostname that resolves to this hospital, in addition to its subdomain."
+          />
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={saving}>
+            Create hospital
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/* ── the fleet ────────────────────────────────────────────────────────────── */
+
+function Console() {
+  const { operator, isSuperAdmin, logout } = useOperator();
+  const { api } = useOperator();
+
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [editions, setEditions] = useState<Edition[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [selected, setSelected] = useState<Hospital | null>(null);
+  const [created, setCreated] = useState<Created | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -197,530 +729,176 @@ function Console() {
     void load();
   }, [load]);
 
-  async function createHospital(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setFieldErrors({});
-    setError(null);
-    try {
-      // `licenseExpiresAt` is a date input (YYYY-MM-DD); the API wants an ISO datetime —
-      // end-of-day, so a licence bought "until the 30th" is valid through all of the 30th.
-      const expiresIso = form.licenseExpiresAt
-        ? new Date(`${form.licenseExpiresAt}T23:59:59`).toISOString()
-        : undefined;
-      const branches = Number(form.maxBranches);
-      const grace = form.graceDays.trim() === "" ? undefined : Number(form.graceDays);
-      const domain = form.customDomain.trim().toLowerCase();
-      const result = await api.createHospital({
-        slug: form.slug,
-        hospitalName: form.hospitalName,
-        planCode: form.planCode,
-        adminEmail: form.adminEmail,
-        ...(Number.isFinite(branches) && branches > 1 ? { maxBranches: branches } : {}),
-        ...(domain ? { customDomain: domain } : {}),
-        ...(expiresIso ? { licenseExpiresAt: expiresIso } : {}),
-        ...(grace != null && Number.isFinite(grace) ? { graceDays: grace } : {}),
-      });
-      setCreated({
-        hospital: result.hospital,
-        email: result.admin.email,
-        ...(result.admin.temporaryPassword ? { password: result.admin.temporaryPassword } : {}),
-      });
-      setShowForm(false);
-      setForm({
-        slug: "",
-        hospitalName: "",
-        planCode: "PLAN_CLINIC",
-        adminEmail: "",
-        maxBranches: "1",
-        licenseExpiresAt: "",
-        graceDays: "",
-        customDomain: "",
-      });
-      await load();
-    } catch (err) {
-      if (err instanceof ApiClientError && err.fieldErrors) setFieldErrors(err.fieldErrors);
-      setError(err instanceof ApiClientError ? err.message : "Could not create the hospital.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function changeStatus(hospital: Hospital, status: Hospital["status"]) {
-    setError(null);
-    try {
-      await api.setHospitalStatus(hospital.id, status);
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not change the status.");
-    }
-  }
-
-  async function changePlan(hospital: Hospital, planCode: string) {
-    setError(null);
-    try {
-      await api.setHospitalPlan(hospital.id, planCode);
-      await load();
-    } catch (err) {
-      // A refused downgrade ("this hospital has 12 staff; Clinic allows 10") is
-      // expected operator feedback, not a failure — show the API's own words.
-      setError(err instanceof ApiClientError ? err.message : "Could not change the plan.");
-    }
-  }
-
-  async function issueAdmin(hospital: Hospital) {
-    const email = window.prompt(`Issue an administrator for ${hospital.hospitalName}.\n\nEmail:`);
-    if (!email) return;
-    setError(null);
-    try {
-      const result = await api.issueHospitalAdmin(hospital.id, { email });
-      setCreated({ hospital, email: result.email, password: result.temporaryPassword });
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not issue the administrator.");
-    }
-  }
-
-  async function changeBranches(hospital: Hospital) {
-    const current = hospital.maxBranches ?? 1;
-    const answer = window.prompt(
-      `Supported branches for ${hospital.hospitalName}.\n\nLowering this does NOT delete branches — it just stops new ones being created until raised again.`,
-      String(current),
-    );
-    if (answer == null) return;
-    const n = Number(answer.trim());
-    if (!Number.isFinite(n) || n < 1) {
-      setError("Supported branches must be a whole number of at least 1.");
-      return;
-    }
-    setError(null);
-    try {
-      await api.setHospitalLimits(hospital.id, n);
-      await load();
-    } catch (err) {
-      setError(
-        err instanceof ApiClientError ? err.message : "Could not update supported branches.",
-      );
-    }
-  }
-
-  async function extendLicense(hospital: Hospital) {
-    const answer = window.prompt(
-      `Extend ${hospital.hospitalName}'s licence by how many days?\n\nCounts from the later of today or the current expiry, so it never shortens an active licence.`,
-      "365",
-    );
-    if (answer == null) return;
-    const days = Number(answer.trim());
-    if (!Number.isFinite(days) || days < 1) {
-      setError("Enter a whole number of days (1 or more).");
-      return;
-    }
-    setError(null);
-    try {
-      await api.setHospitalLicense(hospital.id, { extendDays: days });
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not extend the licence.");
-    }
-  }
-
-  async function changeDomain(hospital: Hospital) {
-    const answer = window.prompt(
-      `Custom domain for ${hospital.hospitalName}.\n\nA bare hostname (e.g. care.hospital.com) that resolves to this hospital. Clear the box to detach. DNS/TLS is set up separately.`,
-      hospital.customDomain ?? "",
-    );
-    if (answer == null) return;
-    const domain = answer.trim().toLowerCase();
-    setError(null);
-    try {
-      await api.setHospitalDomain(hospital.id, domain === "" ? null : domain);
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not update the custom domain.");
-    }
-  }
-
   return (
     <main className="min-h-screen bg-[var(--color-bg-subtle)]">
-      <header className="border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold text-[var(--color-fg)]">Operator console</h1>
-            <p className="text-xs text-[var(--color-fg-muted)]">
-              {hospitals.length} hospitals · signed in as {operator?.email} (
-              {operator?.roles.join(", ")})
-            </p>
+      <header
+        className="sticky top-0 z-30 border-b border-[var(--color-border)]"
+        style={{ background: "var(--surface-glass)", backdropFilter: "blur(12px)" }}
+      >
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
+          <div className="flex items-center gap-2.5">
+            <div
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold text-[var(--color-on-accent)] shadow-[var(--shadow-xs)]"
+              style={{ background: "var(--gradient-brand)" }}
+            >
+              P
+            </div>
+            <div>
+              <h1 className="text-sm font-semibold text-[var(--color-fg)]">Operator console</h1>
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                {hospitals.length} hospitals · {operator?.email}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <ThemeToggle />
-            <button
-              onClick={logout}
-              className="rounded-lg border border-[var(--color-border-strong)] px-3 py-1.5 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-            >
+            <Button variant="secondary" size="sm" onClick={logout}>
               Sign out
-            </button>
+            </Button>
           </div>
         </div>
       </header>
 
       <div className="mx-auto max-w-6xl space-y-6 p-6">
         {error && (
-          <div className="rounded-lg border border-[var(--color-danger)] bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-red-800">
+          <div className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger-bg)] px-4 py-3 text-sm text-[var(--color-danger)]">
             {error}
           </div>
         )}
 
-        {/* Shown ONCE. We store only a hash, so there is no "show it again" — and
-            pretending otherwise would be a lie we could not honour. */}
+        {/* Credentials, shown ONCE (we store only a hash). */}
         {created && (
-          <div className="rounded-xl border border-[var(--color-success)] bg-[var(--color-success-bg)] p-5">
+          <div className="mc-fade-in rounded-2xl border border-[var(--color-success)]/30 bg-[var(--color-success-bg)] p-5">
             <h2 className="font-semibold text-[var(--color-success)]">
               {created.hospital.hospitalName} is ready
             </h2>
             <p className="mt-1 text-sm text-[var(--color-success)]">
-              Hand these to the hospital. The password is shown once and cannot be recovered — we
-              store only a hash of it.
+              Hand these to the hospital. The password is shown once and cannot be recovered.
             </p>
             <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-3">
               <div>
-                <dt className="text-[var(--color-success)]">Sign-in URL</dt>
-                <dd className="font-mono text-[var(--color-success)]">{created.hospital.url}</dd>
+                <dt className="text-[var(--color-success)]/80">Sign-in URL</dt>
+                <dd className="font-mono break-all text-[var(--color-success)]">
+                  {created.hospital.url}
+                </dd>
               </div>
               <div>
-                <dt className="text-[var(--color-success)]">Email</dt>
-                <dd className="font-mono text-[var(--color-success)]">{created.email}</dd>
+                <dt className="text-[var(--color-success)]/80">Email</dt>
+                <dd className="font-mono break-all text-[var(--color-success)]">{created.email}</dd>
               </div>
               <div>
-                <dt className="text-[var(--color-success)]">Temporary password</dt>
+                <dt className="text-[var(--color-success)]/80">Temporary password</dt>
                 <dd className="font-mono font-semibold text-[var(--color-success)]">
                   {created.password ?? "(the one you set)"}
                 </dd>
               </div>
             </dl>
-            <button
-              onClick={() => setCreated(null)}
-              className="mt-4 text-sm font-medium text-[var(--color-success)] underline"
-            >
+            <Button variant="secondary" size="sm" className="mt-4" onClick={() => setCreated(null)}>
               I have copied these
-            </button>
+            </Button>
           </div>
         )}
 
-        {isSuperAdmin && !showForm && (
-          <button
-            onClick={() => setShowForm(true)}
-            className="rounded-lg bg-[var(--color-fg)] px-4 py-2 text-sm font-medium text-[var(--color-bg)]"
-          >
-            + New hospital
-          </button>
-        )}
-
-        {showForm && (
-          <form
-            onSubmit={createHospital}
-            className="space-y-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-6"
-          >
-            <h2 className="font-semibold text-[var(--color-fg)]">New hospital</h2>
-            <p className="text-sm text-[var(--color-fg-muted)]">
-              Creates the database, runs its migrations, seeds the roles and issues the first
-              administrator — one operation. A hospital without an administrator is a room locked
-              from the inside.
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-[var(--color-fg)]">
+              Hospitals
+            </h2>
+            <p className="mt-0.5 text-sm text-[var(--color-fg-muted)]">
+              Select a hospital to view and configure it.
             </p>
+          </div>
+          {isSuperAdmin && <Button onClick={() => setShowCreate(true)}>+ New hospital</Button>}
+        </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">Hospital name</span>
-                <input
-                  value={form.hospitalName}
-                  onChange={(e) => setForm({ ...form, hospitalName: e.target.value })}
-                  required
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">
-                  Address (slug) — permanent
-                </span>
-                <input
-                  value={form.slug}
-                  onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase() })}
-                  required
-                  placeholder="sunrise"
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 font-mono text-sm"
-                />
-                {fieldErrors.slug && (
-                  <span className="mt-1 block text-xs text-[var(--color-danger)]">
-                    {fieldErrors.slug[0]}
-                  </span>
-                )}
-                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
-                  Becomes their hostname AND their database name. It cannot be changed later.
-                </span>
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">Edition</span>
-                <select
-                  value={form.planCode}
-                  onChange={(e) => setForm({ ...form, planCode: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-                >
-                  {editions.map((edition) => (
-                    <option key={edition.code} value={edition.code}>
-                      {edition.name}
-                      {edition.limits.maxUsers ? ` — ${String(edition.limits.maxUsers)} seats` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">
-                  First administrator (email)
-                </span>
-                <input
-                  type="email"
-                  value={form.adminEmail}
-                  onChange={(e) => setForm({ ...form, adminEmail: e.target.value })}
-                  required
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">
-                  Supported branches
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={form.maxBranches}
-                  onChange={(e) => setForm({ ...form, maxBranches: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-                />
-                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
-                  How many branches this hospital may create. 1 = single-site. Raise it any time.
-                </span>
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">
-                  Licence valid until
-                </span>
-                <input
-                  type="date"
-                  value={form.licenseExpiresAt}
-                  onChange={(e) => setForm({ ...form, licenseExpiresAt: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-                />
-                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
-                  Leave blank for a default trial. After this date (plus grace) the hospital is
-                  blocked until you extend.
-                </span>
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-[var(--color-fg)]">Grace days</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={form.graceDays}
-                  onChange={(e) => setForm({ ...form, graceDays: e.target.value })}
-                  placeholder="default"
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm"
-                />
-                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
-                  Days after expiry the hospital still runs (with a renewal banner) before access is
-                  cut.
-                </span>
-              </label>
-
-              <label className="block sm:col-span-2">
-                <span className="text-sm font-medium text-[var(--color-fg)]">
-                  Custom domain <span className="text-[var(--color-fg-muted)]">(optional)</span>
-                </span>
-                <input
-                  value={form.customDomain}
-                  onChange={(e) => setForm({ ...form, customDomain: e.target.value.toLowerCase() })}
-                  placeholder="care.hospital.com"
-                  className="mt-1 w-full rounded-lg border border-[var(--color-border-strong)] px-3 py-2 font-mono text-sm"
-                />
-                <span className="mt-1 block text-xs text-[var(--color-fg-muted)]">
-                  A hostname that resolves to this hospital, in addition to its subdomain. DNS/TLS
-                  is set up separately.
-                </span>
-              </label>
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={saving}
-                className="rounded-lg bg-[var(--color-fg)] px-4 py-2 text-sm font-medium text-[var(--color-bg)] disabled:opacity-60"
-              >
-                {saving ? "Creating…" : "Create hospital"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowForm(false)}
-                className="rounded-lg border border-[var(--color-border-strong)] px-4 py-2 text-sm text-[var(--color-fg-muted)]"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        )}
-
-        <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)]">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-muted)] uppercase">
+        <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[var(--shadow-xs)]">
+          <table className="w-full min-w-[720px] text-left text-sm">
+            <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
               <tr>
-                <th className="px-4 py-3 font-medium">Hospital</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Edition</th>
-                <th className="px-4 py-3 font-medium">Licence</th>
-                <th className="px-4 py-3 font-medium">Branches</th>
-                {isSuperAdmin && <th className="px-4 py-3 font-medium">Actions</th>}
+                <th className="px-6 py-3.5 font-medium">Hospital</th>
+                <th className="px-6 py-3.5 font-medium">Status</th>
+                <th className="px-6 py-3.5 font-medium">Edition</th>
+                <th className="px-6 py-3.5 font-medium">Licence</th>
+                <th className="px-6 py-3.5 text-right font-medium">Branches</th>
+                <th className="px-6 py-3.5 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border)]">
-              {loading && (
+              {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-subtle)]">
+                  <td colSpan={6} className="px-6 py-12 text-center text-[var(--color-fg-subtle)]">
                     Loading the fleet…
                   </td>
                 </tr>
-              )}
-
-              {!loading &&
+              ) : hospitals.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-[var(--color-fg-subtle)]">
+                    No hospitals yet.
+                  </td>
+                </tr>
+              ) : (
                 hospitals.map((hospital) => {
                   const lic = licenseBadge(hospital.license);
                   return (
-                    <tr key={hospital.id}>
-                      <td className="px-4 py-3">
+                    <tr
+                      key={hospital.id}
+                      onClick={() => setSelected(hospital)}
+                      className="cursor-pointer transition-colors hover:bg-[var(--color-bg-subtle)]"
+                    >
+                      <td className="px-6 py-4">
                         <span className="block font-medium text-[var(--color-fg)]">
                           {hospital.hospitalName}
                         </span>
-                        <a
-                          href={hospital.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-mono text-xs text-[var(--color-fg-muted)] underline"
-                        >
-                          {hospital.url}
-                        </a>
+                        <span className="font-mono text-xs text-[var(--color-fg-muted)]">
+                          {hospital.url.replace(/^https?:\/\//, "")}
+                        </span>
                         {hospital.customDomain && (
                           <span className="mt-0.5 block font-mono text-xs text-[var(--color-fg-subtle)]">
                             ↳ {hospital.customDomain}
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-xs font-medium ${statusColor(hospital.status)}`}
-                        >
+                      <td className="px-6 py-4">
+                        <Badge tone={statusTone(hospital.status)} dot>
                           {hospital.status}
-                        </span>
+                        </Badge>
                       </td>
-                      <td className="px-4 py-3">
-                        {isSuperAdmin ? (
-                          <select
-                            value={hospital.planCode ?? ""}
-                            onChange={(e) => void changePlan(hospital, e.target.value)}
-                            className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs"
-                          >
-                            <option value="">— none —</option>
-                            {editions.map((edition) => (
-                              <option key={edition.code} value={edition.code}>
-                                {edition.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span className="text-[var(--color-fg-muted)]">
-                            {hospital.planCode ?? "—"}
-                          </span>
-                        )}
+                      <td className="px-6 py-4 text-[var(--color-fg-muted)]">
+                        {hospital.planCode ?? "—"}
                       </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`rounded-md px-2 py-0.5 text-xs font-medium ${lic.className}`}
-                          title={
-                            hospital.license.expiresAt
-                              ? `Valid until ${shortDate(hospital.license.expiresAt)}`
-                              : "No expiry set"
-                          }
-                        >
-                          {lic.label}
-                        </span>
+                      <td className="px-6 py-4">
+                        <Badge tone={lic.tone}>{lic.label}</Badge>
                         <span className="mt-0.5 block text-xs text-[var(--color-fg-subtle)]">
                           {hospital.license.state === "PERPETUAL"
                             ? "no expiry"
                             : shortDate(hospital.license.expiresAt)}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-[var(--color-fg-muted)]">
+                      <td className="px-6 py-4 text-right tabular-nums text-[var(--color-fg-muted)]">
                         {hospital.maxBranches ?? 1}
                       </td>
-                      {isSuperAdmin && (
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              onClick={() => void extendLicense(hospital)}
-                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
-                            >
-                              Extend licence
-                            </button>
-                            <button
-                              onClick={() => void changeBranches(hospital)}
-                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
-                            >
-                              Branches
-                            </button>
-                            <button
-                              onClick={() => void changeDomain(hospital)}
-                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
-                            >
-                              Domain
-                            </button>
-                            <button
-                              onClick={() => void issueAdmin(hospital)}
-                              className="rounded-md border border-[var(--color-border-strong)] px-2 py-1 text-xs text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]"
-                            >
-                              Issue admin
-                            </button>
-                            {hospital.status === "suspended" ? (
-                              <button
-                                onClick={() => void changeStatus(hospital, "active")}
-                                className="rounded-md border border-[var(--color-success)] px-2 py-1 text-xs text-[var(--color-success)] hover:bg-[var(--color-success-bg)]"
-                              >
-                                Reactivate
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => {
-                                  // Suspension takes the hospital OFFLINE — every member
-                                  // of their staff loses access immediately. Never a
-                                  // one-click action.
-                                  if (
-                                    window.confirm(
-                                      `Suspend ${hospital.hospitalName}?\n\nEvery member of their staff will be unable to log in, immediately. This is for non-payment or a security incident — it is not a pause button.`,
-                                    )
-                                  ) {
-                                    void changeStatus(hospital, "suspended");
-                                  }
-                                }}
-                                className="rounded-md border border-[var(--color-danger)] px-2 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]"
-                              >
-                                Suspend
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      )}
+                      <td className="px-6 py-4 text-right whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1 text-sm font-medium text-[var(--color-brand-600)]">
+                          Details
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden
+                          >
+                            <path d="m9 18 6-6-6-6" />
+                          </svg>
+                        </span>
+                      </td>
                     </tr>
                   );
-                })}
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -731,6 +909,29 @@ function Console() {
           where their compliance officer can see it.
         </p>
       </div>
+
+      {showCreate && (
+        <NewHospitalModal
+          editions={editions}
+          onClose={() => setShowCreate(false)}
+          onCreated={(c) => {
+            setCreated(c);
+            setShowCreate(false);
+            void load();
+          }}
+        />
+      )}
+
+      {selected && (
+        <TenantDrawer
+          hospital={selected}
+          editions={editions}
+          isSuperAdmin={isSuperAdmin}
+          onClose={() => setSelected(null)}
+          onChanged={() => void load()}
+          onIssued={(c) => setCreated(c)}
+        />
+      )}
     </main>
   );
 }

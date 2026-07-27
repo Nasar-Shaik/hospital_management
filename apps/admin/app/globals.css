@@ -1,7 +1,72 @@
 @import "tailwindcss";
 @import "@medicore/ui/tokens.css";
 
+/**
+ * Operator console base — mirrors the hospital app (apps/web/app/globals.css) so the two products
+ * feel like one company's work: same type face, same motion vocabulary, same reduced-motion floor.
+ */
 body {
   background: var(--color-bg);
   color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+.font-mono,
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+}
+
+@keyframes mc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes mc-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes mc-drawer-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.mc-fade-in {
+  animation: mc-fade-in var(--dur) var(--ease-standard) both;
+}
+.mc-scale-in {
+  animation: mc-scale-in var(--dur) var(--ease-emphasized) both;
+}
+.mc-drawer-in-right {
+  animation: mc-drawer-in-right var(--dur-slow) var(--ease-emphasized) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
