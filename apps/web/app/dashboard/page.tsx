@@ -3,18 +3,19 @@
 /**
  * Dashboard — what THIS person needs the moment they sign in.
  *
- * The dashboard is role-aware: a doctor lands on their own day (patients seen, tests ordered, meds
- * prescribed — each a click away from the detail), an administrator sees the hospital's numbers, and
- * everyone gets the quick actions their permissions actually allow. Nothing here is invented — every
- * figure is a real query, self-scoped where it should be (your day is YOUR day), so a demo never
- * shows a chart the hospital cannot reproduce.
+ * Role-aware: a doctor lands on their own day (patients seen, tests ordered, meds prescribed — each
+ * a click from the detail), an administrator sees the hospital's numbers, and everyone gets the
+ * quick actions their permissions actually allow. Nothing here is invented — every figure is a real
+ * query, self-scoped where it should be (your day is YOUR day), so a demo never shows a chart the
+ * hospital cannot reproduce.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { type MyActivity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Alert, Card } from "../../components/ui";
+import { Alert, Card, Skeleton, StatCard } from "../../components/ui";
+import { Icon, type IconName } from "../../components/icons";
 import { rupees } from "../../lib/money";
 
 /* ── date-range presets (half-open [from, to)) ───────────────────────────────── */
@@ -43,12 +44,14 @@ function Dashboard() {
 
   // A clinician is anyone who orders tests or writes prescriptions — the "my day" panel is theirs.
   const clinician = can("order:create") || can("prescription:create");
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-[var(--color-fg)]">
-          Good day, {user.name.split(" ")[0]}
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--color-fg)]">
+          {greeting}, {user.name.split(" ")[0]}
         </h1>
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
           {user.roles.join(" · ") || "No role assigned"}
@@ -58,7 +61,7 @@ function Dashboard() {
       {user.mustChangePassword && (
         <Alert tone="warning" title="Change your password">
           You are using a temporary password.{" "}
-          <Link href="/change-password" className="underline">
+          <Link href="/change-password" className="font-medium underline">
             Set your own now
           </Link>
           .
@@ -82,6 +85,12 @@ function Dashboard() {
 /* ── clinician's "my day" ────────────────────────────────────────────────────── */
 
 type Metric = "patients" | "tests" | "meds";
+
+const METRIC_META: Record<Metric, { label: string; icon: IconName }> = {
+  patients: { label: "Patients seen", icon: "patients" },
+  tests: { label: "Tests ordered", icon: "worklist" },
+  meds: { label: "Prescriptions", icon: "pharmacy" },
+};
 
 function MyDay() {
   const { api } = useAuth();
@@ -107,17 +116,17 @@ function MyDay() {
     void load();
   }, [load]);
 
-  const metrics: { key: Metric; label: string; value: number }[] = [
-    { key: "patients", label: "Patients seen", value: data?.patientsSeen ?? 0 },
-    { key: "tests", label: "Tests ordered", value: data?.tests.length ?? 0 },
-    { key: "meds", label: "Prescriptions", value: data?.prescriptions.length ?? 0 },
+  const metrics: { key: Metric; value: number }[] = [
+    { key: "patients", value: data?.patientsSeen ?? 0 },
+    { key: "tests", value: data?.tests.length ?? 0 },
+    { key: "meds", value: data?.prescriptions.length ?? 0 },
   ];
 
   return (
-    <Card className="p-6">
+    <section className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-[var(--color-fg)]">My activity</h2>
-        <div className="flex gap-1 rounded-lg border border-[var(--color-border)] p-0.5">
+        <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-0.5">
           {(["today", "week", "month"] as Preset[]).map((p) => (
             <button
               key={p}
@@ -126,9 +135,9 @@ function MyDay() {
                 setPreset(p);
                 setOpen(null);
               }}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-[var(--dur-fast)] ${
                 preset === p
-                  ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                  ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)] shadow-[var(--shadow-xs)]"
                   : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
               }`}
             >
@@ -138,28 +147,51 @@ function MyDay() {
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        {metrics.map((m) => (
-          <button
-            key={m.key}
-            type="button"
-            onClick={() => setOpen(open === m.key ? null : m.key)}
-            className={`rounded-xl border p-4 text-left transition ${
-              open === m.key
-                ? "border-[var(--color-brand-600)] bg-[var(--color-brand-50)]"
-                : "border-[var(--color-border)] hover:border-[var(--color-border-strong)]"
-            }`}
-          >
-            <p className="text-3xl font-bold text-[var(--color-fg)]">{loading ? "…" : m.value}</p>
-            <p className="mt-0.5 text-sm text-[var(--color-fg-muted)]">
-              {m.label} <span className="text-[var(--color-fg-subtle)]">· view</span>
-            </p>
-          </button>
-        ))}
+      <div className="grid gap-4 sm:grid-cols-3">
+        {metrics.map((m) => {
+          const meta = METRIC_META[m.key];
+          const active = open === m.key;
+          return (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => setOpen(active ? null : m.key)}
+              className={`group rounded-xl border p-5 text-left shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color] duration-[var(--dur)] ease-[var(--ease-standard)] hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)] ${
+                active
+                  ? "border-[var(--color-brand-600)] bg-[var(--color-brand-50)]"
+                  : "border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-strong)]"
+              }`}
+              style={active ? undefined : { background: "var(--gradient-surface)" }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  {loading ? (
+                    <Skeleton className="h-9 w-14" />
+                  ) : (
+                    <p className="text-3xl font-semibold tracking-tight text-[var(--color-fg)] tabular-nums">
+                      {m.value}
+                    </p>
+                  )}
+                  <p className="mt-1 text-sm text-[var(--color-fg-muted)]">{meta.label}</p>
+                </div>
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--color-brand-50)] text-[var(--color-brand-700)]">
+                  <Icon name={meta.icon} className="h-[18px] w-[18px]" />
+                </span>
+              </div>
+              <p className="mt-3 text-xs font-medium text-[var(--color-brand-700)] opacity-0 transition-opacity group-hover:opacity-100">
+                {active ? "Hide detail" : "View detail →"}
+              </p>
+            </button>
+          );
+        })}
       </div>
 
-      {open && data && <Drill metric={open} data={data} rangeLabel={range.label} />}
-    </Card>
+      {open && data && (
+        <Card className="overflow-hidden">
+          <Drill metric={open} data={data} rangeLabel={range.label} />
+        </Card>
+      )}
+    </section>
   );
 }
 
@@ -179,8 +211,7 @@ function Drill({
     secondary: string;
   }[] =
     metric === "patients"
-      ? // Distinct patients seen — collapse the visit list to one row per patient.
-        dedupePatients(data.visits).map((v) => ({
+      ? dedupePatients(data.visits).map((v) => ({
           key: v.patient.id,
           patient: v.patient,
           primary: v.class,
@@ -205,19 +236,19 @@ function Drill({
 
   if (rows.length === 0) {
     return (
-      <p className="mt-4 text-sm text-[var(--color-fg-muted)]">
+      <p className="px-4 py-8 text-center text-sm text-[var(--color-fg-muted)]">
         Nothing in {rangeLabel.toLowerCase()}.
       </p>
     );
   }
 
   return (
-    <div className="mt-4 divide-y divide-[var(--color-border)] rounded-lg border border-[var(--color-border)]">
+    <div className="divide-y divide-[var(--color-border)]">
       {rows.map((r) => (
         <Link
           key={r.key}
           href={`/patients/${r.patient.id}`}
-          className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm hover:bg-[var(--color-bg-subtle)]"
+          className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-[var(--color-bg-subtle)]"
         >
           <span className="min-w-0">
             <span className="font-medium text-[var(--color-fg)]">{r.patient.name}</span>
@@ -264,60 +295,83 @@ function ManagementStrip() {
   }, [api]);
 
   return (
-    <Card className="p-6">
+    <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-[var(--color-fg)]">Today, hospital-wide</h2>
-        <Link href="/reports" className="text-sm text-[var(--color-brand-600)] hover:underline">
+        <Link
+          href="/reports"
+          className="text-sm font-medium text-[var(--color-brand-600)] hover:underline"
+        >
           All reports →
         </Link>
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-[var(--color-border)] p-4">
-          <p className="text-3xl font-bold text-[var(--color-fg)]">{visits ?? "—"}</p>
-          <p className="mt-0.5 text-sm text-[var(--color-fg-muted)]">Patient visits</p>
-        </div>
-        <div className="rounded-xl border border-[var(--color-border)] p-4">
-          <p className="text-3xl font-bold text-[var(--color-fg)]">
-            {collected === null ? "—" : rupees(collected)}
-          </p>
-          <p className="mt-0.5 text-sm text-[var(--color-fg-muted)]">Collected</p>
-        </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <StatCard
+          label="Patient visits"
+          value={visits ?? "—"}
+          tone="info"
+          icon={<Icon name="patients" className="h-[18px] w-[18px]" />}
+        />
+        <StatCard
+          label="Collected"
+          value={collected === null ? "—" : rupees(collected)}
+          tone="success"
+          icon={<Icon name="billing" className="h-[18px] w-[18px]" />}
+        />
       </div>
-    </Card>
+    </section>
   );
 }
 
 /* ── quick actions ───────────────────────────────────────────────────────────── */
 
 function QuickActions({ can }: { can: (p: string) => boolean }) {
-  const actions: { label: string; href: string; permission: string }[] = [
-    { label: "Register a patient", href: "/patients", permission: "patient:register" },
-    { label: "Reception queue", href: "/reception", permission: "encounter:create" },
-    { label: "My patients", href: "/my-patients", permission: "order:create" },
-    { label: "Lab worklist", href: "/worklist", permission: "order:read" },
-    { label: "Pharmacy", href: "/pharmacy", permission: "pharmacy:dispense" },
-    { label: "Billing", href: "/billing", permission: "billing:read" },
-    { label: "Ward", href: "/ward", permission: "emr:read" },
-    { label: "Staff", href: "/staff", permission: "user:read" },
-  ].filter((a) => can(a.permission));
+  const all: { label: string; href: string; permission: string; icon: IconName }[] = [
+    {
+      label: "Register a patient",
+      href: "/patients",
+      permission: "patient:register",
+      icon: "patients",
+    },
+    {
+      label: "Reception queue",
+      href: "/reception",
+      permission: "encounter:create",
+      icon: "reception",
+    },
+    { label: "My patients", href: "/my-patients", permission: "order:create", icon: "myPatients" },
+    { label: "Lab worklist", href: "/worklist", permission: "order:read", icon: "worklist" },
+    { label: "Pharmacy", href: "/pharmacy", permission: "pharmacy:dispense", icon: "pharmacy" },
+    { label: "Billing", href: "/billing", permission: "billing:read", icon: "billing" },
+    { label: "Ward", href: "/ward", permission: "emr:read", icon: "ward" },
+    { label: "Staff", href: "/staff", permission: "user:read", icon: "staff" },
+  ];
+  const actions = all.filter((a) => can(a.permission));
 
   if (actions.length === 0) return null;
 
   return (
-    <Card className="p-6">
+    <section className="space-y-4">
       <h2 className="text-sm font-semibold text-[var(--color-fg)]">Quick actions</h2>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {actions.map((a) => (
           <Link
             key={a.href}
             href={a.href}
-            className="rounded-lg border border-[var(--color-border)] px-4 py-3 text-sm font-medium text-[var(--color-fg)] transition hover:border-[var(--color-brand-600)] hover:text-[var(--color-brand-700)]"
+            className="group flex items-center gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 py-3.5 text-sm font-medium text-[var(--color-fg)] shadow-[var(--shadow-xs)] transition-[transform,box-shadow,border-color] duration-[var(--dur)] ease-[var(--ease-standard)] hover:-translate-y-0.5 hover:border-[var(--color-brand-600)] hover:shadow-[var(--shadow-md)]"
           >
-            {a.label} →
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-50)] text-[var(--color-brand-700)] transition-transform duration-[var(--dur)] group-hover:scale-110">
+              <Icon name={a.icon} className="h-[18px] w-[18px]" />
+            </span>
+            <span className="flex-1">{a.label}</span>
+            <Icon
+              name="chevron"
+              className="h-4 w-4 text-[var(--color-fg-subtle)] transition-transform group-hover:translate-x-0.5"
+            />
           </Link>
         ))}
       </div>
-    </Card>
+    </section>
   );
 }
 
