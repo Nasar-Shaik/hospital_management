@@ -44,7 +44,7 @@ export interface Encounter {
   arrivedAt: Date;
   closedAt?: Date;
   /** Present when `class` is `IP`. The bed is recorded, not reserved — see the model. */
-  bed?: { ward: string; bedCode: string; tariffCode: string };
+  bed?: { ward: string; bedCode: string; tariffCode: string; bedId?: string };
   admittedAt?: Date;
   dischargedAt?: Date;
   disposition?: DischargeDisposition;
@@ -74,7 +74,16 @@ function toEncounter(doc: EncounterDoc): Encounter {
     ...(doc.advice ? { advice: doc.advice } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
     ...(doc.closedAt ? { closedAt: doc.closedAt } : {}),
-    ...(doc.bed ? { bed: doc.bed } : {}),
+    ...(doc.bed
+      ? {
+          bed: {
+            ward: doc.bed.ward,
+            bedCode: doc.bed.bedCode,
+            tariffCode: doc.bed.tariffCode,
+            ...(doc.bed.bedId ? { bedId: doc.bed.bedId.toString() } : {}),
+          },
+        }
+      : {}),
     ...(doc.admittedAt ? { admittedAt: doc.admittedAt } : {}),
     ...(doc.dischargedAt ? { dischargedAt: doc.dischargedAt } : {}),
     ...(doc.disposition ? { disposition: doc.disposition } : {}),
@@ -131,7 +140,7 @@ export interface CreateEncounterInput {
   express?: boolean;
   reason?: string;
   branchId?: string;
-  bed?: { ward: string; bedCode: string; tariffCode: string };
+  bed?: { ward: string; bedCode: string; tariffCode: string; bedId?: string };
   admittedAt?: Date;
   admittedFrom?: string;
 }

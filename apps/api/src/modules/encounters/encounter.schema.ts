@@ -77,21 +77,32 @@ export type VisitSummaryBody = z.infer<typeof visitSummarySchema>;
 /**
  * Admitting a patient.
  *
- * `tariffCode` is what the bed-day is billed at, and it is chosen by the person admitting
- * rather than derived from the ward name: "ICU" is not a price, and a hospital that renames
- * a ward must not silently re-price every bed in it.
+ * TWO WAYS IN, ONE OF THEM PREFERRED:
+ *  - `bedId` — pick a bed from the inventory (B4). The ward name, bed code and tariff are taken
+ *    from the catalogue, so a typo can no longer invent an untraceable bed and the tariff is the
+ *    one configured for that bed.
+ *  - `ward` + `bedCode` + `tariffCode` — the legacy free-text path, kept for hospitals that have
+ *    not built their bed inventory yet (and for the existing tests). `tariffCode` is chosen by the
+ *    admitter rather than derived from the ward name: "ICU" is not a price, and renaming a ward
+ *    must not silently re-price every bed in it.
+ *
+ * Exactly one shape must be present — `bedId`, OR all three free-text fields.
  */
 export const admitSchema = z
   .object({
-    ward: z.string().min(1).max(100),
-    /** `A-12`. Free text — there is no bed inventory to validate against (see the model). */
-    bedCode: z.string().min(1).max(32),
-    tariffCode: z.string().min(1).max(64),
+    bedId: objectId.optional(),
+    ward: z.string().min(1).max(100).optional(),
+    bedCode: z.string().min(1).max(32).optional(),
+    tariffCode: z.string().min(1).max(64).optional(),
     /** The consultant on the ward. Defaults to the OP doctor when omitted. */
     doctorId: objectId.optional(),
     reason: z.string().max(500).optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => (b.bedId ? true : Boolean(b.ward && b.bedCode && b.tariffCode)), {
+    message: "pick a bed (bedId) or give the ward, bedCode and tariffCode",
+    path: ["bedId"],
+  });
 
 /**
  * Handing the patient to another doctor.

@@ -1115,4 +1115,48 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0027-bed-inventory",
+    description:
+      "Bed inventory (B4) — the catalogue of wards and beds, so admission becomes 'pick a free " +
+      "bed'. Occupancy is NOT stored here; it stays on the encounter. This owns only the two " +
+      "collections and their indexes.",
+    up: async (db) => {
+      await db.createCollection("wards").catch(() => undefined);
+      await db.createCollection("beds").catch(() => undefined);
+
+      /**
+       * A ward name is unique PER TENANT, not per branch — deliberately. Occupancy is enforced by
+       * `one_open_stay_per_bed` on `{tenantId, bed.ward, bed.bedCode}` (migration 0020, no branch),
+       * so the catalogue lines up with it: `(ward name, bed code)` is a tenant-wide key. If this
+       * cannot build because two wards already share a name, fold one into the other and re-run.
+       */
+      await db
+        .collection("wards")
+        .createIndex(
+          { tenantId: 1, name: 1 },
+          { unique: true, name: "one_ward_name_per_tenant", background: true },
+        );
+
+      /** A bed code is unique WITHIN its ward — `ICU / A-12` and `General / A-12` are two beds. */
+      await db
+        .collection("beds")
+        .createIndex(
+          { tenantId: 1, wardId: 1, code: 1 },
+          { unique: true, name: "one_bed_code_per_ward", background: true },
+        );
+      // The board and the admit picker list a ward's beds — read by tenant + ward.
+      await db.collection("beds").createIndex({ tenantId: 1, wardId: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("wards")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("beds")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

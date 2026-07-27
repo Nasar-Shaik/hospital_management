@@ -36,6 +36,18 @@ const FEATURE = { feature: FEATURE_FLAGS.OPS_IPD } as const;
 export function admissionRouter(): Router {
   const router = Router();
 
+  /**
+   * The bed board — the inventory (B4) joined to who is currently admitted. `emr:read`, like the
+   * catalogue reads it draws on: the doctor about to admit and the nurse working the ward both
+   * need to see which beds are free.
+   */
+  router.get(
+    "/bed-board",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_READ, FEATURE),
+    asyncHandler(controller.getBedBoard),
+  );
+
   router.post(
     "/encounters/:id/notes",
     authenticate(),

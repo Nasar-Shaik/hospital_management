@@ -1246,6 +1246,8 @@ export interface Bed {
   bedCode: string;
   /** The tariff the bed-day is billed at — `BED_GEN`, `BED_ICU`. */
   tariffCode: string;
+  /** The inventory bed (B4) this stay occupies, when admitted from the catalogue. */
+  bedId?: string;
 }
 
 export type WardNoteType = "progress" | "discharge_summary" | "outcome_note";
@@ -1269,6 +1271,94 @@ export interface AdmitResult {
   outpatient: Encounter;
   /** The new INPATIENT encounter, in the SAME episode. */
   inpatient: Encounter;
+}
+
+/* ── Bed inventory & board (Module B4) ─────────────────────────────────────── */
+
+export type WardKind =
+  | "general"
+  | "semi_private"
+  | "private"
+  | "icu"
+  | "nicu"
+  | "picu"
+  | "hdu"
+  | "maternity"
+  | "emergency"
+  | "isolation"
+  | "daycare";
+export type WardStatus = "active" | "inactive";
+export type BedStatus = "available" | "blocked";
+
+export interface Ward {
+  id: string;
+  name: string;
+  kind: WardKind;
+  /** The default bed-day tariff for beds in this ward. */
+  tariffCode: string;
+  status: WardStatus;
+  branchId?: string;
+}
+
+/** A catalogue bed, joined to its ward. `tariffCode` is the effective one (bed's, or its ward's). */
+export interface InventoryBed {
+  id: string;
+  wardId: string;
+  code: string;
+  room?: string;
+  tariffCode: string;
+  status: BedStatus;
+  blockedReason?: string;
+  branchId?: string;
+  wardName: string;
+  wardKind: WardKind;
+  wardStatus: WardStatus;
+}
+
+export interface BedBoardOccupant {
+  encounterId: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  admittedAt?: string;
+  doctorId?: string;
+}
+
+export interface BedBoardBed {
+  bedId: string;
+  code: string;
+  room?: string;
+  tariffCode: string;
+  state: "free" | "occupied" | "blocked";
+  blockedReason?: string;
+  occupant?: BedBoardOccupant;
+}
+
+export interface BedBoardWard {
+  wardId: string;
+  name: string;
+  kind: WardKind;
+  status: WardStatus;
+  tariffCode: string;
+  beds: BedBoardBed[];
+  counts: { total: number; free: number; occupied: number; blocked: number };
+}
+
+/** An open stay whose bed is not in the catalogue — a legacy free-text admission. */
+export interface BedBoardUnlisted {
+  encounterId: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  ward: string;
+  bedCode: string;
+  admittedAt?: string;
+}
+
+export interface BedBoard {
+  wards: BedBoardWard[];
+  totals: { total: number; free: number; occupied: number; blocked: number };
+  unlisted: BedBoardUnlisted[];
 }
 
 export interface OperatorSession {
@@ -2285,12 +2375,18 @@ export class ApiClient {
    * encounters, one care story (ADR-0013 §4).
    */
 
+  /**
+   * Admit a patient. Prefer `bedId` — a bed picked from the inventory (B4), which fills in the
+   * ward, code and tariff from the catalogue. The free-text `ward`/`bedCode`/`tariffCode` triple
+   * is the legacy path for hospitals that have not built their bed inventory yet.
+   */
   admitPatient(
     encounterId: string,
     input: {
-      ward: string;
-      bedCode: string;
-      tariffCode: string;
+      bedId?: string;
+      ward?: string;
+      bedCode?: string;
+      tariffCode?: string;
       doctorId?: string;
       reason?: string;
     },
@@ -2301,6 +2397,56 @@ export class ApiClient {
   /** Everyone in a bed right now — the ward round's list. */
   listInpatients(): Promise<Encounter[]> {
     return this.request<Encounter[]>("GET", "/api/v1/inpatients");
+  }
+
+  /* ── Bed inventory & board (Module B4) ───────────────────────────────────── */
+
+  /** The free-and-occupied bed board — the inventory joined to who is actually admitted. */
+  bedBoard(): Promise<BedBoard> {
+    return this.request<BedBoard>("GET", "/api/v1/bed-board");
+  }
+
+  listWards(): Promise<Ward[]> {
+    return this.request<Ward[]>("GET", "/api/v1/wards");
+  }
+
+  createWard(input: { name: string; kind: WardKind; tariffCode: string }): Promise<Ward> {
+    return this.request<Ward>("POST", "/api/v1/wards", input);
+  }
+
+  updateWard(
+    id: string,
+    patch: { name?: string; kind?: WardKind; tariffCode?: string; status?: WardStatus },
+  ): Promise<Ward> {
+    return this.request<Ward>("PATCH", `/api/v1/wards/${id}`, patch);
+  }
+
+  /** Every bed, or one ward's beds — each joined to its ward name and effective tariff. */
+  listBeds(wardId?: string): Promise<InventoryBed[]> {
+    const qs = wardId ? `?wardId=${wardId}` : "";
+    return this.request<InventoryBed[]>("GET", `/api/v1/beds${qs}`);
+  }
+
+  createBed(input: {
+    wardId: string;
+    code: string;
+    room?: string;
+    tariffCode?: string;
+  }): Promise<InventoryBed> {
+    return this.request<InventoryBed>("POST", "/api/v1/beds", input);
+  }
+
+  updateBed(
+    id: string,
+    patch: {
+      code?: string;
+      room?: string;
+      tariffCode?: string;
+      status?: BedStatus;
+      blockedReason?: string;
+    },
+  ): Promise<InventoryBed> {
+    return this.request<InventoryBed>("PATCH", `/api/v1/beds/${id}`, patch);
   }
 
   addWardNote(encounterId: string, text: string): Promise<WardNote> {

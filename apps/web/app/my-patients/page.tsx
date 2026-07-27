@@ -999,6 +999,10 @@ function AdmitOrTransfer({
 }) {
   const { api, user, can } = useAuth();
   const [mode, setMode] = useState<"none" | "admit" | "transfer">("none");
+  // Bed picker (B4): the free beds from the inventory. `null` = not loaded yet.
+  const [freeBeds, setFreeBeds] = useState<{ bedId: string; label: string }[] | null>(null);
+  const [selectedBedId, setSelectedBedId] = useState("");
+  // Legacy free-text fallback, used only when the inventory has no free bed to pick.
   const [ward, setWard] = useState("General Ward");
   const [bedCode, setBedCode] = useState("");
   const [tariffCode, setTariffCode] = useState("BED_GEN");
@@ -1014,11 +1018,39 @@ function AdmitOrTransfer({
     { code: "BED_ICU", ward: "ICU" },
   ];
 
+  // When the doctor opens the admit panel, load the free beds once. A bed board read is `emr:read`,
+  // which the doctor holds. If it fails or the inventory is empty, the panel falls back to manual
+  // entry, so a hospital that has not built its bed inventory yet can still admit.
+  useEffect(() => {
+    if (mode !== "admit" || freeBeds !== null) return;
+    void api
+      .bedBoard()
+      .then((b) => {
+        const free = b.wards
+          .filter((w) => w.status === "active")
+          .flatMap((w) =>
+            w.beds
+              .filter((bd) => bd.state === "free")
+              .map((bd) => ({
+                bedId: bd.bedId,
+                label: `${w.name} · ${bd.code}${bd.room ? ` (${bd.room})` : ""}`,
+              })),
+          );
+        setFreeBeds(free);
+        if (free.length > 0) setSelectedBedId(free[0]!.bedId);
+      })
+      .catch(() => setFreeBeds([]));
+  }, [mode, freeBeds, api]);
+
+  const usePicker = freeBeds !== null && freeBeds.length > 0;
+
   async function admit() {
     setBusy(true);
     setError(null);
     try {
-      await api.admitPatient(encounter.id, { ward, bedCode, tariffCode });
+      const input =
+        usePicker && selectedBedId ? { bedId: selectedBedId } : { ward, bedCode, tariffCode };
+      await api.admitPatient(encounter.id, input);
       onDone(
         "Admitted. This visit is closed and the stay is on the ward list. Send the patient to reception to pay the admission advance.",
       );
@@ -1067,41 +1099,71 @@ function AdmitOrTransfer({
 
       {mode === "admit" && (
         <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-[var(--color-fg-muted)]">
-              Bed class
+          {freeBeds === null ? (
+            <p className="text-xs text-[var(--color-fg-subtle)]">Finding free beds…</p>
+          ) : usePicker ? (
+            <label className="block text-xs text-[var(--color-fg-muted)]">
+              Free bed
               <select
-                value={tariffCode}
-                onChange={(e) => {
-                  const bed = BEDS.find((b) => b.code === e.target.value);
-                  setTariffCode(e.target.value);
-                  if (bed) setWard(bed.ward);
-                }}
+                value={selectedBedId}
+                onChange={(e) => setSelectedBedId(e.target.value)}
                 className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
               >
-                {BEDS.map((b) => (
-                  <option key={b.code} value={b.code}>
-                    {b.ward}
+                {freeBeds.map((b) => (
+                  <option key={b.bedId} value={b.bedId}>
+                    {b.label}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="text-xs text-[var(--color-fg-muted)]">
-              Bed number
-              <input
-                value={bedCode}
-                onChange={(e) => setBedCode(e.target.value)}
-                placeholder="A-12"
-                className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
-              />
-            </label>
-          </div>
+          ) : (
+            <>
+              <p className="text-xs text-[var(--color-fg-subtle)]">
+                No free bed in the inventory — enter the bed manually. (Configure wards and beds on
+                the Bed board to pick from a list.)
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Bed class
+                  <select
+                    value={tariffCode}
+                    onChange={(e) => {
+                      const bed = BEDS.find((b) => b.code === e.target.value);
+                      setTariffCode(e.target.value);
+                      if (bed) setWard(bed.ward);
+                    }}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                  >
+                    {BEDS.map((b) => (
+                      <option key={b.code} value={b.code}>
+                        {b.ward}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Bed number
+                  <input
+                    value={bedCode}
+                    onChange={(e) => setBedCode(e.target.value)}
+                    placeholder="A-12"
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                  />
+                </label>
+              </div>
+            </>
+          )}
           <p className="text-xs text-[var(--color-fg-subtle)]">
             Admitting CLOSES this visit and opens an inpatient stay in the same care story. The bed
             is billed for every day the patient is here, starting today.
           </p>
           <div className="flex gap-2">
-            <Button disabled={busy || bedCode.trim().length === 0} onClick={() => void admit()}>
+            <Button
+              disabled={
+                busy || (usePicker ? selectedBedId.length === 0 : bedCode.trim().length === 0)
+              }
+              onClick={() => void admit()}
+            >
               {busy ? "Admitting…" : "Admit"}
             </Button>
             <Button variant="secondary" onClick={() => setMode("none")}>

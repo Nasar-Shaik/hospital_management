@@ -4,6 +4,7 @@
 import type { RequestHandler, Response } from "express";
 import type { ApiEnvelope } from "@medicore/types";
 import * as admissions from "./admission.service.js";
+import { bedBoard } from "./bedBoard.js";
 import type {
   AddNoteBody,
   DischargeBody,
@@ -15,6 +16,11 @@ function ok<T>(res: Response, data: T, status = 200): void {
   const body: ApiEnvelope<T> = { success: true, data };
   res.status(status).json(body);
 }
+
+/** The free-and-occupied bed board — the inventory joined to who is actually admitted. */
+export const getBedBoard: RequestHandler = async (_req, res) => {
+  ok(res, await bedBoard());
+};
 
 export const addNote: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };

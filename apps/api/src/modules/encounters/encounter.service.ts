@@ -25,6 +25,7 @@ import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { getPatient } from "../patients/index.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
+import { getBed } from "../wards/index.js";
 import * as repo from "./encounter.repository.js";
 import {
   canTransition,
@@ -300,12 +301,17 @@ async function transition(
 }
 
 export interface AdmitInput {
-  /** `General Ward`, `ICU` — what a human calls the place. */
-  ward: string;
-  /** `A-12`. Free text: there is no bed inventory to validate against (see the model). */
-  bedCode: string;
-  /** The tariff code the bed-day is billed at — `BED_GEN`, `BED_ICU`. */
-  tariffCode: string;
+  /**
+   * The bed to admit into, picked from the inventory (B4). When present, the ward name, bed code
+   * and tariff are taken from the catalogue and the three free-text fields below are ignored.
+   */
+  bedId?: string;
+  /** `General Ward`, `ICU` — legacy free-text path, used only when `bedId` is absent. */
+  ward?: string;
+  /** `A-12`. Legacy free-text path, used only when `bedId` is absent. */
+  bedCode?: string;
+  /** The tariff code the bed-day is billed at — legacy free-text path, ignored when `bedId` set. */
+  tariffCode?: string;
   /** The consultant who owns the patient on the ward. Defaults to the OP doctor. */
   doctorId?: string;
   reason?: string;
@@ -371,6 +377,56 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
       });
     }
 
+    /**
+     * Resolve the bed. When a `bedId` is given, the ward name, code and tariff come from the
+     * INVENTORY (B4) — a real bed, priced as configured — rather than from whatever was typed.
+     * Absent a `bedId`, the legacy free-text fields are used as-is (the schema guarantees all
+     * three are present in that case). Either way the values flow through identically from here.
+     */
+    let ward = input.ward;
+    let bedCode = input.bedCode;
+    let tariffCode = input.tariffCode;
+    let bedId: string | undefined;
+    if (input.bedId) {
+      const catalogueBed = await getBed(input.bedId);
+      if (!catalogueBed) {
+        throw new AppError("HMS-GEN-404", 404, "Bed not found", { bedId: input.bedId });
+      }
+      if (catalogueBed.wardStatus !== "active") {
+        throw new AppError("HMS-STATE-001", 422, "That ward is not in service", {
+          bedId: input.bedId,
+          hint: "the ward is retired — pick a bed in an active ward",
+        });
+      }
+      if (catalogueBed.status === "blocked") {
+        throw new AppError("HMS-STATE-001", 422, "That bed is out of service", {
+          bedId: input.bedId,
+          ...(catalogueBed.blockedReason ? { reason: catalogueBed.blockedReason } : {}),
+          hint: "this bed is blocked — pick a free bed",
+        });
+      }
+      // A bed belongs to exactly one site. Admitting a Chennai patient into a Hyderabad bed would
+      // corrupt both sites' census — the same isolation `branchId` gives every other record.
+      if (current.branchId && catalogueBed.branchId && current.branchId !== catalogueBed.branchId) {
+        throw new AppError("HMS-STATE-001", 422, "That bed is at another branch", {
+          bedId: input.bedId,
+          hint: "pick a bed at the patient's current site",
+        });
+      }
+      ward = catalogueBed.wardName;
+      bedCode = catalogueBed.code;
+      tariffCode = catalogueBed.tariffCode;
+      bedId = catalogueBed.id;
+    }
+    // The schema already refuses an admit that has neither a bedId nor the three fields; this is a
+    // belt-and-braces guard so the types below are non-optional and a service caller cannot slip
+    // an empty bed through.
+    if (!ward || !bedCode || !tariffCode) {
+      throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+        bedId: ["pick a bed (bedId) or give the ward, bedCode and tariffCode"],
+      });
+    }
+
     const admittedAt = new Date();
 
     const outpatient = await repo.setStatus(
@@ -404,7 +460,7 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
           // waiting to be seen — they are in the ward, and somebody is responsible for them
           // from this second.
           status: "in_progress",
-          bed: { ward: input.ward, bedCode: input.bedCode, tariffCode: input.tariffCode },
+          bed: { ward, bedCode, tariffCode, ...(bedId ? { bedId } : {}) },
           admittedAt,
           admittedFrom: current.id,
           ...((input.doctorId ?? current.doctorId)
@@ -426,8 +482,8 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
        */
       if (repo.isDuplicateKey(err) && isBedOccupiedConflict(err)) {
         throw new AppError("HMS-STATE-001", 409, "That bed is already occupied", {
-          ward: input.ward,
-          bedCode: input.bedCode,
+          ward,
+          bedCode,
           hint: "another patient is currently admitted in this bed — choose a free bed",
         });
       }
@@ -447,9 +503,9 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
           outpatientEncounterId: outpatient.id,
           episodeId: inpatient.episodeId,
           patientId: inpatient.patientId,
-          ward: input.ward,
-          bedCode: input.bedCode,
-          tariffCode: input.tariffCode,
+          ward,
+          bedCode,
+          tariffCode,
           admittedAt: admittedAt.toISOString(),
           ...(inpatient.doctorId ? { doctorId: inpatient.doctorId } : {}),
         },

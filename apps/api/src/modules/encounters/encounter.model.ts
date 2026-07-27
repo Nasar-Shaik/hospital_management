@@ -228,23 +228,30 @@ export interface EncounterDoc {
    * version of exactly that — `admissions` hanging off `patients` as a parallel root —
    * is the structure ADR-0013 was written to kill. Admission is a CLASS of encounter.
    *
-   * ── IT PREVENTS DOUBLE-OCCUPANCY, BUT IS STILL NOT A BED INVENTORY ───────────
-   * It records which bed the patient is in so the stay can be billed and the ward round
-   * knows where to go. A unique partial index (`one_open_stay_per_bed`, migration 0020) now
-   * refuses to record two OPEN stays in the same ward + bed, so a bed can no longer hold two
-   * patients at once — the database enforcing it, the same way `one_open_encounter_per_patient`
-   * does for the patient. What this still is NOT is an inventory: there is no catalogue of beds
-   * and no free-bed board, so it can tell you a bed is TAKEN but not which beds are free.
-   * `bed:manage` exists as a permission and nothing writes it — that board is future work
-   * (PROJECT_MEMORY §5).
+   * ── IT PREVENTS DOUBLE-OCCUPANCY, AND NOW HAS AN INVENTORY BEHIND IT ─────────
+   * It records which bed the patient is in so the stay can be billed and the ward round knows
+   * where to go. A unique partial index (`one_open_stay_per_bed`, migration 0020) refuses to
+   * record two OPEN stays in the same ward + bed, so a bed can never hold two patients at once —
+   * the database enforcing it, the same way `one_open_encounter_per_patient` does for the patient.
+   * The `wards` module (B4) now supplies the CATALOGUE: `bedId` is set when the patient is admitted
+   * by picking a bed from it, and the free-bed board (admissions module) derives which beds are
+   * free by joining that catalogue to these open stays. Occupancy still lives HERE, never on the
+   * bed — the board reads it, it does not store it.
    */
   bed?: {
     /** `General Ward`, `ICU` — what a human calls it. */
     ward: string;
-    /** `A-12`. Free text: without an inventory there is nothing to validate against. */
+    /** `A-12`. Denormalized from the bed inventory (B4) when admitted from the catalogue. */
     bedCode: string;
     /** The tariff code the bed-day charge is posted against — `BED_GEN`, `BED_ICU`. */
     tariffCode: string;
+    /**
+     * The catalogue bed this stay occupies (B4), when admitted by picking a bed rather than by
+     * typing one. Present, the bed board correlates occupancy by id; absent (legacy / free-text
+     * admits), it falls back to matching `ward` + `bedCode`. Occupancy itself is NEVER stored on
+     * the bed — this reference points AT the encounter's own record of where the patient is.
+     */
+    bedId?: Types.ObjectId;
   };
 
   arrivedAt: Date;
@@ -301,6 +308,7 @@ const encounterSchema = new Schema<EncounterDoc>(
         ward: { type: String, required: true, trim: true, maxlength: 100 },
         bedCode: { type: String, required: true, trim: true, maxlength: 32 },
         tariffCode: { type: String, required: true, trim: true, maxlength: 64 },
+        bedId: { type: Schema.Types.ObjectId },
       },
       required: false,
     },

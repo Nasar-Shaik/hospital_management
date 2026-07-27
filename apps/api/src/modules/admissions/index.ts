@@ -25,6 +25,15 @@ export {
   type TerminalOutcome,
 } from "./admission.service.js";
 
+export {
+  bedBoard,
+  type BedBoard,
+  type BedBoardWard,
+  type BedBoardBed,
+  type BedBoardOccupant,
+  type BedBoardUnlisted,
+} from "./bedBoard.js";
+
 export { WARD_NOTE_TYPES, type WardNoteType } from "./wardNote.model.js";
 
 /** Re-points ward notes onto the survivor on merge. Registered by eventConsumer.ts. */

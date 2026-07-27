@@ -596,6 +596,34 @@ const PROBES: Record<string, Probe> = {
     body: { name: "Renamed" },
   },
 
+  /* ── Bed inventory & board (B4) ──────────────────────────────────────────────
+   * READS are `emr:read` (the doctor about to admit and the nurse on the ward both see the free
+   * beds); WRITES are `bed:manage` (configuring the estate — TENANT_ADMIN, not the ward staff).
+   */
+  "GET /api/v1/bed-board": { method: "get", url: "/api/v1/bed-board" },
+  "GET /api/v1/wards": { method: "get", url: "/api/v1/wards" },
+  "POST /api/v1/wards": {
+    method: "post",
+    url: "/api/v1/wards",
+    body: { name: "Matrix Ward", kind: "general", tariffCode: "BED_GEN" },
+  },
+  "PATCH /api/v1/wards/:id": {
+    method: "patch",
+    url: "/api/v1/wards/64b7f0000000000000000001",
+    body: { name: "Renamed Ward" },
+  },
+  "GET /api/v1/beds": { method: "get", url: "/api/v1/beds" },
+  "POST /api/v1/beds": {
+    method: "post",
+    url: "/api/v1/beds",
+    body: { wardId: "64b7f0000000000000000001", code: "A-1" },
+  },
+  "PATCH /api/v1/beds/:id": {
+    method: "patch",
+    url: "/api/v1/beds/64b7f0000000000000000001",
+    body: { code: "A-2" },
+  },
+
   /* ── Diagnostic reports ─────────────────────────────────────────────────────
    * `order:perform` uploads a report (the technician/radiologist who ran the test);
    * `emr:read` lists a patient's reports and opens a file (every clinical reader).

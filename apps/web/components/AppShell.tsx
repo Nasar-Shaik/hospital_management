@@ -89,9 +89,9 @@ const NAVIGATION: NavSection[] = [
       { label: "Ward", href: "/ward", permission: "emr:read" },
       { label: "Patients", href: "/patients", permission: "patient:read" },
       { label: "Appointments", href: "/appointments", permission: "appointment:read" },
-      // The BED BOARD (which beds are free) is still `soon` — there is no bed inventory.
-      // `/ward` shows who is admitted; it cannot tell you where there is space.
-      { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },
+      // The BED BOARD (which beds are free) and the ward/bed inventory behind it (B4).
+      // `/ward` shows who is admitted; this shows where there is space.
+      { label: "Bed board", href: "/beds", permission: "bed:allocate" },
     ],
   },
   {
