@@ -47,6 +47,7 @@ import {
   type Prescription,
   type PrescriptionStatus,
 } from "../prescriptions/index.js";
+import { assessDrugCredit } from "../billing/index.js";
 import * as repo from "./dispense.repository.js";
 import type { DispenseLine } from "./dispense.model.js";
 
@@ -65,6 +66,12 @@ export interface DispenseInput {
   prescriptionId: string;
   items: DispenseItemInput[];
   requestId?: string;
+  /**
+   * Present when the caller is knowingly dispensing OVER an admitted patient's advance —
+   * the "authorise on credit" acknowledgement. Only honoured from a caller holding
+   * `pharmacy:credit-override`; without it an over-budget dispense is refused (HMS-PHM-003).
+   */
+  creditOverride?: { reason: string };
 }
 
 export interface DispenseResult {
@@ -156,6 +163,52 @@ export async function dispense(input: DispenseInput): Promise<DispenseResult> {
     };
   });
 
+  /**
+   * ── OVER-BUDGET CHECKPOINT (admitted patients only) ─────────────────────────
+   * If handing these drugs over would push an ADMITTED patient's advance below zero, a
+   * clinician must authorise the credit (`pharmacy:credit-override`). This is a recorded
+   * sign-off, NOT a denial of medicine — and it FAILS OPEN: if the assessment itself errors
+   * (tariff, wallet, encounter read), the dispense proceeds unblocked, because a money
+   * problem must never hold a patient's drugs (this module's founding rule).
+   */
+  let creditOverride: repo.CreateDispenseInput["creditOverride"];
+  let assessment: Awaited<ReturnType<typeof assessDrugCredit>> | undefined;
+  try {
+    assessment = await assessDrugCredit({
+      patientId: rx.patientId,
+      encounterId: rx.encounterId,
+      lines: lines.map((l) => ({ drugCode: l.drugCode, quantity: l.quantity })),
+    });
+  } catch (err) {
+    logger.warn(
+      { err, prescriptionId: rx.id },
+      "credit assessment failed — dispensing without the advance-budget check (fail open)",
+    );
+  }
+
+  if (assessment?.overBudget) {
+    if (!input.creditOverride) {
+      throw new AppError("HMS-PHM-003", 402, "Dispense would exceed the patient's advance", {
+        cost: assessment.cost,
+        balance: assessment.balance,
+        shortfall: assessment.shortfall,
+        hint: "a doctor must authorise dispensing on credit",
+      });
+    }
+    // The acknowledgement only counts from someone with the authority to commit the credit.
+    if (!ctx.permissions?.includes("pharmacy:credit-override")) {
+      throw new AppError("HMS-AUTH-005", 403, "Not authorised to dispense on credit", {
+        hint: "over-budget dispensing needs a doctor's or administrator's sign-off (pharmacy:credit-override)",
+      });
+    }
+    creditOverride = {
+      by: ctx.userId ?? "system",
+      reason: input.creditOverride.reason,
+      shortfall: assessment.shortfall,
+      at: new Date(),
+    };
+  }
+
   try {
     return await withTransaction(async (session) => {
       /**
@@ -196,6 +249,7 @@ export async function dispense(input: DispenseInput): Promise<DispenseResult> {
           ...(rx.orderId ? { orderId: rx.orderId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(rx.branchId ? { branchId: rx.branchId } : {}),
+          ...(creditOverride ? { creditOverride } : {}),
         },
         session,
       );

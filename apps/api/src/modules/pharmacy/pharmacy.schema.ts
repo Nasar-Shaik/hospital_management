@@ -27,6 +27,15 @@ export const dispenseSchema = z
      * a retry after a timeout must not either.
      */
     requestId: z.string().min(8).max(64).optional(),
+    /**
+     * Present only when knowingly dispensing OVER an admitted patient's advance — the
+     * "authorise on credit" acknowledgement. The API still refuses it unless the caller
+     * holds `pharmacy:credit-override` (HMS-PHM-003).
+     */
+    creditOverride: z
+      .object({ reason: z.string().min(3).max(300) })
+      .strict()
+      .optional(),
   })
   .strict();
 

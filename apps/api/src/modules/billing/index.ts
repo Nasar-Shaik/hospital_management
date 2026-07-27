@@ -21,6 +21,8 @@ export { billingConsumers } from "./billing.consumers.js";
 export {
   postCharge,
   reverseChargesFor,
+  assessDrugCredit,
+  type DrugCreditAssessment,
   voidCharge,
   getCharges,
   getRunningBill,

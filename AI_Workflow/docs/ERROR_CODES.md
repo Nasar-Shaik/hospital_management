@@ -47,20 +47,21 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 
 ## Financial
 
-| Code        | HTTP | Message                                     | Recovery                                      | Retry |
-| ----------- | ---- | ------------------------------------------- | --------------------------------------------- | ----- |
-| HMS-BIL-001 | 422  | Bill already finalized                      | Use credit-note reversal flow                 | no    |
-| HMS-BIL-002 | 422  | Discount exceeds your approval limit        | Request approval (`details.approverRole`)     | no    |
-| HMS-PAY-001 | 402  | Payment failed at gateway                   | Retry with same Idempotency-Key or other mode | yes   |
-| HMS-PAY-002 | 409  | Payment already captured                    | No action; original receipt in `details`      | no    |
-| HMS-PAY-003 | 422  | Refund exceeds source payment               | Correct amount                                | no    |
-| HMS-WAL-001 | 422  | Insufficient wallet balance                 | Top up or change payment mode                 | no    |
-| HMS-INS-001 | 422  | Pre-authorization required for this service | Initiate pre-auth (W7)                        | no    |
-| HMS-INS-002 | 422  | Claim documents incomplete                  | Attach `details.missing`                      | no    |
-| HMS-PHM-001 | 409  | Insufficient stock (`details.available`)    | Partial dispense or backorder                 | no    |
-| HMS-PHM-002 | 422  | Batch expired                               | System blocks; pick valid batch               | no    |
-| HMS-INV-001 | 422  | GRN quantity exceeds PO                     | Verify receipt; amend PO per policy           | no    |
-| HMS-FIN-001 | 422  | Accounting period closed                    | Post to open period / reopen with permission  | no    |
+| Code        | HTTP | Message                                                      | Recovery                                                 | Retry |
+| ----------- | ---- | ------------------------------------------------------------ | -------------------------------------------------------- | ----- |
+| HMS-BIL-001 | 422  | Bill already finalized                                       | Use credit-note reversal flow                            | no    |
+| HMS-BIL-002 | 422  | Discount exceeds your approval limit                         | Request approval (`details.approverRole`)                | no    |
+| HMS-PAY-001 | 402  | Payment failed at gateway                                    | Retry with same Idempotency-Key or other mode            | yes   |
+| HMS-PAY-002 | 409  | Payment already captured                                     | No action; original receipt in `details`                 | no    |
+| HMS-PAY-003 | 422  | Refund exceeds source payment                                | Correct amount                                           | no    |
+| HMS-WAL-001 | 422  | Insufficient wallet balance                                  | Top up or change payment mode                            | no    |
+| HMS-INS-001 | 422  | Pre-authorization required for this service                  | Initiate pre-auth (W7)                                   | no    |
+| HMS-INS-002 | 422  | Claim documents incomplete                                   | Attach `details.missing`                                 | no    |
+| HMS-PHM-001 | 409  | Insufficient stock (`details.available`)                     | Partial dispense or backorder                            | no    |
+| HMS-PHM-002 | 422  | Batch expired                                                | System blocks; pick valid batch                          | no    |
+| HMS-PHM-003 | 402  | Dispense exceeds the patient's advance (`details.shortfall`) | Doctor authorises on credit (`pharmacy:credit-override`) | no    |
+| HMS-INV-001 | 422  | GRN quantity exceeds PO                                      | Verify receipt; amend PO per policy                      | no    |
+| HMS-FIN-001 | 422  | Accounting period closed                                     | Post to open period / reopen with permission             | no    |
 
 ## Files & Integrations
 

@@ -26,6 +26,7 @@ export const dispense: RequestHandler = async (req, res) => {
     prescriptionId: id,
     items: body.items,
     ...(body.requestId ? { requestId: body.requestId } : {}),
+    ...(body.creditOverride ? { creditOverride: body.creditOverride } : {}),
   });
 
   ok(res, result, result.duplicate ? 200 : 201);

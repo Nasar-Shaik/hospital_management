@@ -2431,7 +2431,15 @@ export class ApiClient {
    */
   dispense(
     prescriptionId: string,
-    input: { items: { lineIndex: number; quantity: number }[]; requestId?: string },
+    input: {
+      items: { lineIndex: number; quantity: number }[];
+      requestId?: string;
+      /**
+       * Set only to knowingly dispense OVER an admitted patient's advance. Rejected with
+       * `HMS-PHM-003` unless the caller holds `pharmacy:credit-override` (a doctor/admin).
+       */
+      creditOverride?: { reason: string };
+    },
   ): Promise<DispenseResult> {
     return this.request<DispenseResult>(
       "POST",

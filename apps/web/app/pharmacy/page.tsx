@@ -58,11 +58,18 @@ function Counter({
   prescription: Prescription;
   onDispensed: () => void;
 }) {
-  const { api } = useAuth();
+  const { api, can } = useAuth();
   const [qty, setQty] = useState<Record<number, number>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ledger, setLedger] = useState<Dispense[]>([]);
+  /** Set when the last attempt was refused as over the patient's advance (HMS-PHM-003). */
+  const [overBudget, setOverBudget] = useState<{
+    cost: number;
+    balance: number;
+    shortfall: number;
+  } | null>(null);
+  const [creditReason, setCreditReason] = useState("");
 
   /** What is still owed on each line. The default the pharmacist almost always wants. */
   const outstanding = useCallback(
@@ -93,14 +100,27 @@ function Counter({
     [prescription.lines, qty],
   );
 
-  async function dispense() {
+  async function dispense(override?: { reason: string }) {
     setBusy(true);
     setError(null);
     try {
-      await api.dispense(prescription.id, { items, requestId: requestKey(prescription.id) });
+      await api.dispense(prescription.id, {
+        items,
+        requestId: requestKey(prescription.id),
+        ...(override ? { creditOverride: override } : {}),
+      });
+      setOverBudget(null);
+      setCreditReason("");
       onDispensed();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not dispense.");
+      // Admitted patient over their advance — not a failure, a checkpoint. Surface the
+      // shortfall so a doctor can authorise dispensing on credit (HMS-PHM-003).
+      if (err instanceof ApiClientError && err.code === "HMS-PHM-003") {
+        const d = (err.details ?? {}) as { cost?: number; balance?: number; shortfall?: number };
+        setOverBudget({ cost: d.cost ?? 0, balance: d.balance ?? 0, shortfall: d.shortfall ?? 0 });
+      } else {
+        setError(err instanceof ApiClientError ? err.message : "Could not dispense.");
+      }
     } finally {
       setBusy(false);
     }
@@ -155,9 +175,47 @@ function Counter({
         })}
       </div>
 
-      <Button disabled={busy || items.length === 0} onClick={() => void dispense()}>
-        {busy ? "Dispensing…" : "Dispense"}
-      </Button>
+      {overBudget ? (
+        <Alert tone="warning" title="Over the patient's advance">
+          <p>
+            This handover costs {rupees(overBudget.cost)} but the patient&apos;s advance is only{" "}
+            {rupees(overBudget.balance)} — <strong>{rupees(overBudget.shortfall)} short</strong>.
+          </p>
+          {can("pharmacy:credit-override") ? (
+            <div className="mt-3 space-y-2">
+              <label className="block text-xs font-medium text-[var(--color-fg)]">
+                Reason for dispensing on credit
+                <input
+                  value={creditReason}
+                  onChange={(e) => setCreditReason(e.target.value)}
+                  placeholder="e.g. inpatient — advance to be topped up on discharge"
+                  className="mt-1 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                />
+              </label>
+              <div className="flex gap-2">
+                <Button
+                  disabled={busy || creditReason.trim().length < 3}
+                  onClick={() => void dispense({ reason: creditReason.trim() })}
+                >
+                  {busy ? "Dispensing…" : "Authorise on credit & dispense"}
+                </Button>
+                <Button variant="ghost" disabled={busy} onClick={() => setOverBudget(null)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-xs">
+              A doctor or administrator must authorise dispensing on credit. Ask them to complete
+              this handover, or collect an advance first.
+            </p>
+          )}
+        </Alert>
+      ) : (
+        <Button disabled={busy || items.length === 0} onClick={() => void dispense()}>
+          {busy ? "Dispensing…" : "Dispense"}
+        </Button>
+      )}
 
       {ledger.length > 0 && (
         <div>

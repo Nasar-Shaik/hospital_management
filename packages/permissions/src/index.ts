@@ -334,6 +334,17 @@ const FINANCE = {
 
   PHARMACY_SELL: p("pharmacy:sell", "Sell at the pharmacy counter", "branch"),
   PHARMACY_DISPENSE: p("pharmacy:dispense", "Dispense against a prescription", "branch"),
+  /**
+   * Authorise dispensing on credit when an admitted patient's advance is exhausted — the
+   * "doctor sign-off" on an over-budget dispense. Held by clinicians and admins, NOT by a
+   * counter pharmacist: the point is that someone with the authority to commit the hospital
+   * to the credit says yes, and it is recorded against them.
+   */
+  PHARMACY_CREDIT_OVERRIDE: p(
+    "pharmacy:credit-override",
+    "Authorise an over-budget dispense (dispense on credit)",
+    "branch",
+  ),
   PHARMACY_STOCK: p("pharmacy:stock", "Pharmacy stock"),
   PHARMACY_PURCHASE: p("pharmacy:purchase", "Pharmacy purchasing"),
 
@@ -664,6 +675,10 @@ export const DEFAULT_ROLES = [
       CLINICAL.CONSULTATION_MANAGE,
       CLINICAL.PRESCRIPTION_CREATE,
       CLINICAL.PRESCRIPTION_SIGN,
+      // Authorises dispensing on credit when an admitted patient's advance is spent — a
+      // clinical/commercial call the counter pharmacist cannot make alone. The pharmacist
+      // holds `pharmacy:dispense`; the sign-off to overrun the advance sits with the doctor.
+      FINANCE.PHARMACY_CREDIT_OVERRIDE,
       // Places the order and follows it. NOT `order:perform` and NOT `order:verify`
       // — a doctor who could sign off their own lab result would be the only pair of
       // eyes on it, which is precisely the check the second signature exists to be.

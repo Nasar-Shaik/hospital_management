@@ -23,6 +23,8 @@ export interface Dispense {
   dispensedAt: Date;
   requestId?: string;
   branchId?: string;
+  /** Set when this handover was authorised on credit over an admitted patient's advance. */
+  creditOverride?: { by: string; reason: string; shortfall: number; at: Date };
   createdAt: Date;
 }
 
@@ -40,6 +42,7 @@ function toDispense(doc: DispenseDoc): Dispense {
     ...(doc.orderId ? { orderId: doc.orderId.toString() } : {}),
     ...(doc.requestId ? { requestId: doc.requestId } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(doc.creditOverride ? { creditOverride: doc.creditOverride } : {}),
   };
 }
 
@@ -52,6 +55,7 @@ export interface CreateDispenseInput {
   lines: DispenseLine[];
   requestId?: string;
   branchId?: string;
+  creditOverride?: { by: string; reason: string; shortfall: number; at: Date };
 }
 
 /**
@@ -83,6 +87,7 @@ export async function create(
         ...(input.orderId ? { orderId: new Types.ObjectId(input.orderId) } : {}),
         ...(input.requestId ? { requestId: input.requestId } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(input.creditOverride ? { creditOverride: input.creditOverride } : {}),
       },
     ],
     session ? { session } : {},

@@ -204,6 +204,78 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
  */
 export const reverseChargesFor = repo.voidChargesBySource;
 
+/* ── credit assessment: "can this patient afford this, from their advance?" ── */
+
+export interface DrugCreditAssessment {
+  /** The advance-budget rule applies only to ADMITTED (IP) patients. OP patients pay at the counter. */
+  applies: boolean;
+  /** Paise. What the drugs about to be handed over would cost (tariff-priced; 0 under zero-tariff). */
+  cost: number;
+  /** Paise. The patient's advance balance right now. */
+  balance: number;
+  /** Paise. How much the cost exceeds the advance — 0 when covered or the rule doesn't apply. */
+  shortfall: number;
+  /** True when the rule applies AND the dispense would push the advance below zero. */
+  overBudget: boolean;
+}
+
+const NO_CREDIT_ISSUE: DrugCreditAssessment = {
+  applies: false,
+  cost: 0,
+  balance: 0,
+  shortfall: 0,
+  overBudget: false,
+};
+
+/** Tariff-price a set of drug lines without posting anything — a pure read (zero under zero-tariff). */
+async function quoteDrugs(lines: { drugCode: string; quantity: number }[]): Promise<number> {
+  const ctx = getContext();
+  const tenant = await getTenant(ctx.tenantId);
+  const policy = policyOf(
+    tenant ?? {
+      id: ctx.tenantId,
+      hospitalName: "",
+      slug: ctx.tenantSlug,
+      databaseName: "",
+      status: "active",
+    },
+  );
+  // Government / zero-tariff: the drugs are free, so there is never a shortfall to gate on.
+  if (policy.billingMode === "zero_tariff") return 0;
+
+  let total = 0;
+  for (const line of lines) {
+    const service = await repo.findServiceByCode(line.drugCode);
+    total += (service?.price ?? 0) * line.quantity;
+  }
+  return total;
+}
+
+/**
+ * Would handing these drugs over push an ADMITTED patient's advance below zero?
+ *
+ * Used by the pharmacy to decide whether a dispense needs a doctor's sign-off to proceed
+ * on credit (the over-budget checkpoint). The rule is scoped to inpatients: a walk-in OP
+ * patient pays at the counter and has no advance to overrun.
+ *
+ * Read-only and cheap. The CALLER treats any failure as "no issue" (fail-open) — a pricing
+ * or wallet hiccup must never be able to hold a patient's medicine.
+ */
+export async function assessDrugCredit(input: {
+  patientId: string;
+  encounterId: string;
+  lines: { drugCode: string; quantity: number }[];
+}): Promise<DrugCreditAssessment> {
+  const encounter = await getEncounter(input.encounterId);
+  // OP (or unknown) — no advance-budget concept, so nothing to gate.
+  if (encounter?.class !== "IP") return NO_CREDIT_ISSUE;
+
+  const cost = await quoteDrugs(input.lines);
+  const balance = await walletBalance(input.patientId);
+  const shortfall = Math.max(0, cost - balance);
+  return { applies: true, cost, balance, shortfall, overBudget: shortfall > 0 };
+}
+
 export const getCharges = repo.chargesForEncounter;
 export const listServices = repo.listServices;
 export const listInvoices = repo.listInvoices;
