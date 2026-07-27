@@ -121,6 +121,7 @@ const SUPERADMIN = {
 
 const ORGANIZATION = {
   HOSPITAL_MANAGE: p("hospital:manage", "Edit the hospital profile"),
+  APIKEY_MANAGE: p("apikey:manage", "Issue and revoke API keys"),
   BRANCH_MANAGE: p("branch:manage", "Manage branches"),
   DEPARTMENT_MANAGE: p("department:manage", "Manage departments"),
   FACILITY_MANAGE: p("facility:manage", "Manage buildings, floors, theatres, ICUs"),

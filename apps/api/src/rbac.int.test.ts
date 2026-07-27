@@ -782,6 +782,18 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/billing/orders/64b7f0000000000000000001/settle-from-advance",
     body: {},
   },
+  // API keys (A9) — `apikey:manage`, an administrative capability.
+  "GET /api/v1/api-keys": { method: "get", url: "/api/v1/api-keys" },
+  "POST /api/v1/api-keys": {
+    method: "post",
+    url: "/api/v1/api-keys",
+    body: { name: "Matrix probe key" },
+  },
+  "DELETE /api/v1/api-keys/:id": {
+    method: "delete",
+    url: "/api/v1/api-keys/64b7f0000000000000000001",
+  },
+
   "GET /api/v1/site/settings": { method: "get", url: "/api/v1/site/settings" },
   "PATCH /api/v1/site/settings": { method: "patch", url: "/api/v1/site/settings", body: {} },
   // Logo upload/remove (A8) — `branding:manage`, like the rest of the site editor.

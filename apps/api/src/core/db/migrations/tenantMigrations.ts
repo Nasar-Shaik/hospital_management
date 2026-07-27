@@ -1178,4 +1178,30 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0029-api-keys",
+    description:
+      "API keys (A9) — programmatic access bound to a user. Stores only the key's digest. This " +
+      "owns the collection and its indexes.",
+    up: async (db) => {
+      await db.createCollection("apiKeys").catch(() => undefined);
+      // Every request with a key looks it up by digest; it must be unique so the lookup is exact.
+      await db
+        .collection("apiKeys")
+        .createIndex(
+          { tenantId: 1, keyHash: 1 },
+          { unique: true, name: "one_key_per_hash", background: true },
+        );
+      // The management list reads a tenant's keys newest-first.
+      await db
+        .collection("apiKeys")
+        .createIndex({ tenantId: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("apiKeys")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

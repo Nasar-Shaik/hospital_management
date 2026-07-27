@@ -34,6 +34,10 @@ import { wardRouter } from "./modules/wards/index.js";
 import { vitalsRouter } from "./modules/vitals/index.js";
 import { reportRouter } from "./modules/reports/index.js";
 import { documentRouter } from "./modules/documents/index.js";
+// Imported from the routes file directly (not the module index): the router imports `authenticate`,
+// which imports the apiKeys index, so routing that through the index would be a cycle. Same reason
+// `rbacRouter` is imported from its routes file.
+import { apiKeyRouter } from "./modules/apiKeys/apiKey.routes.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
 import { reportingRouter } from "./modules/reporting/index.js";
@@ -165,6 +169,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(wardRouter());
   v1Router.use(reportRouter());
   v1Router.use(documentRouter());
+  v1Router.use(apiKeyRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
   v1Router.use(reportingRouter());

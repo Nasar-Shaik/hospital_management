@@ -275,6 +275,23 @@ export interface EditableSite {
   published: boolean;
 }
 
+/** An API key's metadata (Module A9) — never its secret. */
+export interface ApiKeyMeta {
+  id: string;
+  name: string;
+  last4: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+}
+
+/** A freshly created key — the only time the full `key` is ever returned. */
+export interface CreatedApiKey extends ApiKeyMeta {
+  key: string;
+}
+
 /** The admin write DTO. `announcement: null` clears the strip; omitting a field leaves it. */
 export interface UpdateSiteInput {
   displayName?: string;
@@ -1765,6 +1782,21 @@ export class ApiClient {
   /** Admin — remove the hospital logo. Needs `branding:manage`. */
   deleteSiteLogo(): Promise<{ deleted: boolean }> {
     return this.request("DELETE", "/api/v1/site/logo");
+  }
+
+  /* ── API keys (A9) — need `apikey:manage` ─────────────────────────────────── */
+
+  listApiKeys(): Promise<ApiKeyMeta[]> {
+    return this.request<ApiKeyMeta[]>("GET", "/api/v1/api-keys");
+  }
+
+  /** Creates a key. The full `key` in the result is shown ONCE — it is never returned again. */
+  createApiKey(input: { name: string; expiresOn?: string }): Promise<CreatedApiKey> {
+    return this.request<CreatedApiKey>("POST", "/api/v1/api-keys", input);
+  }
+
+  revokeApiKey(id: string): Promise<ApiKeyMeta> {
+    return this.request<ApiKeyMeta>("DELETE", `/api/v1/api-keys/${id}`);
   }
 
   /**
