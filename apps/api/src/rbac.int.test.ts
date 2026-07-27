@@ -644,6 +644,38 @@ const PROBES: Record<string, Probe> = {
     body: { code: "A-2" },
   },
 
+  /* ── Operation theatres (B5) — feature `module.clinical.ot`. READS `emr:read` (the board);
+   * the REGISTRY is `facility:manage`; SCHEDULING is `ot:schedule`. */
+  "GET /api/v1/theatres": { method: "get", url: "/api/v1/theatres" },
+  "POST /api/v1/theatres": {
+    method: "post",
+    url: "/api/v1/theatres",
+    body: { name: "Matrix OT", code: "MOT", kind: "major_ot" },
+  },
+  "PATCH /api/v1/theatres/:id": {
+    method: "patch",
+    url: "/api/v1/theatres/64b7f0000000000000000001",
+    body: { name: "Renamed OT" },
+  },
+  "GET /api/v1/ot-bookings": { method: "get", url: "/api/v1/ot-bookings" },
+  "POST /api/v1/ot-bookings": {
+    method: "post",
+    url: "/api/v1/ot-bookings",
+    body: {
+      theatreId: "64b7f0000000000000000001",
+      patientId: "64b7f0000000000000000002",
+      surgeonId: "64b7f0000000000000000003",
+      procedureName: "Matrix procedure",
+      scheduledStart: "2999-01-01T09:00:00.000Z",
+      scheduledEnd: "2999-01-01T10:00:00.000Z",
+    },
+  },
+  "POST /api/v1/ot-bookings/:id/transition": {
+    method: "post",
+    url: "/api/v1/ot-bookings/64b7f0000000000000000001/transition",
+    body: { to: "cancelled" },
+  },
+
   /* ── Diagnostic reports ─────────────────────────────────────────────────────
    * `order:perform` uploads a report (the technician/radiologist who ran the test);
    * `emr:read` lists a patient's reports and opens a file (every clinical reader).

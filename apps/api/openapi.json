@@ -43,6 +43,9 @@
       "name": "charges"
     },
     {
+      "name": "departments"
+    },
+    {
       "name": "doctors"
     },
     {
@@ -88,6 +91,9 @@
       "name": "orders"
     },
     {
+      "name": "ot-bookings"
+    },
+    {
       "name": "patients"
     },
     {
@@ -116,6 +122,9 @@
     },
     {
       "name": "tariff"
+    },
+    {
+      "name": "theatres"
     },
     {
       "name": "users"
@@ -4680,6 +4689,98 @@
         "x-permission": "branch:manage"
       }
     },
+    "/api/v1/departments": {
+      "get": {
+        "operationId": "get_v1_departments",
+        "tags": ["departments"],
+        "summary": "GET /api/v1/departments",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:read"
+      },
+      "post": {
+        "operationId": "post_v1_departments",
+        "tags": ["departments"],
+        "summary": "POST /api/v1/departments",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "department:manage"
+      }
+    },
+    "/api/v1/departments/{id}": {
+      "patch": {
+        "operationId": "patch_v1_departments_id",
+        "tags": ["departments"],
+        "summary": "PATCH /api/v1/departments/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "department:manage"
+      }
+    },
     "/api/v1/wards": {
       "get": {
         "operationId": "get_v1_wards",
@@ -4868,6 +4969,196 @@
         ],
         "x-permission": "bed:manage",
         "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/theatres": {
+      "get": {
+        "operationId": "get_v1_theatres",
+        "tags": ["theatres"],
+        "summary": "GET /api/v1/theatres",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.clinical.ot"
+      },
+      "post": {
+        "operationId": "post_v1_theatres",
+        "tags": ["theatres"],
+        "summary": "POST /api/v1/theatres",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "facility:manage",
+        "x-feature": "module.clinical.ot"
+      }
+    },
+    "/api/v1/theatres/{id}": {
+      "patch": {
+        "operationId": "patch_v1_theatres_id",
+        "tags": ["theatres"],
+        "summary": "PATCH /api/v1/theatres/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "facility:manage",
+        "x-feature": "module.clinical.ot"
+      }
+    },
+    "/api/v1/ot-bookings": {
+      "get": {
+        "operationId": "get_v1_ot_bookings",
+        "tags": ["ot-bookings"],
+        "summary": "GET /api/v1/ot-bookings",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.clinical.ot"
+      },
+      "post": {
+        "operationId": "post_v1_ot_bookings",
+        "tags": ["ot-bookings"],
+        "summary": "POST /api/v1/ot-bookings",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ot:schedule",
+        "x-feature": "module.clinical.ot"
+      }
+    },
+    "/api/v1/ot-bookings/{id}/transition": {
+      "post": {
+        "operationId": "post_v1_ot_bookings_id_transition",
+        "tags": ["ot-bookings"],
+        "summary": "POST /api/v1/ot-bookings/{id}/transition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ot:schedule",
+        "x-feature": "module.clinical.ot"
       }
     },
     "/api/v1/orders/{id}/reports": {

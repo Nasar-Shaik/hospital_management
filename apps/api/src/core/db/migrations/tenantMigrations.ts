@@ -1240,4 +1240,66 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0031-operation-theatres",
+    description:
+      "Operation theatres (B5) — the registry of theatres and the procedures booked on them. " +
+      "ICU/ER are beds (B4), not here. This owns the two collections and their indexes.",
+    up: async (db) => {
+      await db.createCollection("theatres").catch(() => undefined);
+      await db.createCollection("otBookings").catch(() => undefined);
+
+      // A theatre code is unique per tenant — the human key on the board.
+      await db
+        .collection("theatres")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_theatre_code_per_tenant", background: true },
+        );
+
+      /**
+       * ── THE DOUBLE-BOOKING RACE BACKSTOP ────────────────────────────────────
+       * Overlap is enforced in the service (windows have duration; a unique key cannot express an
+       * overlap). This index closes the one thing the service check races on: two IDENTICAL
+       * bookings submitted at the same instant on the same theatre. Among OCCUPYING bookings the
+       * `(theatre, exact start)` pair is unique, so the second writer gets a duplicate-key error
+       * the service turns into the same "already booked" conflict (theatre.model.ts).
+       *
+       * PARTIAL on `occupies`, so a cancelled/completed booking frees the slot the instant its
+       * `occupies` key is removed — exactly like `appointments.one_doctor_one_slot`.
+       */
+      await db.collection("otBookings").createIndex(
+        { tenantId: 1, theatreId: 1, scheduledStart: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { occupies: { $eq: true } },
+          background: true,
+          name: "one_booking_per_theatre_start",
+        },
+      );
+
+      // The board: a theatre's day, in time order. Serves the overlap query too (equality on
+      // theatre, range on the window).
+      await db
+        .collection("otBookings")
+        .createIndex(
+          { tenantId: 1, theatreId: 1, scheduledStart: 1, scheduledEnd: 1 },
+          { background: true },
+        );
+      // The patient's procedure history, newest first.
+      await db
+        .collection("otBookings")
+        .createIndex({ tenantId: 1, patientId: 1, scheduledStart: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("theatres")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("otBookings")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

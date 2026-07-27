@@ -518,6 +518,71 @@ export interface UpdateDepartmentInput {
   description?: string;
 }
 
+/* ── operation theatres (B5) ── */
+
+export type TheatreKind = "major_ot" | "minor_ot" | "cath_lab" | "endoscopy" | "labor_room";
+export type TheatreStatus = "active" | "inactive";
+export type OtBookingStatus = "scheduled" | "in_progress" | "completed" | "cancelled";
+
+export interface Theatre {
+  id: string;
+  name: string;
+  code: string;
+  kind: TheatreKind;
+  status: TheatreStatus;
+  branchId?: string;
+}
+
+export interface CreateTheatreInput {
+  name: string;
+  code: string;
+  kind: TheatreKind;
+}
+
+export interface UpdateTheatreInput {
+  name?: string;
+  kind?: TheatreKind;
+  status?: TheatreStatus;
+}
+
+/** A procedure booked on a theatre, with the patient named for the board. */
+export interface OtBooking {
+  id: string;
+  theatreId: string;
+  theatreName: string;
+  theatreCode: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  surgeonId: string;
+  encounterId?: string;
+  procedureName: string;
+  /** ISO timestamps. */
+  scheduledStart: string;
+  scheduledEnd: string;
+  status: OtBookingStatus;
+  notes?: string;
+  branchId?: string;
+}
+
+export interface CreateBookingInput {
+  theatreId: string;
+  patientId: string;
+  surgeonId: string;
+  encounterId?: string;
+  procedureName: string;
+  /** ISO timestamps or anything `new Date()` accepts. */
+  scheduledStart: string;
+  scheduledEnd: string;
+}
+
+export interface ListBookingsQuery {
+  from?: string;
+  to?: string;
+  theatreId?: string;
+  status?: OtBookingStatus;
+}
+
 /* ── Vitals ─────────────────────────────────────────────────────────────────── */
 
 export const TRIAGE_LEVELS = ["routine", "urgent", "critical"] as const;
@@ -1944,6 +2009,44 @@ export class ApiClient {
   /** Edits a department — rename, re-parent, deactivate. Needs `department:manage`. */
   updateDepartment(id: string, input: UpdateDepartmentInput): Promise<Department> {
     return this.request<Department>("PATCH", `/api/v1/departments/${id}`, input);
+  }
+
+  /* ── operation theatres (B5) ── */
+
+  /** The operation-theatre registry. Needs `emr:read` + the OT module. */
+  listTheatres(): Promise<Theatre[]> {
+    return this.request<Theatre[]>("GET", "/api/v1/theatres");
+  }
+
+  /** Registers a theatre. Needs `facility:manage` + the OT module. */
+  createTheatre(input: CreateTheatreInput): Promise<Theatre> {
+    return this.request<Theatre>("POST", "/api/v1/theatres", input);
+  }
+
+  /** Edits a theatre — rename, retire. Needs `facility:manage` + the OT module. */
+  updateTheatre(id: string, input: UpdateTheatreInput): Promise<Theatre> {
+    return this.request<Theatre>("PATCH", `/api/v1/theatres/${id}`, input);
+  }
+
+  /** The OT board — bookings intersecting a day window (defaults to today). Needs `emr:read`. */
+  listOtBookings(query: ListBookingsQuery = {}): Promise<OtBooking[]> {
+    const qs = new URLSearchParams(
+      Object.entries(query).filter(([, v]) => v != null) as [string, string][],
+    ).toString();
+    return this.request<OtBooking[]>("GET", `/api/v1/ot-bookings${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Books a procedure on a theatre (rejects window overlaps). Needs `ot:schedule`. */
+  createOtBooking(input: CreateBookingInput): Promise<OtBooking> {
+    return this.request<OtBooking>("POST", "/api/v1/ot-bookings", input);
+  }
+
+  /** Moves a booking along its lifecycle (start/complete/cancel). Needs `ot:schedule`. */
+  transitionOtBooking(
+    id: string,
+    input: { to: OtBookingStatus; reason?: string },
+  ): Promise<OtBooking> {
+    return this.request<OtBooking>("POST", `/api/v1/ot-bookings/${id}/transition`, input);
   }
 
   /* ── vitals ── */

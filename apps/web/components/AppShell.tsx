@@ -95,6 +95,7 @@ const NAVIGATION: NavSection[] = [
       // The BED BOARD (which beds are free) and the ward/bed inventory behind it (B4).
       // `/ward` shows who is admitted; this shows where there is space.
       { label: "Bed board", href: "/beds", permission: "bed:allocate" },
+      { label: "Theatres", href: "/theatres", permission: "ot:schedule" },
     ],
   },
   {
