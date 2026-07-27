@@ -1,7 +1,91 @@
 @import "tailwindcss";
 @import "@medicore/ui/tokens.css";
 
+/**
+ * Global base (Doc 08). Components style themselves from the semantic tokens with Tailwind
+ * arbitrary-value classes — this file only sets what belongs to the document itself: the type
+ * face, font smoothing, the shared motion keyframes, and the reduced-motion escape hatch.
+ */
 body {
   background: var(--color-bg);
   color: var(--color-fg);
+  font-family: var(--font-sans);
+  /* Inter looks best with contextual alternates + tabular figures off by default; digits that must
+     line up (tables, money) opt into `tabular-nums` locally. */
+  font-feature-settings: "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* The mono utility the app already reaches for (`font-mono`) now points at JetBrains Mono. */
+.font-mono,
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+}
+
+/* ── Shared motion (see the `--dur-*` / `--ease-*` tokens) ─────────────────────
+   Small, named keyframes reused by the primitives and the shell. Kept here so the
+   whole app animates in one vocabulary rather than each component inventing its own. */
+@keyframes mc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes mc-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes mc-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes mc-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.mc-fade-in {
+  animation: mc-fade-in var(--dur) var(--ease-standard) both;
+}
+.mc-scale-in {
+  animation: mc-scale-in var(--dur) var(--ease-emphasized) both;
+}
+.mc-slide-up {
+  animation: mc-slide-up var(--dur-slow) var(--ease-emphasized) both;
+}
+
+/**
+ * Accessibility floor: honour a user who has asked their OS to stop motion. Everything collapses
+ * to an imperceptible duration rather than 0, so state still settles but nothing travels. This is
+ * a hospital — a clinician prone to migraine or vestibular symptoms gets a still interface.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
