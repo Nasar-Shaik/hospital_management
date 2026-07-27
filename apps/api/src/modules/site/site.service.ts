@@ -11,6 +11,7 @@
  * The doctors are NOT stored here: they are pulled live from the staff directory (opt-in per
  * person), so the site reflects who actually works here today without a second edit.
  */
+import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { getById as getTenant } from "../tenants/index.js";
 import { listPublicDoctors, type PublicDoctor } from "../staff/index.js";
@@ -43,6 +44,8 @@ export interface PublicSite {
   announcement?: SiteAnnouncement;
   metaDescription: string;
   doctors: PublicDoctor[];
+  /** Whether a logo has been uploaded — the client fetches it from `GET /site/logo` when true. */
+  hasLogo: boolean;
   /** When false the site is hidden — the web layer sends visitors straight to sign-in. */
   published: boolean;
 }
@@ -60,6 +63,7 @@ export interface EditableSite {
   social: SiteSocial;
   announcement: SiteAnnouncement | undefined;
   metaDescription: string;
+  hasLogo: boolean;
   published: boolean;
 }
 
@@ -133,6 +137,7 @@ export async function getPublicSite(): Promise<PublicSite> {
     ...(saved?.announcement?.text ? { announcement: saved.announcement } : {}),
     metaDescription: saved?.metaDescription?.trim() || tagline,
     doctors,
+    hasLogo: Boolean(saved?.logo?.contentType),
     published: saved?.published ?? true,
   };
 }
@@ -152,6 +157,7 @@ export async function getEditableSite(): Promise<EditableSite> {
     social: saved?.social ?? {},
     announcement: saved?.announcement,
     metaDescription: saved?.metaDescription ?? "",
+    hasLogo: Boolean(saved?.logo?.contentType),
     published: saved?.published ?? true,
   };
 }
@@ -197,4 +203,38 @@ export async function updateSite(input: UpdateSiteInput): Promise<EditableSite> 
 
   await repo.upsertSettings(patch);
   return getEditableSite();
+}
+
+/* ── Logo (A8) ─────────────────────────────────────────────────────────────── */
+
+/** 512 KB. A logo, not a hero image — big enough for a crisp mark, small enough to inline. */
+const MAX_LOGO_BYTES = 512 * 1024;
+
+const LOGO_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml"]);
+
+/** The logo bytes for the public download, or `undefined` when none is set. */
+export async function getLogo(): Promise<{ contentType: string; data: Buffer } | undefined> {
+  return repo.getLogo();
+}
+
+export async function setLogo(contentType: string, dataBase64: string): Promise<void> {
+  if (!LOGO_TYPES.has(contentType)) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      contentType: [`unsupported image type "${contentType}" — use PNG, JPEG, WebP or SVG`],
+    });
+  }
+  const data = Buffer.from(dataBase64, "base64");
+  if (data.length === 0) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", { file: ["the image is empty"] });
+  }
+  if (data.length > MAX_LOGO_BYTES) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      file: [`the logo is ${(data.length / 1024).toFixed(0)} KB — the limit is 512 KB`],
+    });
+  }
+  await repo.upsertSettings({ logo: { contentType, size: data.length, data } });
+}
+
+export async function clearLogo(): Promise<void> {
+  await repo.clearLogo();
 }

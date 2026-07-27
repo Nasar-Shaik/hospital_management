@@ -102,6 +102,8 @@ const PUBLIC_ROUTES = new Set([
   "POST /api/v1/auth/reset-password",
   // The hospital's public website content — served to a logged-out visitor (resolved by host).
   "GET /api/v1/site",
+  // The hospital's logo (A8) — shown on the logged-out login page and the public site.
+  "GET /api/v1/site/logo",
 ]);
 
 /**
@@ -782,6 +784,13 @@ const PROBES: Record<string, Probe> = {
   },
   "GET /api/v1/site/settings": { method: "get", url: "/api/v1/site/settings" },
   "PATCH /api/v1/site/settings": { method: "patch", url: "/api/v1/site/settings", body: {} },
+  // Logo upload/remove (A8) — `branding:manage`, like the rest of the site editor.
+  "PUT /api/v1/site/logo": {
+    method: "put",
+    url: "/api/v1/site/logo",
+    body: { contentType: "image/png", dataBase64: "aGVsbG8=" },
+  },
+  "DELETE /api/v1/site/logo": { method: "delete", url: "/api/v1/site/logo" },
   "GET /api/v1/patients/:patientId/wallet": {
     method: "get",
     url: "/api/v1/patients/64b7f0000000000000000001/wallet",

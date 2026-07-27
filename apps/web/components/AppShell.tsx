@@ -21,6 +21,7 @@ import { ThemeToggle } from "@medicore/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { LicenseBanner } from "./LicenseBanner";
 import { useAuth } from "./AuthProvider";
+import { useBranding } from "./BrandingProvider";
 import { Badge, Button } from "./ui";
 
 interface NavItem {
@@ -114,6 +115,7 @@ function initials(name: string): string {
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { user, can, logout } = useAuth();
+  const branding = useBranding();
   const [menuOpen, setMenuOpen] = useState(false);
 
   if (!user) return null;
@@ -127,10 +129,22 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen bg-[var(--color-bg-subtle)]">
       <aside className="hidden w-64 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] lg:block">
         <div className="flex h-16 items-center gap-2.5 border-b border-[var(--color-border)] px-6">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand-600)] text-sm font-bold text-[var(--color-on-accent)]">
-            M
-          </div>
-          <span className="font-semibold text-[var(--color-fg)]">MediCore</span>
+          {branding.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={branding.displayName || "Hospital"}
+              className="h-8 w-auto max-w-[150px] object-contain"
+            />
+          ) : (
+            <>
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand-600)] text-sm font-bold text-[var(--color-on-accent)]">
+                {(branding.displayName || "M").charAt(0).toUpperCase()}
+              </div>
+              <span className="truncate font-semibold text-[var(--color-fg)]">
+                {branding.displayName || "MediCore"}
+              </span>
+            </>
+          )}
         </div>
 
         <nav className="space-y-6 p-4">

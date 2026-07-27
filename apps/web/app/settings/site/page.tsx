@@ -15,6 +15,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiClientError, type EditableSite } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
+import { useBranding } from "../../../components/BrandingProvider";
 import { Protected } from "../../../components/Protected";
 import { Alert, Button, Card, Field } from "../../../components/ui";
 
@@ -30,6 +31,7 @@ export default function SiteSettingsPage() {
 
 function Editor() {
   const { can, api } = useAuth();
+  const branding = useBranding();
   const allowed = can("branding:manage");
 
   const [form, setForm] = useState<EditableSite | null>(null);
@@ -37,6 +39,49 @@ function Editor() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
+
+  async function uploadLogo(file: File) {
+    setLogoBusy(true);
+    setLogoError(null);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("read failed"));
+        reader.readAsDataURL(file);
+      });
+      await api.uploadSiteLogo({
+        contentType: file.type || "image/png",
+        dataBase64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+      });
+      setForm((f) => (f ? { ...f, hasLogo: true } : f));
+      branding.refresh();
+    } catch (err) {
+      setLogoError(
+        err instanceof ApiClientError
+          ? err.message
+          : "Could not upload the logo (PNG/JPEG/WebP/SVG, ≤512 KB).",
+      );
+    } finally {
+      setLogoBusy(false);
+    }
+  }
+
+  async function removeLogo() {
+    setLogoBusy(true);
+    setLogoError(null);
+    try {
+      await api.deleteSiteLogo();
+      setForm((f) => (f ? { ...f, hasLogo: false } : f));
+      branding.refresh();
+    } catch {
+      setLogoError("Could not remove the logo.");
+    } finally {
+      setLogoBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!allowed) return;
@@ -164,6 +209,53 @@ function Editor() {
                 style={{ background: form.accentColor || DEFAULT_ACCENT }}
               />
             </div>
+          </div>
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">Logo</span>
+            {logoError && (
+              <div className="mb-2">
+                <Alert tone="danger">{logoError}</Alert>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
+              {branding.logoUrl ? (
+                <img
+                  src={branding.logoUrl}
+                  alt="Current logo"
+                  className="h-12 w-auto max-w-[160px] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] object-contain p-1"
+                />
+              ) : (
+                <span className="text-sm text-[var(--color-fg-subtle)]">No logo uploaded.</span>
+              )}
+              <label className="cursor-pointer rounded-lg border border-[var(--color-border-strong)] px-3 py-2 text-sm font-medium text-[var(--color-fg)] hover:bg-[var(--color-bg-subtle)]">
+                {logoBusy ? "Uploading…" : form.hasLogo ? "Replace" : "Upload logo"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  className="hidden"
+                  disabled={logoBusy}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void uploadLogo(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              {form.hasLogo && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => void removeLogo()}
+                  disabled={logoBusy}
+                >
+                  Remove
+                </Button>
+              )}
+            </div>
+            <p className="mt-1.5 text-xs text-[var(--color-fg-muted)]">
+              Shown on the login page, the app header and your public website. PNG, JPEG, WebP or
+              SVG, up to 512 KB.
+            </p>
           </div>
           <Field
             label="Tagline"

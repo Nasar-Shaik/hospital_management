@@ -16,6 +16,7 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiClientError, isMfaChallenge } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranding } from "../../components/BrandingProvider";
 import { apiTarget } from "../../lib/api";
 import { Alert, Button, Card, Field } from "../../components/ui";
 import {
@@ -29,6 +30,7 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const { login, completeMfa } = useAuth();
+  const branding = useBranding();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -140,9 +142,22 @@ function LoginForm() {
     <main className="flex min-h-screen items-center justify-center bg-[var(--color-bg-subtle)] px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-600)] text-lg font-bold text-[var(--color-on-accent)]">
-            M
-          </div>
+          {branding.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={branding.displayName || "Hospital logo"}
+              className="mx-auto mb-4 h-12 w-auto max-w-[180px] object-contain"
+            />
+          ) : (
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-600)] text-lg font-bold text-[var(--color-on-accent)]">
+              {(branding.displayName || "M").charAt(0).toUpperCase()}
+            </div>
+          )}
+          {branding.displayName && (
+            <p className="mb-1 text-sm font-semibold text-[var(--color-fg)]">
+              {branding.displayName}
+            </p>
+          )}
           <h1 className="text-xl font-semibold text-[var(--color-fg)]">
             {mfaToken ? "Two-step verification" : "Sign in"}
           </h1>

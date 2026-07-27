@@ -72,3 +72,14 @@ export const updateSiteSchema = z
   .strict();
 
 export type UpdateSiteBody = z.infer<typeof updateSiteSchema>;
+
+/** The logo upload (A8). Type and size are checked in the service, before a byte is stored. */
+export const uploadLogoSchema = z
+  .object({
+    contentType: z.string().trim().min(1).max(100),
+    /** The image, base64-encoded. */
+    dataBase64: z.string().min(1),
+  })
+  .strict();
+
+export type UploadLogoBody = z.infer<typeof uploadLogoSchema>;

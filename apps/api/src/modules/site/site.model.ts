@@ -54,6 +54,17 @@ export interface SiteBranding {
   accentColor?: string;
 }
 
+/**
+ * The hospital's logo (A8) — shown on the public site, the login page and the app header. Stored
+ * as bytes in the settings document and served by `GET /site/logo`; kept small (≤512 KB) because
+ * it is a logo, not a hero image. The bytes are excluded from every settings read but the download.
+ */
+export interface SiteLogo {
+  contentType: string;
+  size: number;
+  data: Buffer;
+}
+
 /** Off-site links shown in the footer. All optional; an empty set renders nothing. */
 export interface SiteSocial {
   website?: string;
@@ -80,6 +91,7 @@ export interface SiteSettingsDoc {
   tenantId: string;
 
   branding?: SiteBranding;
+  logo?: SiteLogo;
   tagline?: string;
   /** The "about us" block. Free text; rendered as paragraphs split on blank lines. */
   about?: string;
@@ -172,6 +184,16 @@ const siteSettingsSchema = new Schema<SiteSettingsDoc>(
       _id: false,
     },
     metaDescription: { type: String, trim: true, maxlength: 320 },
+
+    logo: {
+      type: {
+        contentType: { type: String },
+        size: { type: Number },
+        data: { type: Buffer },
+      },
+      default: undefined,
+      _id: false,
+    },
 
     published: { type: Boolean, required: true, default: true },
   },

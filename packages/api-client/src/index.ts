@@ -253,6 +253,8 @@ export interface PublicSite {
   announcement?: SiteAnnouncement;
   metaDescription: string;
   doctors: PublicDoctor[];
+  /** Whether a logo has been uploaded — fetch it from `GET /site/logo` when true. */
+  hasLogo: boolean;
   published: boolean;
 }
 
@@ -269,6 +271,7 @@ export interface EditableSite {
   social: SiteSocial;
   announcement?: SiteAnnouncement;
   metaDescription: string;
+  hasLogo: boolean;
   published: boolean;
 }
 
@@ -1749,6 +1752,38 @@ export class ApiClient {
   /** Admin — save site edits. Needs `branding:manage`. */
   updateSiteSettings(input: UpdateSiteInput): Promise<EditableSite> {
     return this.request<EditableSite>("PATCH", "/api/v1/site/settings", input);
+  }
+
+  /** Admin — upload/replace the hospital logo (A8). Needs `branding:manage`. */
+  uploadSiteLogo(input: {
+    contentType: string;
+    dataBase64: string;
+  }): Promise<{ uploaded: boolean }> {
+    return this.request("PUT", "/api/v1/site/logo", input);
+  }
+
+  /** Admin — remove the hospital logo. Needs `branding:manage`. */
+  deleteSiteLogo(): Promise<{ deleted: boolean }> {
+    return this.request("DELETE", "/api/v1/site/logo");
+  }
+
+  /**
+   * PUBLIC — the hospital's logo bytes as a Blob (A8), or `null` when none is set. Fetched (not
+   * plain-linked) so the tenant host header reaches the API in local dev, the same reason
+   * `fetchReportBlob` exists. The caller turns it into an object URL for an `<img>`.
+   */
+  async fetchSiteLogoBlob(): Promise<Blob | null> {
+    const headers: Record<string, string> = {};
+    if (this.tenantHost) headers.host = this.tenantHost;
+    const res = await this.fetchImpl(`${this.baseUrl}/api/v1/site/logo`, {
+      method: "GET",
+      headers,
+      credentials: this.credentials,
+      cache: "no-store",
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    return res.blob();
   }
 
   /* ── patients (Doc 02 C1) ── */

@@ -11,20 +11,22 @@
  * tenant-scoped permission the platform defined for exactly this and that TENANT_ADMIN
  * inherits. Editing the shop window is an administrator's job, not a clinician's.
  */
-import { Router } from "express";
+import { Router, json } from "express";
 import { PERMISSIONS } from "@medicore/permissions";
 import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import * as controller from "./site.controller.js";
-import { updateSiteSchema } from "./site.schema.js";
+import { updateSiteSchema, uploadLogoSchema } from "./site.schema.js";
 
 export function siteRouter(): Router {
   const router = Router();
 
   // Public — no authenticate. Tenant is resolved from the host.
   router.get("/site", asyncHandler(controller.publicSite));
+  // Public — the logo is shown on the logged-out login page and the public site.
+  router.get("/site/logo", asyncHandler(controller.publicLogo));
 
   router.get(
     "/site/settings",
@@ -39,6 +41,23 @@ export function siteRouter(): Router {
     authorize(PERMISSIONS.BRANDING_MANAGE),
     validate(updateSiteSchema),
     asyncHandler(controller.updateSettings),
+  );
+
+  router.put(
+    "/site/logo",
+    authenticate(),
+    authorize(PERMISSIONS.BRANDING_MANAGE),
+    // A base64 logo exceeds the app-wide 1 MB JSON limit only slightly; this route accepts more.
+    json({ limit: "2mb" }),
+    validate(uploadLogoSchema),
+    asyncHandler(controller.uploadLogo),
+  );
+
+  router.delete(
+    "/site/logo",
+    authenticate(),
+    authorize(PERMISSIONS.BRANDING_MANAGE),
+    asyncHandler(controller.deleteLogo),
   );
 
   return router;
