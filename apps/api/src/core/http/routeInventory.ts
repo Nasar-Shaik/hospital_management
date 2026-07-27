@@ -24,7 +24,7 @@
  * That is the difference between testing authorization and testing the
  * authorization we *remembered to test*. It is why the suite is release-gating.
  */
-import type { Express, RequestHandler } from "express";
+import type { Application, RequestHandler } from "express";
 
 /** The tag the auth middleware factories stamp onto themselves. */
 export interface AuthTag {
@@ -78,7 +78,7 @@ export interface RouteInfo {
  * so it cannot drift from reality the way a hand-maintained list would. If a route
  * is reachable in production, it is in here.
  */
-export function routeInventory(app: Express): RouteInfo[] {
+export function routeInventory(app: Application): RouteInfo[] {
   const routes: RouteInfo[] = [];
 
   interface Layer {

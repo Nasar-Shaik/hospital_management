@@ -4,7 +4,7 @@
  * P1 inserts: resolveTenant → authenticate → authorize → validate → idempotency.
  * Business modules mount under src/modules/<name>/ per Doc 09 §1 — none yet.
  */
-import express, { type Express, Router } from "express";
+import express, { type Express, type Request, type Response, Router } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -14,6 +14,9 @@ import { requestLog } from "./core/http/requestLog.js";
 import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { authenticate } from "./middleware/authenticate.js";
+import { asyncHandler } from "./core/http/asyncHandler.js";
+import { specFromApp } from "./core/http/openapi.js";
 import { auditRouter } from "./modules/audit/index.js";
 import { platformRouter } from "./modules/platform/index.js";
 import { authRouter } from "./modules/auth/index.js";
@@ -175,6 +178,24 @@ export function createApp(logger: Logger): Express {
   v1Router.use(reportingRouter());
   v1Router.use(siteRouter());
   v1Router.use(walletRouter());
+
+  /**
+   * The API's own machine-readable contract (OpenAPI 3.1), generated from the shipped routes so it
+   * can never drift. Authenticated but unpermissioned (self-service, like `/auth/me`): any user or
+   * integration may read the route map, and the spec reveals no data. Built once and cached — the
+   * route table does not change between deploys. Not enveloped: tools expect the spec at the root.
+   */
+  let openApiCache: object | undefined;
+  v1Router.get(
+    "/openapi.json",
+    authenticate(),
+    asyncHandler((req: Request, res: Response) => {
+      openApiCache ??= specFromApp(req.app);
+      res.json(openApiCache);
+      return Promise.resolve();
+    }),
+  );
+
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

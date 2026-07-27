@@ -1,0 +1,6418 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "MediCore HMS API",
+    "version": "1.0.0",
+    "description": "The MediCore HMS tenant API. Every path is resolved against the hospital in the request host (the hostname IS the tenant). Authenticated routes accept a session access token or an API key as `Authorization: Bearer <token>`. The `x-permission` and `x-feature` extensions state the authorization each route enforces."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The hospital's own host (e.g. https://apollo.example.com)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "allergies"
+    },
+    {
+      "name": "api-keys"
+    },
+    {
+      "name": "appointments"
+    },
+    {
+      "name": "audit"
+    },
+    {
+      "name": "auth"
+    },
+    {
+      "name": "bed-board"
+    },
+    {
+      "name": "beds"
+    },
+    {
+      "name": "billing"
+    },
+    {
+      "name": "branches"
+    },
+    {
+      "name": "charges"
+    },
+    {
+      "name": "doctors"
+    },
+    {
+      "name": "documents"
+    },
+    {
+      "name": "editions"
+    },
+    {
+      "name": "encounters"
+    },
+    {
+      "name": "episodes"
+    },
+    {
+      "name": "feature-flags"
+    },
+    {
+      "name": "hospitals"
+    },
+    {
+      "name": "inpatients"
+    },
+    {
+      "name": "invoices"
+    },
+    {
+      "name": "me"
+    },
+    {
+      "name": "medicines"
+    },
+    {
+      "name": "notifications"
+    },
+    {
+      "name": "openapi.json"
+    },
+    {
+      "name": "operators"
+    },
+    {
+      "name": "orders"
+    },
+    {
+      "name": "patients"
+    },
+    {
+      "name": "permissions"
+    },
+    {
+      "name": "plans"
+    },
+    {
+      "name": "prescriptions"
+    },
+    {
+      "name": "reports"
+    },
+    {
+      "name": "roles"
+    },
+    {
+      "name": "services"
+    },
+    {
+      "name": "site"
+    },
+    {
+      "name": "subscription"
+    },
+    {
+      "name": "tariff"
+    },
+    {
+      "name": "users"
+    },
+    {
+      "name": "wallet"
+    },
+    {
+      "name": "wards"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A session access token OR an API key (`mk_…`)."
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "example": "HMS-AUTH-005"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "traceId": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message"]
+          }
+        },
+        "required": ["error"]
+      }
+    }
+  },
+  "paths": {
+    "/api/platform/v1/auth/login": {
+      "post": {
+        "operationId": "post_platform_v1_auth_login",
+        "tags": ["auth"],
+        "summary": "POST /api/platform/v1/auth/login",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/platform/v1/auth/logout": {
+      "post": {
+        "operationId": "post_platform_v1_auth_logout",
+        "tags": ["auth"],
+        "summary": "POST /api/platform/v1/auth/logout",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      }
+    },
+    "/api/platform/v1/auth/me": {
+      "get": {
+        "operationId": "get_platform_v1_auth_me",
+        "tags": ["auth"],
+        "summary": "GET /api/platform/v1/auth/me",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      }
+    },
+    "/api/platform/v1/auth/change-password": {
+      "post": {
+        "operationId": "post_platform_v1_auth_change_password",
+        "tags": ["auth"],
+        "summary": "POST /api/platform/v1/auth/change-password",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      }
+    },
+    "/api/platform/v1/hospitals": {
+      "get": {
+        "operationId": "get_platform_v1_hospitals",
+        "tags": ["hospitals"],
+        "summary": "GET /api/platform/v1/hospitals",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      },
+      "post": {
+        "operationId": "post_platform_v1_hospitals",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/hospitals/{id}": {
+      "get": {
+        "operationId": "get_platform_v1_hospitals_id",
+        "tags": ["hospitals"],
+        "summary": "GET /api/platform/v1/hospitals/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      }
+    },
+    "/api/platform/v1/editions": {
+      "get": {
+        "operationId": "get_platform_v1_editions",
+        "tags": ["editions"],
+        "summary": "GET /api/platform/v1/editions",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      }
+    },
+    "/api/platform/v1/audit": {
+      "get": {
+        "operationId": "get_platform_v1_audit",
+        "tags": ["audit"],
+        "summary": "GET /api/platform/v1/audit",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true
+      }
+    },
+    "/api/platform/v1/hospitals/{id}/status": {
+      "post": {
+        "operationId": "post_platform_v1_hospitals_id_status",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals/{id}/status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/hospitals/{id}/plan": {
+      "post": {
+        "operationId": "post_platform_v1_hospitals_id_plan",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals/{id}/plan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/hospitals/{id}/limits": {
+      "post": {
+        "operationId": "post_platform_v1_hospitals_id_limits",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals/{id}/limits",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/hospitals/{id}/license": {
+      "post": {
+        "operationId": "post_platform_v1_hospitals_id_license",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals/{id}/license",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/hospitals/{id}/domain": {
+      "post": {
+        "operationId": "post_platform_v1_hospitals_id_domain",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals/{id}/domain",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/hospitals/{id}/admin": {
+      "post": {
+        "operationId": "post_platform_v1_hospitals_id_admin",
+        "tags": ["hospitals"],
+        "summary": "POST /api/platform/v1/hospitals/{id}/admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/platform/v1/operators": {
+      "get": {
+        "operationId": "get_platform_v1_operators",
+        "tags": ["operators"],
+        "summary": "GET /api/platform/v1/operators",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      },
+      "post": {
+        "operationId": "post_platform_v1_operators",
+        "tags": ["operators"],
+        "summary": "POST /api/platform/v1/operators",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-operator": true,
+        "x-operator-roles": ["SUPER_ADMIN"]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "post_v1_auth_login",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/login",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "post_v1_auth_refresh",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/refresh",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/mfa/verify": {
+      "post": {
+        "operationId": "post_v1_auth_mfa_verify",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/mfa/verify",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/forgot-password": {
+      "post": {
+        "operationId": "post_v1_auth_forgot_password",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/forgot-password",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/reset-password": {
+      "post": {
+        "operationId": "post_v1_auth_reset_password",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/reset-password",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "post_v1_auth_logout",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/logout",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "get_v1_auth_me",
+        "tags": ["auth"],
+        "summary": "GET /api/v1/auth/me",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/change-password": {
+      "post": {
+        "operationId": "post_v1_auth_change_password",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/change-password",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions": {
+      "get": {
+        "operationId": "get_v1_auth_sessions",
+        "tags": ["auth"],
+        "summary": "GET /api/v1/auth/sessions",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/sessions/{id}": {
+      "delete": {
+        "operationId": "delete_v1_auth_sessions_id",
+        "tags": ["auth"],
+        "summary": "DELETE /api/v1/auth/sessions/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/setup": {
+      "post": {
+        "operationId": "post_v1_auth_mfa_setup",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/mfa/setup",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/activate": {
+      "post": {
+        "operationId": "post_v1_auth_mfa_activate",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/mfa/activate",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/auth/mfa/disable": {
+      "post": {
+        "operationId": "post_v1_auth_mfa_disable",
+        "tags": ["auth"],
+        "summary": "POST /api/v1/auth/mfa/disable",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/permissions": {
+      "get": {
+        "operationId": "get_v1_permissions",
+        "tags": ["permissions"],
+        "summary": "GET /api/v1/permissions",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "permission:view"
+      }
+    },
+    "/api/v1/roles": {
+      "get": {
+        "operationId": "get_v1_roles",
+        "tags": ["roles"],
+        "summary": "GET /api/v1/roles",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "role:manage"
+      },
+      "post": {
+        "operationId": "post_v1_roles",
+        "tags": ["roles"],
+        "summary": "POST /api/v1/roles",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "role:manage"
+      }
+    },
+    "/api/v1/roles/{id}": {
+      "get": {
+        "operationId": "get_v1_roles_id",
+        "tags": ["roles"],
+        "summary": "GET /api/v1/roles/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "role:manage"
+      },
+      "delete": {
+        "operationId": "delete_v1_roles_id",
+        "tags": ["roles"],
+        "summary": "DELETE /api/v1/roles/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "role:manage"
+      }
+    },
+    "/api/v1/roles/{id}/permissions": {
+      "put": {
+        "operationId": "put_v1_roles_id_permissions",
+        "tags": ["roles"],
+        "summary": "PUT /api/v1/roles/{id}/permissions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "role:manage"
+      }
+    },
+    "/api/v1/users/{id}/roles": {
+      "post": {
+        "operationId": "post_v1_users_id_roles",
+        "tags": ["users"],
+        "summary": "POST /api/v1/users/{id}/roles",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:assign-role"
+      }
+    },
+    "/api/v1/users/{id}/roles/{roleCode}": {
+      "delete": {
+        "operationId": "delete_v1_users_id_roles_roleCode",
+        "tags": ["users"],
+        "summary": "DELETE /api/v1/users/{id}/roles/{roleCode}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "roleCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:assign-role"
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "get_v1_users",
+        "tags": ["users"],
+        "summary": "GET /api/v1/users",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:read"
+      },
+      "post": {
+        "operationId": "post_v1_users",
+        "tags": ["users"],
+        "summary": "POST /api/v1/users",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:create"
+      }
+    },
+    "/api/v1/doctors": {
+      "get": {
+        "operationId": "get_v1_doctors",
+        "tags": ["doctors"],
+        "summary": "GET /api/v1/doctors",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read"
+      }
+    },
+    "/api/v1/doctors/{id}": {
+      "get": {
+        "operationId": "get_v1_doctors_id",
+        "tags": ["doctors"],
+        "summary": "GET /api/v1/doctors/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read"
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "operationId": "get_v1_users_id",
+        "tags": ["users"],
+        "summary": "GET /api/v1/users/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:read"
+      },
+      "patch": {
+        "operationId": "patch_v1_users_id",
+        "tags": ["users"],
+        "summary": "PATCH /api/v1/users/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:update"
+      }
+    },
+    "/api/v1/users/{id}/status": {
+      "post": {
+        "operationId": "post_v1_users_id_status",
+        "tags": ["users"],
+        "summary": "POST /api/v1/users/{id}/status",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:deactivate"
+      }
+    },
+    "/api/v1/users/{id}/reset-password": {
+      "post": {
+        "operationId": "post_v1_users_id_reset_password",
+        "tags": ["users"],
+        "summary": "POST /api/v1/users/{id}/reset-password",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "user:update"
+      }
+    },
+    "/api/v1/subscription": {
+      "get": {
+        "operationId": "get_v1_subscription",
+        "tags": ["subscription"],
+        "summary": "GET /api/v1/subscription",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "subscription:manage"
+      }
+    },
+    "/api/v1/plans": {
+      "get": {
+        "operationId": "get_v1_plans",
+        "tags": ["plans"],
+        "summary": "GET /api/v1/plans",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "subscription:manage"
+      }
+    },
+    "/api/v1/subscription/plan": {
+      "post": {
+        "operationId": "post_v1_subscription_plan",
+        "tags": ["subscription"],
+        "summary": "POST /api/v1/subscription/plan",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "plan:manage"
+      }
+    },
+    "/api/v1/feature-flags": {
+      "post": {
+        "operationId": "post_v1_feature_flags",
+        "tags": ["feature-flags"],
+        "summary": "POST /api/v1/feature-flags",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "featureflag:manage"
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "get_v1_audit",
+        "tags": ["audit"],
+        "summary": "GET /api/v1/audit",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "audit:view"
+      }
+    },
+    "/api/v1/audit/export": {
+      "get": {
+        "operationId": "get_v1_audit_export",
+        "tags": ["audit"],
+        "summary": "GET /api/v1/audit/export",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "audit:export"
+      }
+    },
+    "/api/v1/audit/integrity": {
+      "get": {
+        "operationId": "get_v1_audit_integrity",
+        "tags": ["audit"],
+        "summary": "GET /api/v1/audit/integrity",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "audit:view"
+      }
+    },
+    "/api/v1/patients": {
+      "get": {
+        "operationId": "get_v1_patients",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:read"
+      },
+      "post": {
+        "operationId": "post_v1_patients",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:register"
+      }
+    },
+    "/api/v1/patients/by-uhid/{uhid}": {
+      "get": {
+        "operationId": "get_v1_patients_by_uhid_uhid",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/by-uhid/{uhid}",
+        "parameters": [
+          {
+            "name": "uhid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:read"
+      }
+    },
+    "/api/v1/patients/{id}": {
+      "get": {
+        "operationId": "get_v1_patients_id",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:read"
+      },
+      "patch": {
+        "operationId": "patch_v1_patients_id",
+        "tags": ["patients"],
+        "summary": "PATCH /api/v1/patients/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:update"
+      }
+    },
+    "/api/v1/patients/check-duplicates": {
+      "post": {
+        "operationId": "post_v1_patients_check_duplicates",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/check-duplicates",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:read"
+      }
+    },
+    "/api/v1/patients/merge": {
+      "post": {
+        "operationId": "post_v1_patients_merge",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/merge",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "patient:merge"
+      }
+    },
+    "/api/v1/encounters": {
+      "post": {
+        "operationId": "post_v1_encounters",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:create",
+        "x-feature": "module.ops.opd"
+      },
+      "get": {
+        "operationId": "get_v1_encounters",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}": {
+      "get": {
+        "operationId": "get_v1_encounters_id",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/episodes/{id}/timeline": {
+      "get": {
+        "operationId": "get_v1_episodes_id_timeline",
+        "tags": ["episodes"],
+        "summary": "GET /api/v1/episodes/{id}/timeline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/inpatients": {
+      "get": {
+        "operationId": "get_v1_inpatients",
+        "tags": ["inpatients"],
+        "summary": "GET /api/v1/inpatients",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/encounters/{id}/admit": {
+      "post": {
+        "operationId": "post_v1_encounters_id_admit",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/admit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "admission:create",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/encounters/{id}/transfer": {
+      "post": {
+        "operationId": "post_v1_encounters_id_transfer",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/transfer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:update",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/queue": {
+      "post": {
+        "operationId": "post_v1_encounters_id_queue",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/queue",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:update",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/start": {
+      "post": {
+        "operationId": "post_v1_encounters_id_start",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:update",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/investigations": {
+      "post": {
+        "operationId": "post_v1_encounters_id_investigations",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/investigations",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:update",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/close": {
+      "post": {
+        "operationId": "post_v1_encounters_id_close",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/close",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:close",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/summary": {
+      "post": {
+        "operationId": "post_v1_encounters_id_summary",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/summary",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:write",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_encounters_id_cancel",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:update",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/left": {
+      "post": {
+        "operationId": "post_v1_encounters_id_left",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/left",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:update",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders": {
+      "post": {
+        "operationId": "post_v1_orders",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:create",
+        "x-feature": "module.ops.opd"
+      },
+      "get": {
+        "operationId": "get_v1_orders",
+        "tags": ["orders"],
+        "summary": "GET /api/v1/orders",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}": {
+      "get": {
+        "operationId": "get_v1_orders_id",
+        "tags": ["orders"],
+        "summary": "GET /api/v1/orders/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}/accept": {
+      "post": {
+        "operationId": "post_v1_orders_id_accept",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/accept",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:perform",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}/start": {
+      "post": {
+        "operationId": "post_v1_orders_id_start",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:perform",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}/complete": {
+      "post": {
+        "operationId": "post_v1_orders_id_complete",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/complete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:perform",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}/verify": {
+      "post": {
+        "operationId": "post_v1_orders_id_verify",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/verify",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:verify",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}/release": {
+      "post": {
+        "operationId": "post_v1_orders_id_release",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:release",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/orders/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_orders_id_cancel",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:cancel",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/billing/order-payments": {
+      "get": {
+        "operationId": "get_v1_billing_order_payments",
+        "tags": ["billing"],
+        "summary": "GET /api/v1/billing/order-payments",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/billing/consultation-payments": {
+      "get": {
+        "operationId": "get_v1_billing_consultation_payments",
+        "tags": ["billing"],
+        "summary": "GET /api/v1/billing/consultation-payments",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/billing/order-settlement": {
+      "get": {
+        "operationId": "get_v1_billing_order_settlement",
+        "tags": ["billing"],
+        "summary": "GET /api/v1/billing/order-settlement",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/billing/orders/{id}/settle-from-advance": {
+      "post": {
+        "operationId": "post_v1_billing_orders_id_settle_from_advance",
+        "tags": ["billing"],
+        "summary": "POST /api/v1/billing/orders/{id}/settle-from-advance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:perform",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/services": {
+      "get": {
+        "operationId": "get_v1_services",
+        "tags": ["services"],
+        "summary": "GET /api/v1/services",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/services/catalogue": {
+      "get": {
+        "operationId": "get_v1_services_catalogue",
+        "tags": ["services"],
+        "summary": "GET /api/v1/services/catalogue",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:create",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/tariff": {
+      "get": {
+        "operationId": "get_v1_tariff",
+        "tags": ["tariff"],
+        "summary": "GET /api/v1/tariff",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "tariff:manage",
+        "x-feature": "module.ops.opd"
+      },
+      "post": {
+        "operationId": "post_v1_tariff",
+        "tags": ["tariff"],
+        "summary": "POST /api/v1/tariff",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "tariff:manage",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/tariff/{id}": {
+      "patch": {
+        "operationId": "patch_v1_tariff_id",
+        "tags": ["tariff"],
+        "summary": "PATCH /api/v1/tariff/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "tariff:manage",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/bill": {
+      "get": {
+        "operationId": "get_v1_encounters_id_bill",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}/bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/billing": {
+      "get": {
+        "operationId": "get_v1_encounters_id_billing",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}/billing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/charges": {
+      "get": {
+        "operationId": "get_v1_encounters_id_charges",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}/charges",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/charges": {
+      "post": {
+        "operationId": "post_v1_charges",
+        "tags": ["charges"],
+        "summary": "POST /api/v1/charges",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:create",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/charges/{id}/void": {
+      "post": {
+        "operationId": "post_v1_charges_id_void",
+        "tags": ["charges"],
+        "summary": "POST /api/v1/charges/{id}/void",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:create",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/bill/finalize": {
+      "post": {
+        "operationId": "post_v1_encounters_id_bill_finalize",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/bill/finalize",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:finalize",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/invoices": {
+      "get": {
+        "operationId": "get_v1_invoices",
+        "tags": ["invoices"],
+        "summary": "GET /api/v1/invoices",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/invoices/{id}": {
+      "get": {
+        "operationId": "get_v1_invoices_id",
+        "tags": ["invoices"],
+        "summary": "GET /api/v1/invoices/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/invoices/{id}/payments": {
+      "post": {
+        "operationId": "post_v1_invoices_id_payments",
+        "tags": ["invoices"],
+        "summary": "POST /api/v1/invoices/{id}/payments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "payment:collect",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions": {
+      "post": {
+        "operationId": "post_v1_prescriptions",
+        "tags": ["prescriptions"],
+        "summary": "POST /api/v1/prescriptions",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:create",
+        "x-feature": "module.ops.opd"
+      },
+      "get": {
+        "operationId": "get_v1_prescriptions",
+        "tags": ["prescriptions"],
+        "summary": "GET /api/v1/prescriptions",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}": {
+      "get": {
+        "operationId": "get_v1_prescriptions_id",
+        "tags": ["prescriptions"],
+        "summary": "GET /api/v1/prescriptions/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.opd"
+      },
+      "patch": {
+        "operationId": "patch_v1_prescriptions_id",
+        "tags": ["prescriptions"],
+        "summary": "PATCH /api/v1/prescriptions/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:create",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}/screen": {
+      "get": {
+        "operationId": "get_v1_prescriptions_id_screen",
+        "tags": ["prescriptions"],
+        "summary": "GET /api/v1/prescriptions/{id}/screen",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}/sign": {
+      "post": {
+        "operationId": "post_v1_prescriptions_id_sign",
+        "tags": ["prescriptions"],
+        "summary": "POST /api/v1/prescriptions/{id}/sign",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:sign",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_prescriptions_id_cancel",
+        "tags": ["prescriptions"],
+        "summary": "POST /api/v1/prescriptions/{id}/cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:sign",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}/discard": {
+      "post": {
+        "operationId": "post_v1_prescriptions_id_discard",
+        "tags": ["prescriptions"],
+        "summary": "POST /api/v1/prescriptions/{id}/discard",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:create",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}/amend": {
+      "post": {
+        "operationId": "post_v1_prescriptions_id_amend",
+        "tags": ["prescriptions"],
+        "summary": "POST /api/v1/prescriptions/{id}/amend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:create",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/prescriptions/{id}/dispense": {
+      "post": {
+        "operationId": "post_v1_prescriptions_id_dispense",
+        "tags": ["prescriptions"],
+        "summary": "POST /api/v1/prescriptions/{id}/dispense",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:dispense",
+        "x-feature": "module.pharmacy.dispensing"
+      }
+    },
+    "/api/v1/prescriptions/{id}/dispenses": {
+      "get": {
+        "operationId": "get_v1_prescriptions_id_dispenses",
+        "tags": ["prescriptions"],
+        "summary": "GET /api/v1/prescriptions/{id}/dispenses",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.pharmacy.dispensing"
+      }
+    },
+    "/api/v1/medicines": {
+      "get": {
+        "operationId": "get_v1_medicines",
+        "tags": ["medicines"],
+        "summary": "GET /api/v1/medicines",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      },
+      "post": {
+        "operationId": "post_v1_medicines",
+        "tags": ["medicines"],
+        "summary": "POST /api/v1/medicines",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/medicines/stock-report": {
+      "get": {
+        "operationId": "get_v1_medicines_stock_report",
+        "tags": ["medicines"],
+        "summary": "GET /api/v1/medicines/stock-report",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/medicines/{id}": {
+      "get": {
+        "operationId": "get_v1_medicines_id",
+        "tags": ["medicines"],
+        "summary": "GET /api/v1/medicines/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      },
+      "patch": {
+        "operationId": "patch_v1_medicines_id",
+        "tags": ["medicines"],
+        "summary": "PATCH /api/v1/medicines/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/medicines/{id}/movements": {
+      "get": {
+        "operationId": "get_v1_medicines_id_movements",
+        "tags": ["medicines"],
+        "summary": "GET /api/v1/medicines/{id}/movements",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/medicines/{id}/receive": {
+      "post": {
+        "operationId": "post_v1_medicines_id_receive",
+        "tags": ["medicines"],
+        "summary": "POST /api/v1/medicines/{id}/receive",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/medicines/{id}/adjust": {
+      "post": {
+        "operationId": "post_v1_medicines_id_adjust",
+        "tags": ["medicines"],
+        "summary": "POST /api/v1/medicines/{id}/adjust",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/bed-board": {
+      "get": {
+        "operationId": "get_v1_bed_board",
+        "tags": ["bed-board"],
+        "summary": "GET /api/v1/bed-board",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/encounters/{id}/notes": {
+      "post": {
+        "operationId": "post_v1_encounters_id_notes",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:write",
+        "x-feature": "module.ops.ipd"
+      },
+      "get": {
+        "operationId": "get_v1_encounters_id_notes",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}/notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/encounters/{id}/discharge": {
+      "post": {
+        "operationId": "post_v1_encounters_id_discharge",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/discharge",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "admission:discharge",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/encounters/{id}/outcome": {
+      "post": {
+        "operationId": "post_v1_encounters_id_outcome",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/outcome",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "admission:discharge",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/patients/{patientId}/allergies": {
+      "get": {
+        "operationId": "get_v1_patients_patientId_allergies",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/allergies",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "allergy:read"
+      },
+      "post": {
+        "operationId": "post_v1_patients_patientId_allergies",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/{patientId}/allergies",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "allergy:manage"
+      }
+    },
+    "/api/v1/allergies/{id}/refute": {
+      "post": {
+        "operationId": "post_v1_allergies_id_refute",
+        "tags": ["allergies"],
+        "summary": "POST /api/v1/allergies/{id}/refute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "allergy:manage"
+      }
+    },
+    "/api/v1/encounters/{encounterId}/vitals": {
+      "post": {
+        "operationId": "post_v1_encounters_encounterId_vitals",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{encounterId}/vitals",
+        "parameters": [
+          {
+            "name": "encounterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "vitals:record"
+      },
+      "get": {
+        "operationId": "get_v1_encounters_encounterId_vitals",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{encounterId}/vitals",
+        "parameters": [
+          {
+            "name": "encounterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read"
+      }
+    },
+    "/api/v1/patients/{patientId}/vitals": {
+      "get": {
+        "operationId": "get_v1_patients_patientId_vitals",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/vitals",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read"
+      }
+    },
+    "/api/v1/me/branches": {
+      "get": {
+        "operationId": "get_v1_me_branches",
+        "tags": ["me"],
+        "summary": "GET /api/v1/me/branches",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/branches": {
+      "get": {
+        "operationId": "get_v1_branches",
+        "tags": ["branches"],
+        "summary": "GET /api/v1/branches",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branch:manage"
+      },
+      "post": {
+        "operationId": "post_v1_branches",
+        "tags": ["branches"],
+        "summary": "POST /api/v1/branches",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branch:manage"
+      }
+    },
+    "/api/v1/branches/{id}": {
+      "patch": {
+        "operationId": "patch_v1_branches_id",
+        "tags": ["branches"],
+        "summary": "PATCH /api/v1/branches/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branch:manage"
+      }
+    },
+    "/api/v1/wards": {
+      "get": {
+        "operationId": "get_v1_wards",
+        "tags": ["wards"],
+        "summary": "GET /api/v1/wards",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.ipd"
+      },
+      "post": {
+        "operationId": "post_v1_wards",
+        "tags": ["wards"],
+        "summary": "POST /api/v1/wards",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "bed:manage",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/wards/{id}": {
+      "patch": {
+        "operationId": "patch_v1_wards_id",
+        "tags": ["wards"],
+        "summary": "PATCH /api/v1/wards/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "bed:manage",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/beds": {
+      "get": {
+        "operationId": "get_v1_beds",
+        "tags": ["beds"],
+        "summary": "GET /api/v1/beds",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.ipd"
+      },
+      "post": {
+        "operationId": "post_v1_beds",
+        "tags": ["beds"],
+        "summary": "POST /api/v1/beds",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "bed:manage",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/beds/{id}": {
+      "patch": {
+        "operationId": "patch_v1_beds_id",
+        "tags": ["beds"],
+        "summary": "PATCH /api/v1/beds/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "bed:manage",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/orders/{id}/reports": {
+      "post": {
+        "operationId": "post_v1_orders_id_reports",
+        "tags": ["orders"],
+        "summary": "POST /api/v1/orders/{id}/reports",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "order:perform"
+      }
+    },
+    "/api/v1/patients/{patientId}/reports": {
+      "get": {
+        "operationId": "get_v1_patients_patientId_reports",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/reports",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read"
+      }
+    },
+    "/api/v1/reports/{id}/file": {
+      "get": {
+        "operationId": "get_v1_reports_id_file",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/{id}/file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read"
+      }
+    },
+    "/api/v1/patients/{patientId}/documents": {
+      "post": {
+        "operationId": "post_v1_patients_patientId_documents",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/{patientId}/documents",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "file:upload"
+      },
+      "get": {
+        "operationId": "get_v1_patients_patientId_documents",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/documents",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "file:read"
+      }
+    },
+    "/api/v1/documents/{id}/file": {
+      "get": {
+        "operationId": "get_v1_documents_id_file",
+        "tags": ["documents"],
+        "summary": "GET /api/v1/documents/{id}/file",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "file:read"
+      }
+    },
+    "/api/v1/documents/{id}": {
+      "delete": {
+        "operationId": "delete_v1_documents_id",
+        "tags": ["documents"],
+        "summary": "DELETE /api/v1/documents/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "file:delete"
+      }
+    },
+    "/api/v1/api-keys": {
+      "get": {
+        "operationId": "get_v1_api_keys",
+        "tags": ["api-keys"],
+        "summary": "GET /api/v1/api-keys",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "apikey:manage"
+      },
+      "post": {
+        "operationId": "post_v1_api_keys",
+        "tags": ["api-keys"],
+        "summary": "POST /api/v1/api-keys",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "apikey:manage"
+      }
+    },
+    "/api/v1/api-keys/{id}": {
+      "delete": {
+        "operationId": "delete_v1_api_keys_id",
+        "tags": ["api-keys"],
+        "summary": "DELETE /api/v1/api-keys/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "apikey:manage"
+      }
+    },
+    "/api/v1/appointments/availability": {
+      "get": {
+        "operationId": "get_v1_appointments_availability",
+        "tags": ["appointments"],
+        "summary": "GET /api/v1/appointments/availability",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:read",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments": {
+      "get": {
+        "operationId": "get_v1_appointments",
+        "tags": ["appointments"],
+        "summary": "GET /api/v1/appointments",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:read",
+        "x-feature": "module.ops.appointments"
+      },
+      "post": {
+        "operationId": "post_v1_appointments",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:create",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}": {
+      "get": {
+        "operationId": "get_v1_appointments_id",
+        "tags": ["appointments"],
+        "summary": "GET /api/v1/appointments/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:read",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/confirm": {
+      "post": {
+        "operationId": "post_v1_appointments_id_confirm",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/confirm",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:update",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/check-in": {
+      "post": {
+        "operationId": "post_v1_appointments_id_check_in",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/check-in",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:update",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/start": {
+      "post": {
+        "operationId": "post_v1_appointments_id_start",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:update",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/complete": {
+      "post": {
+        "operationId": "post_v1_appointments_id_complete",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/complete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:update",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/reschedule": {
+      "post": {
+        "operationId": "post_v1_appointments_id_reschedule",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/reschedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:update",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/no-show": {
+      "post": {
+        "operationId": "post_v1_appointments_id_no_show",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/no-show",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:update",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/appointments/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_appointments_id_cancel",
+        "tags": ["appointments"],
+        "summary": "POST /api/v1/appointments/{id}/cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:cancel",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/{doctorId}/schedule": {
+      "get": {
+        "operationId": "get_v1_doctors_doctorId_schedule",
+        "tags": ["doctors"],
+        "summary": "GET /api/v1/doctors/{doctorId}/schedule",
+        "parameters": [
+          {
+            "name": "doctorId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:read",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/schedule": {
+      "put": {
+        "operationId": "put_v1_doctors_schedule",
+        "tags": ["doctors"],
+        "summary": "PUT /api/v1/doctors/schedule",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/schedule/{id}": {
+      "delete": {
+        "operationId": "delete_v1_doctors_schedule_id",
+        "tags": ["doctors"],
+        "summary": "DELETE /api/v1/doctors/schedule/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "get_v1_notifications",
+        "tags": ["notifications"],
+        "summary": "GET /api/v1/notifications",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "notification:manage"
+      }
+    },
+    "/api/v1/notifications/templates": {
+      "get": {
+        "operationId": "get_v1_notifications_templates",
+        "tags": ["notifications"],
+        "summary": "GET /api/v1/notifications/templates",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "notification:manage"
+      }
+    },
+    "/api/v1/notifications/templates/{key}": {
+      "put": {
+        "operationId": "put_v1_notifications_templates_key",
+        "tags": ["notifications"],
+        "summary": "PUT /api/v1/notifications/templates/{key}",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "notification:manage"
+      }
+    },
+    "/api/v1/reports/my-activity": {
+      "get": {
+        "operationId": "get_v1_reports_my_activity",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/my-activity",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports/pharmacy-stock": {
+      "get": {
+        "operationId": "get_v1_reports_pharmacy_stock",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/pharmacy-stock",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/patient-visits": {
+      "get": {
+        "operationId": "get_v1_reports_patient_visits",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/patient-visits",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/doctor-load": {
+      "get": {
+        "operationId": "get_v1_reports_doctor_load",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/doctor-load",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/diagnostics": {
+      "get": {
+        "operationId": "get_v1_reports_diagnostics",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/diagnostics",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/collections": {
+      "get": {
+        "operationId": "get_v1_reports_collections",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/collections",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/wallet": {
+      "get": {
+        "operationId": "get_v1_reports_wallet",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/wallet",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/receipts": {
+      "get": {
+        "operationId": "get_v1_reports_receipts",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/receipts",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/reports/discharge-outcomes": {
+      "get": {
+        "operationId": "get_v1_reports_discharge_outcomes",
+        "tags": ["reports"],
+        "summary": "GET /api/v1/reports/discharge-outcomes",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "report:view",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/site": {
+      "get": {
+        "operationId": "get_v1_site",
+        "tags": ["site"],
+        "summary": "GET /api/v1/site",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/site/logo": {
+      "get": {
+        "operationId": "get_v1_site_logo",
+        "tags": ["site"],
+        "summary": "GET /api/v1/site/logo",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      },
+      "put": {
+        "operationId": "put_v1_site_logo",
+        "tags": ["site"],
+        "summary": "PUT /api/v1/site/logo",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branding:manage"
+      },
+      "delete": {
+        "operationId": "delete_v1_site_logo",
+        "tags": ["site"],
+        "summary": "DELETE /api/v1/site/logo",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branding:manage"
+      }
+    },
+    "/api/v1/site/settings": {
+      "get": {
+        "operationId": "get_v1_site_settings",
+        "tags": ["site"],
+        "summary": "GET /api/v1/site/settings",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branding:manage"
+      },
+      "patch": {
+        "operationId": "patch_v1_site_settings",
+        "tags": ["site"],
+        "summary": "PATCH /api/v1/site/settings",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "branding:manage"
+      }
+    },
+    "/api/v1/patients/{patientId}/wallet": {
+      "get": {
+        "operationId": "get_v1_patients_patientId_wallet",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/wallet",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "wallet:manage"
+      }
+    },
+    "/api/v1/wallet/entries/{id}": {
+      "get": {
+        "operationId": "get_v1_wallet_entries_id",
+        "tags": ["wallet"],
+        "summary": "GET /api/v1/wallet/entries/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "wallet:manage"
+      }
+    },
+    "/api/v1/patients/{patientId}/wallet/deposits": {
+      "post": {
+        "operationId": "post_v1_patients_patientId_wallet_deposits",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/{patientId}/wallet/deposits",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "wallet:manage"
+      }
+    },
+    "/api/v1/patients/{patientId}/wallet/refunds": {
+      "post": {
+        "operationId": "post_v1_patients_patientId_wallet_refunds",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/{patientId}/wallet/refunds",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "wallet:manage"
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "operationId": "get_v1_openapi_json",
+        "tags": ["openapi.json"],
+        "summary": "GET /api/v1/openapi.json",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  }
+}

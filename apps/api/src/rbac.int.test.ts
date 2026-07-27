@@ -127,6 +127,9 @@ const SELF_SERVICE_ROUTES = new Set([
   // The branch switcher — the caller's OWN allowed branches, like `/auth/me`. Self-service,
   // authenticated, deliberately unpermissioned (ADR-0015). See branch.routes.ts.
   "GET /api/v1/me/branches",
+  // The API's own OpenAPI contract — authenticated, unpermissioned; the route map is not data
+  // and any integration may read it (A9). See app.ts.
+  "GET /api/v1/openapi.json",
 ]);
 
 /** A concrete, callable request for each protected route — the matrix's probes. */
