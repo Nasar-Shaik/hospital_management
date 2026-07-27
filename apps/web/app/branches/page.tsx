@@ -7,11 +7,11 @@
  * one. A branch is never deleted — years of operational records are stamped with it — so a site that
  * closes is set inactive, which drops it from the switcher while keeping its past readable.
  */
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { type Branch } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Badge, Button, Card, Field } from "../../components/ui";
+import { Badge, Button, DataTable, Field, Modal, type Column } from "../../components/ui";
 import { ErrorAlert } from "../../components/ui";
 
 interface BranchForm {
@@ -21,34 +21,6 @@ interface BranchForm {
   contactPhone: string;
   contactEmail: string;
   gstin: string;
-}
-
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-xl">
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3.5">
-          <h2 className="font-semibold text-[var(--color-fg)]">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)]"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 function BranchFormFields({
@@ -208,6 +180,74 @@ function BranchesPage() {
     );
   }
 
+  const columns: Column<Branch>[] = [
+    {
+      key: "name",
+      header: "Branch",
+      cellClassName: "font-medium text-[var(--color-fg)]",
+      render: (b) => (
+        <>
+          {b.name}
+          {b.isMain && (
+            <span className="ml-2 align-middle">
+              <Badge tone="brand">Main</Badge>
+            </span>
+          )}
+        </>
+      ),
+    },
+    {
+      key: "code",
+      header: "Code",
+      cellClassName: "font-mono text-xs text-[var(--color-fg-muted)]",
+      render: (b) => b.code,
+    },
+    {
+      key: "contact",
+      header: "Contact",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (b) => b.contactPhone || b.contactEmail || "—",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (b) => (
+        <Badge tone={b.status === "active" ? "success" : "neutral"} dot>
+          {b.status === "active" ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    ...(canManage
+      ? ([
+          {
+            key: "actions",
+            header: "Actions",
+            align: "right",
+            render: (b) => (
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setActive(b);
+                    setFormError(null);
+                    setModal("edit");
+                  }}
+                >
+                  Edit
+                </Button>
+                {!b.isMain && (
+                  <Button variant="ghost" size="sm" onClick={() => toggleActive(b)}>
+                    {b.status === "active" ? "Deactivate" : "Reactivate"}
+                  </Button>
+                )}
+              </div>
+            ),
+          },
+        ] as Column<Branch>[])
+      : []),
+  ];
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="flex items-center justify-between gap-4">
@@ -233,79 +273,14 @@ function BranchesPage() {
 
       {error != null && <ErrorAlert error={error} fallback="Could not load branches." />}
 
-      <Card className="overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
-            <tr>
-              <th className="px-4 py-3 font-medium">Branch</th>
-              <th className="px-4 py-3 font-medium">Code</th>
-              <th className="px-4 py-3 font-medium">Contact</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              {canManage && <th className="px-4 py-3 text-right font-medium">Actions</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Loading…
-                </td>
-              </tr>
-            ) : items.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  No branches yet.
-                </td>
-              </tr>
-            ) : (
-              items.map((b) => (
-                <tr key={b.id} className={b.status === "active" ? "" : "opacity-60"}>
-                  <td className="px-4 py-3 font-medium text-[var(--color-fg)]">
-                    {b.name}
-                    {b.isMain && (
-                      <span className="ml-2 align-middle">
-                        <Badge tone="brand">Main</Badge>
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-muted)]">
-                    {b.code}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--color-fg-muted)]">
-                    {b.contactPhone || b.contactEmail || "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge tone={b.status === "active" ? "success" : "neutral"}>
-                      {b.status === "active" ? "Active" : "Inactive"}
-                    </Badge>
-                  </td>
-                  {canManage && (
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setActive(b);
-                            setFormError(null);
-                            setModal("edit");
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        {!b.isMain && (
-                          <Button variant="ghost" onClick={() => toggleActive(b)}>
-                            {b.status === "active" ? "Deactivate" : "Reactivate"}
-                          </Button>
-                        )}
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </Card>
+      <DataTable<Branch>
+        columns={columns}
+        rows={items}
+        keyOf={(b) => b.id}
+        loading={loading}
+        empty="No branches yet."
+        rowClassName={(b) => (b.status === "active" ? "" : "opacity-60")}
+      />
 
       {modal === "create" && (
         <Modal title="Add branch" onClose={() => setModal(null)}>

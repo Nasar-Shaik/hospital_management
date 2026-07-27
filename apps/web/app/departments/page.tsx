@@ -10,7 +10,7 @@
  * Reading the list needs only `patient:read` (everyone who routes or reads a patient); creating and
  * editing needs `department:manage`.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   type Department,
   type DepartmentKind,
@@ -18,8 +18,10 @@ import {
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Badge, Button, Card, Field } from "../../components/ui";
+import { Badge, Button, DataTable, Field, Modal, type Column } from "../../components/ui";
 import { ErrorAlert } from "../../components/ui";
+
+type TreeRow = { dept: Department; depth: number };
 
 const KINDS: { value: DepartmentKind; label: string }[] = [
   { value: "clinical", label: "Clinical" },
@@ -38,34 +40,6 @@ interface DeptForm {
   kind: DepartmentKind;
   parentId: string;
   description: string;
-}
-
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-xl">
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3.5">
-          <h2 className="font-semibold text-[var(--color-fg)]">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)]"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 function DeptFormFields({
@@ -266,6 +240,68 @@ function DepartmentsPage() {
     );
   }
 
+  const columns: Column<TreeRow>[] = [
+    {
+      key: "name",
+      header: "Department",
+      cellClassName: "font-medium text-[var(--color-fg)]",
+      render: ({ dept: d, depth }) => (
+        <span style={{ paddingLeft: `${depth * 1.5}rem` }} className="inline-block">
+          {depth > 0 && <span className="mr-1 text-[var(--color-fg-subtle)]">└</span>}
+          {d.name}
+        </span>
+      ),
+    },
+    {
+      key: "code",
+      header: "Code",
+      cellClassName: "font-mono text-xs text-[var(--color-fg-muted)]",
+      render: ({ dept }) => dept.code,
+    },
+    {
+      key: "kind",
+      header: "Kind",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: ({ dept }) => kindLabel(dept.kind),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: ({ dept }) => (
+        <Badge tone={dept.status === "active" ? "success" : "neutral"} dot>
+          {dept.status === "active" ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    ...(canManage
+      ? ([
+          {
+            key: "actions",
+            header: "Actions",
+            align: "right",
+            render: ({ dept: d }) => (
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setActive(d);
+                    setFormError(null);
+                    setModal("edit");
+                  }}
+                >
+                  Edit
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => toggleActive(d)}>
+                  {d.status === "active" ? "Deactivate" : "Reactivate"}
+                </Button>
+              </div>
+            ),
+          },
+        ] as Column<TreeRow>[])
+      : []),
+  ];
+
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="flex items-center justify-between gap-4">
@@ -291,73 +327,14 @@ function DepartmentsPage() {
 
       {error != null && <ErrorAlert error={error} fallback="Could not load departments." />}
 
-      <Card className="overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
-            <tr>
-              <th className="px-4 py-3 font-medium">Department</th>
-              <th className="px-4 py-3 font-medium">Code</th>
-              <th className="px-4 py-3 font-medium">Kind</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              {canManage && <th className="px-4 py-3 text-right font-medium">Actions</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Loading…
-                </td>
-              </tr>
-            ) : tree.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  No departments yet.
-                </td>
-              </tr>
-            ) : (
-              tree.map(({ dept: d, depth }) => (
-                <tr key={d.id} className={d.status === "active" ? "" : "opacity-60"}>
-                  <td className="px-4 py-3 font-medium text-[var(--color-fg)]">
-                    <span style={{ paddingLeft: `${depth * 1.5}rem` }} className="inline-block">
-                      {depth > 0 && <span className="mr-1 text-[var(--color-fg-subtle)]">└</span>}
-                      {d.name}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-muted)]">
-                    {d.code}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--color-fg-muted)]">{kindLabel(d.kind)}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={d.status === "active" ? "success" : "neutral"}>
-                      {d.status === "active" ? "Active" : "Inactive"}
-                    </Badge>
-                  </td>
-                  {canManage && (
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setActive(d);
-                            setFormError(null);
-                            setModal("edit");
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        <Button variant="ghost" onClick={() => toggleActive(d)}>
-                          {d.status === "active" ? "Deactivate" : "Reactivate"}
-                        </Button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </Card>
+      <DataTable<TreeRow>
+        columns={columns}
+        rows={tree}
+        keyOf={(r) => r.dept.id}
+        loading={loading}
+        empty="No departments yet."
+        rowClassName={(r) => (r.dept.status === "active" ? "" : "opacity-60")}
+      />
 
       {modal === "create" && (
         <Modal title="Add department" onClose={() => setModal(null)}>

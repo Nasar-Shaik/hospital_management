@@ -14,6 +14,7 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 
 const FOCUS =
   "outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-500)]/45 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg)]";
@@ -134,14 +135,19 @@ export function Field({
   );
 }
 
-/** Close on Escape — shared by the modal and the drawer. */
-function useEscape(onClose: () => void) {
+/** Close on Escape + lock the body scroll while open — shared by the modal and the drawer. */
+function useOverlay(onClose: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
   }, [onClose]);
 }
 
@@ -157,10 +163,12 @@ export function Modal({
   children: ReactNode;
   width?: string;
 }) {
-  useEscape(onClose);
-  return (
+  useOverlay(onClose);
+  if (typeof document === "undefined") return null;
+  // Portalled to <body> so it clears the sticky top bar's stacking context (see the web Modal).
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
       role="dialog"
       aria-modal
     >
@@ -195,7 +203,8 @@ export function Modal({
         </div>
         <div className="max-h-[75vh] overflow-y-auto px-6 py-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -211,9 +220,10 @@ export function Drawer({
   onClose: () => void;
   children: ReactNode;
 }) {
-  useEscape(onClose);
-  return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal>
+  useOverlay(onClose);
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[100]" role="dialog" aria-modal>
       <div
         className="mc-fade-in absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
@@ -248,7 +258,8 @@ export function Drawer({
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

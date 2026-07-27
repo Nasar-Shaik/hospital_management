@@ -15,7 +15,13 @@
  * transition rides the shared `--dur-*` / `--ease-*` tokens and collapses under
  * `prefers-reduced-motion` (globals.css).
  */
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import {
+  useEffect,
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import { describeError } from "../lib/errors";
 
 /** The shared focus ring — one look for every keyboard-focused control. */
@@ -431,6 +437,177 @@ export function Tabs({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * A centered modal. ONE implementation, replacing the copy each list page used to hand-roll — same
+ * scrim, focus, Escape-to-close and entrance everywhere. Close with the ✕, the scrim, or Escape.
+ */
+export function Modal({
+  title,
+  onClose,
+  children,
+  width = "max-w-lg",
+}: {
+  title: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  width?: string;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    // The scrim covers the page; stop the body scrolling behind it.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  if (typeof document === "undefined") return null;
+
+  // Rendered through a PORTAL to <body> so it escapes every ancestor stacking context — otherwise a
+  // modal nested inside <main> can be trapped BELOW the sticky top bar and its close button becomes
+  // unreachable. On body, its z-50 always wins.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal
+    >
+      <div
+        className="mc-fade-in absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden
+      />
+      <div
+        className={`mc-scale-in relative w-full ${width} rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[var(--shadow-xl)]`}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-6 py-4">
+          <h2 className="text-base font-semibold text-[var(--color-fg)]">{title}</h2>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-[var(--color-fg-subtle)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-fg)]"
+            aria-label="Close"
+          >
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden
+            >
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="max-h-[75vh] overflow-y-auto px-6 py-5">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * A premium data table — ONE place that owns table spacing, the sticky header, hover rows and the
+ * loading / empty states, so every list in the app breathes the same way. Presentational: give it
+ * columns and rows; pass `onRowClick` to make rows navigable.
+ */
+export interface Column<T> {
+  key: string;
+  header: ReactNode;
+  render: (row: T) => ReactNode;
+  align?: "left" | "right" | "center";
+  /** Extra classes for this column's cells (e.g. `font-mono`, `whitespace-nowrap`). */
+  cellClassName?: string;
+  headerClassName?: string;
+}
+
+export function DataTable<T>({
+  columns,
+  rows,
+  keyOf,
+  loading = false,
+  empty,
+  onRowClick,
+  rowClassName,
+}: {
+  columns: Column<T>[];
+  rows: T[];
+  keyOf: (row: T) => string;
+  loading?: boolean;
+  empty?: ReactNode;
+  onRowClick?: (row: T) => void;
+  rowClassName?: (row: T) => string;
+}) {
+  const alignOf = (a?: "left" | "right" | "center") =>
+    a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left";
+
+  return (
+    <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[var(--shadow-xs)]">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
+          <tr>
+            {columns.map((c) => (
+              <th
+                key={c.key}
+                className={`px-5 py-3.5 font-medium ${alignOf(c.align)} ${c.headerClassName ?? ""}`}
+              >
+                {c.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--color-border)]">
+          {loading ? (
+            <tr>
+              <td
+                colSpan={columns.length}
+                className="px-5 py-12 text-center text-[var(--color-fg-subtle)]"
+              >
+                Loading…
+              </td>
+            </tr>
+          ) : rows.length === 0 ? (
+            <tr>
+              <td
+                colSpan={columns.length}
+                className="px-5 py-12 text-center text-[var(--color-fg-muted)]"
+              >
+                {empty ?? "Nothing here yet."}
+              </td>
+            </tr>
+          ) : (
+            rows.map((row) => (
+              <tr
+                key={keyOf(row)}
+                {...(onRowClick ? { onClick: () => onRowClick(row) } : {})}
+                className={`${onRowClick ? "cursor-pointer" : ""} transition-colors hover:bg-[var(--color-bg-subtle)] ${
+                  rowClassName?.(row) ?? ""
+                }`}
+              >
+                {columns.map((c) => (
+                  <td
+                    key={c.key}
+                    className={`px-5 py-4 ${alignOf(c.align)} ${c.cellClassName ?? ""}`}
+                  >
+                    {c.render(row)}
+                  </td>
+                ))}
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }

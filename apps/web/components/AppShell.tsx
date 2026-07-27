@@ -19,7 +19,7 @@
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ThemeToggle } from "@medicore/ui";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { LicenseBanner } from "./LicenseBanner";
@@ -143,6 +143,22 @@ const NAVIGATION: NavSection[] = [
 ];
 
 const COLLAPSE_KEY = "medicore.sidebar.collapsed";
+
+/**
+ * ── WHY THIS MODULE-SCOPED CACHE EXISTS ─────────────────────────────────────
+ * Every page renders its own `<Protected><AppShell>`, so the shell REMOUNTS on each client
+ * navigation (Next only persists `layout.tsx`, and the shell is not one — yet). A remount would
+ * otherwise reset the sidebar's scroll to the top and re-read the collapse flag from storage with a
+ * visible flicker — which reads as "the page reloaded and lost my place". This cache lives on the
+ * module, which SURVIVES the remount (only a full page reload clears it), so the rail comes back
+ * exactly where it was. The proper fix is to hoist the shell into a route-group layout so it never
+ * remounts at all; until then, this keeps the experience seamless.
+ */
+const shellUi: { collapsed: boolean; navScroll: number; hydrated: boolean } = {
+  collapsed: false,
+  navScroll: 0,
+  hydrated: false,
+};
 
 function initials(name: string): string {
   return name
@@ -317,15 +333,27 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, can, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  // Seed from the module cache so a remount keeps the rail's state with no flicker (see `shellUi`).
+  const [collapsed, setCollapsed] = useState(shellUi.collapsed);
+  const navScrollRef = useRef<HTMLDivElement>(null);
 
-  // Restore the rail's collapsed preference (client-only, so it never trips hydration).
+  // First mount of the session: read the persisted collapse preference once.
   useEffect(() => {
+    if (shellUi.hydrated) return;
+    shellUi.hydrated = true;
     try {
-      setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+      const stored = localStorage.getItem(COLLAPSE_KEY) === "1";
+      shellUi.collapsed = stored;
+      setCollapsed(stored);
     } catch {
       /* storage disabled — default expanded */
     }
+  }, []);
+
+  // Restore the sidebar's scroll position after each remount, so navigation never scrolls the rail
+  // back to the top and hides the item you just selected.
+  useEffect(() => {
+    if (navScrollRef.current) navScrollRef.current.scrollTop = shellUi.navScroll;
   }, []);
 
   // Close the mobile drawer whenever the route changes.
@@ -338,6 +366,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       const next = !c;
+      shellUi.collapsed = next;
       try {
         localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
       } catch {
@@ -370,7 +399,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Brandmark collapsed={collapsed} />
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div
+          ref={navScrollRef}
+          onScroll={(e) => {
+            shellUi.navScroll = e.currentTarget.scrollTop;
+          }}
+          className="flex-1 overflow-y-auto"
+        >
           <SidebarNav sections={sections} pathname={pathname} collapsed={collapsed} />
         </div>
 
@@ -546,7 +581,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <LicenseBanner />
 
-        <main className="mc-fade-in flex-1 overflow-x-auto p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="flex-1 overflow-x-auto p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

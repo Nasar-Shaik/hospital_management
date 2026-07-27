@@ -13,7 +13,7 @@
  * booked in) sits above anything out of stock, above anything low. A pharmacist opening this at
  * the start of the day sees the problems before the routine.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   ApiClientError,
   MEDICINE_FORMS,
@@ -25,7 +25,7 @@ import {
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Alert, Badge, Button, Card, Field } from "../../components/ui";
+import { Alert, Badge, Button, Card, Field, Modal } from "../../components/ui";
 
 const STATUS_TONE: Record<StockStatus, "success" | "warning" | "danger" | "neutral"> = {
   ok: "success",
@@ -50,42 +50,6 @@ const FORM_LABEL: Record<MedicineForm, string> = {
   sachet: "Sachet",
   other: "Other",
 };
-
-/** A simple centred dialog — the app has no modal primitive, so each screen that needs one carries it. */
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:p-8"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-2xl rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
-          <h2 className="text-sm font-semibold text-[var(--color-fg)]">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
-      </div>
-    </div>
-  );
-}
 
 function Select({
   label,
@@ -672,12 +636,12 @@ function MedicinesPage() {
       </Card>
 
       {modal === "create" && (
-        <Modal title="Add medicine" onClose={close}>
+        <Modal title="Add medicine" onClose={close} width="max-w-2xl">
           <MedicineForm mode="create" onSubmit={submitCreate} saving={saving} error={formError} />
         </Modal>
       )}
       {modal === "edit" && active && (
-        <Modal title={`Edit ${active.name}`} onClose={close}>
+        <Modal title={`Edit ${active.name}`} onClose={close} width="max-w-2xl">
           <MedicineForm
             mode="edit"
             initial={active}
@@ -708,7 +672,7 @@ function MedicinesPage() {
         </Modal>
       )}
       {modal === "history" && active && (
-        <Modal title={`Stock history — ${active.name}`} onClose={close}>
+        <Modal title={`Stock history — ${active.name}`} onClose={close} width="max-w-2xl">
           <MovementHistory movements={movements} />
         </Modal>
       )}

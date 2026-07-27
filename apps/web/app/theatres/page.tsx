@@ -10,7 +10,7 @@
  * Reading needs `emr:read`; booking/moving a procedure needs `ot:schedule`; the registry needs
  * `facility:manage`. The whole feature is gated on the OT module edition flag.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   type Theatre,
   type TheatreKind,
@@ -21,7 +21,7 @@ import {
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Protected } from "../../components/Protected";
-import { Badge, Button, Card, Field } from "../../components/ui";
+import { Badge, Button, DataTable, Field, Modal, type Column } from "../../components/ui";
 import { ErrorAlert } from "../../components/ui";
 
 const THEATRE_KINDS: { value: TheatreKind; label: string }[] = [
@@ -60,34 +60,6 @@ const fmtTime = (iso: string) =>
 /** `<input type="datetime-local">` gives a zone-less local string; the API wants ISO. */
 const toIso = (local: string) => (local ? new Date(local).toISOString() : "");
 const todayStr = () => new Date().toISOString().slice(0, 10);
-
-function Modal({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-xl">
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3.5">
-          <h2 className="font-semibold text-[var(--color-fg)]">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-[var(--color-fg-subtle)] hover:text-[var(--color-fg)]"
-            aria-label="Close"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="max-h-[75vh] overflow-y-auto p-5">{children}</div>
-      </div>
-    </div>
-  );
-}
 
 /* ── Booking form ── */
 
@@ -437,6 +409,118 @@ function TheatresPage() {
     [bookings],
   );
 
+  const bookingColumns: Column<OtBooking>[] = [
+    {
+      key: "time",
+      header: "Time",
+      cellClassName: "font-mono text-xs whitespace-nowrap text-[var(--color-fg-muted)]",
+      render: (b) => `${fmtTime(b.scheduledStart)}–${fmtTime(b.scheduledEnd)}`,
+    },
+    {
+      key: "theatre",
+      header: "Theatre",
+      cellClassName: "text-[var(--color-fg)]",
+      render: (b) => b.theatreName,
+    },
+    {
+      key: "procedure",
+      header: "Procedure",
+      cellClassName: "text-[var(--color-fg)]",
+      render: (b) => b.procedureName,
+    },
+    {
+      key: "patient",
+      header: "Patient",
+      render: (b) => (
+        <>
+          {b.patientName}{" "}
+          <span className="font-mono text-xs text-[var(--color-fg-muted)]">{b.uhid}</span>
+        </>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (b) => <Badge tone={STATUS_TONE[b.status]}>{b.status.replace("_", " ")}</Badge>,
+    },
+    ...(canSchedule
+      ? ([
+          {
+            key: "actions",
+            header: "Actions",
+            align: "right",
+            render: (b) => (
+              <div className="flex justify-end gap-2">
+                {NEXT_STEPS[b.status].map((step) => (
+                  <Button
+                    key={step.to}
+                    size="sm"
+                    variant={step.to === "cancelled" ? "ghost" : "secondary"}
+                    onClick={() => transition(b, step.to)}
+                  >
+                    {step.label}
+                  </Button>
+                ))}
+              </div>
+            ),
+          },
+        ] as Column<OtBooking>[])
+      : []),
+  ];
+
+  const theatreColumns: Column<Theatre>[] = [
+    {
+      key: "name",
+      header: "Theatre",
+      cellClassName: "font-medium text-[var(--color-fg)]",
+      render: (t) => t.name,
+    },
+    {
+      key: "code",
+      header: "Code",
+      cellClassName: "font-mono text-xs text-[var(--color-fg-muted)]",
+      render: (t) => t.code,
+    },
+    {
+      key: "kind",
+      header: "Kind",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (t) => kindLabel(t.kind),
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (t) => (
+        <Badge tone={t.status === "active" ? "success" : "neutral"} dot>
+          {t.status === "active" ? "Active" : "Inactive"}
+        </Badge>
+      ),
+    },
+    ...(canRegistry
+      ? ([
+          {
+            key: "actions",
+            header: "Actions",
+            align: "right",
+            render: (t) => (
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setTheatreModal({ initial: t })}
+                >
+                  Edit
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => retireTheatre(t)}>
+                  {t.status === "active" ? "Retire" : "Reactivate"}
+                </Button>
+              </div>
+            ),
+          },
+        ] as Column<Theatre>[])
+      : []),
+  ];
+
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -453,135 +537,44 @@ function TheatresPage() {
       {error != null && <ErrorAlert error={error} fallback="Something went wrong." />}
 
       {/* ── OT board ── */}
-      <Card className="overflow-hidden">
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-[var(--color-fg)]">Schedule</h2>
           <input
             type="date"
-            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+            className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
             value={date}
             onChange={(e) => setDate(e.target.value)}
           />
         </div>
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
-            <tr>
-              <th className="px-4 py-3 font-medium">Time</th>
-              <th className="px-4 py-3 font-medium">Theatre</th>
-              <th className="px-4 py-3 font-medium">Procedure</th>
-              <th className="px-4 py-3 font-medium">Patient</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              {canSchedule && <th className="px-4 py-3 text-right font-medium">Actions</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {loading ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Loading…
-                </td>
-              </tr>
-            ) : sortedBookings.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  No procedures booked for this day.
-                </td>
-              </tr>
-            ) : (
-              sortedBookings.map((b) => (
-                <tr key={b.id} className={b.status === "cancelled" ? "opacity-60" : ""}>
-                  <td className="px-4 py-3 font-mono text-xs whitespace-nowrap text-[var(--color-fg-muted)]">
-                    {fmtTime(b.scheduledStart)}–{fmtTime(b.scheduledEnd)}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--color-fg)]">{b.theatreName}</td>
-                  <td className="px-4 py-3 text-[var(--color-fg)]">{b.procedureName}</td>
-                  <td className="px-4 py-3">
-                    {b.patientName}{" "}
-                    <span className="font-mono text-xs text-[var(--color-fg-muted)]">{b.uhid}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge tone={STATUS_TONE[b.status]}>{b.status.replace("_", " ")}</Badge>
-                  </td>
-                  {canSchedule && (
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        {NEXT_STEPS[b.status].map((step) => (
-                          <Button
-                            key={step.to}
-                            variant={step.to === "cancelled" ? "ghost" : "secondary"}
-                            onClick={() => transition(b, step.to)}
-                          >
-                            {step.label}
-                          </Button>
-                        ))}
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </Card>
+        <DataTable<OtBooking>
+          columns={bookingColumns}
+          rows={sortedBookings}
+          keyOf={(b) => b.id}
+          loading={loading}
+          empty="No procedures booked for this day."
+          rowClassName={(b) => (b.status === "cancelled" ? "opacity-60" : "")}
+        />
+      </div>
 
       {/* ── Theatre registry ── */}
-      <Card className="overflow-hidden">
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-[var(--color-fg)]">Theatres</h2>
           {canRegistry && (
-            <Button variant="secondary" onClick={() => setTheatreModal({})}>
+            <Button variant="secondary" size="sm" onClick={() => setTheatreModal({})}>
               Add theatre
             </Button>
           )}
         </div>
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
-            <tr>
-              <th className="px-4 py-3 font-medium">Theatre</th>
-              <th className="px-4 py-3 font-medium">Code</th>
-              <th className="px-4 py-3 font-medium">Kind</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              {canRegistry && <th className="px-4 py-3 text-right font-medium">Actions</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {theatres.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  No theatres yet.
-                </td>
-              </tr>
-            ) : (
-              theatres.map((t) => (
-                <tr key={t.id} className={t.status === "active" ? "" : "opacity-60"}>
-                  <td className="px-4 py-3 font-medium text-[var(--color-fg)]">{t.name}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-muted)]">
-                    {t.code}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--color-fg-muted)]">{kindLabel(t.kind)}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={t.status === "active" ? "success" : "neutral"}>
-                      {t.status === "active" ? "Active" : "Inactive"}
-                    </Badge>
-                  </td>
-                  {canRegistry && (
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="secondary" onClick={() => setTheatreModal({ initial: t })}>
-                          Edit
-                        </Button>
-                        <Button variant="ghost" onClick={() => retireTheatre(t)}>
-                          {t.status === "active" ? "Retire" : "Reactivate"}
-                        </Button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </Card>
+        <DataTable<Theatre>
+          columns={theatreColumns}
+          rows={theatres}
+          keyOf={(t) => t.id}
+          empty="No theatres yet."
+          rowClassName={(t) => (t.status === "active" ? "" : "opacity-60")}
+        />
+      </div>
 
       {booking && (
         <BookingModal
