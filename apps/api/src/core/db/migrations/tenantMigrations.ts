@@ -1159,4 +1159,23 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0028-patient-documents",
+    description:
+      "Patient documents (A7) — ID proofs, consents, insurance cards and referral letters, stored " +
+      "as capped binary in the tenant DB. This owns only the collection and its index.",
+    up: async (db) => {
+      await db.createCollection("documents").catch(() => undefined);
+      // The Documents tab reads "this patient's files, newest first".
+      await db
+        .collection("documents")
+        .createIndex({ tenantId: 1, patientId: 1, uploadedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("documents")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

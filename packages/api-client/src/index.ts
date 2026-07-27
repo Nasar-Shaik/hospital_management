@@ -525,6 +525,31 @@ export interface ReportMeta {
   uploadedAt: string;
 }
 
+/** How a patient document is filed (Module A7). */
+export type DocumentCategory =
+  | "id_proof"
+  | "consent"
+  | "insurance"
+  | "referral"
+  | "discharge"
+  | "clinical_image"
+  | "external_record"
+  | "other";
+
+/** A patient document's metadata (never its bytes). */
+export interface DocumentMeta {
+  id: string;
+  patientId: string;
+  encounterId?: string;
+  category: DocumentCategory;
+  title: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
 export interface RegisterPatientInput {
   name: string;
   gender?: Gender;
@@ -1852,6 +1877,56 @@ export class ApiClient {
         res.status,
         "HMS-GEN-500",
         `Could not load the report (HTTP ${String(res.status)}).`,
+      );
+    }
+    return res.blob();
+  }
+
+  /* ── patient documents (A7) ── */
+
+  /** Uploads a document against a patient. `dataBase64` is the file, base64-encoded. */
+  uploadDocument(
+    patientId: string,
+    input: {
+      category: DocumentCategory;
+      title: string;
+      encounterId?: string;
+      filename: string;
+      contentType: string;
+      dataBase64: string;
+    },
+  ): Promise<DocumentMeta> {
+    return this.request<DocumentMeta>("POST", `/api/v1/patients/${patientId}/documents`, input);
+  }
+
+  /** Every document on a patient's record, newest first. */
+  listDocuments(patientId: string): Promise<DocumentMeta[]> {
+    return this.request<DocumentMeta[]>("GET", `/api/v1/patients/${patientId}/documents`);
+  }
+
+  /** Removes a document (needs `file:delete`). A correction — wrong patient or wrong file. */
+  deleteDocument(id: string): Promise<{ id: string; deleted: boolean }> {
+    return this.request("DELETE", `/api/v1/documents/${id}`);
+  }
+
+  /** Fetches a document's bytes, authenticated, as a Blob — same reason as `fetchReportBlob`. */
+  async fetchDocumentBlob(id: string): Promise<Blob> {
+    const token = this.getAccessToken?.();
+    const headers: Record<string, string> = {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (this.tenantHost) headers.host = this.tenantHost;
+
+    const res = await this.fetchImpl(`${this.baseUrl}/api/v1/documents/${id}/file`, {
+      method: "GET",
+      headers,
+      credentials: this.credentials,
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new ApiClientError(
+        res.status,
+        "HMS-GEN-500",
+        `Could not load the document (HTTP ${String(res.status)}).`,
       );
     }
     return res.blob();

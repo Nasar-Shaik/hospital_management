@@ -642,6 +642,34 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/reports/64b7f0000000000000000001/file",
   },
 
+  /* ── Patient documents (A7) ──────────────────────────────────────────────────
+   * `file:upload` attaches, `file:read` lists + opens, `file:delete` removes (deleting PHI is
+   * heavier than reading it, so its own permission).
+   */
+  "POST /api/v1/patients/:patientId/documents": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/documents",
+    body: {
+      category: "id_proof",
+      title: "Matrix probe",
+      filename: "id.pdf",
+      contentType: "application/pdf",
+      dataBase64: "aGVsbG8=",
+    },
+  },
+  "GET /api/v1/patients/:patientId/documents": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/documents",
+  },
+  "GET /api/v1/documents/:id/file": {
+    method: "get",
+    url: "/api/v1/documents/64b7f0000000000000000001/file",
+  },
+  "DELETE /api/v1/documents/:id": {
+    method: "delete",
+    url: "/api/v1/documents/64b7f0000000000000000001",
+  },
+
   /* ── Tariff management ───────────────────────────────────────────────────────
    * `tariff:manage` — the administrator's price list. Prices are visible and editable here.
    */

@@ -48,6 +48,7 @@ import { vitalsConsumers } from "../../modules/vitals/index.js";
 import { dispenseConsumers } from "../../modules/pharmacy/index.js";
 import { wardNoteConsumers } from "../../modules/admissions/index.js";
 import { reportConsumers } from "../../modules/reports/index.js";
+import { documentConsumers } from "../../modules/documents/index.js";
 import { walletConsumers } from "../../modules/wallet/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
@@ -85,6 +86,7 @@ const MODULES: ModuleConsumers[] = [
   dispenseConsumers,
   wardNoteConsumers,
   reportConsumers,
+  documentConsumers,
   walletConsumers,
 ];
 

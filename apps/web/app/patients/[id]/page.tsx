@@ -20,6 +20,8 @@ import {
   type Encounter,
   type Invoice,
   type Order,
+  type DocumentMeta,
+  type DocumentCategory,
   type Patient,
   type Prescription,
   type ReportMeta,
@@ -94,13 +96,17 @@ const ORDER_TONE: Record<string, "neutral" | "warning" | "success" | "brand"> = 
 
 /* ── page ────────────────────────────────────────────────────────────────────── */
 
-type TabKey = "timeline" | "visits" | "vitals" | "tests" | "prescriptions" | "bills" | "wallet";
+type TabKey =
+  "timeline" | "visits" | "vitals" | "tests" | "prescriptions" | "bills" | "wallet" | "documents";
 
 function Profile() {
   const { can, api } = useAuth();
   const canWallet = can("wallet:manage");
   const canReadVitals = can("emr:read");
   const canRecordVitals = can("vitals:record");
+  const canReadDocs = can("file:read");
+  const canUploadDocs = can("file:upload");
+  const canDeleteDocs = can("file:delete");
   const params = useParams<{ id: string }>();
   const id = params.id;
 
@@ -114,6 +120,7 @@ function Profile() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [doctors, setDoctors] = useState<Map<string, string>>(new Map());
   const [vitals, setVitals] = useState<VitalsReading[]>([]);
+  const [documents, setDocuments] = useState<DocumentMeta[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +134,7 @@ function Profile() {
       // permission on one strand (e.g. billing) must not blank the whole page, so each
       // optional strand tolerates a failure and simply shows empty.
       const soft = <T,>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback);
-      const [pat, alg, enc, ord, rx, rep, inv, docs, vit] = await Promise.all([
+      const [pat, alg, enc, ord, rx, rep, inv, docs, vit, files] = await Promise.all([
         api.getPatient(id),
         soft(api.listAllergies(id), [] as Allergy[]),
         soft(api.listEncounters({ patientId: id, limit: 100 }), {
@@ -147,6 +154,8 @@ function Profile() {
         soft(api.listDoctors(), [] as { id: string; name: string }[]),
         // Vitals are clinical PHI behind `emr:read` — a desk user simply sees no tab.
         canReadVitals ? soft(api.listPatientVitals(id, 50), [] as VitalsReading[]) : [],
+        // Documents (A7) are behind `file:read` — a role without it simply sees no tab.
+        canReadDocs ? soft(api.listDocuments(id), [] as DocumentMeta[]) : [],
       ]);
       setPatient(pat);
       setAllergies(alg.filter((a) => a.status === "active"));
@@ -157,6 +166,7 @@ function Profile() {
       setInvoices(inv.items);
       setDoctors(new Map(docs.map((d) => [d.id, d.name])));
       setVitals(vit);
+      setDocuments(files);
 
       // The wallet is only fetched for staff who may see it (cashier / front office); a
       // clinician's profile view simply has no advance panel, rather than a 403 in the console.
@@ -217,6 +227,9 @@ function Profile() {
     { key: "prescriptions", label: "Prescriptions", count: prescriptions.length },
     { key: "bills", label: "Bills", count: invoices.length },
     ...(canWallet ? [{ key: "wallet" as const, label: "Wallet" }] : []),
+    ...(canReadDocs
+      ? [{ key: "documents" as const, label: "Documents", count: documents.length }]
+      : []),
   ];
 
   return (
@@ -356,6 +369,16 @@ function Profile() {
         )}
         {tab === "wallet" && canWallet && (
           <WalletPanel patientId={id} wallet={wallet} dues={dues} api={api} reload={load} />
+        )}
+        {tab === "documents" && canReadDocs && (
+          <Documents
+            patientId={id}
+            documents={documents}
+            canUpload={canUploadDocs}
+            canDelete={canDeleteDocs}
+            api={api}
+            reload={load}
+          />
         )}
       </div>
     </Shell>
@@ -966,6 +989,198 @@ function Rows({ head, children }: { head: string[]; children: ReactNode }) {
 
 function Td({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <td className={`px-4 py-2.5 text-[var(--color-fg-muted)] ${className}`}>{children}</td>;
+}
+
+/* ── Documents (A7) ──────────────────────────────────────────────────────────── */
+
+const DOC_CATEGORY_LABELS: Record<DocumentCategory, string> = {
+  id_proof: "ID proof",
+  consent: "Consent",
+  insurance: "Insurance",
+  referral: "Referral",
+  discharge: "Discharge",
+  clinical_image: "Clinical image",
+  external_record: "Outside record",
+  other: "Other",
+};
+
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Reads a File as base64 (strips the `data:...;base64,` prefix the API does not want). */
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result);
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(new Error("could not read the file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function Documents({
+  patientId,
+  documents,
+  canUpload,
+  canDelete,
+  api,
+  reload,
+}: {
+  patientId: string;
+  documents: DocumentMeta[];
+  canUpload: boolean;
+  canDelete: boolean;
+  api: ReturnType<typeof useAuth>["api"];
+  reload: () => void;
+}) {
+  const [category, setCategory] = useState<DocumentCategory>("id_proof");
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function upload() {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const dataBase64 = await readAsBase64(file);
+      await api.uploadDocument(patientId, {
+        category,
+        title: title.trim() || file.name,
+        filename: file.name,
+        contentType: file.type || "application/octet-stream",
+        dataBase64,
+      });
+      setTitle("");
+      setFile(null);
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not upload the document.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function open(doc: DocumentMeta) {
+    try {
+      const blob = await api.fetchDocumentBlob(doc.id);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      /* best-effort open */
+    }
+  }
+
+  async function remove(doc: DocumentMeta) {
+    if (!window.confirm(`Remove "${doc.title}"? This cannot be undone.`)) return;
+    try {
+      await api.deleteDocument(doc.id);
+      reload();
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {canUpload && (
+        <Card className="p-4">
+          {error && (
+            <div className="mb-3">
+              <Alert tone="danger">{error}</Alert>
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-4">
+            <label className="text-xs text-[var(--color-fg-muted)]">
+              Type
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value as DocumentCategory)}
+                className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              >
+                {(Object.keys(DOC_CATEGORY_LABELS) as DocumentCategory[]).map((c) => (
+                  <option key={c} value={c}>
+                    {DOC_CATEGORY_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-[var(--color-fg-muted)] sm:col-span-2">
+              Title
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={file?.name ?? "e.g. Aadhaar card"}
+                className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+            <label className="text-xs text-[var(--color-fg-muted)]">
+              File
+              <input
+                type="file"
+                accept=".pdf,image/*"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="mt-0.5 w-full text-xs text-[var(--color-fg-muted)] file:mr-2 file:rounded file:border-0 file:bg-[var(--color-brand-50)] file:px-2 file:py-1 file:text-[var(--color-brand-700)]"
+              />
+            </label>
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
+            PDF or image, up to 10 MB. ID proofs, consents, insurance cards, referral and outside
+            records.
+          </p>
+          <div className="mt-3">
+            <Button disabled={busy || !file} onClick={() => void upload()}>
+              {busy ? "Uploading…" : "Upload document"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {documents.length === 0 ? (
+        <Empty>No documents on file.</Empty>
+      ) : (
+        <Rows head={["Title", "Type", "Uploaded", "Size", ""]}>
+          {documents.map((d) => (
+            <tr key={d.id}>
+              <Td className="font-medium text-[var(--color-fg)]">
+                <button className="hover:underline" onClick={() => void open(d)}>
+                  {d.title}
+                </button>
+              </Td>
+              <Td>
+                <Badge tone="neutral">{DOC_CATEGORY_LABELS[d.category]}</Badge>
+              </Td>
+              <Td>{fmtDate(d.uploadedAt)}</Td>
+              <Td>{fileSize(d.size)}</Td>
+              <Td className="text-right">
+                <button
+                  className="text-xs text-[var(--color-brand-600)] hover:underline"
+                  onClick={() => void open(d)}
+                >
+                  Open
+                </button>
+                {canDelete && (
+                  <button
+                    className="ml-3 text-xs text-[var(--color-danger)] hover:underline"
+                    onClick={() => void remove(d)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </Td>
+            </tr>
+          ))}
+        </Rows>
+      )}
+    </div>
+  );
 }
 
 export default function PatientProfilePage() {

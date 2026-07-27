@@ -33,6 +33,7 @@ import { branchRouter } from "./modules/branches/index.js";
 import { wardRouter } from "./modules/wards/index.js";
 import { vitalsRouter } from "./modules/vitals/index.js";
 import { reportRouter } from "./modules/reports/index.js";
+import { documentRouter } from "./modules/documents/index.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
 import { reportingRouter } from "./modules/reporting/index.js";
@@ -163,6 +164,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(branchRouter());
   v1Router.use(wardRouter());
   v1Router.use(reportRouter());
+  v1Router.use(documentRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
   v1Router.use(reportingRouter());
