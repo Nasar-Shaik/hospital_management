@@ -64,6 +64,44 @@ function shortDate(iso?: string): string {
   });
 }
 
+/** The plain-language "when does this hospital stop working" line for the drawer. */
+function licenseExpiry(license: Hospital["license"]): string {
+  if (license.state === "PERPETUAL") return "No expiry — perpetual licence";
+  const d = license.daysRemaining;
+  const on = shortDate(license.expiresAt);
+  const plural = (n: number) => (Math.abs(n) === 1 ? "day" : "days");
+  if (license.state === "EXPIRED")
+    return d != null
+      ? `Expired ${Math.abs(d)} ${plural(d)} ago — was ${on}`
+      : `Expired — was ${on}`;
+  if (license.state === "GRACE")
+    return d != null
+      ? `In grace period · ${d} ${plural(d)} of grace left — expired ${on}`
+      : `In grace period — expired ${on}`;
+  return d != null ? `Expires ${on} · ${d} ${plural(d)} remaining` : `Expires ${on}`;
+}
+
+/**
+ * School-ERP-style renewal presets. Extending counts from the LATER of today or the current expiry
+ * (see the API), so these read as "add this much tenure" rather than "expire this far from now".
+ */
+const EXTEND_PRESETS: { label: string; days: number }[] = [
+  { label: "1 month", days: 30 },
+  { label: "3 months", days: 90 },
+  { label: "6 months", days: 180 },
+  { label: "1 year", days: 365 },
+];
+
+/** Where a licence would land if extended by `addDays` today (mirrors the API's later-of rule). */
+function projectedExpiry(license: Hospital["license"], addDays: number): string {
+  const now = Date.now();
+  const base =
+    license.expiresAt && new Date(license.expiresAt).getTime() > now
+      ? new Date(license.expiresAt).getTime()
+      : now;
+  return shortDate(new Date(base + addDays * 86_400_000).toISOString());
+}
+
 /* ── login ────────────────────────────────────────────────────────────────── */
 
 function OperatorLogin() {
@@ -275,12 +313,12 @@ function TenantDrawer({
             </Badge>
           </Row>
           <Row label="Licence">
-            <span className="inline-flex items-center gap-2">
+            <div className="flex flex-col items-end gap-1">
               <Badge tone={lic.tone}>{lic.label}</Badge>
-              <span className="text-xs text-[var(--color-fg-subtle)]">
-                {h.license.state === "PERPETUAL" ? "no expiry" : shortDate(h.license.expiresAt)}
+              <span className="text-xs text-[var(--color-fg-muted)]">
+                {licenseExpiry(h.license)}
               </span>
-            </span>
+            </div>
           </Row>
           <Row label="Edition">{h.planCode ?? "—"}</Row>
           <Row label="Supported branches">{h.maxBranches ?? 1}</Row>
@@ -362,31 +400,78 @@ function TenantDrawer({
               title="Extend licence"
               hint="Counts from the later of today or the current expiry, so it never shortens an active licence."
             >
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  value={extendDays}
-                  onChange={(e) => setExtendDays(e.target.value)}
-                  className="w-28 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm"
-                />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  loading={busy === "licence"}
-                  onClick={() => {
-                    const days = Number(extendDays.trim());
-                    if (!Number.isFinite(days) || days < 1) {
-                      setError("Enter a whole number of days (1 or more).");
-                      return;
-                    }
-                    void run("licence", () =>
-                      api.setHospitalLicense(hospital.id, { extendDays: days }),
+              <div className="space-y-3">
+                {/* Preset terms — the quick, unambiguous choices an operator reaches for. */}
+                <div className="flex flex-wrap gap-2">
+                  {EXTEND_PRESETS.map((p) => {
+                    const selected = extendDays === String(p.days);
+                    return (
+                      <button
+                        key={p.days}
+                        type="button"
+                        onClick={() => setExtendDays(String(p.days))}
+                        className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                          selected
+                            ? "border-[var(--color-brand-600)] bg-[var(--color-brand-50)] text-[var(--color-brand-700)]"
+                            : "border-[var(--color-border-strong)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+                        }`}
+                      >
+                        {p.label}
+                      </button>
                     );
-                  }}
-                >
-                  Extend by {extendDays || "…"} days
-                </Button>
+                  })}
+                </div>
+
+                {/* Custom term, for the renewal that does not fit a preset. */}
+                <label className="flex items-center gap-2 text-sm text-[var(--color-fg-muted)]">
+                  <span>Custom</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={extendDays}
+                    onChange={(e) => setExtendDays(e.target.value)}
+                    className="w-24 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm"
+                  />
+                  <span>days</span>
+                </label>
+
+                {/* Live preview — the operator sees the new expiry BEFORE committing. */}
+                {(() => {
+                  const days = Number(extendDays.trim());
+                  const valid = Number.isFinite(days) && days >= 1;
+                  return (
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs text-[var(--color-fg-subtle)]">
+                        {valid ? (
+                          <>
+                            New expiry:{" "}
+                            <span className="font-medium text-[var(--color-fg)]">
+                              {projectedExpiry(h.license, days)}
+                            </span>
+                          </>
+                        ) : (
+                          "Pick a term or enter a number of days."
+                        )}
+                      </p>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        loading={busy === "licence"}
+                        onClick={() => {
+                          if (!valid) {
+                            setError("Enter a whole number of days (1 or more).");
+                            return;
+                          }
+                          void run("licence", () =>
+                            api.setHospitalLicense(hospital.id, { extendDays: days }),
+                          );
+                        }}
+                      >
+                        Extend
+                      </Button>
+                    </div>
+                  );
+                })()}
               </div>
             </ConfigBlock>
 
@@ -812,13 +897,14 @@ function Console() {
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[var(--shadow-xs)]">
-          <table className="w-full min-w-[720px] text-left text-sm">
+          <table className="w-full min-w-[820px] text-left text-sm">
             <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
               <tr>
                 <th className="px-6 py-3.5 font-medium">Hospital</th>
                 <th className="px-6 py-3.5 font-medium">Status</th>
                 <th className="px-6 py-3.5 font-medium">Edition</th>
                 <th className="px-6 py-3.5 font-medium">Licence</th>
+                <th className="px-6 py-3.5 font-medium">Expiry</th>
                 <th className="px-6 py-3.5 text-right font-medium">Branches</th>
                 <th className="px-6 py-3.5 text-right font-medium">Actions</th>
               </tr>
@@ -826,13 +912,13 @@ function Console() {
             <tbody className="divide-y divide-[var(--color-border)]">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-[var(--color-fg-subtle)]">
+                  <td colSpan={7} className="px-6 py-12 text-center text-[var(--color-fg-subtle)]">
                     Loading the fleet…
                   </td>
                 </tr>
               ) : hospitals.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-[var(--color-fg-subtle)]">
+                  <td colSpan={7} className="px-6 py-12 text-center text-[var(--color-fg-subtle)]">
                     No hospitals yet.
                   </td>
                 </tr>
@@ -868,11 +954,24 @@ function Console() {
                       </td>
                       <td className="px-6 py-4">
                         <Badge tone={lic.tone}>{lic.label}</Badge>
-                        <span className="mt-0.5 block text-xs text-[var(--color-fg-subtle)]">
-                          {hospital.license.state === "PERPETUAL"
-                            ? "no expiry"
-                            : shortDate(hospital.license.expiresAt)}
-                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {hospital.license.state === "PERPETUAL" ? (
+                          <span className="text-[var(--color-fg-muted)]">No expiry</span>
+                        ) : (
+                          <>
+                            <span className="block text-[var(--color-fg)]">
+                              {shortDate(hospital.license.expiresAt)}
+                            </span>
+                            {hospital.license.daysRemaining != null && (
+                              <span className="text-xs text-[var(--color-fg-subtle)]">
+                                {hospital.license.daysRemaining >= 0
+                                  ? `${hospital.license.daysRemaining}d remaining`
+                                  : `${Math.abs(hospital.license.daysRemaining)}d overdue`}
+                              </span>
+                            )}
+                          </>
+                        )}
                       </td>
                       <td className="px-6 py-4 text-right tabular-nums text-[var(--color-fg-muted)]">
                         {hospital.maxBranches ?? 1}
