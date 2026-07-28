@@ -16,7 +16,7 @@
  * A refusal a clerk cannot act on is a refusal they learn to route around.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ApiClientError,
   type DuplicateCandidate,
@@ -24,7 +24,16 @@ import {
   type RegisterPatientInput,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  DataTable,
+  Field,
+  PermissionGate,
+  type Column,
+} from "../../components/ui";
 
 const EMPTY_FORM = {
   name: "",
@@ -97,8 +106,41 @@ function Candidates({
   );
 }
 
+const patientColumns: Column<Patient>[] = [
+  {
+    key: "uhid",
+    header: "UHID",
+    cellClassName: "font-mono text-xs text-[var(--color-fg-muted)] whitespace-nowrap",
+    render: (p) => p.uhid,
+  },
+  {
+    key: "name",
+    header: "Name",
+    cellClassName: "font-medium text-[var(--color-fg)]",
+    render: (p) => p.name,
+  },
+  {
+    key: "age",
+    header: "Age / Gender",
+    cellClassName: "text-[var(--color-fg-muted)] whitespace-nowrap",
+    render: (p) => `${age(p.dob)} · ${p.gender}`,
+  },
+  {
+    key: "phone",
+    header: "Phone",
+    cellClassName: "text-[var(--color-fg-muted)]",
+    render: (p) => p.contact.phone ?? "—",
+  },
+  {
+    key: "status",
+    header: "Status",
+    render: (p) => <Badge tone={p.status === "active" ? "success" : "neutral"}>{p.status}</Badge>,
+  },
+];
+
 function Patients() {
   const { api, can } = useAuth();
+  const router = useRouter();
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [query, setQuery] = useState("");
@@ -348,62 +390,21 @@ function Patients() {
         </Card>
       )}
 
-      <Card>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by UHID, name or phone…"
-          className="mb-4 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm text-[var(--color-fg)] outline-none"
-        />
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search by UHID, name or phone…"
+        className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+      />
 
-        {loading ? (
-          <p className="py-8 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
-        ) : patients.length === 0 ? (
-          <p className="py-8 text-center text-sm text-[var(--color-fg-subtle)]">No patients yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-[var(--color-border)] text-xs uppercase text-[var(--color-fg-subtle)]">
-                <tr>
-                  <th className="py-2 pr-4">UHID</th>
-                  <th className="py-2 pr-4">Name</th>
-                  <th className="py-2 pr-4">Age / Gender</th>
-                  <th className="py-2 pr-4">Phone</th>
-                  <th className="py-2">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-border)]">
-                {patients.map((patient) => (
-                  <tr
-                    key={patient.id}
-                    className="group transition-colors hover:bg-[var(--color-bg-subtle)]"
-                  >
-                    <td className="py-2.5 pr-4 font-mono text-xs text-[var(--color-fg-muted)]">
-                      <Link href={`/patients/${patient.id}`} className="hover:underline">
-                        {patient.uhid}
-                      </Link>
-                    </td>
-                    <td className="py-2.5 pr-4 font-medium text-[var(--color-fg)] group-hover:text-[var(--color-brand-700)]">
-                      <Link href={`/patients/${patient.id}`}>{patient.name}</Link>
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-fg-muted)]">
-                      {age(patient.dob)} · {patient.gender}
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-fg-muted)]">
-                      {patient.contact.phone ?? "—"}
-                    </td>
-                    <td className="py-2.5">
-                      <Badge tone={patient.status === "active" ? "success" : "neutral"}>
-                        {patient.status}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <DataTable<Patient>
+        columns={patientColumns}
+        rows={loading ? [] : patients}
+        keyOf={(p) => p.id}
+        loading={loading}
+        empty="No patients yet."
+        onRowClick={(p) => router.push(`/patients/${p.id}`)}
+      />
     </div>
   );
 }

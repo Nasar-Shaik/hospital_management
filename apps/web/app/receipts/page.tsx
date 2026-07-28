@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type ReceiptRow, type ReportRange } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Badge, Card, ErrorAlert } from "../../components/ui";
+import { Badge, Card, DataTable, ErrorAlert, type Column } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
 function iso(dateStr: string): string {
@@ -83,6 +83,57 @@ function Receipts() {
   const hrefOf = (r: ReceiptRow): string =>
     r.kind === "advance" ? `/receipt/advance/${r.refId}` : `/receipt/${r.refId}`;
 
+  const columns: Column<ReceiptRow>[] = [
+    {
+      key: "receiptNo",
+      header: "Receipt no",
+      cellClassName: "font-mono text-xs font-medium text-[var(--color-fg)]",
+      render: (r) => r.receiptNo,
+    },
+    {
+      key: "type",
+      header: "Type",
+      render: (r) => (
+        <Badge tone={r.kind === "advance" ? "brand" : "neutral"}>
+          {r.kind === "advance" ? "Advance" : "Bill"}
+        </Badge>
+      ),
+    },
+    {
+      key: "patient",
+      header: "Patient",
+      render: (r) => (
+        <>
+          <span className="text-[var(--color-fg)]">{r.patientName}</span>{" "}
+          <span className="font-mono text-xs text-[var(--color-fg-muted)]">{r.uhid}</span>
+        </>
+      ),
+    },
+    {
+      key: "amount",
+      header: "Amount",
+      align: "right",
+      cellClassName: "font-medium text-[var(--color-fg)] tabular-nums",
+      render: (r) => rupees(r.amount),
+    },
+    {
+      key: "when",
+      header: "When",
+      cellClassName: "whitespace-nowrap text-[var(--color-fg-muted)]",
+      render: (r) => fmtDateTime(r.at),
+    },
+    {
+      key: "action",
+      header: "",
+      align: "right",
+      render: (r) => (
+        <a href={hrefOf(r)} className="text-[var(--color-brand-700)] hover:underline">
+          Receipt →
+        </a>
+      ),
+    },
+  ];
+
   if (!can("billing:read")) {
     return (
       <Card className="p-8 text-center text-sm text-[var(--color-fg-muted)]">
@@ -144,70 +195,23 @@ function Receipts() {
         </div>
       </Card>
 
-      <Card className="p-5">
-        <div className="mb-3 flex items-center justify-between text-sm">
-          <span className="font-semibold text-[var(--color-fg)]">
-            {filtered.length} {filtered.length === 1 ? "receipt" : "receipts"}
-          </span>
-          <span className="text-[var(--color-fg-muted)]">
-            Total <span className="font-semibold text-[var(--color-fg)]">{rupees(total)}</span>
-          </span>
-        </div>
+      <div className="flex items-center justify-between px-1 text-sm">
+        <span className="font-semibold text-[var(--color-fg)]">
+          {filtered.length} {filtered.length === 1 ? "receipt" : "receipts"}
+        </span>
+        <span className="text-[var(--color-fg-muted)]">
+          Total{" "}
+          <span className="font-semibold text-[var(--color-fg)] tabular-nums">{rupees(total)}</span>
+        </span>
+      </div>
 
-        {loading ? (
-          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
-        ) : filtered.length === 0 ? (
-          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
-            No receipts in this period.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-subtle)] uppercase">
-                <tr>
-                  <th className="py-2 pr-4">Receipt No</th>
-                  <th className="py-2 pr-4">Type</th>
-                  <th className="py-2 pr-4">Patient</th>
-                  <th className="py-2 pr-4 text-right">Amount</th>
-                  <th className="py-2 pr-4">When</th>
-                  <th className="py-2"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-border)]">
-                {filtered.map((r) => (
-                  <tr key={`${r.kind}-${r.refId}`}>
-                    <td className="py-2.5 pr-4 font-mono text-xs font-medium text-[var(--color-fg)]">
-                      {r.receiptNo}
-                    </td>
-                    <td className="py-2.5 pr-4">
-                      <Badge tone={r.kind === "advance" ? "brand" : "neutral"}>
-                        {r.kind === "advance" ? "Advance" : "Bill"}
-                      </Badge>
-                    </td>
-                    <td className="py-2.5 pr-4">
-                      <span className="text-[var(--color-fg)]">{r.patientName}</span>{" "}
-                      <span className="font-mono text-xs text-[var(--color-fg-muted)]">
-                        {r.uhid}
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-4 text-right font-medium text-[var(--color-fg)]">
-                      {rupees(r.amount)}
-                    </td>
-                    <td className="py-2.5 pr-4 text-[var(--color-fg-muted)]">
-                      {fmtDateTime(r.at)}
-                    </td>
-                    <td className="py-2.5">
-                      <a href={hrefOf(r)} className="text-[var(--color-brand-700)] hover:underline">
-                        Receipt →
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <DataTable<ReceiptRow>
+        columns={columns}
+        rows={filtered}
+        keyOf={(r) => `${r.kind}-${r.refId}`}
+        loading={loading}
+        empty="No receipts in this period."
+      />
     </div>
   );
 }

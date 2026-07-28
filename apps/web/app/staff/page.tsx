@@ -26,7 +26,16 @@ import {
   type StaffProfile,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  DataTable,
+  Field,
+  PermissionGate,
+  type Column,
+} from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
 function statusTone(status: StaffMember["status"]): "success" | "danger" | "neutral" {
@@ -771,6 +780,94 @@ function StaffDirectory() {
 
   const roleName = useMemo(() => new Map(roles.map((r) => [r.code, r.name])), [roles]);
 
+  const columns: Column<StaffMember>[] = [
+    {
+      key: "name",
+      header: "Name",
+      render: (member) => (
+        <>
+          <p className="font-medium text-[var(--color-fg)]">{member.name}</p>
+          <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
+        </>
+      ),
+    },
+    {
+      key: "role",
+      header: "Role",
+      render: (member) => (
+        <div className="flex flex-wrap gap-1">
+          {member.roles.length > 0 ? (
+            member.roles.map((r) => (
+              <Badge key={r} tone="brand">
+                {roleName.get(r) ?? r}
+              </Badge>
+            ))
+          ) : (
+            <span className="text-xs text-[var(--color-fg-subtle)]">none</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "dept",
+      header: "Department / specialty",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (member) => {
+        const p = member.profile ?? {};
+        return [p.specialty, p.department].filter(Boolean).join(" · ") || "—";
+      },
+    },
+    {
+      key: "phone",
+      header: "Phone",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (member) => member.phone ?? "—",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (member) => <Badge tone={statusTone(member.status)}>{member.status}</Badge>,
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (member) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" className="text-xs" onClick={() => setViewing(member)}>
+            View
+          </Button>
+          <PermissionGate can={can} permission="user:update">
+            <Button
+              variant="ghost"
+              className="text-xs"
+              onClick={() => {
+                setFieldErrors({});
+                setEditing(member);
+              }}
+            >
+              Edit
+            </Button>
+            <Button variant="ghost" className="text-xs" onClick={() => void resetPassword(member)}>
+              Reset password
+            </Button>
+          </PermissionGate>
+          <PermissionGate can={can} permission="user:deactivate">
+            {member.id !== user?.id && (
+              <Button
+                variant="ghost"
+                className={`text-xs ${member.status === "active" ? "text-[var(--color-danger)]" : ""}`}
+                onClick={() => void toggleStatus(member)}
+              >
+                {member.status === "active" ? "Disable" : "Enable"}
+              </Button>
+            )}
+          </PermissionGate>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -810,8 +907,8 @@ function StaffDirectory() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <Card>
-        <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] p-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-3">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -835,111 +932,15 @@ function StaffDirectory() {
             ))}
           </div>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
-              <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Role</th>
-                <th className="px-4 py-3 font-medium">Department / specialty</th>
-                <th className="px-4 py-3 font-medium">Phone</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--color-border)]">
-              {loading && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                    Loading…
-                  </td>
-                </tr>
-              )}
-              {!loading && staff.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                    Nobody matches.
-                  </td>
-                </tr>
-              )}
-              {staff.map((member) => {
-                const p = member.profile ?? {};
-                const deptSpec = [p.specialty, p.department].filter(Boolean).join(" · ");
-                return (
-                  <tr key={member.id} className="hover:bg-[var(--color-bg-subtle)]">
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-[var(--color-fg)]">{member.name}</p>
-                      <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {member.roles.length > 0 ? (
-                          member.roles.map((r) => (
-                            <Badge key={r} tone="brand">
-                              {roleName.get(r) ?? r}
-                            </Badge>
-                          ))
-                        ) : (
-                          <span className="text-xs text-[var(--color-fg-subtle)]">none</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-[var(--color-fg-muted)]">{deptSpec || "—"}</td>
-                    <td className="px-4 py-3 text-[var(--color-fg-muted)]">
-                      {member.phone ?? "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={statusTone(member.status)}>{member.status}</Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          className="text-xs"
-                          onClick={() => setViewing(member)}
-                        >
-                          View
-                        </Button>
-                        <PermissionGate can={can} permission="user:update">
-                          <Button
-                            variant="ghost"
-                            className="text-xs"
-                            onClick={() => {
-                              setFieldErrors({});
-                              setEditing(member);
-                            }}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            className="text-xs"
-                            onClick={() => void resetPassword(member)}
-                          >
-                            Reset password
-                          </Button>
-                        </PermissionGate>
-                        <PermissionGate can={can} permission="user:deactivate">
-                          {member.id !== user?.id && (
-                            <Button
-                              variant="ghost"
-                              className={`text-xs ${member.status === "active" ? "text-[var(--color-danger)]" : ""}`}
-                              onClick={() => void toggleStatus(member)}
-                            >
-                              {member.status === "active" ? "Disable" : "Enable"}
-                            </Button>
-                          )}
-                        </PermissionGate>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
       </Card>
+
+      <DataTable<StaffMember>
+        columns={columns}
+        rows={loading ? [] : staff}
+        keyOf={(member) => member.id}
+        loading={loading}
+        empty="Nobody matches."
+      />
 
       {showCreate && (
         <Modal title="Add staff" onClose={() => setShowCreate(false)}>

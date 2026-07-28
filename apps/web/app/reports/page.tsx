@@ -84,7 +84,7 @@ function ReportTable({
         <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
           <tr>
             {headers.map((h, i) => (
-              <th key={h} className={`px-4 py-3 font-medium ${i === 0 ? "" : "text-right"}`}>
+              <th key={h} className={`px-4 py-3.5 font-medium ${i === 0 ? "" : "text-right"}`}>
                 {h}
               </th>
             ))}
@@ -102,11 +102,11 @@ function ReportTable({
             </tr>
           ) : (
             rows.map((r, ri) => (
-              <tr key={ri} className="hover:bg-[var(--color-bg-subtle)]">
+              <tr key={ri} className="transition-colors hover:bg-[var(--color-bg-subtle)]">
                 {r.map((cell, ci) => (
                   <td
                     key={ci}
-                    className={`px-4 py-3 ${ci === 0 ? "text-[var(--color-fg)]" : "text-right text-[var(--color-fg-muted)]"}`}
+                    className={`px-4 py-3.5 ${ci === 0 ? "text-[var(--color-fg)]" : "text-right tabular-nums text-[var(--color-fg-muted)]"}`}
                   >
                     {cell}
                   </td>

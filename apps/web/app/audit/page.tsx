@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClientError, type AuditEntry, type AuditIntegrity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { Alert, Badge, Button, DataTable, PermissionGate, type Column } from "../../components/ui";
 
 const CATEGORIES = [
   { value: "", label: "All activity" },
@@ -118,6 +118,52 @@ function AuditTrail() {
   }
 
   const pages = Math.max(1, Math.ceil(total / 25));
+
+  const columns: Column<AuditEntry>[] = [
+    {
+      key: "when",
+      header: "When",
+      cellClassName: "whitespace-nowrap text-[var(--color-fg-muted)]",
+      render: (e) => new Date(e.at).toLocaleString(),
+    },
+    {
+      key: "who",
+      header: "Who",
+      render: (e) => (
+        <>
+          <span className="block text-[var(--color-fg)]">
+            {e.actorEmail ?? e.actorId ?? "System"}
+          </span>
+          {e.actorRoles?.[0] && (
+            <span className="text-xs text-[var(--color-fg-subtle)]">{e.actorRoles[0]}</span>
+          )}
+        </>
+      ),
+    },
+    {
+      key: "what",
+      header: "What",
+      render: (e) => (
+        <div className="flex items-center gap-2">
+          <span className="text-[var(--color-fg)]">{humanize(e.action)}</span>
+          <Badge tone={categoryTone(e.category)}>{e.category}</Badge>
+          {e.outcome === "failure" && <Badge tone="danger">refused</Badge>}
+        </div>
+      ),
+    },
+    {
+      key: "changed",
+      header: "Changed",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (e) => changedFields(e),
+    },
+    {
+      key: "from",
+      header: "From",
+      cellClassName: "font-mono text-xs text-[var(--color-fg-subtle)]",
+      render: (e) => e.ip ?? "—",
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -256,69 +302,14 @@ function AuditTrail() {
         )}
       </div>
 
-      <Card className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-subtle)] uppercase">
-            <tr>
-              <th className="px-4 py-3 font-medium">When</th>
-              <th className="px-4 py-3 font-medium">Who</th>
-              <th className="px-4 py-3 font-medium">What</th>
-              <th className="px-4 py-3 font-medium">Changed</th>
-              <th className="px-4 py-3 font-medium">From</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {loading && (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Loading…
-                </td>
-              </tr>
-            )}
-
-            {!loading && entries.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Nothing recorded yet in this category.
-                </td>
-              </tr>
-            )}
-
-            {!loading &&
-              entries.map((entry) => (
-                <tr
-                  key={entry.id}
-                  className={entry.outcome === "failure" ? "bg-[var(--color-danger-bg)]/30" : ""}
-                >
-                  <td className="px-4 py-3 whitespace-nowrap text-[var(--color-fg-muted)]">
-                    {new Date(entry.at).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="block text-[var(--color-fg)]">
-                      {entry.actorEmail ?? entry.actorId ?? "System"}
-                    </span>
-                    {entry.actorRoles?.[0] && (
-                      <span className="text-xs text-[var(--color-fg-subtle)]">
-                        {entry.actorRoles[0]}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[var(--color-fg)]">{humanize(entry.action)}</span>
-                      <Badge tone={categoryTone(entry.category)}>{entry.category}</Badge>
-                      {entry.outcome === "failure" && <Badge tone="danger">refused</Badge>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-[var(--color-fg-muted)]">{changedFields(entry)}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-subtle)]">
-                    {entry.ip ?? "—"}
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-      </Card>
+      <DataTable<AuditEntry>
+        columns={columns}
+        rows={loading ? [] : entries}
+        keyOf={(e) => e.id}
+        loading={loading}
+        empty="Nothing recorded yet in this category."
+        rowClassName={(e) => (e.outcome === "failure" ? "bg-[var(--color-danger-bg)]/30" : "")}
+      />
 
       {pages > 1 && (
         <div className="flex items-center justify-between text-sm text-[var(--color-fg-muted)]">
