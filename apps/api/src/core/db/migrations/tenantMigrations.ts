@@ -1368,4 +1368,25 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0033-hospital-profile",
+    description:
+      "Hospital profile (B1) — the hospital's own official identity as a singleton settings " +
+      "document. One unique index on tenantId enforces exactly one profile per hospital.",
+    up: async (db) => {
+      await db.createCollection("hospitalProfile").catch(() => undefined);
+      await db
+        .collection("hospitalProfile")
+        .createIndex(
+          { tenantId: 1 },
+          { unique: true, name: "one_profile_per_tenant", background: true },
+        );
+    },
+    down: async (db) => {
+      await db
+        .collection("hospitalProfile")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

@@ -71,10 +71,9 @@ const NAVIGATION: NavSection[] = [
       { label: "Activity trail", href: "/audit", icon: "audit", permission: "audit:view" },
       {
         label: "Hospital profile",
-        href: "/settings",
+        href: "/settings/profile",
         icon: "hospital",
         permission: "hospital:manage",
-        soon: true,
       },
       { label: "Branches", href: "/branches", icon: "branches", permission: "branch:manage" },
       {

@@ -660,6 +660,27 @@ export interface ListTripsQuery {
   status?: AmbulanceTripStatus;
 }
 
+/* ── hospital profile (B1) ── */
+
+export type OwnershipType = "government" | "private" | "trust" | "charitable" | "corporate";
+
+/** The hospital's own official identity — a singleton per hospital. Every field is optional. */
+export interface HospitalProfile {
+  legalName?: string;
+  registrationNumber?: string;
+  taxId?: string;
+  accreditations?: string[];
+  establishedYear?: number;
+  ownershipType?: OwnershipType;
+  licensedBeds?: number;
+  address?: string;
+  officialEmail?: string;
+  officialPhone?: string;
+  website?: string;
+  headName?: string;
+  headTitle?: string;
+}
+
 /* ── Vitals ─────────────────────────────────────────────────────────────────── */
 
 export const TRIAGE_LEVELS = ["routine", "urgent", "critical"] as const;
@@ -2124,6 +2145,18 @@ export class ApiClient {
     input: { to: OtBookingStatus; reason?: string },
   ): Promise<OtBooking> {
     return this.request<OtBooking>("POST", `/api/v1/ot-bookings/${id}/transition`, input);
+  }
+
+  /* ── hospital profile (B1) ── */
+
+  /** The hospital's own official identity. Needs `hospital:manage`. */
+  getHospitalProfile(): Promise<HospitalProfile> {
+    return this.request<HospitalProfile>("GET", "/api/v1/hospital-profile");
+  }
+
+  /** Saves the hospital profile (upsert; blank fields are cleared). Needs `hospital:manage`. */
+  saveHospitalProfile(input: HospitalProfile): Promise<HospitalProfile> {
+    return this.request<HospitalProfile>("PUT", "/api/v1/hospital-profile", input);
   }
 
   /* ── ambulance fleet (B6) ── */

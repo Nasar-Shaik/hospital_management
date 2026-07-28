@@ -70,6 +70,9 @@
       "name": "feature-flags"
     },
     {
+      "name": "hospital-profile"
+    },
+    {
       "name": "hospitals"
     },
     {
@@ -5355,6 +5358,60 @@
         ],
         "x-permission": "ambulance:dispatch",
         "x-feature": "module.support.ambulance"
+      }
+    },
+    "/api/v1/hospital-profile": {
+      "get": {
+        "operationId": "get_v1_hospital_profile",
+        "tags": ["hospital-profile"],
+        "summary": "GET /api/v1/hospital-profile",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "hospital:manage"
+      },
+      "put": {
+        "operationId": "put_v1_hospital_profile",
+        "tags": ["hospital-profile"],
+        "summary": "PUT /api/v1/hospital-profile",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "hospital:manage"
       }
     },
     "/api/v1/orders/{id}/reports": {
