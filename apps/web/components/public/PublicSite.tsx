@@ -9,17 +9,24 @@
  * is done in pure CSS.
  *
  * The visual language is a polished, medical-industry landing page (topbar → branded header → hero
- * with a "why choose us" panel → stats → services → doctors → about → contact → footer). It is
- * deliberately a LIGHT design regardless of the app's dark theme: a hospital's public site should
- * look the same to every visitor, not flip to dark because a staff member once toggled it. Every
+ * with a "why choose us" panel → stats → services → doctors → about → contact → footer). Every
  * accent is derived from the tenant's own brand colour, so the same layout renders in teal for one
  * hospital and blue for another.
+ *
+ * ── LIGHT AND DARK ──────────────────────────────────────────────────────────
+ * The neutrals are CSS variables with a light default and a `.dark .psite` override, driven by the
+ * SAME `.dark` class the app's no-flash script stamps on <html> before paint (root layout). So the
+ * site respects a visitor's OS theme out of the box, and the small ThemeToggle in the header lets
+ * them flip it — the only interactive island on an otherwise pure-CSS, server-rendered page. Accent
+ * washes derive from the accent via `color-mix`, so they re-tint correctly in either mode; only the
+ * three tenant accent values are injected inline.
  *
  * The one thing that varies per viewer is where "Sign in" points once they already have a
  * session — that decision is made by the page (from the cookie) and passed in as `isAuthed`.
  */
 import Link from "next/link";
 import { Poppins } from "next/font/google";
+import { ThemeToggle } from "@medicore/ui";
 import type { CSSProperties, JSX, ReactNode } from "react";
 import type { PublicSite as Site } from "@medicore/api-client";
 
@@ -43,16 +50,6 @@ function shift(hex: string, amount: number): string {
   const ch = (bits: number) => {
     const c = (n >> bits) & 0xff;
     return Math.max(0, Math.min(255, Math.round(c + amount)));
-  };
-  return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0")}`;
-}
-
-/** Blend a colour toward white; `keep` is how much of the colour survives (0 → white). */
-function wash(hex: string, keep: number): string {
-  const n = parseInt(clampHex(hex).slice(1), 16);
-  const ch = (bits: number) => {
-    const c = (n >> bits) & 0xff;
-    return Math.round(c * keep + 255 * (1 - keep));
   };
   return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0")}`;
 }
@@ -249,17 +246,12 @@ export function PublicSite({ site, isAuthed }: { site: Site; isAuthed: boolean }
   // The about checklist reuses service names as concrete proof points.
   const proofPoints = site.services.slice(0, 4);
 
+  // Only the tenant accent is injected inline; every neutral lives in the stylesheet so the
+  // `.dark .psite` block can override it (an inline var would outrank that rule and never flip).
   const cssVars = {
     "--accent": accent,
     "--accent-dark": accentDark,
     "--accent-ink": accentInk,
-    "--navy": "#152238",
-    "--body": "#5b6b84",
-    "--muted": "#8a97ab",
-    "--line": "#e7edf5",
-    "--tint": wash(accent, 0.06),
-    "--soft": `${accent}14`,
-    "--softer": `${accent}0d`,
   } as CSSProperties;
 
   return (
@@ -332,6 +324,9 @@ export function PublicSite({ site, isAuthed }: { site: Site; isAuthed: boolean }
                 </span>
               </a>
             )}
+            <span className="psite-theme">
+              <ThemeToggle />
+            </span>
             <Link href={signIn.href} className="psite-btn psite-btn-solid">
               {signIn.label}
             </Link>
@@ -659,22 +654,53 @@ function ContactCard({
 const PSITE_CSS = `
 .psite{
   --font: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-  font-family:var(--font); color:var(--body); background:#fff; min-height:100vh;
+  /* Neutrals — light defaults; the .dark block below overrides them. */
+  --page:#ffffff;
+  --surface:#ffffff;
+  --heading:#152238;
+  --body:#5b6b84;
+  --muted:#8a97ab;
+  --line:#e7edf5;
+  --band-bg:#152238;
+  --band-fg:#c9d3e2;
+  --header-bg:rgba(255,255,255,.92);
+  --card-shadow:var(--card-shadow);
+  --card-shadow-soft:rgba(21,34,56,.30);
+  /* Accent washes derive from the tenant accent + the theme surface, so they re-tint in dark. */
+  --tint:color-mix(in srgb, var(--accent) 5%, var(--page));
+  --soft:color-mix(in srgb, var(--accent) 9%, var(--surface));
+  font-family:var(--font); color:var(--body); background:var(--page); min-height:100vh;
   -webkit-font-smoothing:antialiased; line-height:1.6; scroll-behavior:smooth;
 }
+.dark .psite{
+  --page:#0b1220;
+  --surface:#141d30;
+  --heading:#eef2f8;
+  --body:#aab7c9;
+  --muted:#8695ab;
+  --line:#26324c;
+  --band-bg:#0a101d;
+  --band-fg:#aeb9cb;
+  --header-bg:rgba(11,18,32,.85);
+  --card-shadow:rgba(0,0,0,.55);
+  --card-shadow-soft:rgba(0,0,0,.5);
+  --tint:color-mix(in srgb, var(--accent) 14%, var(--page));
+  --soft:color-mix(in srgb, var(--accent) 24%, var(--surface));
+}
 .psite h1,.psite h2,.psite h3,.psite h4,.psite h5{
-  font-family:var(--font-poppins),var(--font); color:var(--navy); margin:0; line-height:1.2;
+  font-family:var(--font-poppins),var(--font); color:var(--heading); margin:0; line-height:1.2;
 }
 .psite p{margin:0}
 .psite a{color:inherit; text-decoration:none}
 .psite ::selection{background:var(--accent); color:var(--accent-ink)}
+.psite-theme{display:inline-flex; align-items:center}
 .psite-wrap{max-width:1160px; margin:0 auto; padding:0 24px}
 .psite-btn{display:inline-flex; align-items:center; gap:8px; border-radius:9999px;
   font-weight:600; font-size:14px; padding:11px 22px; transition:.2s ease; cursor:pointer;
   font-family:var(--font-poppins),var(--font)}
 .psite-btn-solid{background:var(--accent); color:var(--accent-ink)}
 .psite-btn-solid:hover{background:var(--accent-dark)}
-.psite-btn-ghost{background:transparent; color:var(--navy); border:1.5px solid var(--line)}
+.psite-btn-ghost{background:transparent; color:var(--heading); border:1.5px solid var(--line)}
 .psite-btn-ghost:hover{border-color:var(--accent); color:var(--accent)}
 .psite-btn-lg{padding:14px 26px; font-size:15px}
 
@@ -685,7 +711,7 @@ const PSITE_CSS = `
 .psite-ann-link{font-weight:700; text-decoration:underline; text-underline-offset:2px}
 
 /* Topbar */
-.psite-topbar{background:var(--navy); color:#c9d3e2; font-size:13px}
+.psite-topbar{background:var(--band-bg); color:#c9d3e2; font-size:13px}
 .psite-topbar-in{display:flex; align-items:center; justify-content:space-between; gap:12px;
   min-height:40px; flex-wrap:wrap}
 .psite-topbar-contact{display:flex; gap:22px; flex-wrap:wrap}
@@ -699,7 +725,7 @@ const PSITE_CSS = `
 .psite-topbar-soc:hover{background:var(--accent); color:var(--accent-ink)}
 
 /* Header */
-.psite-header{position:sticky; top:0; z-index:40; background:rgba(255,255,255,.92);
+.psite-header{position:sticky; top:0; z-index:40; background:var(--header-bg);
   backdrop-filter:saturate(180%) blur(8px); border-bottom:1px solid var(--line)}
 .psite-header-in{display:flex; align-items:center; justify-content:space-between; gap:20px;
   min-height:72px}
@@ -709,15 +735,15 @@ const PSITE_CSS = `
   font-weight:700; font-size:17px; font-family:var(--font-poppins),var(--font);
   box-shadow:0 6px 16px -6px var(--accent)}
 .psite-logo-name{font-family:var(--font-poppins),var(--font); font-weight:600; font-size:20px;
-  color:var(--navy); letter-spacing:-.01em}
+  color:var(--heading); letter-spacing:-.01em}
 .psite-nav{display:none; gap:30px; font-size:14.5px; font-weight:500}
-.psite-nav a{color:var(--navy); position:relative; padding:4px 0}
+.psite-nav a{color:var(--heading); position:relative; padding:4px 0}
 .psite-nav a::after{content:""; position:absolute; left:0; bottom:-2px; height:2px; width:0;
   background:var(--accent); transition:width .2s ease}
 .psite-nav a:hover{color:var(--accent)}
 .psite-nav a:hover::after{width:100%}
 .psite-header-cta{display:flex; align-items:center; gap:16px}
-.psite-emergency{display:none; align-items:center; gap:9px; color:var(--navy)}
+.psite-emergency{display:none; align-items:center; gap:9px; color:var(--heading)}
 .psite-emergency svg{color:var(--accent)}
 .psite-emergency em{display:block; font-style:normal; font-size:11px; color:var(--muted);
   text-transform:uppercase; letter-spacing:.06em; font-weight:600}
@@ -726,7 +752,7 @@ const PSITE_CSS = `
 /* Hero */
 .psite-hero{background:
   radial-gradient(1200px 480px at 85% -10%, var(--soft), transparent 60%),
-  linear-gradient(180deg, var(--tint), #fff)}
+  linear-gradient(180deg, var(--tint), var(--page))}
 .psite-hero-in{display:grid; grid-template-columns:1fr; gap:44px; padding:64px 24px 72px}
 .psite-eyebrow{color:var(--accent); font-weight:700; font-size:13px; letter-spacing:.12em;
   text-transform:uppercase; margin-bottom:14px}
@@ -734,7 +760,7 @@ const PSITE_CSS = `
 .psite-hero-lead{margin-top:18px; font-size:17px; max-width:52ch; color:var(--body)}
 .psite-hero-actions{margin-top:30px; display:flex; flex-wrap:wrap; gap:14px}
 .psite-hero-trust{margin-top:26px; display:flex; flex-wrap:wrap; gap:22px; font-size:14px;
-  color:var(--navy); font-weight:500}
+  color:var(--heading); font-weight:500}
 .psite-hero-trust span{display:inline-flex; align-items:center; gap:8px}
 .psite-hero-trust svg{color:var(--accent)}
 .psite-why{background:linear-gradient(160deg, var(--accent), var(--accent-dark));
@@ -771,9 +797,9 @@ const PSITE_CSS = `
 
 /* Services */
 .psite-svc-grid{display:grid; grid-template-columns:1fr; gap:22px}
-.psite-svc{background:#fff; border:1px solid var(--line); border-radius:18px; padding:30px 26px;
+.psite-svc{background:var(--surface); border:1px solid var(--line); border-radius:18px; padding:30px 26px;
   transition:.22s ease}
-.psite-svc:hover{transform:translateY(-6px); box-shadow:0 24px 48px -24px rgba(21,34,56,.32);
+.psite-svc:hover{transform:translateY(-6px); box-shadow:0 24px 48px -24px var(--card-shadow);
   border-color:transparent}
 .psite-svc-ic{display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px;
   border-radius:15px; background:var(--soft); color:var(--accent); transition:.22s ease}
@@ -783,9 +809,9 @@ const PSITE_CSS = `
 
 /* Doctors */
 .psite-doc-grid{display:grid; grid-template-columns:1fr; gap:20px}
-.psite-doc{display:flex; align-items:center; gap:18px; background:#fff; border:1px solid var(--line);
+.psite-doc{display:flex; align-items:center; gap:18px; background:var(--surface); border:1px solid var(--line);
   border-radius:16px; padding:20px 22px; border-top:3px solid var(--accent); transition:.22s ease}
-.psite-doc:hover{box-shadow:0 20px 40px -22px rgba(21,34,56,.3); transform:translateY(-3px)}
+.psite-doc:hover{box-shadow:0 20px 40px -22px var(--card-shadow-soft); transform:translateY(-3px)}
 .psite-doc-avatar{flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
   width:60px; height:60px; border-radius:9999px; background:var(--soft); color:var(--accent);
   font-family:var(--font-poppins),var(--font); font-weight:700; font-size:22px}
@@ -809,26 +835,26 @@ const PSITE_CSS = `
 .psite-about-checks{list-style:none; margin:26px 0 0; padding:0; display:grid;
   grid-template-columns:repeat(2,1fr); gap:12px}
 .psite-about-checks li{display:flex; align-items:center; gap:10px; font-size:14.5px;
-  font-weight:500; color:var(--navy)}
+  font-weight:500; color:var(--heading)}
 .psite-about-checks svg{flex-shrink:0; color:var(--accent)}
 
 /* Contact */
 .psite-contact{display:grid; grid-template-columns:1fr; gap:26px}
 .psite-contact-cards{display:grid; grid-template-columns:1fr; gap:16px}
-.psite-cc{display:flex; gap:16px; background:#fff; border:1px solid var(--line); border-radius:16px;
+.psite-cc{display:flex; gap:16px; background:var(--surface); border:1px solid var(--line); border-radius:16px;
   padding:22px}
 .psite-cc-ic{flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
   width:46px; height:46px; border-radius:13px; background:var(--soft); color:var(--accent)}
-.psite-cc-label{font-weight:600; color:var(--navy); font-size:15px}
+.psite-cc-label{font-weight:600; color:var(--heading); font-size:15px}
 .psite-cc-val{margin-top:4px; font-size:14.5px; color:var(--body)}
 .psite-contact-link{color:var(--accent); font-weight:600; display:inline-block; margin-top:6px}
-.psite-strong{font-weight:700; color:var(--navy)}
+.psite-strong{font-weight:700; color:var(--heading)}
 .psite-break{word-break:break-all}
 .psite-map{border-radius:18px; overflow:hidden; border:1px solid var(--line); min-height:280px}
 .psite-map iframe{width:100%; height:100%; min-height:280px; border:0; display:block}
 
 /* Footer */
-.psite-footer{background:var(--navy); color:#aeb9cb}
+.psite-footer{background:var(--band-bg); color:#aeb9cb}
 .psite-footer-in{display:grid; grid-template-columns:1fr; gap:36px; padding:60px 24px 46px}
 .psite-footer-logo{display:flex; align-items:center; gap:11px; color:#fff; font-weight:600;
   font-size:19px; font-family:var(--font-poppins),var(--font)}
