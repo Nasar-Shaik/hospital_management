@@ -363,7 +363,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const crumb = crumbFor(pathname);
 
   return (
-    <div className="flex min-h-screen bg-[var(--color-bg-subtle)]">
+    // The shell OWNS the viewport height and never scrolls; only <main> does. This keeps the rail
+    // and top bar fixed, so a long page can never scroll the sidebar (and the item you just picked)
+    // out of view — the whole shell used to move with the window on `min-h-screen`.
+    <div className="flex h-screen overflow-hidden bg-[var(--color-bg-subtle)]">
       {/* ── Desktop rail ─────────────────────────────────────────────────────── */}
       <aside
         className={`hidden shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-[width] duration-[var(--dur)] ease-[var(--ease-standard)] lg:flex ${
@@ -435,9 +438,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       )}
 
       {/* ── Main column ──────────────────────────────────────────────────────── */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header
-          className="sticky top-0 z-30 flex h-16 items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 lg:px-6"
+          className="z-30 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 lg:px-6"
           style={{ background: "var(--surface-glass)", backdropFilter: "blur(12px)" }}
         >
           <div className="flex min-w-0 items-center gap-2">
@@ -554,7 +557,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <LicenseBanner />
 
-        <main className="flex-1 overflow-x-auto p-4 sm:p-6 lg:p-8">{children}</main>
+        {/* The ONLY scroll container. `overflow-x-auto` keeps wide tables from bleeding the page. */}
+        <main className="flex-1 overflow-y-auto overflow-x-auto p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );
