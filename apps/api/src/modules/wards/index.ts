@@ -12,22 +12,31 @@ export { wardRouter } from "./ward.routes.js";
 
 export {
   listWards,
+  listRooms,
   listBeds,
   getWard,
+  getRoom,
   getBed,
   createWard,
   updateWard,
+  createRoom,
+  updateRoom,
   createBed,
   updateBed,
   type Ward,
+  type Room,
   type Bed,
 } from "./ward.service.js";
 
 export {
   WARD_KINDS,
   WARD_STATUSES,
+  ROOM_KINDS,
+  ROOM_STATUSES,
   BED_STATUSES,
   type WardKind,
   type WardStatus,
+  type RoomKind,
+  type RoomStatus,
   type BedStatus,
 } from "./ward.model.js";

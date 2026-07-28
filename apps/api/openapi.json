@@ -121,6 +121,9 @@
       "name": "roles"
     },
     {
+      "name": "rooms"
+    },
+    {
       "name": "services"
     },
     {
@@ -4890,6 +4893,101 @@
         "operationId": "patch_v1_wards_id",
         "tags": ["wards"],
         "summary": "PATCH /api/v1/wards/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "bed:manage",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/rooms": {
+      "get": {
+        "operationId": "get_v1_rooms",
+        "tags": ["rooms"],
+        "summary": "GET /api/v1/rooms",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
+        "x-feature": "module.ops.ipd"
+      },
+      "post": {
+        "operationId": "post_v1_rooms",
+        "tags": ["rooms"],
+        "summary": "POST /api/v1/rooms",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "bed:manage",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/rooms/{id}": {
+      "patch": {
+        "operationId": "patch_v1_rooms_id",
+        "tags": ["rooms"],
+        "summary": "PATCH /api/v1/rooms/{id}",
         "parameters": [
           {
             "name": "id",

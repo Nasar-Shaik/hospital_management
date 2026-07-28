@@ -16,8 +16,10 @@ import {
   type BedBoard,
   type BedBoardBed,
   type Ward,
+  type Room,
   type InventoryBed,
   type WardKind,
+  type RoomKind,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Badge, Button, Card, Field, ErrorAlert } from "../../components/ui";
@@ -36,6 +38,16 @@ const WARD_KINDS: { value: WardKind; label: string }[] = [
   { value: "daycare", label: "Day care" },
 ];
 const kindLabel = (k: WardKind): string => WARD_KINDS.find((x) => x.value === k)?.label ?? k;
+
+const ROOM_KINDS: { value: RoomKind; label: string }[] = [
+  { value: "general", label: "General" },
+  { value: "sharing", label: "Sharing" },
+  { value: "semi_private", label: "Semi-private" },
+  { value: "private", label: "Private" },
+  { value: "deluxe", label: "Deluxe" },
+  { value: "suite", label: "Suite" },
+];
+const roomKindLabel = (k: RoomKind): string => ROOM_KINDS.find((x) => x.value === k)?.label ?? k;
 
 function daysIn(admittedAt?: string): number {
   if (!admittedAt) return 0;
@@ -153,9 +165,35 @@ function BedTile({ bed }: { bed: BedBoardBed }) {
         <span className="font-mono text-xs font-semibold text-[var(--color-fg)]">{bed.code}</span>
         <Badge tone="success">Free</Badge>
       </div>
-      <p className="mt-1 text-xs text-[var(--color-fg-subtle)]">{bed.room ?? "Available"}</p>
+      <p className="mt-1 text-xs text-[var(--color-fg-subtle)]">
+        {bed.roomName ?? bed.room ?? "Available"}
+      </p>
     </div>
   );
+}
+
+/** Groups a ward's board beds by their room, room-less beds last under "Ward floor". */
+function groupBedsByRoom(
+  beds: BedBoardBed[],
+): { label: string; kind?: RoomKind; beds: BedBoardBed[] }[] {
+  const byRoom = new Map<string, { label: string; kind?: RoomKind; beds: BedBoardBed[] }>();
+  const floor: BedBoardBed[] = [];
+  for (const b of beds) {
+    if (b.roomId) {
+      const g = byRoom.get(b.roomId) ?? {
+        label: b.roomName ?? "Room",
+        ...(b.roomKind ? { kind: b.roomKind } : {}),
+        beds: [],
+      };
+      g.beds.push(b);
+      byRoom.set(b.roomId, g);
+    } else {
+      floor.push(b);
+    }
+  }
+  const groups = [...byRoom.values()].sort((a, b) => a.label.localeCompare(b.label));
+  if (floor.length) groups.push({ label: "Ward floor", beds: floor });
+  return groups;
 }
 
 function Board({ board }: { board: BedBoard }) {
@@ -198,9 +236,21 @@ function Board({ board }: { board: BedBoard }) {
                 No beds in this ward yet.
               </p>
             ) : (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {w.beds.map((b) => (
-                  <BedTile key={b.bedId} bed={b} />
+              <div className="space-y-4">
+                {groupBedsByRoom(w.beds).map((g) => (
+                  <div key={g.label}>
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span className="text-xs font-semibold tracking-wide text-[var(--color-fg-muted)] uppercase">
+                        {g.label}
+                      </span>
+                      {g.kind && <Badge tone="neutral">{roomKindLabel(g.kind)}</Badge>}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                      {g.beds.map((b) => (
+                        <BedTile key={b.bedId} bed={b} />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -293,21 +343,87 @@ function WardForm({
   );
 }
 
+function RoomForm({
+  initial,
+  onSubmit,
+  saving,
+  error,
+}: {
+  initial?: Room;
+  onSubmit: (f: { name: string; kind: RoomKind; tariffCode?: string }) => void;
+  saving: boolean;
+  error?: unknown;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [kind, setKind] = useState<RoomKind>(initial?.kind ?? "general");
+  const [tariffCode, setTariffCode] = useState(initial?.tariffCode ?? "");
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e: FormEvent) => {
+        e.preventDefault();
+        onSubmit({
+          name: name.trim(),
+          kind,
+          ...(tariffCode.trim() ? { tariffCode: tariffCode.trim() } : {}),
+        });
+      }}
+    >
+      {error != null && <ErrorAlert error={error} fallback="Could not save the room." />}
+      <Field
+        label="Room name"
+        name="name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Room 4"
+        required
+      />
+      <Select label="Class" value={kind} onChange={(v) => setKind(v as RoomKind)}>
+        {ROOM_KINDS.map((k) => (
+          <option key={k.value} value={k.value}>
+            {k.label}
+          </option>
+        ))}
+      </Select>
+      <Field
+        label="Room tariff (optional)"
+        name="tariffCode"
+        value={tariffCode}
+        onChange={(e) => setTariffCode(e.target.value.toUpperCase())}
+        hint="The room-class bed-day rate. Leave blank to bill beds at the ward's rate."
+      />
+      <div className="flex justify-end">
+        <Button type="submit" loading={saving}>
+          {initial ? "Save room" : "Add room"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 function BedForm({
   wardId,
+  rooms,
   initial,
   onSubmit,
   saving,
   error,
 }: {
   wardId: string;
+  /** The rooms of this bed's ward — the bed may sit in one, or on the open floor. */
+  rooms: Room[];
   initial?: InventoryBed;
-  onSubmit: (f: { wardId: string; code: string; room?: string; tariffCode?: string }) => void;
+  onSubmit: (f: {
+    wardId: string;
+    roomId?: string | null;
+    code: string;
+    tariffCode?: string;
+  }) => void;
   saving: boolean;
   error?: unknown;
 }) {
   const [code, setCode] = useState(initial?.code ?? "");
-  const [room, setRoom] = useState(initial?.room ?? "");
+  const [roomId, setRoomId] = useState(initial?.roomId ?? "");
   const [tariffCode, setTariffCode] = useState(initial?.tariffCode ?? "");
   return (
     <form
@@ -316,8 +432,9 @@ function BedForm({
         e.preventDefault();
         onSubmit({
           wardId,
+          // "" ⇒ null so an edit can pull a bed back out onto the ward floor.
+          roomId: roomId || (initial?.roomId ? null : undefined),
           code: code.trim(),
-          ...(room.trim() ? { room: room.trim() } : {}),
           ...(tariffCode.trim() ? { tariffCode: tariffCode.trim() } : {}),
         });
       }}
@@ -331,19 +448,20 @@ function BedForm({
         placeholder="A-12"
         required
       />
-      <Field
-        label="Room / bay (optional)"
-        name="room"
-        value={room}
-        onChange={(e) => setRoom(e.target.value)}
-        placeholder="Room 4"
-      />
+      <Select label="Room" value={roomId} onChange={setRoomId}>
+        <option value="">On the ward floor (no room)</option>
+        {rooms.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.name} · {roomKindLabel(r.kind)}
+          </option>
+        ))}
+      </Select>
       <Field
         label="Tariff override (optional)"
         name="tariffCode"
         value={tariffCode}
         onChange={(e) => setTariffCode(e.target.value.toUpperCase())}
-        hint="Leave blank to bill at the ward's rate."
+        hint="Leave blank to bill at the room's rate, or the ward's when there is no room."
       />
       <div className="flex justify-end">
         <Button type="submit" loading={saving}>
@@ -354,9 +472,51 @@ function BedForm({
   );
 }
 
+/** The row of bed chips under a room (or the ward floor) in the manage view. */
+function BedChips({
+  beds,
+  onEdit,
+  onToggle,
+}: {
+  beds: InventoryBed[];
+  onEdit: (b: InventoryBed) => void;
+  onToggle: (b: InventoryBed) => void;
+}) {
+  if (beds.length === 0) {
+    return <p className="text-xs text-[var(--color-fg-subtle)]">No beds here yet.</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {beds.map((b) => (
+        <div
+          key={b.id}
+          className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
+        >
+          <span className="font-mono text-xs font-semibold text-[var(--color-fg)]">{b.code}</span>
+          {b.status === "blocked" && <Badge tone="neutral">Blocked</Badge>}
+          <button
+            className="text-xs text-[var(--color-brand-600)] hover:underline"
+            onClick={() => onEdit(b)}
+          >
+            Edit
+          </button>
+          <button
+            className="text-xs text-[var(--color-fg-muted)] hover:underline"
+            onClick={() => onToggle(b)}
+          >
+            {b.status === "available" ? "Block" : "Unblock"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type ModalState =
   | { kind: "ward-create" }
   | { kind: "ward-edit"; ward: Ward }
+  | { kind: "room-create"; wardId: string; wardName: string }
+  | { kind: "room-edit"; room: Room }
   | { kind: "bed-create"; wardId: string; wardName: string }
   | { kind: "bed-edit"; bed: InventoryBed }
   | null;
@@ -364,6 +524,7 @@ type ModalState =
 function Manage() {
   const { api } = useAuth();
   const [wards, setWards] = useState<Ward[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [beds, setBeds] = useState<InventoryBed[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
@@ -373,9 +534,10 @@ function Manage() {
 
   const load = useCallback(() => {
     setLoading(true);
-    Promise.all([api.listWards(), api.listBeds()])
-      .then(([w, b]) => {
+    Promise.all([api.listWards(), api.listRooms(), api.listBeds()])
+      .then(([w, r, b]) => {
         setWards(w);
+        setRooms(r);
         setBeds(b);
       })
       .catch((e: unknown) => setError(e))
@@ -437,6 +599,8 @@ function Manage() {
       ) : (
         wards.map((w) => {
           const wardBeds = beds.filter((b) => b.wardId === w.id);
+          const wardRooms = rooms.filter((r) => r.wardId === w.id);
+          const floorBeds = wardBeds.filter((b) => !b.roomId);
           return (
             <Card key={w.id} className={`p-5 ${w.status === "inactive" ? "opacity-60" : ""}`}>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -462,6 +626,15 @@ function Manage() {
                     variant="ghost"
                     onClick={() => {
                       setFormError(null);
+                      setModal({ kind: "room-create", wardId: w.id, wardName: w.name });
+                    }}
+                  >
+                    Add room
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setFormError(null);
                       setModal({ kind: "bed-create", wardId: w.id, wardName: w.name });
                     }}
                   >
@@ -469,41 +642,61 @@ function Manage() {
                   </Button>
                 </div>
               </div>
-              {wardBeds.length === 0 ? (
+
+              {wardBeds.length === 0 && wardRooms.length === 0 ? (
                 <p className="py-3 text-center text-sm text-[var(--color-fg-subtle)]">
-                  No beds yet.
+                  No rooms or beds yet.
                 </p>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {wardBeds.map((b) => (
-                    <div
-                      key={b.id}
-                      className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
-                    >
-                      <span className="font-mono text-xs font-semibold text-[var(--color-fg)]">
-                        {b.code}
-                      </span>
-                      {b.room && (
-                        <span className="text-xs text-[var(--color-fg-subtle)]">{b.room}</span>
-                      )}
-                      {b.status === "blocked" && <Badge tone="neutral">Blocked</Badge>}
-                      <button
-                        className="text-xs text-[var(--color-brand-600)] hover:underline"
-                        onClick={() => {
+                <div className="space-y-4">
+                  {wardRooms.map((r) => (
+                    <div key={r.id}>
+                      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-[var(--color-fg)]">{r.name}</span>
+                        <Badge tone="neutral">{roomKindLabel(r.kind)}</Badge>
+                        {r.tariffCode && (
+                          <span className="font-mono text-xs text-[var(--color-fg-subtle)]">
+                            {r.tariffCode}
+                          </span>
+                        )}
+                        {r.status === "inactive" && <Badge tone="warning">Retired</Badge>}
+                        <button
+                          className="text-xs text-[var(--color-brand-600)] hover:underline"
+                          onClick={() => {
+                            setFormError(null);
+                            setModal({ kind: "room-edit", room: r });
+                          }}
+                        >
+                          Edit room
+                        </button>
+                      </div>
+                      <BedChips
+                        beds={wardBeds.filter((b) => b.roomId === r.id)}
+                        onEdit={(b) => {
                           setFormError(null);
                           setModal({ kind: "bed-edit", bed: b });
                         }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="text-xs text-[var(--color-fg-muted)] hover:underline"
-                        onClick={() => toggleBed(b)}
-                      >
-                        {b.status === "available" ? "Block" : "Unblock"}
-                      </button>
+                        onToggle={toggleBed}
+                      />
                     </div>
                   ))}
+                  {floorBeds.length > 0 && (
+                    <div>
+                      {wardRooms.length > 0 && (
+                        <div className="mb-1.5 text-xs font-semibold tracking-wide text-[var(--color-fg-muted)] uppercase">
+                          Ward floor
+                        </div>
+                      )}
+                      <BedChips
+                        beds={floorBeds}
+                        onEdit={(b) => {
+                          setFormError(null);
+                          setModal({ kind: "bed-edit", bed: b });
+                        }}
+                        onToggle={toggleBed}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </Card>
@@ -544,13 +737,65 @@ function Manage() {
           </div>
         </Modal>
       )}
+      {modal?.kind === "room-create" && (
+        <Modal title={`Add room to ${modal.wardName}`} onClose={() => setModal(null)}>
+          <RoomForm
+            saving={saving}
+            error={formError}
+            onSubmit={(f) => void run(() => api.createRoom({ wardId: modal.wardId, ...f }))}
+          />
+        </Modal>
+      )}
+      {modal?.kind === "room-edit" && (
+        <Modal title={`Edit ${modal.room.name}`} onClose={() => setModal(null)}>
+          <RoomForm
+            initial={modal.room}
+            saving={saving}
+            error={formError}
+            onSubmit={(f) =>
+              void run(() =>
+                api.updateRoom(modal.room.id, {
+                  ...f,
+                  // A blank tariff clears the room-class override.
+                  tariffCode: f.tariffCode ?? "",
+                }),
+              )
+            }
+          />
+          <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+            <Button
+              variant="ghost"
+              onClick={() =>
+                void run(() =>
+                  api.updateRoom(modal.room.id, {
+                    status: modal.room.status === "active" ? "inactive" : "active",
+                  }),
+                )
+              }
+            >
+              {modal.room.status === "active" ? "Retire this room" : "Reactivate this room"}
+            </Button>
+          </div>
+        </Modal>
+      )}
       {modal?.kind === "bed-create" && (
         <Modal title={`Add bed to ${modal.wardName}`} onClose={() => setModal(null)}>
           <BedForm
             wardId={modal.wardId}
+            rooms={rooms.filter((r) => r.wardId === modal.wardId && r.status === "active")}
             saving={saving}
             error={formError}
-            onSubmit={(f) => void run(() => api.createBed(f))}
+            onSubmit={(f) =>
+              void run(() =>
+                api.createBed({
+                  wardId: f.wardId,
+                  code: f.code,
+                  // A new bed is never pulled OUT of a room, so null collapses to "no room".
+                  ...(f.roomId ? { roomId: f.roomId } : {}),
+                  ...(f.tariffCode ? { tariffCode: f.tariffCode } : {}),
+                }),
+              )
+            }
           />
         </Modal>
       )}
@@ -558,14 +803,15 @@ function Manage() {
         <Modal title={`Edit bed ${modal.bed.code}`} onClose={() => setModal(null)}>
           <BedForm
             wardId={modal.bed.wardId}
+            rooms={rooms.filter((r) => r.wardId === modal.bed.wardId && r.status === "active")}
             initial={modal.bed}
             saving={saving}
             error={formError}
             onSubmit={(f) =>
               void run(() =>
                 api.updateBed(modal.bed.id, {
+                  roomId: f.roomId,
                   code: f.code,
-                  room: f.room ?? "",
                   tariffCode: f.tariffCode ?? "",
                 }),
               )

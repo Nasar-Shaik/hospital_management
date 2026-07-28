@@ -50,6 +50,25 @@ export const WARD_STATUSES = ["active", "inactive"] as const;
 export type WardStatus = (typeof WARD_STATUSES)[number];
 
 /**
+ * A room's CLASS — how a hospital prices and describes the space a bed sits in. A ward groups
+ * beds clinically (ICU, maternity); a room groups them commercially (a private single, a
+ * four-bed sharing). Drives nothing in code beyond the label and the default room tariff.
+ */
+export const ROOM_KINDS = [
+  "general",
+  "sharing",
+  "semi_private",
+  "private",
+  "deluxe",
+  "suite",
+] as const;
+export type RoomKind = (typeof ROOM_KINDS)[number];
+
+/** Same two-state life as a ward: `active` rooms take beds; `inactive` is retired, history intact. */
+export const ROOM_STATUSES = ["active", "inactive"] as const;
+export type RoomStatus = (typeof ROOM_STATUSES)[number];
+
+/**
  * A bed's OWN status — the part occupancy cannot answer.
  * - `available` — in service; free-or-occupied is derived from encounters, not from here.
  * - `blocked`   — out of service (cleaning, maintenance, reserved). Not admittable, and the
@@ -78,17 +97,53 @@ export interface WardDoc {
   updatedAt: Date;
 }
 
+/**
+ * A ROOM — the optional commercial level between a ward and its beds (ward → room → bed).
+ *
+ * A bed may sit in a room (`Room 4`, a private single; `Bay B`, a four-bed sharing) or hang
+ * directly off the ward (a general ward's open floor of beds). The room carries the room-class
+ * TARIFF, so a four-bed sharing is priced once on the room, not four times on its beds. A bed
+ * that names a room inherits that price unless it sets its own; the resolution is
+ * bed → room → ward, most specific wins. Occupancy is NOT here either — it is derived from
+ * encounters exactly as for a ward, so a room never stores who is in it.
+ */
+export interface RoomDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+
+  wardId: Types.ObjectId;
+  /** `Room 4`, `Bay B`. Unique within its ward. */
+  name: string;
+  kind: RoomKind;
+  /** The room-class bed-day tariff; a bed in the room bills at this unless it overrides. Optional. */
+  tariffCode?: string;
+  status: RoomStatus;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface BedDoc {
   _id: Types.ObjectId;
   tenantId: string;
   branchId?: string;
 
   wardId: Types.ObjectId;
+  /**
+   * The room this bed sits in, when the ward is divided into rooms. Absent means the bed hangs
+   * directly off the ward (an open general floor). A room's ward always equals the bed's ward —
+   * the service enforces it, so the two can never disagree.
+   */
+  roomId?: Types.ObjectId;
   /** `A-12`. Unique within its ward. */
   code: string;
-  /** Optional room/bay label, purely for the human reading the board (`Room 4`, `Bay B`). */
+  /**
+   * LEGACY free-text room/bay label, kept for beds catalogued before rooms became first-class.
+   * New beds carry `roomId` instead; the board falls back to this label when there is no room.
+   */
   room?: string;
-  /** Overrides the ward's tariff for this bed; absent means "bill at the ward's rate". */
+  /** Overrides the room/ward tariff for this bed; absent means "bill at the room-or-ward rate". */
   tariffCode?: string;
   status: BedStatus;
   /** Why the bed is out of service — shown on the board. Set only when `status` is `blocked`. */
@@ -112,12 +167,27 @@ const wardSchema = new Schema<WardDoc>(
   { timestamps: true, collection: "wards", autoIndex: false },
 );
 
+const roomSchema = new Schema<RoomDoc>(
+  {
+    tenantId: { type: String, required: true, index: true },
+    branchId: { type: String },
+
+    wardId: { type: Schema.Types.ObjectId, required: true },
+    name: { type: String, required: true, trim: true, maxlength: 100 },
+    kind: { type: String, enum: ROOM_KINDS, required: true, default: "general" },
+    tariffCode: { type: String, trim: true, maxlength: 64 },
+    status: { type: String, enum: ROOM_STATUSES, required: true, default: "active" },
+  },
+  { timestamps: true, collection: "rooms", autoIndex: false },
+);
+
 const bedSchema = new Schema<BedDoc>(
   {
     tenantId: { type: String, required: true, index: true },
     branchId: { type: String },
 
     wardId: { type: Schema.Types.ObjectId, required: true },
+    roomId: { type: Schema.Types.ObjectId },
     code: { type: String, required: true, trim: true, maxlength: 32 },
     room: { type: String, trim: true, maxlength: 32 },
     tariffCode: { type: String, trim: true, maxlength: 64 },
@@ -128,15 +198,21 @@ const bedSchema = new Schema<BedDoc>(
 );
 
 wardSchema.plugin(tenantScopePlugin);
+roomSchema.plugin(tenantScopePlugin);
 bedSchema.plugin(tenantScopePlugin);
 
 // Configuration, not PHI — the `admin` category, like `branches`. Adding a ward or blocking a
 // bed is an administrative act a compliance officer expects to find in the trail.
 wardSchema.plugin(auditPlugin, { resource: "ward", category: "admin" });
+roomSchema.plugin(auditPlugin, { resource: "room", category: "admin" });
 bedSchema.plugin(auditPlugin, { resource: "bed", category: "admin" });
 
 export function getWardModel(conn: Connection): Model<WardDoc> {
   return (conn.models.Ward as Model<WardDoc>) ?? conn.model<WardDoc>("Ward", wardSchema);
+}
+
+export function getRoomModel(conn: Connection): Model<RoomDoc> {
+  return (conn.models.Room as Model<RoomDoc>) ?? conn.model<RoomDoc>("Room", roomSchema);
 }
 
 export function getBedModel(conn: Connection): Model<BedDoc> {

@@ -1389,4 +1389,37 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0034-rooms",
+    description:
+      "Rooms (B4) — the optional commercial level between a ward and its beds (ward → room → bed). " +
+      "A room carries the room-class tariff; a bed may reference one. Occupancy is NOT stored here " +
+      "either. This owns only the `rooms` collection and its indexes; beds gain an optional roomId " +
+      "with no schema change needed (Mongo is schemaless — the field is simply set when present).",
+    up: async (db) => {
+      await db.createCollection("rooms").catch(() => undefined);
+
+      /** A room name is unique WITHIN its ward — `General / Room 4` and `ICU / Room 4` are distinct. */
+      await db
+        .collection("rooms")
+        .createIndex(
+          { tenantId: 1, wardId: 1, name: 1 },
+          { unique: true, name: "one_room_name_per_ward", background: true },
+        );
+      // The catalogue lists a ward's rooms — read by tenant + ward.
+      await db.collection("rooms").createIndex({ tenantId: 1, wardId: 1 }, { background: true });
+      // The board joins beds to their room by id — read by tenant + room.
+      await db.collection("beds").createIndex({ tenantId: 1, roomId: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("rooms")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("beds")
+        .dropIndex("tenantId_1_roomId_1")
+        .catch(() => undefined);
+    },
+  },
 ];

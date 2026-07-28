@@ -7,8 +7,11 @@ import * as wards from "./ward.service.js";
 import type {
   CreateWardBody,
   UpdateWardBody,
+  CreateRoomBody,
+  UpdateRoomBody,
   CreateBedBody,
   UpdateBedBody,
+  ListRoomsQuery,
   ListBedsQuery,
 } from "./ward.schema.js";
 
@@ -28,6 +31,20 @@ export const createWard: RequestHandler = async (req, res) => {
 export const updateWard: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await wards.updateWard(id, req.body as UpdateWardBody));
+};
+
+export const listRooms: RequestHandler = async (req, res) => {
+  const { wardId } = req.query as ListRoomsQuery;
+  ok(res, await wards.listRooms(wardId));
+};
+
+export const createRoom: RequestHandler = async (req, res) => {
+  ok(res, await wards.createRoom(req.body as CreateRoomBody), 201);
+};
+
+export const updateRoom: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await wards.updateRoom(id, req.body as UpdateRoomBody));
 };
 
 export const listBeds: RequestHandler = async (req, res) => {

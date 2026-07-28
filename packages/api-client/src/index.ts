@@ -1538,6 +1538,10 @@ export type WardKind =
 export type WardStatus = "active" | "inactive";
 export type BedStatus = "available" | "blocked";
 
+/** A room's commercial class — how a hospital prices the space a bed sits in. */
+export type RoomKind = "general" | "sharing" | "semi_private" | "private" | "deluxe" | "suite";
+export type RoomStatus = "active" | "inactive";
+
 export interface Ward {
   id: string;
   name: string;
@@ -1548,11 +1552,30 @@ export interface Ward {
   branchId?: string;
 }
 
-/** A catalogue bed, joined to its ward. `tariffCode` is the effective one (bed's, or its ward's). */
+/** A room — the optional level between a ward and its beds (ward → room → bed), joined to its ward. */
+export interface Room {
+  id: string;
+  wardId: string;
+  name: string;
+  kind: RoomKind;
+  /** The room-class bed-day tariff, when set — the middle link of the bed → room → ward chain. */
+  tariffCode?: string;
+  status: RoomStatus;
+  branchId?: string;
+  wardName: string;
+}
+
+/**
+ * A catalogue bed, joined to its ward (and room, if it has one). `tariffCode` is the EFFECTIVE
+ * one, resolved bed → room → ward.
+ */
 export interface InventoryBed {
   id: string;
   wardId: string;
+  /** The room this bed sits in, when it has one — absent for a bed on the open ward floor. */
+  roomId?: string;
   code: string;
+  /** LEGACY free-text room label, kept for beds catalogued before rooms were first-class. */
   room?: string;
   tariffCode: string;
   status: BedStatus;
@@ -1561,6 +1584,8 @@ export interface InventoryBed {
   wardName: string;
   wardKind: WardKind;
   wardStatus: WardStatus;
+  roomName?: string;
+  roomKind?: RoomKind;
 }
 
 export interface BedBoardOccupant {
@@ -1575,7 +1600,12 @@ export interface BedBoardOccupant {
 export interface BedBoardBed {
   bedId: string;
   code: string;
+  /** LEGACY free-text room label — shown only when the bed has no first-class room. */
   room?: string;
+  /** The first-class room this bed sits in, when it has one — the board groups by it. */
+  roomId?: string;
+  roomName?: string;
+  roomKind?: RoomKind;
   tariffCode: string;
   state: "free" | "occupied" | "blocked";
   blockedReason?: string;
@@ -2871,7 +2901,29 @@ export class ApiClient {
     return this.request<Ward>("PATCH", `/api/v1/wards/${id}`, patch);
   }
 
-  /** Every bed, or one ward's beds — each joined to its ward name and effective tariff. */
+  /** Every room, or one ward's rooms — each joined to its ward name. */
+  listRooms(wardId?: string): Promise<Room[]> {
+    const qs = wardId ? `?wardId=${wardId}` : "";
+    return this.request<Room[]>("GET", `/api/v1/rooms${qs}`);
+  }
+
+  createRoom(input: {
+    wardId: string;
+    name: string;
+    kind: RoomKind;
+    tariffCode?: string;
+  }): Promise<Room> {
+    return this.request<Room>("POST", "/api/v1/rooms", input);
+  }
+
+  updateRoom(
+    id: string,
+    patch: { name?: string; kind?: RoomKind; tariffCode?: string; status?: RoomStatus },
+  ): Promise<Room> {
+    return this.request<Room>("PATCH", `/api/v1/rooms/${id}`, patch);
+  }
+
+  /** Every bed, or one ward's beds — each joined to its ward name, room, and effective tariff. */
   listBeds(wardId?: string): Promise<InventoryBed[]> {
     const qs = wardId ? `?wardId=${wardId}` : "";
     return this.request<InventoryBed[]>("GET", `/api/v1/beds${qs}`);
@@ -2879,6 +2931,7 @@ export class ApiClient {
 
   createBed(input: {
     wardId: string;
+    roomId?: string;
     code: string;
     room?: string;
     tariffCode?: string;
@@ -2889,6 +2942,8 @@ export class ApiClient {
   updateBed(
     id: string,
     patch: {
+      /** A room id moves the bed into that room; `null` pulls it out onto the open ward floor. */
+      roomId?: string | null;
       code?: string;
       room?: string;
       tariffCode?: string;

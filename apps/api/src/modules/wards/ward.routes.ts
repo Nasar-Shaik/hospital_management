@@ -24,8 +24,11 @@ import * as controller from "./ward.controller.js";
 import {
   createWardSchema,
   updateWardSchema,
+  createRoomSchema,
+  updateRoomSchema,
   createBedSchema,
   updateBedSchema,
+  listRoomsQuerySchema,
   listBedsQuerySchema,
   idParamSchema,
 } from "./ward.schema.js";
@@ -57,6 +60,31 @@ export function wardRouter(): Router {
     validate(idParamSchema, "params"),
     validate(updateWardSchema),
     asyncHandler(controller.updateWard),
+  );
+
+  router.get(
+    "/rooms",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_READ, FEATURE),
+    validate(listRoomsQuerySchema, "query"),
+    asyncHandler(controller.listRooms),
+  );
+
+  router.post(
+    "/rooms",
+    authenticate(),
+    authorize(PERMISSIONS.BED_MANAGE, FEATURE),
+    validate(createRoomSchema),
+    asyncHandler(controller.createRoom),
+  );
+
+  router.patch(
+    "/rooms/:id",
+    authenticate(),
+    authorize(PERMISSIONS.BED_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(updateRoomSchema),
+    asyncHandler(controller.updateRoom),
   );
 
   router.get(

@@ -8,11 +8,13 @@
 import { AppError } from "../../core/errors/appError.js";
 import * as repo from "./ward.repository.js";
 
-export type { Ward, Bed } from "./ward.repository.js";
+export type { Ward, Room, Bed } from "./ward.repository.js";
 
 export const listWards = repo.listWards;
+export const listRooms = repo.listRooms;
 export const listBeds = repo.listBeds;
 export const getWard = repo.findWardById;
+export const getRoom = repo.findRoomById;
 export const getBed = repo.findBedById;
 
 export interface CreateWardInput {
@@ -53,8 +55,51 @@ export async function updateWard(id: string, patch: repo.UpdateWardInput): Promi
   }
 }
 
+export interface CreateRoomInput {
+  wardId: string;
+  kind: repo.CreateRoomInput["kind"];
+  name: string;
+  tariffCode?: string;
+}
+
+export async function createRoom(input: CreateRoomInput): Promise<repo.Room> {
+  try {
+    const room = await repo.createRoom(input);
+    // The ward the room was hung on does not exist (or is out of the caller's branch scope).
+    if (!room) throw new AppError("HMS-GEN-404", 404, "Ward not found", { wardId: input.wardId });
+    return room;
+  } catch (err) {
+    if (repo.isDuplicateKey(err)) {
+      throw new AppError("HMS-VAL-001", 409, "That room already exists in this ward", {
+        name: input.name,
+        hint: "room names are unique within a ward — pick another",
+      });
+    }
+    throw err;
+  }
+}
+
+export async function updateRoom(id: string, patch: repo.UpdateRoomInput): Promise<repo.Room> {
+  const existing = await repo.findRoomById(id);
+  if (!existing) throw new AppError("HMS-GEN-404", 404, "Room not found", { id });
+  try {
+    const updated = await repo.updateRoom(id, patch);
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Room not found", { id });
+    return updated;
+  } catch (err) {
+    if (repo.isDuplicateKey(err)) {
+      throw new AppError("HMS-VAL-001", 409, "That room already exists in this ward", {
+        name: patch.name,
+        hint: "room names are unique within a ward — pick another",
+      });
+    }
+    throw err;
+  }
+}
+
 export interface CreateBedInput {
   wardId: string;
+  roomId?: string;
   code: string;
   room?: string;
   tariffCode?: string;
@@ -63,8 +108,13 @@ export interface CreateBedInput {
 export async function createBed(input: CreateBedInput): Promise<repo.Bed> {
   try {
     const bed = await repo.createBed(input);
-    // The ward the bed was hung on does not exist (or is out of the caller's branch scope).
-    if (!bed) throw new AppError("HMS-GEN-404", 404, "Ward not found", { wardId: input.wardId });
+    // The ward does not exist, or the named room is missing / belongs to a different ward.
+    if (!bed)
+      throw new AppError("HMS-GEN-404", 404, "Ward or room not found", {
+        wardId: input.wardId,
+        ...(input.roomId ? { roomId: input.roomId } : {}),
+        hint: "the room must belong to the chosen ward",
+      });
     return bed;
   } catch (err) {
     if (repo.isDuplicateKey(err)) {
@@ -91,7 +141,13 @@ export async function updateBed(id: string, patch: repo.UpdateBedInput): Promise
 
   try {
     const updated = await repo.updateBed(id, patch);
-    if (!updated) throw new AppError("HMS-GEN-404", 404, "Bed not found", { id });
+    // The bed exists (checked above), so a miss here is a room that is missing or in another ward.
+    if (!updated)
+      throw new AppError("HMS-GEN-404", 404, "Room not found", {
+        id,
+        ...(patch.roomId ? { roomId: patch.roomId } : {}),
+        hint: "the room must belong to the bed's ward",
+      });
     return updated;
   } catch (err) {
     if (repo.isDuplicateKey(err)) {
