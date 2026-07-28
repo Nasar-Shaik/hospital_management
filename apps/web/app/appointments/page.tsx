@@ -29,7 +29,6 @@ import {
   type Slot,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 
 function toDateInput(d: Date): string {
@@ -558,9 +557,5 @@ function Appointments() {
 }
 
 export default function AppointmentsPage() {
-  return (
-    <Protected>
-      <Appointments />
-    </Protected>
-  );
+  return <Appointments />;
 }

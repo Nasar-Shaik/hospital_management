@@ -45,7 +45,6 @@ import {
 } from "@medicore/api-client";
 import { VitalsPanel } from "../../components/Vitals";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 
 function time(iso: string): string {
@@ -1817,9 +1816,5 @@ function VisitSummary({ encounter, onSaved }: { encounter: Encounter; onSaved: (
 }
 
 export default function MyPatientsPage() {
-  return (
-    <Protected>
-      <MyPatients />
-    </Protected>
-  );
+  return <MyPatients />;
 }

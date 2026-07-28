@@ -25,7 +25,6 @@ import {
   type TerminalOutcome,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
@@ -720,9 +719,5 @@ function Ward() {
 }
 
 export default function WardPage() {
-  return (
-    <Protected>
-      <Ward />
-    </Protected>
-  );
+  return <Ward />;
 }

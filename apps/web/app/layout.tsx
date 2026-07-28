@@ -5,6 +5,7 @@ import { ThemeProvider, themeInitScript } from "@medicore/ui";
 import { AuthProvider } from "../components/AuthProvider";
 import { BrandingProvider } from "../components/BrandingProvider";
 import { BranchProvider } from "../components/BranchProvider";
+import { AppFrame } from "../components/AppFrame";
 import { IdleGuard } from "../components/IdleGuard";
 import "./globals.css";
 
@@ -63,7 +64,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <BrandingProvider>
               <BranchProvider>
                 <IdleGuard />
-                {children}
+                {/* The shell is hoisted here so it mounts once and survives navigation. */}
+                <AppFrame>{children}</AppFrame>
               </BranchProvider>
             </BrandingProvider>
           </AuthProvider>

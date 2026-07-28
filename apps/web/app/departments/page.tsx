@@ -17,7 +17,6 @@ import {
   type CreateDepartmentInput,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Badge, Button, DataTable, Field, Modal, type Column } from "../../components/ui";
 import { ErrorAlert } from "../../components/ui";
 
@@ -364,9 +363,5 @@ function DepartmentsPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <DepartmentsPage />
-    </Protected>
-  );
+  return <DepartmentsPage />;
 }

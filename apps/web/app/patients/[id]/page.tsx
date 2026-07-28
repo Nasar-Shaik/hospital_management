@@ -30,7 +30,6 @@ import {
   type WalletEntry,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
-import { Protected } from "../../../components/Protected";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
 import { rupees, toPaise } from "../../../lib/money";
@@ -1184,9 +1183,5 @@ function Documents({
 }
 
 export default function PatientProfilePage() {
-  return (
-    <Protected>
-      <Profile />
-    </Protected>
-  );
+  return <Profile />;
 }

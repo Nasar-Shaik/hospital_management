@@ -13,7 +13,6 @@
 import { useEffect, useState } from "react";
 import { ApiClientError, type Role } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Card } from "../../components/ui";
 import { ROLE_GUIDE } from "../../lib/roleGuide";
 
@@ -218,9 +217,5 @@ function Roles() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <Roles />
-    </Protected>
-  );
+  return <Roles />;
 }

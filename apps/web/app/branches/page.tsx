@@ -10,7 +10,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { type Branch } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Badge, Button, DataTable, Field, Modal, type Column } from "../../components/ui";
 import { ErrorAlert } from "../../components/ui";
 
@@ -308,9 +307,5 @@ function BranchesPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <BranchesPage />
-    </Protected>
-  );
+  return <BranchesPage />;
 }

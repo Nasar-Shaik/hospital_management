@@ -30,7 +30,6 @@ import {
   type Patient,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
@@ -776,9 +775,5 @@ function Worklist() {
 }
 
 export default function WorklistPage() {
-  return (
-    <Protected>
-      <Worklist />
-    </Protected>
-  );
+  return <Worklist />;
 }

@@ -16,17 +16,12 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ApiClientError, type EditableSite } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { useBranding } from "../../../components/BrandingProvider";
-import { Protected } from "../../../components/Protected";
 import { Alert, Button, Card, Field } from "../../../components/ui";
 
 const DEFAULT_ACCENT = "#0d9488";
 
 export default function SiteSettingsPage() {
-  return (
-    <Protected>
-      <Editor />
-    </Protected>
-  );
+  return <Editor />;
 }
 
 function Editor() {

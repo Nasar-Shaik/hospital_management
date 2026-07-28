@@ -24,7 +24,6 @@ import {
   type WalletRegister,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
@@ -543,9 +542,5 @@ function ReportsPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <ReportsPage />
-    </Protected>
-  );
+  return <ReportsPage />;
 }

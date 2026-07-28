@@ -11,7 +11,6 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ApiClientError } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Button, Card, Field } from "../../components/ui";
 
 function ChangePassword() {
@@ -136,9 +135,5 @@ function ChangePassword() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <ChangePassword />
-    </Protected>
-  );
+  return <ChangePassword />;
 }

@@ -13,7 +13,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { type MyActivity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Card, Skeleton, StatCard } from "../../components/ui";
 import { Icon, type IconName } from "../../components/icons";
 import { rupees } from "../../lib/money";
@@ -376,9 +375,5 @@ function QuickActions({ can }: { can: (p: string) => boolean }) {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <Dashboard />
-    </Protected>
-  );
+  return <Dashboard />;
 }

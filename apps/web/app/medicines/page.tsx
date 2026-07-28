@@ -24,7 +24,6 @@ import {
   type StockStatus,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field, Modal } from "../../components/ui";
 
 const STATUS_TONE: Record<StockStatus, "success" | "warning" | "danger" | "neutral"> = {
@@ -681,9 +680,5 @@ function MedicinesPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <MedicinesPage />
-    </Protected>
-  );
+  return <MedicinesPage />;
 }

@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiClientError, type ApiKeyMeta, type CreatedApiKey } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
-import { Protected } from "../../../components/Protected";
 import { Alert, Badge, Button, Card, Field } from "../../../components/ui";
 
 function fmtDate(iso?: string): string {
@@ -237,9 +236,5 @@ function ApiKeysPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <ApiKeysPage />
-    </Protected>
-  );
+  return <ApiKeysPage />;
 }

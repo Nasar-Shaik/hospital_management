@@ -25,7 +25,6 @@ import {
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 
 const METHODS = ["cash", "card", "upi", "netbanking", "cheque", "insurance"] as const;
@@ -339,9 +338,5 @@ function Billing() {
 }
 
 export default function BillingPage() {
-  return (
-    <Protected>
-      <Billing />
-    </Protected>
-  );
+  return <Billing />;
 }

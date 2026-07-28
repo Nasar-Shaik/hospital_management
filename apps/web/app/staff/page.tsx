@@ -26,7 +26,6 @@ import {
   type StaffProfile,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
@@ -980,9 +979,5 @@ function StaffDirectory() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <StaffDirectory />
-    </Protected>
-  );
+  return <StaffDirectory />;
 }

@@ -24,7 +24,6 @@ import {
   type RegisterPatientInput,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
 
 const EMPTY_FORM = {
@@ -410,9 +409,5 @@ function Patients() {
 }
 
 export default function PatientsPage() {
-  return (
-    <Protected>
-      <Patients />
-    </Protected>
-  );
+  return <Patients />;
 }

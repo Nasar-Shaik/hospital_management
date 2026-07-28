@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiClientError, type ChargeCategory, type TariffItem } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field } from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
@@ -420,9 +419,5 @@ function TariffPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <TariffPage />
-    </Protected>
-  );
+  return <TariffPage />;
 }

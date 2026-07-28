@@ -11,7 +11,6 @@
 import { useEffect, useState } from "react";
 import { ApiClientError } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Card } from "../../components/ui";
 
 interface UsageLine {
@@ -164,9 +163,5 @@ function Subscription() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <Subscription />
-    </Protected>
-  );
+  return <Subscription />;
 }

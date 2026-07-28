@@ -20,7 +20,6 @@ import {
   type WardKind,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Badge, Button, Card, Field, ErrorAlert } from "../../components/ui";
 
 const WARD_KINDS: { value: WardKind; label: string }[] = [
@@ -642,9 +641,5 @@ function BedsPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <BedsPage />
-    </Protected>
-  );
+  return <BedsPage />;
 }

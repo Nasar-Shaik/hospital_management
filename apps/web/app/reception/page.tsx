@@ -33,7 +33,6 @@ import {
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
 
 /** An ISO instant → the `<input type="date">` value for its calendar day (local). */
@@ -782,9 +781,5 @@ function Reception() {
 }
 
 export default function ReceptionPage() {
-  return (
-    <Protected>
-      <Reception />
-    </Protected>
-  );
+  return <Reception />;
 }

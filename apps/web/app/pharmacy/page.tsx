@@ -30,7 +30,6 @@ import {
   type Prescription,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
@@ -486,9 +485,5 @@ function Pharmacy() {
 }
 
 export default function PharmacyPage() {
-  return (
-    <Protected>
-      <Pharmacy />
-    </Protected>
-  );
+  return <Pharmacy />;
 }

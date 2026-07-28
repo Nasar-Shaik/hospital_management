@@ -23,7 +23,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClientError, type AuditEntry, type AuditIntegrity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 
 const CATEGORIES = [
@@ -345,9 +344,5 @@ function AuditTrail() {
 }
 
 export default function AuditPage() {
-  return (
-    <Protected>
-      <AuditTrail />
-    </Protected>
-  );
+  return <AuditTrail />;
 }

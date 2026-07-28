@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type ReceiptRow, type ReportRange } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Badge, Card, ErrorAlert } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
@@ -214,9 +213,5 @@ function Receipts() {
 }
 
 export default function ReceiptsPage() {
-  return (
-    <Protected>
-      <Receipts />
-    </Protected>
-  );
+  return <Receipts />;
 }
