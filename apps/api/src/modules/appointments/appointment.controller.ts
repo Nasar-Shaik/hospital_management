@@ -9,6 +9,8 @@ import type {
   BookAppointmentBody,
   ListAppointmentsQuery,
   SetScheduleBody,
+  SetAvailabilityBody,
+  AddLeaveBody,
 } from "./appointment.schema.js";
 
 function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
@@ -92,5 +94,31 @@ export const getDoctorSchedules: RequestHandler = async (req, res) => {
 export const removeDoctorSchedule: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   await appointments.removeDoctorSchedule(id);
+  ok(res, { removed: true });
+};
+
+/* ── doctor availability (session roster) & leave (Doc 02 D2) ──────────────── */
+
+export const getDoctorAvailability: RequestHandler = async (req, res) => {
+  const { doctorId } = req.params as { doctorId: string };
+  ok(res, await appointments.getDoctorAvailability(doctorId));
+};
+
+export const setDoctorAvailability: RequestHandler = async (req, res) => {
+  ok(res, await appointments.setDoctorAvailability(req.body as SetAvailabilityBody));
+};
+
+export const getDoctorLeave: RequestHandler = async (req, res) => {
+  const { doctorId } = req.params as { doctorId: string };
+  ok(res, await appointments.getDoctorLeave(doctorId));
+};
+
+export const addDoctorLeave: RequestHandler = async (req, res) => {
+  ok(res, await appointments.addDoctorLeave(req.body as AddLeaveBody), 201);
+};
+
+export const removeDoctorLeave: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  await appointments.removeDoctorLeave(id);
   ok(res, { removed: true });
 };

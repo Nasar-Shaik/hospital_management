@@ -37,6 +37,8 @@ import {
   noShowSchema,
   rescheduleAppointmentSchema,
   setScheduleSchema,
+  setAvailabilitySchema,
+  addLeaveSchema,
 } from "./appointment.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_APPOINTMENTS } as const;
@@ -167,6 +169,48 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     asyncHandler(controller.removeDoctorSchedule),
+  );
+
+  /* ── doctor availability (session roster) & leave (Doc 02 D2) ── */
+
+  router.get(
+    "/doctors/:doctorId/availability",
+    authenticate(),
+    authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
+    validate(doctorIdParamSchema, "params"),
+    asyncHandler(controller.getDoctorAvailability),
+  );
+
+  router.put(
+    "/doctors/availability",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
+    validate(setAvailabilitySchema),
+    asyncHandler(controller.setDoctorAvailability),
+  );
+
+  router.get(
+    "/doctors/:doctorId/leave",
+    authenticate(),
+    authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
+    validate(doctorIdParamSchema, "params"),
+    asyncHandler(controller.getDoctorLeave),
+  );
+
+  router.post(
+    "/doctors/leave",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
+    validate(addLeaveSchema),
+    asyncHandler(controller.addDoctorLeave),
+  );
+
+  router.delete(
+    "/doctors/leave/:id",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.removeDoctorLeave),
   );
 
   return router;

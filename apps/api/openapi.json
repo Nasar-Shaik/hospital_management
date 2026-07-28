@@ -6411,6 +6411,181 @@
         "x-feature": "module.ops.appointments"
       }
     },
+    "/api/v1/doctors/{doctorId}/availability": {
+      "get": {
+        "operationId": "get_v1_doctors_doctorId_availability",
+        "tags": ["doctors"],
+        "summary": "GET /api/v1/doctors/{doctorId}/availability",
+        "parameters": [
+          {
+            "name": "doctorId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:read",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/availability": {
+      "put": {
+        "operationId": "put_v1_doctors_availability",
+        "tags": ["doctors"],
+        "summary": "PUT /api/v1/doctors/availability",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/{doctorId}/leave": {
+      "get": {
+        "operationId": "get_v1_doctors_doctorId_leave",
+        "tags": ["doctors"],
+        "summary": "GET /api/v1/doctors/{doctorId}/leave",
+        "parameters": [
+          {
+            "name": "doctorId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "appointment:read",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/leave": {
+      "post": {
+        "operationId": "post_v1_doctors_leave",
+        "tags": ["doctors"],
+        "summary": "POST /api/v1/doctors/leave",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/leave/{id}": {
+      "delete": {
+        "operationId": "delete_v1_doctors_leave_id",
+        "tags": ["doctors"],
+        "summary": "DELETE /api/v1/doctors/leave/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
     "/api/v1/notifications": {
       "get": {
         "operationId": "get_v1_notifications",

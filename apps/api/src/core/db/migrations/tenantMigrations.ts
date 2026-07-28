@@ -1422,4 +1422,41 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0035-doctor-management",
+    description:
+      "Doctor management (D2) — the simple session ROSTER (`doctorAvailability`: which sessions a " +
+      "doctor holds each weekday) and LEAVE (`doctorLeave`: whole-day ranges a doctor is away). " +
+      "Distinct from the slot-based `doctorSchedules`; this owns the two new collections + indexes.",
+    up: async (db) => {
+      await db.createCollection("doctorAvailability").catch(() => undefined);
+      await db.createCollection("doctorLeave").catch(() => undefined);
+
+      /** One roster row per doctor per weekday — the sessions they are in that day. */
+      await db
+        .collection("doctorAvailability")
+        .createIndex(
+          { tenantId: 1, doctorId: 1, weekday: 1 },
+          { unique: true, name: "one_roster_row_per_doctor_weekday", background: true },
+        );
+
+      /**
+       * Leave is queried by "does any range cover this day?" — `fromDate <= day <= toDate`.
+       * The index leads with the range's start so the doctor's ranges are found together.
+       */
+      await db
+        .collection("doctorLeave")
+        .createIndex({ tenantId: 1, doctorId: 1, fromDate: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("doctorAvailability")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("doctorLeave")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

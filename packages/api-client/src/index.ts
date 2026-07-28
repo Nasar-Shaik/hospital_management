@@ -850,6 +850,28 @@ export interface DoctorSchedule {
   active: boolean;
 }
 
+/** The named parts of a clinic day (Doc 02 D2). `full_day` is its own option. */
+export type DoctorSession = "morning" | "afternoon" | "evening" | "full_day";
+
+/** One weekday of a doctor's simple session roster — the sessions they are in that day. */
+export interface DoctorAvailability {
+  doctorId: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekday: number;
+  sessions: DoctorSession[];
+  branchId?: string;
+}
+
+/** A block of days a doctor is away — inclusive `fromDate`..`toDate` (`YYYY-MM-DD`). */
+export interface DoctorLeave {
+  id: string;
+  doctorId: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+  branchId?: string;
+}
+
 /* ── encounters (ADR-0013) — THE CENTRAL CLINICAL OBJECT ──────────────────── */
 
 export type EncounterStatus =
@@ -2447,6 +2469,39 @@ export class ApiClient {
     slotMinutes: number;
   }): Promise<DoctorSchedule> {
     return this.request<DoctorSchedule>("PUT", "/api/v1/doctors/schedule", input);
+  }
+
+  /* ── doctor availability (session roster) & leave (Doc 02 D2) ── */
+
+  /** A doctor's whole week of sessions — the simple roster reception reads. */
+  getDoctorAvailability(doctorId: string): Promise<DoctorAvailability[]> {
+    return this.request<DoctorAvailability[]>("GET", `/api/v1/doctors/${doctorId}/availability`);
+  }
+
+  /** Sets one weekday's sessions; an empty `sessions` clears the day (returns null). */
+  setDoctorAvailability(input: {
+    doctorId: string;
+    weekday: number;
+    sessions: DoctorSession[];
+  }): Promise<DoctorAvailability | null> {
+    return this.request<DoctorAvailability | null>("PUT", "/api/v1/doctors/availability", input);
+  }
+
+  getDoctorLeave(doctorId: string): Promise<DoctorLeave[]> {
+    return this.request<DoctorLeave[]>("GET", `/api/v1/doctors/${doctorId}/leave`);
+  }
+
+  addDoctorLeave(input: {
+    doctorId: string;
+    fromDate: string;
+    toDate: string;
+    reason?: string;
+  }): Promise<DoctorLeave> {
+    return this.request<DoctorLeave>("POST", "/api/v1/doctors/leave", input);
+  }
+
+  removeDoctorLeave(id: string): Promise<{ removed: boolean }> {
+    return this.request<{ removed: boolean }>("DELETE", `/api/v1/doctors/leave/${id}`);
   }
 
   /* ── encounters (ADR-0013) — the front door of the whole product ────────────

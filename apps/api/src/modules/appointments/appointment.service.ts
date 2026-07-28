@@ -32,7 +32,12 @@ import * as repo from "./appointment.repository.js";
 import { canTransition, type AppointmentStatus } from "./appointment.model.js";
 import { availableSlots, slotsFor, type Slot } from "./slots.js";
 
-export type { Appointment, DoctorSchedule } from "./appointment.repository.js";
+export type {
+  Appointment,
+  DoctorSchedule,
+  DoctorLeave,
+  DoctorAvailability,
+} from "./appointment.repository.js";
 
 /** HMS-APT-001 — the slot went while the clerk was typing. Carries a way forward. */
 class SlotUnavailableError extends AppError {
@@ -58,6 +63,14 @@ function endOfDay(d: Date): Date {
   return x;
 }
 
+/** `YYYY-MM-DD` in the hospital's local reckoning — the key doctor leave is stored and matched on. */
+function localDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 /**
  * The slots a doctor still has open on a day.
  *
@@ -72,6 +85,9 @@ export async function getAvailability(
 ): Promise<Slot[]> {
   const schedules = await repo.findSchedules(doctorId, day.getDay());
   if (schedules.length === 0) return [];
+
+  // On leave that day → no slots, whatever the weekly schedule says. Leave is the exception that wins.
+  if (await repo.isOnLeave(doctorId, localDateStr(day))) return [];
 
   const taken = await repo.bookedStartsFor(doctorId, startOfDay(day), endOfDay(day));
 
@@ -139,6 +155,13 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
   if (slot.startAt <= new Date()) {
     throw new AppError("HMS-VAL-001", 400, "Validation failed", {
       startAt: ["cannot book a slot in the past"],
+    });
+  }
+
+  // The doctor is on leave that day — the schedule would offer the slot, but they are away.
+  if (await repo.isOnLeave(input.doctorId, localDateStr(slot.startAt))) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      startAt: ["the doctor is on leave that day"],
     });
   }
 
@@ -418,4 +441,46 @@ export async function removeDoctorSchedule(id: string): Promise<void> {
   // "why was this patient given a 4pm slot" must remain answerable.
   const removed = await repo.deactivateSchedule(id);
   if (!removed) throw new AppError("HMS-GEN-404", 404, "Schedule not found", { id });
+}
+
+/* ── doctor availability (session roster) & leave (Doc 02 D2) ──────────────── */
+
+export const getDoctorAvailability = (doctorId: string): Promise<repo.DoctorAvailability[]> =>
+  repo.findAvailability(doctorId);
+
+export async function setDoctorAvailability(input: {
+  doctorId: string;
+  weekday: number;
+  sessions: repo.DoctorAvailability["sessions"];
+  branchId?: string;
+}): Promise<repo.DoctorAvailability | undefined> {
+  // `full_day` already means the whole day, so pairing it with a part-session is
+  // contradictory — collapse it to just `full_day` rather than reject and nag.
+  const sessions = input.sessions.includes("full_day")
+    ? (["full_day"] as repo.DoctorAvailability["sessions"])
+    : [...new Set(input.sessions)];
+  return repo.setAvailability({ ...input, sessions });
+}
+
+export const getDoctorLeave = (doctorId: string): Promise<repo.DoctorLeave[]> =>
+  repo.findLeave(doctorId);
+
+export async function addDoctorLeave(input: {
+  doctorId: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+  branchId?: string;
+}): Promise<repo.DoctorLeave> {
+  if (input.toDate < input.fromDate) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      toDate: ["leave cannot end before it starts"],
+    });
+  }
+  return repo.addLeave(input);
+}
+
+export async function removeDoctorLeave(id: string): Promise<void> {
+  const removed = await repo.removeLeave(id);
+  if (!removed) throw new AppError("HMS-GEN-404", 404, "Leave not found", { id });
 }

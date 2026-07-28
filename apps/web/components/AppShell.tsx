@@ -126,6 +126,9 @@ const NAVIGATION: NavSection[] = [
         icon: "appointments",
         permission: "appointment:read",
       },
+      // The doctor ROSTER — weekly sessions + leave (D2). `doctor:manage`: roster administration,
+      // not front-desk work; the same permission that guards setting a doctor's hours.
+      { label: "Doctors", href: "/doctors", icon: "staff", permission: "doctor:manage" },
       // The BED BOARD (which beds are free) and the inventory behind it (B4). `/ward` shows who is
       // admitted; this shows where there is space.
       { label: "Bed board", href: "/beds", icon: "beds", permission: "bed:allocate" },

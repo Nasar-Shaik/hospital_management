@@ -1,18 +1,23 @@
 /**
- * Appointment repository — the ONLY code that queries `appointments` and
- * `doctorSchedules` (Constitution §6).
+ * Appointment repository — the ONLY code that queries `appointments`,
+ * `doctorSchedules` and `doctorLeave` (Constitution §6).
  */
 import type { ClientSession } from "mongoose";
-import { getTenantDb } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import {
   getAppointmentModel,
   getDoctorScheduleModel,
+  getDoctorLeaveModel,
+  getDoctorAvailabilityModel,
   occupiesSlot,
   type AppointmentDoc,
   type AppointmentStatus,
   type DoctorScheduleDoc,
+  type DoctorLeaveDoc,
+  type DoctorAvailabilityDoc,
+  type DoctorSession,
   type StatusChange,
 } from "./appointment.model.js";
 
@@ -245,6 +250,144 @@ export async function deactivateSchedule(id: string): Promise<boolean> {
     { new: true },
   );
   return Boolean(doc);
+}
+
+/* ── doctor leave ─────────────────────────────────────────────────────────── */
+
+export interface DoctorLeave {
+  id: string;
+  doctorId: string;
+  branchId?: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+}
+
+function toLeave(doc: DoctorLeaveDoc): DoctorLeave {
+  return {
+    id: doc._id.toString(),
+    doctorId: doc.doctorId,
+    fromDate: doc.fromDate,
+    toDate: doc.toDate,
+    ...(doc.reason ? { reason: doc.reason } : {}),
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
+  };
+}
+
+/** A doctor's leave, most recent first — the roster view. Branch-scoped like every read. */
+export async function findLeave(doctorId: string): Promise<DoctorLeave[]> {
+  const docs = await getDoctorLeaveModel(getTenantDb())
+    .find({ doctorId, ...scopeFilter() })
+    .sort({ fromDate: -1 })
+    .lean<DoctorLeaveDoc[]>();
+  return docs.map(toLeave);
+}
+
+/**
+ * Is the doctor on leave on `dateStr` (`YYYY-MM-DD`)? True when any leave range covers
+ * it inclusively. This is the one query availability and booking consult — a string
+ * comparison, because `YYYY-MM-DD` sorts chronologically as text.
+ */
+export async function isOnLeave(doctorId: string, dateStr: string): Promise<boolean> {
+  const hit = await getDoctorLeaveModel(getTenantDb())
+    .findOne({
+      doctorId,
+      fromDate: { $lte: dateStr },
+      toDate: { $gte: dateStr },
+      ...scopeFilter(),
+    })
+    .lean<DoctorLeaveDoc>();
+  return Boolean(hit);
+}
+
+export async function addLeave(input: {
+  doctorId: string;
+  branchId?: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+}): Promise<DoctorLeave> {
+  const ctx = getContext();
+  const doc = await getDoctorLeaveModel(getTenantDb()).create({
+    tenantId: ctx.tenantId,
+    doctorId: input.doctorId,
+    fromDate: input.fromDate,
+    toDate: input.toDate,
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.branchId ? { branchId: input.branchId } : {}),
+    ...(ctx.userId ? { createdBy: ctx.userId } : {}),
+  });
+  return toLeave(doc.toObject() as DoctorLeaveDoc);
+}
+
+/**
+ * Deleted, not soft-deleted: unlike a schedule, no appointment is booked "against" a
+ * leave row — it only ever suppressed slots — so removing it leaves nothing dangling.
+ */
+export async function removeLeave(id: string): Promise<boolean> {
+  const doc = await getDoctorLeaveModel(getTenantDb())
+    .findOneAndDelete({ _id: id, ...scopeFilter() })
+    .lean<DoctorLeaveDoc>();
+  return Boolean(doc);
+}
+
+/* ── doctor availability (session roster) ─────────────────────────────────── */
+
+export interface DoctorAvailability {
+  doctorId: string;
+  weekday: number;
+  sessions: DoctorSession[];
+  branchId?: string;
+}
+
+function toAvailability(doc: DoctorAvailabilityDoc): DoctorAvailability {
+  return {
+    doctorId: doc.doctorId,
+    weekday: doc.weekday,
+    sessions: doc.sessions,
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
+  };
+}
+
+/** A doctor's whole week, ordered Sunday→Saturday — what the roster and reception read. */
+export async function findAvailability(doctorId: string): Promise<DoctorAvailability[]> {
+  const docs = await getDoctorAvailabilityModel(getTenantDb())
+    .find({ doctorId, ...scopeFilter() })
+    .sort({ weekday: 1 })
+    .lean<DoctorAvailabilityDoc[]>();
+  return docs.map(toAvailability);
+}
+
+/**
+ * Sets the sessions a doctor holds on one weekday. An empty set DELETES the day's row —
+ * "not in" is the absence of a row, not a row that says nothing, so the roster stays clean.
+ */
+export async function setAvailability(input: {
+  doctorId: string;
+  branchId?: string;
+  weekday: number;
+  sessions: DoctorSession[];
+}): Promise<DoctorAvailability | undefined> {
+  const ctx = getContext();
+  const model = getDoctorAvailabilityModel(getTenantDb());
+
+  if (input.sessions.length === 0) {
+    await model.deleteOne({ doctorId: input.doctorId, weekday: input.weekday, ...scopeFilter() });
+    return undefined;
+  }
+
+  const doc = await model.findOneAndUpdate(
+    { doctorId: input.doctorId, weekday: input.weekday },
+    {
+      $set: {
+        sessions: input.sessions,
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+      },
+      $setOnInsert: { tenantId: ctx.tenantId },
+    },
+    { new: true, upsert: true },
+  );
+  return toAvailability(doc);
 }
 
 /**

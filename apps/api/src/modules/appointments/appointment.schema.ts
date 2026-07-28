@@ -2,7 +2,9 @@
  * Appointment DTOs (Doc 09 §5/§6). `.strict()` — an unexpected field is a 400.
  */
 import { z } from "@medicore/validation";
-import { APPOINTMENT_STATUSES } from "./appointment.model.js";
+import { APPOINTMENT_STATUSES, DOCTOR_SESSIONS } from "./appointment.model.js";
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD");
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "invalid id");
 
@@ -68,6 +70,31 @@ export const setScheduleSchema = z
   })
   .strict();
 
+/**
+ * The doctor's weekly session roster (Doc 02 D2). Sessions may be EMPTY — that clears the
+ * weekday ("not in"). `.strict()` still rejects unknown fields.
+ */
+export const setAvailabilitySchema = z
+  .object({
+    doctorId: objectId,
+    /** 0 = Sunday … 6 = Saturday. */
+    weekday: z.number().int().min(0).max(6),
+    sessions: z.array(z.enum(DOCTOR_SESSIONS)).max(4),
+    branchId: objectId.optional(),
+  })
+  .strict();
+
+/** A block of days a doctor is away — inclusive `fromDate`..`toDate`. */
+export const addLeaveSchema = z
+  .object({
+    doctorId: objectId,
+    fromDate: isoDate,
+    toDate: isoDate,
+    reason: z.string().trim().max(200).optional(),
+    branchId: objectId.optional(),
+  })
+  .strict();
+
 export const idParamSchema = z.object({ id: objectId }).strict();
 export const doctorIdParamSchema = z.object({ doctorId: objectId }).strict();
 
@@ -75,3 +102,5 @@ export type BookAppointmentBody = z.infer<typeof bookAppointmentSchema>;
 export type AvailabilityQuery = z.infer<typeof availabilityQuerySchema>;
 export type ListAppointmentsQuery = z.infer<typeof listAppointmentsQuerySchema>;
 export type SetScheduleBody = z.infer<typeof setScheduleSchema>;
+export type SetAvailabilityBody = z.infer<typeof setAvailabilitySchema>;
+export type AddLeaveBody = z.infer<typeof addLeaveSchema>;

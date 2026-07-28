@@ -233,3 +233,109 @@ export function getDoctorScheduleModel(conn: Connection): Model<DoctorScheduleDo
     conn.model<DoctorScheduleDoc>("DoctorSchedule", doctorScheduleSchema)
   );
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Doctor leave (Doc 02 D2) — when a doctor is AWAY, overriding the weekly schedule.
+ *
+ * A weekly template says a doctor works Tuesdays; leave says "not this Tuesday — she
+ * is at a conference". So leave is the exception that wins: a day covered by leave
+ * offers no slots and takes no bookings, even though the schedule would.
+ *
+ * Dates are stored as `YYYY-MM-DD` STRINGS, not Date instants, and that is deliberate.
+ * Leave is a whole-day concept in the hospital's local reckoning — the same reckoning
+ * `slots.ts` uses (minutes from local midnight, no DST in the launch markets). A string
+ * date has no timezone to shift under it, so "off on the 14th" cannot become the 13th
+ * for a viewer in another zone. Inclusive range: `fromDate <= day <= toDate`, and a
+ * single day is `fromDate === toDate`.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export interface DoctorLeaveDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+  doctorId: string;
+  /** First day off, inclusive — `YYYY-MM-DD` in the hospital's local reckoning. */
+  fromDate: string;
+  /** Last day off, inclusive — equals `fromDate` for a single day. */
+  toDate: string;
+  /** Why — leave / conference / sick. Shown on the roster; optional. */
+  reason?: string;
+  /** The user who recorded it, for the audit trail. */
+  createdBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const doctorLeaveSchema = new Schema<DoctorLeaveDoc>(
+  {
+    branchId: { type: String },
+    doctorId: { type: String, required: true },
+    fromDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
+    toDate: { type: String, required: true, match: /^\d{4}-\d{2}-\d{2}$/ },
+    reason: { type: String, trim: true, maxlength: 200 },
+    createdBy: { type: String },
+  },
+  { timestamps: true, collection: "doctorLeave", autoIndex: false },
+);
+
+doctorLeaveSchema.plugin(tenantScopePlugin);
+
+// `admin`, not `phi`: a doctor being on leave is roster data, not health data.
+doctorLeaveSchema.plugin(auditPlugin, { resource: "doctorLeave", category: "admin" });
+
+export function getDoctorLeaveModel(conn: Connection): Model<DoctorLeaveDoc> {
+  return (
+    (conn.models.DoctorLeave as Model<DoctorLeaveDoc>) ??
+    conn.model<DoctorLeaveDoc>("DoctorLeave", doctorLeaveSchema)
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Doctor availability (Doc 02 D2) — the SIMPLE weekly roster reception reads.
+ *
+ * Indian OPD reality: a doctor is "in" for the MORNING or the AFTERNOON, not for a
+ * grid of 15-minute clock slots. So availability is named SESSIONS per weekday, and
+ * reception books a patient into a session, not a minute. This is a deliberately
+ * separate, simpler concept from the slot-based `doctorSchedules` (which stays for
+ * hospitals that do run timed appointment books) — one row per doctor per weekday,
+ * carrying the set of sessions the doctor holds that day.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** The named parts of a clinic day. `full_day` is its own option, not morning+afternoon. */
+export const DOCTOR_SESSIONS = ["morning", "afternoon", "evening", "full_day"] as const;
+export type DoctorSession = (typeof DOCTOR_SESSIONS)[number];
+
+export interface DoctorAvailabilityDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+  doctorId: string;
+  /** 0 = Sunday … 6 = Saturday, in the hospital's local reckoning. */
+  weekday: number;
+  /** The sessions the doctor is present that weekday. Never stored empty — an empty set clears the day. */
+  sessions: DoctorSession[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const doctorAvailabilitySchema = new Schema<DoctorAvailabilityDoc>(
+  {
+    branchId: { type: String },
+    doctorId: { type: String, required: true },
+    weekday: { type: Number, required: true, min: 0, max: 6 },
+    sessions: { type: [String], required: true, enum: DOCTOR_SESSIONS },
+  },
+  { timestamps: true, collection: "doctorAvailability", autoIndex: false },
+);
+
+doctorAvailabilitySchema.plugin(tenantScopePlugin);
+
+// `admin`, not `phi`: a doctor's working sessions are roster data, not health data.
+doctorAvailabilitySchema.plugin(auditPlugin, { resource: "doctorAvailability", category: "admin" });
+
+export function getDoctorAvailabilityModel(conn: Connection): Model<DoctorAvailabilityDoc> {
+  return (
+    (conn.models.DoctorAvailability as Model<DoctorAvailabilityDoc>) ??
+    conn.model<DoctorAvailabilityDoc>("DoctorAvailability", doctorAvailabilitySchema)
+  );
+}
