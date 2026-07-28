@@ -221,6 +221,30 @@ export async function setDoctor(
 }
 
 /**
+ * Moves the recorded bed of an OPEN IP stay to another bed (B4 bed-to-bed transfer).
+ *
+ * Only the physical bed changes — never the status (a transfer is not a state change) and never the
+ * `tariffCode` (the service keeps it; bed-days bill a stay at one rate). The filter pins `class: IP`
+ * and `open: true` so a transfer can only touch a live admission, and the `one_open_stay_per_bed`
+ * unique index does the occupancy check on commit: moving onto a taken bed is a duplicate key, which
+ * the service turns into a 409. The field change is picked up by the audit plugin like any `$set`.
+ */
+export async function setBed(
+  id: string,
+  bed: { ward: string; bedCode: string; tariffCode: string; bedId?: string },
+  session?: ClientSession,
+): Promise<Encounter | undefined> {
+  const doc = await getEncounterModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: id, class: "IP", open: true, ...scopeFilter() },
+      { $set: { bed } },
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<EncounterDoc>();
+  return doc ? toEncounter(doc) : undefined;
+}
+
+/**
  * Records the doctor's OP visit summary (diagnosis / advice) for the OPD slip. A plain `$set` of
  * whichever fields were supplied — clearing a field is sending an empty string, which the service
  * translates to `$unset` so the slip does not print a stale line.

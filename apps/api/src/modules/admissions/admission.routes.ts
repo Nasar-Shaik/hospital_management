@@ -29,6 +29,7 @@ import {
   outcomeSchema,
   idParamSchema,
   listNotesQuerySchema,
+  transferBedSchema,
 } from "./admission.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_IPD } as const;
@@ -74,6 +75,20 @@ export function admissionRouter(): Router {
     validate(idParamSchema, "params"),
     validate(dischargeSchema),
     asyncHandler(controller.discharge),
+  );
+
+  /**
+   * Moves an admitted patient to another bed (B4). `bed:allocate` — the permission whose own
+   * description is "Allocate and transfer beds"; the ward clerk / nurse who runs the board, not
+   * necessarily the discharging doctor. The occupancy invariant is the encounter's; this records why.
+   */
+  router.post(
+    "/encounters/:id/transfer-bed",
+    authenticate(),
+    authorize(PERMISSIONS.BED_ALLOCATE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(transferBedSchema),
+    asyncHandler(controller.transferBed),
   );
 
   /**

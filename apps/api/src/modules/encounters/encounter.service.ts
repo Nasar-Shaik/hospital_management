@@ -604,6 +604,121 @@ export async function transferDoctor(
   });
 }
 
+export interface TransferBedInput {
+  /** The target bed, picked from the inventory (B4). Ward name, code come from the catalogue. */
+  bedId?: string;
+  /** Legacy free-text path, used only when `bedId` is absent (a hospital with no bed catalogue). */
+  ward?: string;
+  bedCode?: string;
+  reason?: string;
+}
+
+export interface TransferBedResult {
+  encounter: repo.Encounter;
+  from: { ward: string; bedCode: string };
+  to: { ward: string; bedCode: string };
+}
+
+/**
+ * Moves an admitted patient from one bed to another (B4 bed-to-bed transfer).
+ *
+ * ── THE PHYSICAL BED MOVES; THE BILLING TARIFF DOES NOT ─────────────────────
+ * A transfer records that the patient is now in a different bed — nothing else. It deliberately
+ * KEEPS the stay's `tariffCode`: bed-days are billed at a single rate for the whole stay (charged
+ * at admission and again at discharge from `bed.tariffCode`, with no per-night cron), so silently
+ * adopting the new bed's rate would re-price every night already spent, not just the ones ahead. A
+ * genuine rate change is a deliberate billing action, not a side effect of wheeling a bed — so this
+ * does not make one. What it guarantees is the same occupancy invariant admission does: the target
+ * bed must be a real, active, unblocked bed at the patient's site, and it must be FREE — enforced by
+ * `one_open_stay_per_bed`, which turns a move onto a taken bed into a 409.
+ *
+ * No transaction: this is a single-document update, and the unique index is its own atomic guard.
+ * The reason for the move is recorded by the caller (admissions) as a ward note — the durable
+ * clinical record of why the patient was moved.
+ */
+export async function transferBed(id: string, input: TransferBedInput): Promise<TransferBedResult> {
+  const current = await repo.findById(id);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+  if (current.class !== "IP" || !isOpen(current.status) || !current.bed) {
+    throw new AppError("HMS-STATE-001", 422, "This patient is not admitted", {
+      id,
+      hint: "a bed transfer needs an open inpatient stay",
+    });
+  }
+
+  // Keep the stay's tariff (see the header); only the physical location changes.
+  const tariffCode = current.bed.tariffCode;
+  let ward = input.ward;
+  let bedCode = input.bedCode;
+  let bedId: string | undefined;
+
+  if (input.bedId) {
+    const catalogueBed = await getBed(input.bedId);
+    if (!catalogueBed) {
+      throw new AppError("HMS-GEN-404", 404, "Bed not found", { bedId: input.bedId });
+    }
+    if (catalogueBed.wardStatus !== "active") {
+      throw new AppError("HMS-STATE-001", 422, "That ward is not in service", {
+        bedId: input.bedId,
+        hint: "pick a bed in an active ward",
+      });
+    }
+    if (catalogueBed.status === "blocked") {
+      throw new AppError("HMS-STATE-001", 422, "That bed is out of service", {
+        bedId: input.bedId,
+        ...(catalogueBed.blockedReason ? { reason: catalogueBed.blockedReason } : {}),
+        hint: "this bed is blocked — pick a free bed",
+      });
+    }
+    if (current.branchId && catalogueBed.branchId && current.branchId !== catalogueBed.branchId) {
+      throw new AppError("HMS-STATE-001", 422, "That bed is at another branch", {
+        bedId: input.bedId,
+        hint: "pick a bed at the patient's current site",
+      });
+    }
+    ward = catalogueBed.wardName;
+    bedCode = catalogueBed.code;
+    bedId = catalogueBed.id;
+  }
+
+  if (!ward || !bedCode) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      bedId: ["pick a bed (bedId) or give the ward and bedCode"],
+    });
+  }
+
+  if (ward === current.bed.ward && bedCode === current.bed.bedCode) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      bedId: ["the patient is already in this bed"],
+    });
+  }
+
+  const from = { ward: current.bed.ward, bedCode: current.bed.bedCode };
+
+  try {
+    const updated = await repo.setBed(id, {
+      ward,
+      bedCode,
+      tariffCode,
+      ...(bedId ? { bedId } : {}),
+    });
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+    return { encounter: updated, from, to: { ward, bedCode } };
+  } catch (err) {
+    // The target bed is taken — `one_open_stay_per_bed` refused the move, the same way it refuses a
+    // double admission. Report the hospital's answer, not a 500: choose a free bed.
+    if (repo.isDuplicateKey(err) && isBedOccupiedConflict(err)) {
+      throw new AppError("HMS-STATE-001", 409, "That bed is already occupied", {
+        ward,
+        bedCode,
+        hint: "another patient is currently admitted in this bed — choose a free bed",
+      });
+    }
+    throw err;
+  }
+}
+
 /**
  * The patient goes home.
  *

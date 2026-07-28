@@ -2903,6 +2903,17 @@ export class ApiClient {
     return this.request<WardNote>("POST", `/api/v1/encounters/${encounterId}/notes`, { text });
   }
 
+  /**
+   * Moves an admitted patient to another bed (B4). Prefer a `bedId` from the bed board; the move is
+   * refused (409) if that bed is occupied. Needs `bed:allocate`.
+   */
+  transferBed(
+    encounterId: string,
+    input: { bedId?: string; ward?: string; bedCode?: string; reason?: string },
+  ): Promise<{ from: { ward: string; bedCode: string }; to: { ward: string; bedCode: string } }> {
+    return this.request("POST", `/api/v1/encounters/${encounterId}/transfer-bed`, input);
+  }
+
   listWardNotes(encounterId: string, type?: WardNoteType): Promise<WardNote[]> {
     const qs = type ? `?type=${type}` : "";
     return this.request<WardNote[]>("GET", `/api/v1/encounters/${encounterId}/notes${qs}`);

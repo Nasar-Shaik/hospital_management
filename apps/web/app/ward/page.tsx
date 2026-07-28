@@ -23,6 +23,7 @@ import {
   type Patient,
   type WardNote,
   type TerminalOutcome,
+  type BedBoard,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
@@ -457,6 +458,124 @@ function WardAdvance({ patientId, stayOwes }: { patientId: string; stayOwes: num
   );
 }
 
+/**
+ * Bed-to-bed transfer (B4). Moves an admitted patient to a FREE bed picked from the board; the API
+ * refuses a move onto a taken bed. The reason lands on the ward round as a note.
+ */
+function TransferBed({
+  encounterId,
+  current,
+  onTransferred,
+}: {
+  encounterId: string;
+  current?: { ward: string; bedCode: string };
+  onTransferred: (to: { ward: string; bedCode: string }) => void;
+}) {
+  const { api } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [freeBeds, setFreeBeds] = useState<{ bedId: string; label: string }[]>([]);
+  const [bedId, setBedId] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const openPicker = () => {
+    setOpen(true);
+    setError(null);
+    api
+      .bedBoard()
+      .then((board: BedBoard) => {
+        const free = board.wards.flatMap((w) =>
+          w.beds
+            .filter((b) => b.state === "free")
+            .map((b) => ({ bedId: b.bedId, label: `${w.name} · ${b.code}` })),
+        );
+        setFreeBeds(free);
+      })
+      .catch(() => setFreeBeds([]));
+  };
+
+  const submit = async () => {
+    if (!bedId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { to } = await api.transferBed(encounterId, {
+        bedId,
+        ...(reason.trim() ? { reason: reason.trim() } : {}),
+      });
+      setOpen(false);
+      setBedId("");
+      setReason("");
+      onTransferred(to);
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not transfer the bed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--color-fg)]">Bed</h3>
+          <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">
+            {current ? `${current.ward} · ${current.bedCode}` : "—"}
+          </p>
+        </div>
+        {!open && (
+          <Button variant="secondary" onClick={openPicker}>
+            Move bed
+          </Button>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-4 space-y-3">
+          {error && <Alert tone="danger">{error}</Alert>}
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">Move to</span>
+            <select
+              className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+              value={bedId}
+              onChange={(e) => setBedId(e.target.value)}
+            >
+              <option value="">
+                {freeBeds.length ? "— Select a free bed —" : "No free beds available"}
+              </option>
+              {freeBeds.map((b) => (
+                <option key={b.bedId} value={b.bedId}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">
+              Reason <span className="font-normal text-[var(--color-fg-subtle)]">(optional)</span>
+            </span>
+            <input
+              className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Step-down from ICU"
+            />
+          </label>
+          <div className="flex gap-2">
+            <Button disabled={busy || !bedId} onClick={() => void submit()}>
+              {busy ? "Moving…" : "Confirm move"}
+            </Button>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function Ward() {
   const { api, can } = useAuth();
 
@@ -652,6 +771,20 @@ function Ward() {
 
               <PermissionGate can={can} permission="wallet:manage">
                 <WardAdvance patientId={selected.patientId} stayOwes={bill?.total ?? null} />
+              </PermissionGate>
+
+              <PermissionGate can={can} permission="bed:allocate">
+                <TransferBed
+                  encounterId={selected.id}
+                  {...(selected.bed
+                    ? { current: { ward: selected.bed.ward, bedCode: selected.bed.bedCode } }
+                    : {})}
+                  onTransferred={(to) => {
+                    setNotice(`Moved to ${to.ward} · ${to.bedCode}.`);
+                    void load();
+                    loadChart(selected.id);
+                  }}
+                />
               </PermissionGate>
 
               <PermissionGate can={can} permission="emr:write">

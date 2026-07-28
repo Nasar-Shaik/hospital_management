@@ -44,9 +44,32 @@ export const listNotesQuerySchema = z
   .object({ type: z.enum(["progress", "discharge_summary", "outcome_note"]).optional() })
   .strict();
 
+/**
+ * A bed-to-bed transfer (B4). Prefer a `bedId` from the catalogue; `ward`+`bedCode` is the legacy
+ * free-text path for a hospital with no bed inventory. `.superRefine` requires one or the other.
+ */
+export const transferBedSchema = z
+  .object({
+    bedId: objectId.optional(),
+    ward: z.string().trim().min(1).max(100).optional(),
+    bedCode: z.string().trim().min(1).max(32).optional(),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .strict()
+  .superRefine((b, ctx) => {
+    if (!b.bedId && !(b.ward && b.bedCode)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "pick a bed (bedId) or give the ward and bedCode",
+        path: ["bedId"],
+      });
+    }
+  });
+
 export const idParamSchema = z.object({ id: objectId }).strict();
 
 export type AddNoteBody = z.infer<typeof addNoteSchema>;
 export type DischargeBody = z.infer<typeof dischargeSchema>;
 export type OutcomeBody = z.infer<typeof outcomeSchema>;
 export type ListNotesQuery = z.infer<typeof listNotesQuerySchema>;
+export type TransferBedBody = z.infer<typeof transferBedSchema>;

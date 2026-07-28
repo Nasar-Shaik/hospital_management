@@ -16,6 +16,7 @@ import { AppError } from "../../core/errors/appError.js";
 import {
   getEncounter,
   dischargePatient as closeTheStay,
+  transferBed as moveBed,
   type DischargeDisposition,
 } from "../encounters/index.js";
 import * as repo from "./wardNote.repository.js";
@@ -56,6 +57,52 @@ export async function addNote(input: AddNoteInput): Promise<repo.WardNote> {
     text: input.text,
     ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
   });
+}
+
+export interface TransferBedInput {
+  encounterId: string;
+  bedId?: string;
+  ward?: string;
+  bedCode?: string;
+  reason?: string;
+}
+
+/**
+ * Moves an admitted patient to another bed and records WHY on the ward round.
+ *
+ * The move itself is the encounter's job (`encounters.transferBed` owns the bed and the occupancy
+ * invariant). Admissions adds what the ward round needs afterwards: a progress note that says the
+ * patient was moved, from where to where, and the reason — so a doctor reading the chart tomorrow
+ * sees the transfer in the same feed as every other event of the stay, not only in the audit trail.
+ * The note is best-effort AFTER the move: if it failed, the patient has still been moved (the
+ * important, occupancy-guarded act), and a missing narrative line is recoverable; a bed move that
+ * rolled back because a note failed would not be.
+ */
+export async function transferBed(
+  input: TransferBedInput,
+): Promise<{ from: { ward: string; bedCode: string }; to: { ward: string; bedCode: string } }> {
+  const result = await moveBed(input.encounterId, {
+    ...(input.bedId ? { bedId: input.bedId } : {}),
+    ...(input.ward ? { ward: input.ward } : {}),
+    ...(input.bedCode ? { bedCode: input.bedCode } : {}),
+    ...(input.reason ? { reason: input.reason } : {}),
+  });
+
+  const { encounter, from, to } = result;
+  const line =
+    `Bed transfer: ${from.ward} / ${from.bedCode} → ${to.ward} / ${to.bedCode}` +
+    (input.reason ? `. Reason: ${input.reason}` : "");
+
+  await repo.create({
+    encounterId: encounter.id,
+    patientId: encounter.patientId,
+    episodeId: encounter.episodeId,
+    type: "progress",
+    text: line,
+    ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+  });
+
+  return { from, to };
 }
 
 /**

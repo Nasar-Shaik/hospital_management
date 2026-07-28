@@ -10,6 +10,7 @@ import type {
   DischargeBody,
   OutcomeBody,
   ListNotesQuery,
+  TransferBedBody,
 } from "./admission.schema.js";
 
 function ok<T>(res: Response, data: T, status = 200): void {
@@ -32,6 +33,22 @@ export const listNotes: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   const query = req.query as unknown as ListNotesQuery;
   ok(res, await admissions.notesFor(id, query.type));
+};
+
+/** Moves an admitted patient to another bed, recording the reason on the ward round. */
+export const transferBed: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as TransferBedBody;
+  ok(
+    res,
+    await admissions.transferBed({
+      encounterId: id,
+      ...(body.bedId ? { bedId: body.bedId } : {}),
+      ...(body.ward ? { ward: body.ward } : {}),
+      ...(body.bedCode ? { bedCode: body.bedCode } : {}),
+      ...(body.reason ? { reason: body.reason } : {}),
+    }),
+  );
 };
 
 /**
