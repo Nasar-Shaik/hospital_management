@@ -1302,4 +1302,70 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0032-ambulance-fleet",
+    description:
+      "Ambulance fleet (B6) — the registry of vehicles and the trips dispatched on them. " +
+      "Owns the two collections and their indexes; mirrors the theatre booking shape (0031).",
+    up: async (db) => {
+      await db.createCollection("ambulances").catch(() => undefined);
+      await db.createCollection("ambulanceTrips").catch(() => undefined);
+
+      // An ambulance code is unique per tenant — the human key on the board.
+      await db
+        .collection("ambulances")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_ambulance_code_per_tenant", background: true },
+        );
+
+      /**
+       * ── THE DOUBLE-DISPATCH RACE BACKSTOP ───────────────────────────────────
+       * Overlap is enforced in the service (windows have duration; a unique key cannot express an
+       * overlap). This index closes the one thing the service check races on: two IDENTICAL trips
+       * submitted at the same instant on the same vehicle. Among OCCUPYING trips the
+       * `(ambulance, exact start)` pair is unique, so the second writer gets a duplicate-key error
+       * the service turns into the same "already out" conflict (ambulance.model.ts).
+       *
+       * PARTIAL on `occupies`, so a cancelled/completed trip frees the slot the instant its
+       * `occupies` key is removed — exactly like `otBookings.one_booking_per_theatre_start`.
+       */
+      await db.collection("ambulanceTrips").createIndex(
+        { tenantId: 1, ambulanceId: 1, scheduledStart: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { occupies: { $eq: true } },
+          background: true,
+          name: "one_trip_per_ambulance_start",
+        },
+      );
+
+      // The board: a vehicle's day, in time order. Serves the overlap query too (equality on
+      // vehicle, range on the window).
+      await db
+        .collection("ambulanceTrips")
+        .createIndex(
+          { tenantId: 1, ambulanceId: 1, scheduledStart: 1, scheduledEnd: 1 },
+          { background: true },
+        );
+      // A linked patient's transport history, newest first. Sparse: most trips near a scene have no
+      // patientId, and those should not sit in this index.
+      await db
+        .collection("ambulanceTrips")
+        .createIndex(
+          { tenantId: 1, patientId: 1, scheduledStart: -1 },
+          { background: true, sparse: true },
+        );
+    },
+    down: async (db) => {
+      await db
+        .collection("ambulances")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("ambulanceTrips")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

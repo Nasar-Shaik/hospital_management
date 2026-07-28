@@ -442,6 +442,7 @@ export const FEATURE_FLAGS = {
   SUPPORT_CSSD: "module.support.cssd",
   SUPPORT_MORTUARY: "module.support.mortuary",
   SUPPORT_MRD: "module.support.mrd",
+  SUPPORT_AMBULANCE: "module.support.ambulance",
 
   // Pharmacy & finance
   PHARMACY_DISPENSING: "module.pharmacy.dispensing",
@@ -519,6 +520,8 @@ const HOSPITAL_FLAGS: FeatureFlag[] = [
   F.FINANCE_IP_BILLING,
   F.FINANCE_INSURANCE,
   F.SUPPORT_MRD,
+  // A full hospital runs a fleet: emergency pickups, inter-facility transfers, discharge drops.
+  F.SUPPORT_AMBULANCE,
 ];
 
 export const EDITIONS = {

@@ -16,6 +16,12 @@
       "name": "allergies"
     },
     {
+      "name": "ambulance-trips"
+    },
+    {
+      "name": "ambulances"
+    },
+    {
       "name": "api-keys"
     },
     {
@@ -5159,6 +5165,196 @@
         ],
         "x-permission": "ot:schedule",
         "x-feature": "module.clinical.ot"
+      }
+    },
+    "/api/v1/ambulances": {
+      "get": {
+        "operationId": "get_v1_ambulances",
+        "tags": ["ambulances"],
+        "summary": "GET /api/v1/ambulances",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ambulance:dispatch",
+        "x-feature": "module.support.ambulance"
+      },
+      "post": {
+        "operationId": "post_v1_ambulances",
+        "tags": ["ambulances"],
+        "summary": "POST /api/v1/ambulances",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ambulance:manage",
+        "x-feature": "module.support.ambulance"
+      }
+    },
+    "/api/v1/ambulances/{id}": {
+      "patch": {
+        "operationId": "patch_v1_ambulances_id",
+        "tags": ["ambulances"],
+        "summary": "PATCH /api/v1/ambulances/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ambulance:manage",
+        "x-feature": "module.support.ambulance"
+      }
+    },
+    "/api/v1/ambulance-trips": {
+      "get": {
+        "operationId": "get_v1_ambulance_trips",
+        "tags": ["ambulance-trips"],
+        "summary": "GET /api/v1/ambulance-trips",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ambulance:dispatch",
+        "x-feature": "module.support.ambulance"
+      },
+      "post": {
+        "operationId": "post_v1_ambulance_trips",
+        "tags": ["ambulance-trips"],
+        "summary": "POST /api/v1/ambulance-trips",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ambulance:dispatch",
+        "x-feature": "module.support.ambulance"
+      }
+    },
+    "/api/v1/ambulance-trips/{id}/transition": {
+      "post": {
+        "operationId": "post_v1_ambulance_trips_id_transition",
+        "tags": ["ambulance-trips"],
+        "summary": "POST /api/v1/ambulance-trips/{id}/transition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ambulance:dispatch",
+        "x-feature": "module.support.ambulance"
       }
     },
     "/api/v1/orders/{id}/reports": {

@@ -583,6 +583,83 @@ export interface ListBookingsQuery {
   status?: OtBookingStatus;
 }
 
+/* ── ambulance fleet (B6) ── */
+
+export type AmbulanceKind =
+  "basic_life_support" | "advanced_life_support" | "patient_transport" | "mortuary_van";
+export type AmbulanceStatus = "active" | "inactive";
+export type AmbulanceTripStatus = "dispatched" | "in_progress" | "completed" | "cancelled";
+export type AmbulanceTripPurpose =
+  "emergency" | "transfer" | "discharge" | "body_transport" | "standby";
+
+export interface Ambulance {
+  id: string;
+  name: string;
+  code: string;
+  registrationNumber?: string;
+  kind: AmbulanceKind;
+  status: AmbulanceStatus;
+  branchId?: string;
+}
+
+export interface CreateAmbulanceInput {
+  name: string;
+  code: string;
+  registrationNumber?: string;
+  kind: AmbulanceKind;
+}
+
+export interface UpdateAmbulanceInput {
+  name?: string;
+  registrationNumber?: string;
+  kind?: AmbulanceKind;
+  status?: AmbulanceStatus;
+}
+
+/** A trip dispatched on a vehicle. The patient is named only when the trip is linked to one. */
+export interface AmbulanceTrip {
+  id: string;
+  ambulanceId: string;
+  ambulanceName: string;
+  ambulanceCode: string;
+  patientId?: string;
+  patientName?: string;
+  uhid?: string;
+  encounterId?: string;
+  driverId?: string;
+  purpose: AmbulanceTripPurpose;
+  pickup?: string;
+  dropoff?: string;
+  contactPhone?: string;
+  /** ISO timestamps. */
+  scheduledStart: string;
+  scheduledEnd: string;
+  status: AmbulanceTripStatus;
+  notes?: string;
+  branchId?: string;
+}
+
+export interface CreateTripInput {
+  ambulanceId: string;
+  patientId?: string;
+  encounterId?: string;
+  driverId?: string;
+  purpose: AmbulanceTripPurpose;
+  pickup?: string;
+  dropoff?: string;
+  contactPhone?: string;
+  /** ISO timestamps or anything `new Date()` accepts. */
+  scheduledStart: string;
+  scheduledEnd: string;
+}
+
+export interface ListTripsQuery {
+  from?: string;
+  to?: string;
+  ambulanceId?: string;
+  status?: AmbulanceTripStatus;
+}
+
 /* ── Vitals ─────────────────────────────────────────────────────────────────── */
 
 export const TRIAGE_LEVELS = ["routine", "urgent", "critical"] as const;
@@ -2047,6 +2124,44 @@ export class ApiClient {
     input: { to: OtBookingStatus; reason?: string },
   ): Promise<OtBooking> {
     return this.request<OtBooking>("POST", `/api/v1/ot-bookings/${id}/transition`, input);
+  }
+
+  /* ── ambulance fleet (B6) ── */
+
+  /** The ambulance fleet — the vehicles a dispatch picks from. Needs `ambulance:dispatch`. */
+  listAmbulances(): Promise<Ambulance[]> {
+    return this.request<Ambulance[]>("GET", "/api/v1/ambulances");
+  }
+
+  /** Registers a vehicle. Needs `ambulance:manage` + the ambulance module. */
+  createAmbulance(input: CreateAmbulanceInput): Promise<Ambulance> {
+    return this.request<Ambulance>("POST", "/api/v1/ambulances", input);
+  }
+
+  /** Edits a vehicle — rename, re-plate, retire. Needs `ambulance:manage`. */
+  updateAmbulance(id: string, input: UpdateAmbulanceInput): Promise<Ambulance> {
+    return this.request<Ambulance>("PATCH", `/api/v1/ambulances/${id}`, input);
+  }
+
+  /** The dispatch board — trips intersecting a day window (defaults to today). Needs `ambulance:dispatch`. */
+  listAmbulanceTrips(query: ListTripsQuery = {}): Promise<AmbulanceTrip[]> {
+    const qs = new URLSearchParams(
+      Object.entries(query).filter(([, v]) => v != null) as [string, string][],
+    ).toString();
+    return this.request<AmbulanceTrip[]>("GET", `/api/v1/ambulance-trips${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Dispatches a vehicle on a trip (rejects window overlaps). Needs `ambulance:dispatch`. */
+  createAmbulanceTrip(input: CreateTripInput): Promise<AmbulanceTrip> {
+    return this.request<AmbulanceTrip>("POST", "/api/v1/ambulance-trips", input);
+  }
+
+  /** Moves a trip along its lifecycle (start/complete/cancel). Needs `ambulance:dispatch`. */
+  transitionAmbulanceTrip(
+    id: string,
+    input: { to: AmbulanceTripStatus; reason?: string },
+  ): Promise<AmbulanceTrip> {
+    return this.request<AmbulanceTrip>("POST", `/api/v1/ambulance-trips/${id}/transition`, input);
   }
 
   /* ── vitals ── */

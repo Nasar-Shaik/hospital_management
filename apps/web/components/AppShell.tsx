@@ -131,6 +131,12 @@ const NAVIGATION: NavSection[] = [
       // admitted; this shows where there is space.
       { label: "Bed board", href: "/beds", icon: "beds", permission: "bed:allocate" },
       { label: "Theatres", href: "/theatres", icon: "theatres", permission: "ot:schedule" },
+      {
+        label: "Ambulance",
+        href: "/ambulance",
+        icon: "ambulance",
+        permission: "ambulance:dispatch",
+      },
     ],
   },
   {
