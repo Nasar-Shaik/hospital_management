@@ -9,7 +9,7 @@
  * query, self-scoped where it should be (your day is YOUR day), so a demo never shows a chart the
  * hospital cannot reproduce.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { type MyActivity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
@@ -74,7 +74,7 @@ function Dashboard() {
       )}
 
       {clinician && <MyDay />}
-      {can("report:view") && <ManagementStrip />}
+      {can("report:view") && <ManagementPanel />}
 
       <QuickActions can={can} />
     </div>
@@ -274,50 +274,206 @@ function dedupePatients(visits: MyActivity["visits"]): MyActivity["visits"] {
   });
 }
 
-/* ── management KPI strip ────────────────────────────────────────────────────── */
+/* ── management panel ────────────────────────────────────────────────────────── */
 
-function ManagementStrip() {
+type MgmtPreset = "today" | "month";
+
+interface MgmtFigures {
+  visits: number | null;
+  collected: number | null;
+  unbilled: number | null;
+  duesTotal: number | null;
+  duesBuckets: { bucket: string; amount: number }[];
+}
+
+const DUES_BUCKET_LABEL: Record<string, string> = {
+  "0-30": "0–30d",
+  "31-60": "31–60d",
+  "61-90": "61–90d",
+  "90+": "90d+",
+};
+// The oldest money is the reddest — the eye should land on what is hardest to collect.
+const DUES_BUCKET_COLOR: Record<string, string> = {
+  "0-30": "var(--color-info)",
+  "31-60": "var(--color-brand-600)",
+  "61-90": "var(--color-warning)",
+  "90+": "var(--color-danger)",
+};
+
+/**
+ * The hospital-wide money picture for management. Every figure is one of the reports the Reports
+ * page runs in full, so each stat is a link straight into it — the dashboard is the glance, the
+ * report is the detail. A figure that fails to load shows "—" rather than blocking the panel.
+ */
+function ManagementPanel() {
   const { api } = useAuth();
-  const [collected, setCollected] = useState<number | null>(null);
-  const [visits, setVisits] = useState<number | null>(null);
+  const [preset, setPreset] = useState<MgmtPreset>("today");
+  const [fig, setFig] = useState<MgmtFigures>({
+    visits: null,
+    collected: null,
+    unbilled: null,
+    duesTotal: null,
+    duesBuckets: [],
+  });
+  const [loading, setLoading] = useState(true);
+
+  const range = useMemo(() => rangeFor(preset === "today" ? "today" : "month"), [preset]);
 
   useEffect(() => {
-    const r = rangeFor("today");
-    void api
-      .reportCollections({ from: r.from, to: r.to })
-      .then((c) => setCollected(c.total))
-      .catch(() => setCollected(null));
-    void api
-      .reportPatientVisits({ from: r.from, to: r.to })
-      .then((v) => setVisits(v.total))
-      .catch(() => setVisits(null));
-  }, [api]);
+    let live = true;
+    setLoading(true);
+    const r = { from: range.from, to: range.to };
+    const num = (p: Promise<number>) => p.then((v) => (live ? v : null)).catch(() => null);
+
+    void Promise.all([
+      num(api.reportPatientVisits(r).then((v) => v.total)),
+      num(api.reportCollections(r).then((c) => c.total)),
+      num(api.reportRevenueLeakage(r).then((l) => l.total)),
+      api.reportDuesAgeing(r).catch(() => null),
+    ]).then(([visits, collected, unbilled, dues]) => {
+      if (!live) return;
+      setFig({
+        visits,
+        collected,
+        unbilled,
+        duesTotal: dues?.totalOutstanding ?? null,
+        duesBuckets: dues?.buckets ?? [],
+      });
+      setLoading(false);
+    });
+
+    return () => {
+      live = false;
+    };
+  }, [api, range.from, range.to]);
+
+  const money = (v: number | null) => (v === null ? "—" : rupees(v));
+
+  const stats: {
+    label: string;
+    value: ReactNode;
+    tone: "info" | "success" | "warning" | "danger";
+    icon: IconName;
+    href: string;
+  }[] = [
+    {
+      label: "Patient visits",
+      value: fig.visits ?? "—",
+      tone: "info",
+      icon: "patients",
+      href: "/reports?tab=visits",
+    },
+    {
+      label: "Collected",
+      value: money(fig.collected),
+      tone: "success",
+      icon: "billing",
+      href: "/reports?tab=collections",
+    },
+    {
+      label: "Unbilled (at risk)",
+      value: money(fig.unbilled),
+      tone: "warning",
+      icon: "billing",
+      href: "/reports?tab=leakage",
+    },
+    {
+      label: "Outstanding dues",
+      value: money(fig.duesTotal),
+      tone: "danger",
+      icon: "billing",
+      href: "/reports?tab=dues",
+    },
+  ];
+
+  const duesTotal = fig.duesBuckets.reduce((s, b) => s + b.amount, 0);
 
   return (
     <section className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--color-fg)]">Today, hospital-wide</h2>
-        <Link
-          href="/reports"
-          className="text-sm font-medium text-[var(--color-brand-600)] hover:underline"
-        >
-          All reports →
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold text-[var(--color-fg)]">Hospital-wide</h2>
+        <div className="flex items-center gap-3">
+          <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-0.5">
+            {(["today", "month"] as MgmtPreset[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPreset(p)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors duration-[var(--dur-fast)] ${
+                  preset === p
+                    ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)] shadow-[var(--shadow-xs)]"
+                    : "text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                }`}
+              >
+                {p === "today" ? "Today" : "30 days"}
+              </button>
+            ))}
+          </div>
+          <Link
+            href="/reports"
+            className="text-sm font-medium text-[var(--color-brand-600)] hover:underline"
+          >
+            All reports →
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {stats.map((s) => (
+          <Link key={s.label} href={s.href} className="group block">
+            <StatCard
+              label={s.label}
+              value={loading ? "…" : s.value}
+              tone={s.tone}
+              icon={<Icon name={s.icon} className="h-[18px] w-[18px]" />}
+            />
+          </Link>
+        ))}
+      </div>
+
+      {/* Dues by age — where the outstanding money sits, oldest reddest. Links to the full register. */}
+      {duesTotal > 0 && (
+        <Link href="/reports?tab=dues" className="block">
+          <Card className="space-y-2.5 p-4 transition-colors hover:border-[var(--color-border-strong)]">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-fg-muted)]">Dues by age</span>
+              <span className="text-xs text-[var(--color-fg-subtle)]">
+                Oldest first — hardest to collect
+              </span>
+            </div>
+            <div className="flex h-2.5 overflow-hidden rounded-full bg-[var(--color-bg-subtle)]">
+              {fig.duesBuckets.map((b) =>
+                b.amount > 0 ? (
+                  <span
+                    key={b.bucket}
+                    style={{
+                      width: `${((b.amount / duesTotal) * 100).toFixed(2)}%`,
+                      background: DUES_BUCKET_COLOR[b.bucket],
+                    }}
+                    title={`${DUES_BUCKET_LABEL[b.bucket] ?? b.bucket}: ${rupees(b.amount)}`}
+                  />
+                ) : null,
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {fig.duesBuckets.map((b) => (
+                <span key={b.bucket} className="flex items-center gap-1.5 text-xs">
+                  <span
+                    className="h-2 w-2 rounded-full"
+                    style={{ background: DUES_BUCKET_COLOR[b.bucket] }}
+                  />
+                  <span className="text-[var(--color-fg-muted)]">
+                    {DUES_BUCKET_LABEL[b.bucket] ?? b.bucket}
+                  </span>
+                  <span className="font-medium text-[var(--color-fg)] tabular-nums">
+                    {rupees(b.amount)}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </Card>
         </Link>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <StatCard
-          label="Patient visits"
-          value={visits ?? "—"}
-          tone="info"
-          icon={<Icon name="patients" className="h-[18px] w-[18px]" />}
-        />
-        <StatCard
-          label="Collected"
-          value={collected === null ? "—" : rupees(collected)}
-          tone="success"
-          icon={<Icon name="billing" className="h-[18px] w-[18px]" />}
-        />
-      </div>
+      )}
     </section>
   );
 }

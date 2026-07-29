@@ -11,7 +11,8 @@
  * The period is HALF-OPEN: the "To" date the user picks is a whole day, so the request's upper
  * bound is the start of the day after it — nothing that happens in that last day is lost.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ApiClientError,
   type CollectionsReport,
@@ -152,10 +153,16 @@ function Stat({ label, value }: { label: string; value: string }) {
 function ReportsPage() {
   const { api } = useAuth();
 
+  // Deep-link support: `/reports?tab=dues` lands on that report (the dashboard links in this way).
+  const params = useSearchParams();
+  const requested = params.get("tab");
+  const initialTab: Tab =
+    requested && TABS.some((t) => t.id === requested) ? (requested as Tab) : "stock";
+
   const now = new Date();
   const [fromStr, setFromStr] = useState(ymd(new Date(now.getFullYear(), now.getMonth(), 1)));
   const [toStr, setToStr] = useState(ymd(now));
-  const [tab, setTab] = useState<Tab>("stock");
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -661,5 +668,10 @@ function ReportsPage() {
 }
 
 export default function Page() {
-  return <ReportsPage />;
+  // `useSearchParams` (the ?tab= deep-link) must sit under a Suspense boundary in the App Router.
+  return (
+    <Suspense fallback={null}>
+      <ReportsPage />
+    </Suspense>
+  );
 }
