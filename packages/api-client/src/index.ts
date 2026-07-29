@@ -780,6 +780,27 @@ export interface ConsultationNote {
   updatedAt: string;
 }
 
+/* ── MAR — medication administration (D5 / nursing) ── */
+
+export type MarStatus = "given" | "held" | "refused" | "not_available";
+
+/** One dose given (or held/refused) to an inpatient against a signed prescription line. */
+export interface MedicationAdministration {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  prescriptionId: string;
+  drugCode: string;
+  drugName: string;
+  dose: string;
+  route: string;
+  status: MarStatus;
+  administeredAt: string;
+  reason?: string;
+  note?: string;
+  administeredBy?: string;
+}
+
 /* ── insurance (patient policies + claims) ── */
 
 export type PolicyType = "cashless" | "reimbursement" | "government" | "corporate";
@@ -2538,6 +2559,35 @@ export class ApiClient {
     input: { to: FeedbackStatus; note?: string },
   ): Promise<FeedbackTicket> {
     return this.request<FeedbackTicket>("POST", `/api/v1/feedback/${id}/transition`, input);
+  }
+
+  /* ── MAR — medication administration (D5 / nursing) ── */
+
+  /** The medication administration record for a visit, newest first. Needs `emr:read`. */
+  listMedicationAdministrations(encounterId: string): Promise<MedicationAdministration[]> {
+    return this.request<MedicationAdministration[]>(
+      "GET",
+      `/api/v1/encounters/${encounterId}/medication-administrations`,
+    );
+  }
+
+  /** Charts a dose against a signed prescription line. Needs `mar:administer`. */
+  recordMedicationAdministration(
+    encounterId: string,
+    input: {
+      prescriptionId: string;
+      drugCode: string;
+      status: MarStatus;
+      administeredAt?: string;
+      reason?: string;
+      note?: string;
+    },
+  ): Promise<MedicationAdministration> {
+    return this.request<MedicationAdministration>(
+      "POST",
+      `/api/v1/encounters/${encounterId}/medication-administrations`,
+      input,
+    );
   }
 
   /* ── insurance (patient policies + claims) ── */

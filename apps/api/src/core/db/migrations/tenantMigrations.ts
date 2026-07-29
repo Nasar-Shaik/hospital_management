@@ -1585,4 +1585,27 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0040-medication-administrations",
+    description:
+      "Medication Administration Record (D5 / nursing) — one row per dose given to an inpatient " +
+      "against a signed prescription line. This owns the collection and its indexes.",
+    up: async (db) => {
+      await db.createCollection("medicationAdministrations").catch(() => undefined);
+      // The ward chart / handover reads a visit's MAR, most recent first.
+      await db
+        .collection("medicationAdministrations")
+        .createIndex({ tenantId: 1, encounterId: 1, administeredAt: -1 }, { background: true });
+      // Reconciliation reads what was given against a prescription.
+      await db
+        .collection("medicationAdministrations")
+        .createIndex({ tenantId: 1, prescriptionId: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("medicationAdministrations")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];
