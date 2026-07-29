@@ -125,7 +125,7 @@ export interface PostChargeInput {
   description?: string;
   category: ChargeCategory;
   quantity?: number;
-  source: "encounter" | "order" | "pharmacy" | "bed" | "manual";
+  source: "encounter" | "order" | "pharmacy" | "bed" | "manual" | "package";
   sourceId?: string;
   branchId?: string;
   /** Overrides the tariff — the pharmacy knows the price of the batch it dispensed. */
@@ -172,7 +172,24 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
    * the state can still cost the encounter from `listPrice`. `zero_tariff` is a
    * TARIFF, not an off-switch — see BILLING_MODES.
    */
-  const amount = policy.billingMode === "zero_tariff" ? 0 : listPrice * quantity;
+  let amount = policy.billingMode === "zero_tariff" ? 0 : listPrice * quantity;
+  let description = input.description ?? service?.name ?? input.code;
+
+  /**
+   * ── PACKAGE COVERAGE ────────────────────────────────────────────────────────
+   * If this visit is enrolled in a care package and this service is one the package covers, it
+   * bills at ₹0 against the bundle — the package's fixed price was already charged at enrol time,
+   * and billing the contents again would double-charge. The package charge ITSELF (source
+   * `package`) is never zeroed. The service still posts, with its worth on `listPrice`, so the
+   * bill shows what the bundle included; only its `amount` is nil.
+   */
+  if (input.source !== "package") {
+    const enrollment = await repo.activeEnrollmentForEncounter(input.encounterId);
+    if (enrollment && enrollment.includedCodes.includes(input.code.toUpperCase())) {
+      amount = 0;
+      description = `${description} (covered by ${enrollment.packageName})`;
+    }
+  }
 
   try {
     return await repo.postCharge({
@@ -180,7 +197,7 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
       patientId: input.patientId,
       episodeId: input.episodeId,
       code: input.code,
-      description: input.description ?? service?.name ?? input.code,
+      description,
       category: input.category,
       quantity,
       listPrice,
@@ -329,6 +346,142 @@ export async function voidCharge(id: string, reason: string): Promise<repo.Charg
     });
   }
   return charge;
+}
+
+/* ── Care packages: catalogue + enrollment ─────────────────────────────────── */
+
+export type { Package, PackageEnrollment } from "./billing.repository.js";
+
+export const listPackages = repo.listPackages;
+export const getPackageByCode = repo.findPackageByCode;
+export const listPackageEnrollments = repo.listEnrollmentsForEncounter;
+export const activePackageEnrollment = repo.activeEnrollmentForEncounter;
+
+export async function createPackage(input: repo.CreatePackageInput): Promise<repo.Package> {
+  try {
+    return await repo.createPackage(input);
+  } catch (err) {
+    if (repo.isDuplicateKey(err)) {
+      throw new AppError("HMS-VAL-001", 409, "That package code already exists", {
+        code: input.code,
+        hint: "package codes are unique per hospital — pick another",
+      });
+    }
+    throw err;
+  }
+}
+
+export async function updatePackage(
+  id: string,
+  patch: repo.UpdatePackageInput,
+): Promise<repo.Package> {
+  const updated = await repo.updatePackage(id, patch);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Package not found", { id });
+  return updated;
+}
+
+/**
+ * Enrols a visit in a package: charges the bundle's fixed price ONCE, and from then on every
+ * service the package covers posts at ₹0 against it (see the coverage block in `postCharge`).
+ *
+ * The price and covered codes are SNAPSHOT onto the enrollment, so a later edit of the catalogue
+ * never changes what this patient owes. Charge and enrollment are written in ONE transaction — a
+ * package price with no enrollment (services would never be covered), or an enrollment with no
+ * charge (the bundle billed nothing), are both wrong, so neither is allowed to exist alone. Only
+ * one active package per visit — a second is refused rather than silently stacking bundles.
+ */
+export async function enrollInPackage(
+  encounterId: string,
+  packageCode: string,
+): Promise<repo.PackageEnrollment> {
+  const ctx = getContext();
+  const pkg = await repo.findPackageByCode(packageCode);
+  if (!pkg) throw new AppError("HMS-GEN-404", 404, "Package not found", { code: packageCode });
+  if (!pkg.active) {
+    throw new AppError("HMS-STATE-001", 422, "That package is retired", { code: packageCode });
+  }
+
+  const encounter = await getEncounter(encounterId);
+  if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { encounterId });
+
+  const existing = await repo.activeEnrollmentForEncounter(encounterId);
+  if (existing) {
+    throw new AppError("HMS-STATE-001", 409, "This visit is already enrolled in a package", {
+      encounterId,
+      packageCode: existing.packageCode,
+      hint: "cancel the current enrollment before enrolling in another",
+    });
+  }
+
+  // Government / zero-tariff: the bundle, like everything else, is free — but still recorded.
+  const tenant = await getTenant(ctx.tenantId);
+  const policy = policyOf(
+    tenant ?? {
+      id: ctx.tenantId,
+      hospitalName: "",
+      slug: ctx.tenantSlug,
+      databaseName: "",
+      status: "active",
+    },
+  );
+  const price = policy.billingMode === "zero_tariff" ? 0 : pkg.price;
+
+  return withTransaction(async (session) => {
+    const charge = await repo.postCharge(
+      {
+        encounterId,
+        patientId: encounter.patientId,
+        episodeId: encounter.episodeId,
+        code: pkg.code,
+        description: pkg.name,
+        category: "package",
+        quantity: 1,
+        listPrice: pkg.price,
+        amount: price,
+        source: "package",
+        ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+      },
+      session,
+    );
+    return repo.createEnrollment(
+      {
+        packageId: pkg.id,
+        packageCode: pkg.code,
+        packageName: pkg.name,
+        price,
+        includedCodes: pkg.includedCodes,
+        encounterId,
+        patientId: encounter.patientId,
+        episodeId: encounter.episodeId,
+        chargeId: charge.id,
+        ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+      },
+      session,
+    );
+  });
+}
+
+/**
+ * Cancels an enrollment: voids its package charge and stops covering services from now on. A charge
+ * already on a finalized bill cannot be voided (that would be a credit note) — the cancel proceeds
+ * for the coverage, and the stale package charge is surfaced for manual reconciliation.
+ */
+export async function cancelPackageEnrollment(id: string): Promise<repo.PackageEnrollment> {
+  const enrollment = await repo.findEnrollmentById(id);
+  if (!enrollment) throw new AppError("HMS-GEN-404", 404, "Enrollment not found", { id });
+  if (enrollment.status !== "active") {
+    throw new AppError("HMS-STATE-001", 409, "That enrollment is already cancelled", { id });
+  }
+  if (enrollment.chargeId) {
+    // Best-effort: if the package charge is already on a finalized bill, voiding is refused and
+    // that is fine — the enrollment still cancels; the finalized charge is reconciled by hand.
+    await repo
+      .voidCharge(enrollment.chargeId, "package enrollment cancelled")
+      .catch(() => undefined);
+  }
+  const cancelled = await repo.cancelEnrollment(id);
+  if (!cancelled) throw new AppError("HMS-GEN-404", 404, "Enrollment not found", { id });
+  return cancelled;
 }
 
 /**

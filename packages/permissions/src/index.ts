@@ -771,6 +771,8 @@ export const DEFAULT_ROLES = [
       FINANCE.BILLING_FINALIZE,
       FINANCE.PAYMENT_COLLECT,
       PATIENT.WALLET_MANAGE,
+      // Enrolling a visit in a care package posts its fixed price — a billing act.
+      PATIENT.PACKAGE_ENROLL,
       OPERATIONS.APPOINTMENT_READ,
     ),
   },
@@ -807,6 +809,7 @@ export const DEFAULT_ROLES = [
       FINANCE.BILLING_FINALIZE,
       FINANCE.PAYMENT_COLLECT,
       PATIENT.WALLET_MANAGE,
+      PATIENT.PACKAGE_ENROLL,
     ),
   },
   {

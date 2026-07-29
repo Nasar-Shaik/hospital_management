@@ -35,6 +35,10 @@ import {
   applyDiscountSchema,
   recordRefundSchema,
   payerSplitSchema,
+  createPackageSchema,
+  updatePackageSchema,
+  enrollPackageSchema,
+  listPackagesQuerySchema,
   voidChargeSchema,
 } from "./billing.schema.js";
 
@@ -268,6 +272,60 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(payerSplitSchema),
     asyncHandler(controller.setPayerSplit),
+  );
+
+  /* ── care packages ───────────────────────────────────────────────────────
+   * The catalogue is priced config the counter reads (`billing:read`) and the tariff manager
+   * defines (`tariff:manage`) — the same split as `/services` vs `/tariff`. Enrolling a visit
+   * posts money, so it is its own authority: `package:enroll`, the front desk / billing act. */
+  router.get(
+    "/packages",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(listPackagesQuerySchema, "query"),
+    asyncHandler(controller.listPackages),
+  );
+
+  router.post(
+    "/packages",
+    authenticate(),
+    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    validate(createPackageSchema),
+    asyncHandler(controller.createPackage),
+  );
+
+  router.patch(
+    "/packages/:id",
+    authenticate(),
+    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(updatePackageSchema),
+    asyncHandler(controller.updatePackage),
+  );
+
+  router.get(
+    "/encounters/:id/package-enrollments",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.listPackageEnrollments),
+  );
+
+  router.post(
+    "/encounters/:id/package-enrollments",
+    authenticate(),
+    authorize(PERMISSIONS.PACKAGE_ENROLL, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(enrollPackageSchema),
+    asyncHandler(controller.enrollPackage),
+  );
+
+  router.post(
+    "/package-enrollments/:id/cancel",
+    authenticate(),
+    authorize(PERMISSIONS.PACKAGE_ENROLL, FEATURE),
+    validate(idParamSchema, "params"),
+    asyncHandler(controller.cancelPackageEnrollment),
   );
 
   return router;

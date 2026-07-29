@@ -1,6 +1,6 @@
 /**
- * Billing repository — the ONLY code that queries `serviceItems`, `charges` and
- * `invoices` (Constitution §6).
+ * Billing repository — the ONLY code that queries `serviceItems`, `charges`, `invoices`,
+ * `servicePackages` and `packageEnrollments` (Constitution §6).
  */
 import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
@@ -12,6 +12,8 @@ import {
   getChargeModel,
   getInvoiceModel,
   getServiceItemModel,
+  getPackageModel,
+  getPackageEnrollmentModel,
   type ChargeCategory,
   type ChargeDoc,
   type ChargeSource,
@@ -21,6 +23,9 @@ import {
   type PaymentEntry,
   type RefundEntry,
   type ServiceItemDoc,
+  type PackageDoc,
+  type PackageEnrollmentDoc,
+  type PackageEnrollmentStatus,
 } from "./billing.model.js";
 
 export { isDuplicateKey };
@@ -1018,4 +1023,216 @@ export async function invoiceStatusByIds(ids: string[]): Promise<Map<string, str
     .find({ _id: { $in: objectIds } }, { status: 1 })
     .lean<{ _id: Types.ObjectId; status: string }[]>();
   return new Map(docs.map((d) => [d._id.toString(), d.status]));
+}
+
+/* ── Care packages: catalogue + enrollment ─────────────────────────────────── */
+
+export interface Package {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+  price: number;
+  includedCodes: string[];
+  active: boolean;
+}
+
+function toPackage(d: PackageDoc): Package {
+  return {
+    id: d._id.toString(),
+    code: d.code,
+    name: d.name,
+    price: d.price,
+    includedCodes: d.includedCodes ?? [],
+    active: d.active,
+    ...(d.description ? { description: d.description } : {}),
+  };
+}
+
+export interface CreatePackageInput {
+  code: string;
+  name: string;
+  description?: string;
+  price: number;
+  includedCodes: string[];
+}
+
+export async function createPackage(input: CreatePackageInput): Promise<Package> {
+  const ctx = getContext();
+  // A tenant-wide catalogue, like the tariff (`serviceItems`) — not branch-stamped.
+  const doc = await getPackageModel(getTenantDb()).create({
+    tenantId: ctx.tenantId,
+    code: input.code.toUpperCase(),
+    name: input.name,
+    price: input.price,
+    ...(input.description ? { description: input.description } : {}),
+    ...(input.includedCodes.length
+      ? { includedCodes: input.includedCodes.map((c) => c.toUpperCase()) }
+      : {}),
+    active: true,
+    ...(ctx.userId ? { createdBy: ctx.userId } : {}),
+  });
+  return toPackage(doc.toObject() as PackageDoc);
+}
+
+export async function listPackages(includeInactive: boolean): Promise<Package[]> {
+  const q: Record<string, unknown> = { ...scopeFilter() };
+  if (!includeInactive) q.active = true;
+  const docs = await getPackageModel(getTenantDb()).find(q).sort({ name: 1 }).lean<PackageDoc[]>();
+  return docs.map(toPackage);
+}
+
+export async function findPackageByCode(code: string): Promise<Package | undefined> {
+  const doc = await getPackageModel(getTenantDb())
+    .findOne({ code: code.toUpperCase(), ...scopeFilter() })
+    .lean<PackageDoc>();
+  return doc ? toPackage(doc) : undefined;
+}
+
+export interface UpdatePackageInput {
+  name?: string;
+  description?: string;
+  price?: number;
+  includedCodes?: string[];
+  active?: boolean;
+}
+
+export async function updatePackage(
+  id: string,
+  patch: UpdatePackageInput,
+): Promise<Package | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const set: UpdatePackageInput = patch.includedCodes
+    ? { ...patch, includedCodes: patch.includedCodes.map((c) => c.toUpperCase()) }
+    : patch;
+  const doc = await getPackageModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: new Types.ObjectId(id), ...scopeFilter() },
+      { $set: set },
+      { new: true },
+    )
+    .lean<PackageDoc>();
+  return doc ? toPackage(doc) : undefined;
+}
+
+export interface PackageEnrollment {
+  id: string;
+  packageId: string;
+  packageCode: string;
+  packageName: string;
+  price: number;
+  includedCodes: string[];
+  encounterId: string;
+  patientId: string;
+  status: PackageEnrollmentStatus;
+  chargeId?: string;
+  enrolledAt: string;
+}
+
+function toEnrollment(d: PackageEnrollmentDoc): PackageEnrollment {
+  return {
+    id: d._id.toString(),
+    packageId: d.packageId.toString(),
+    packageCode: d.packageCode,
+    packageName: d.packageName,
+    price: d.price,
+    includedCodes: d.includedCodes ?? [],
+    encounterId: d.encounterId.toString(),
+    patientId: d.patientId.toString(),
+    status: d.status,
+    enrolledAt: d.enrolledAt.toISOString(),
+    ...(d.chargeId ? { chargeId: d.chargeId.toString() } : {}),
+  };
+}
+
+export interface CreateEnrollmentInput {
+  packageId: string;
+  packageCode: string;
+  packageName: string;
+  price: number;
+  includedCodes: string[];
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  chargeId?: string;
+  branchId?: string;
+}
+
+export async function createEnrollment(
+  input: CreateEnrollmentInput,
+  session?: ClientSession,
+): Promise<PackageEnrollment> {
+  const ctx = getContext();
+  const [doc] = await getPackageEnrollmentModel(getTenantDb()).create(
+    [
+      {
+        tenantId: ctx.tenantId,
+        packageId: new Types.ObjectId(input.packageId),
+        packageCode: input.packageCode,
+        packageName: input.packageName,
+        price: input.price,
+        ...(input.includedCodes.length
+          ? { includedCodes: input.includedCodes.map((c) => c.toUpperCase()) }
+          : {}),
+        encounterId: new Types.ObjectId(input.encounterId),
+        patientId: new Types.ObjectId(input.patientId),
+        episodeId: new Types.ObjectId(input.episodeId),
+        status: "active",
+        enrolledAt: new Date(),
+        ...(input.chargeId ? { chargeId: new Types.ObjectId(input.chargeId) } : {}),
+        ...(ctx.userId ? { enrolledBy: ctx.userId } : {}),
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+      },
+    ],
+    session ? { session } : {},
+  );
+  if (!doc) throw new Error("enrollment insert returned nothing");
+  return toEnrollment(doc.toObject() as PackageEnrollmentDoc);
+}
+
+/**
+ * The active enrollment on a visit, if any — the one the coverage check reads on the hot path of
+ * every charge. Keyed on the globally-unique `encounterId`, so it deliberately does NOT apply the
+ * branch `scopeFilter`: an event-driven charge (a lab result, a dispense) may post without a branch
+ * in context, and coverage must still find the enrollment or the bundle would double-bill.
+ */
+export async function activeEnrollmentForEncounter(
+  encounterId: string,
+): Promise<PackageEnrollment | undefined> {
+  if (!Types.ObjectId.isValid(encounterId)) return undefined;
+  const doc = await getPackageEnrollmentModel(getTenantDb())
+    .findOne({ encounterId: new Types.ObjectId(encounterId), status: "active" })
+    .lean<PackageEnrollmentDoc>();
+  return doc ? toEnrollment(doc) : undefined;
+}
+
+export async function listEnrollmentsForEncounter(
+  encounterId: string,
+): Promise<PackageEnrollment[]> {
+  if (!Types.ObjectId.isValid(encounterId)) return [];
+  const docs = await getPackageEnrollmentModel(getTenantDb())
+    .find({ encounterId: new Types.ObjectId(encounterId), ...scopeFilter() })
+    .sort({ enrolledAt: -1 })
+    .lean<PackageEnrollmentDoc[]>();
+  return docs.map(toEnrollment);
+}
+
+export async function findEnrollmentById(id: string): Promise<PackageEnrollment | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getPackageEnrollmentModel(getTenantDb())
+    .findOne({ _id: new Types.ObjectId(id), ...scopeFilter() })
+    .lean<PackageEnrollmentDoc>();
+  return doc ? toEnrollment(doc) : undefined;
+}
+
+export async function cancelEnrollment(id: string): Promise<PackageEnrollment | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getPackageEnrollmentModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: new Types.ObjectId(id), status: "active", ...scopeFilter() },
+      { $set: { status: "cancelled", cancelledAt: new Date() } },
+      { new: true },
+    )
+    .lean<PackageEnrollmentDoc>();
+  return doc ? toEnrollment(doc) : undefined;
 }

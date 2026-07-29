@@ -1274,9 +1274,35 @@ export interface PlaceOrderResult {
 /* ── billing (F-group) ────────────────────────────────────────────────────── */
 
 export type ChargeCategory =
-  "consultation" | "lab" | "radiology" | "pharmacy" | "procedure" | "bed" | "other";
+  "consultation" | "lab" | "radiology" | "pharmacy" | "procedure" | "bed" | "package" | "other";
 
 export type InvoiceStatus = "draft" | "finalized" | "paid" | "cancelled";
+
+/** A fixed-price care bundle — one price covers the services in `includedCodes`. Amounts PAISE. */
+export interface CarePackage {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+  price: number;
+  includedCodes: string[];
+  active: boolean;
+}
+
+/** A package on a visit — snapshots the price and covered codes at enrol time. */
+export interface PackageEnrollment {
+  id: string;
+  packageId: string;
+  packageCode: string;
+  packageName: string;
+  price: number;
+  includedCodes: string[];
+  encounterId: string;
+  patientId: string;
+  status: "active" | "cancelled";
+  chargeId?: string;
+  enrolledAt: string;
+}
 
 /**
  * ── EVERY AMOUNT IS AN INTEGER NUMBER OF PAISE ──────────────────────────────
@@ -3941,6 +3967,61 @@ export class ApiClient {
     input: { policyId: string; coveredAmount: number },
   ): Promise<Invoice> {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payer-split`, input);
+  }
+
+  /* ── care packages ── */
+
+  /** The package catalogue — fixed-price bundles. Needs `billing:read`. */
+  listPackages(includeInactive = false): Promise<CarePackage[]> {
+    const qs = includeInactive ? "?includeInactive=true" : "";
+    return this.request<CarePackage[]>("GET", `/api/v1/packages${qs}`);
+  }
+
+  /** Defines a package. Needs `tariff:manage` (the price list owner). */
+  createPackage(input: {
+    code: string;
+    name: string;
+    description?: string;
+    price: number;
+    includedCodes: string[];
+  }): Promise<CarePackage> {
+    return this.request<CarePackage>("POST", "/api/v1/packages", input);
+  }
+
+  /** Edits a package — including retiring it via `active`. Needs `tariff:manage`. */
+  updatePackage(
+    id: string,
+    patch: {
+      name?: string;
+      description?: string;
+      price?: number;
+      includedCodes?: string[];
+      active?: boolean;
+    },
+  ): Promise<CarePackage> {
+    return this.request<CarePackage>("PATCH", `/api/v1/packages/${id}`, patch);
+  }
+
+  /** The package enrollments on a visit, newest first. Needs `billing:read`. */
+  listPackageEnrollments(encounterId: string): Promise<PackageEnrollment[]> {
+    return this.request<PackageEnrollment[]>(
+      "GET",
+      `/api/v1/encounters/${encounterId}/package-enrollments`,
+    );
+  }
+
+  /** Enrols a visit in a package — charges the bundle once. Needs `package:enroll`. */
+  enrollInPackage(encounterId: string, packageCode: string): Promise<PackageEnrollment> {
+    return this.request<PackageEnrollment>(
+      "POST",
+      `/api/v1/encounters/${encounterId}/package-enrollments`,
+      { packageCode },
+    );
+  }
+
+  /** Cancels an enrollment — voids its package charge, stops covering. Needs `package:enroll`. */
+  cancelPackageEnrollment(id: string): Promise<PackageEnrollment> {
+    return this.request<PackageEnrollment>("POST", `/api/v1/package-enrollments/${id}/cancel`, {});
   }
 
   /* ── wallet (patient advance) ── */

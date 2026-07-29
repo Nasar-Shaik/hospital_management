@@ -61,6 +61,7 @@ const NAVIGATION: NavSection[] = [
         permission: "subscription:manage",
       },
       { label: "Service tariff", href: "/tariff", icon: "tariff", permission: "tariff:manage" },
+      { label: "Care packages", href: "/packages", icon: "tariff", permission: "tariff:manage" },
       {
         label: "Public website",
         href: "/settings/site",

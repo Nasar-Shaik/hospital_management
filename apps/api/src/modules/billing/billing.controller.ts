@@ -13,6 +13,10 @@ import type {
   ApplyDiscountBody,
   RecordRefundBody,
   PayerSplitBody,
+  CreatePackageBody,
+  UpdatePackageBody,
+  EnrollPackageBody,
+  ListPackagesQuery,
   CreateServiceBody,
   UpdateServiceBody,
 } from "./billing.schema.js";
@@ -240,4 +244,36 @@ export const recordRefund: RequestHandler = async (req, res) => {
 export const setPayerSplit: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await billing.setPayerSplit(id, req.body as PayerSplitBody));
+};
+
+/* ── care packages ─────────────────────────────────────────────────────────── */
+
+export const listPackages: RequestHandler = async (req, res) => {
+  const { includeInactive } = req.query as ListPackagesQuery;
+  ok(res, await billing.listPackages(Boolean(includeInactive)));
+};
+
+export const createPackage: RequestHandler = async (req, res) => {
+  ok(res, await billing.createPackage(req.body as CreatePackageBody), 201);
+};
+
+export const updatePackage: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.updatePackage(id, req.body as UpdatePackageBody));
+};
+
+export const listPackageEnrollments: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.listPackageEnrollments(id));
+};
+
+export const enrollPackage: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const { packageCode } = req.body as EnrollPackageBody;
+  ok(res, await billing.enrollInPackage(id, packageCode), 201);
+};
+
+export const cancelPackageEnrollment: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.cancelPackageEnrollment(id));
 };

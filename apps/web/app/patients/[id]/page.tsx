@@ -37,6 +37,8 @@ import {
   type Consent,
   type ConsentType,
   type ConsentSigner,
+  type CarePackage,
+  type PackageEnrollment,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
@@ -125,6 +127,7 @@ function Profile() {
   const canReadVitals = can("emr:read");
   const canRecordVitals = can("vitals:record");
   const canManageConsent = can("consent:manage");
+  const canEnrollPackage = can("package:enroll");
   const canReadDocs = can("file:read");
   const canUploadDocs = can("file:upload");
   const canDeleteDocs = can("file:delete");
@@ -384,6 +387,8 @@ function Profile() {
         {tab === "bills" && (
           <Bills
             invoices={invoices}
+            encounters={encounters}
+            canEnroll={canEnrollPackage}
             balance={wallet?.balance ?? 0}
             canPayFromWallet={canWallet && (wallet?.balance ?? 0) > 0}
             api={api}
@@ -664,12 +669,16 @@ function Prescriptions({
 
 function Bills({
   invoices,
+  encounters,
+  canEnroll,
   balance,
   canPayFromWallet,
   api,
   reload,
 }: {
   invoices: Invoice[];
+  encounters: Encounter[];
+  canEnroll: boolean;
   balance: number;
   canPayFromWallet: boolean;
   api: ReturnType<typeof useAuth>["api"];
@@ -699,60 +708,214 @@ function Bills({
     }
   }
 
-  if (invoices.length === 0) return <Empty>No bills.</Empty>;
   const sorted = [...invoices].sort((a, b) =>
     a.finalizedAt && b.finalizedAt
       ? new Date(b.finalizedAt).getTime() - new Date(a.finalizedAt).getTime()
       : 0,
   );
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {error && <Alert tone="danger">{error}</Alert>}
-      <Rows head={["Invoice", "Date", "Total", "Paid", "Outstanding", "Status", ""]}>
-        {sorted.map((i) => {
-          const outstanding = Math.max(0, i.total - i.paid);
-          const settleable = canPayFromWallet && i.status === "finalized" && outstanding > 0;
-          return (
-            <tr key={i.id}>
-              <Td className="font-mono text-xs">{i.number ?? "draft"}</Td>
-              <Td>{fmtDate(i.finalizedAt)}</Td>
-              <Td>{rupees(i.total)}</Td>
-              <Td>{rupees(i.paid)}</Td>
-              <Td className={outstanding > 0 ? "font-medium text-[var(--color-warning)]" : ""}>
-                {rupees(outstanding)}
-              </Td>
-              <Td>
-                <Badge
-                  tone={
-                    i.status === "paid"
-                      ? "success"
-                      : i.status === "finalized"
-                        ? "warning"
-                        : "neutral"
-                  }
-                >
-                  {i.status}
-                </Badge>
-              </Td>
-              <Td>
-                {settleable && (
-                  <button
-                    type="button"
-                    disabled={busy === i.id}
-                    onClick={() => void payFromAdvance(i.id, outstanding)}
-                    className="rounded-md bg-[var(--color-success-bg)] px-2.5 py-1 text-xs font-semibold text-[var(--color-success)] hover:opacity-80 disabled:opacity-50"
+
+      <PackagesPanel encounters={encounters} canEnroll={canEnroll} api={api} />
+
+      {invoices.length === 0 ? (
+        <Empty>No bills.</Empty>
+      ) : (
+        <Rows head={["Invoice", "Date", "Total", "Paid", "Outstanding", "Status", ""]}>
+          {sorted.map((i) => {
+            const outstanding = Math.max(0, i.total - i.paid);
+            const settleable = canPayFromWallet && i.status === "finalized" && outstanding > 0;
+            return (
+              <tr key={i.id}>
+                <Td className="font-mono text-xs">{i.number ?? "draft"}</Td>
+                <Td>{fmtDate(i.finalizedAt)}</Td>
+                <Td>{rupees(i.total)}</Td>
+                <Td>{rupees(i.paid)}</Td>
+                <Td className={outstanding > 0 ? "font-medium text-[var(--color-warning)]" : ""}>
+                  {rupees(outstanding)}
+                </Td>
+                <Td>
+                  <Badge
+                    tone={
+                      i.status === "paid"
+                        ? "success"
+                        : i.status === "finalized"
+                          ? "warning"
+                          : "neutral"
+                    }
                   >
-                    {busy === i.id
-                      ? "Settling…"
-                      : `Pay ${rupees(Math.min(outstanding, balance))} from advance`}
-                  </button>
-                )}
-              </Td>
-            </tr>
-          );
-        })}
-      </Rows>
+                    {i.status}
+                  </Badge>
+                </Td>
+                <Td>
+                  {settleable && (
+                    <button
+                      type="button"
+                      disabled={busy === i.id}
+                      onClick={() => void payFromAdvance(i.id, outstanding)}
+                      className="rounded-md bg-[var(--color-success-bg)] px-2.5 py-1 text-xs font-semibold text-[var(--color-success)] hover:opacity-80 disabled:opacity-50"
+                    >
+                      {busy === i.id
+                        ? "Settling…"
+                        : `Pay ${rupees(Math.min(outstanding, balance))} from advance`}
+                    </button>
+                  )}
+                </Td>
+              </tr>
+            );
+          })}
+        </Rows>
+      )}
     </div>
+  );
+}
+
+/* ── Package enrollment (F5) ─────────────────────────────────────────────────── */
+
+function PackagesPanel({
+  encounters,
+  canEnroll,
+  api,
+}: {
+  encounters: Encounter[];
+  canEnroll: boolean;
+  api: ReturnType<typeof useAuth>["api"];
+}) {
+  // Enrollment hangs off a visit — offer the patient's visits, newest first, default the latest.
+  const visits = [...encounters].sort(
+    (a, b) => new Date(b.arrivedAt).getTime() - new Date(a.arrivedAt).getTime(),
+  );
+  const [encounterId, setEncounterId] = useState(visits[0]?.id ?? "");
+  const [packages, setPackages] = useState<CarePackage[]>([]);
+  const [enrollments, setEnrollments] = useState<PackageEnrollment[]>([]);
+  const [packageCode, setPackageCode] = useState("");
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadEnrollments = useCallback(() => {
+    if (!encounterId) {
+      setEnrollments([]);
+      return;
+    }
+    api
+      .listPackageEnrollments(encounterId)
+      .then(setEnrollments)
+      .catch(() => setEnrollments([]));
+  }, [api, encounterId]);
+
+  useEffect(() => {
+    api
+      .listPackages(false)
+      .then((p) => {
+        setPackages(p);
+        setPackageCode((cur) => cur || p[0]?.code || "");
+      })
+      .catch(() => setPackages([]));
+  }, [api]);
+  useEffect(loadEnrollments, [loadEnrollments]);
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      loadEnrollments();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const active = enrollments.find((e) => e.status === "active");
+
+  // Nothing to show and nothing the viewer can do — keep the tab clean.
+  if (!canEnroll && enrollments.length === 0) return null;
+
+  return (
+    <Card className="space-y-3 p-4">
+      <h3 className="text-sm font-semibold text-[var(--color-fg)]">Care packages</h3>
+      {error != null && (
+        <Alert tone="danger">
+          {error instanceof ApiClientError ? error.message : "Something went wrong."}
+        </Alert>
+      )}
+
+      {visits.length > 1 && (
+        <label className="block text-xs text-[var(--color-fg-muted)]">
+          Visit
+          <select
+            value={encounterId}
+            onChange={(e) => setEncounterId(e.target.value)}
+            className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+          >
+            {visits.map((v) => (
+              <option key={v.id} value={v.id}>
+                {fmtDate(v.arrivedAt)} · {v.class}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {active ? (
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="font-medium text-[var(--color-fg)]">{active.packageName}</span>
+              <span className="ml-2 text-sm text-[var(--color-fg-muted)]">
+                {rupees(active.price)}
+              </span>
+            </div>
+            {canEnroll && (
+              <Button
+                variant="ghost"
+                onClick={() => void act(() => api.cancelPackageEnrollment(active.id))}
+              >
+                Cancel enrollment
+              </Button>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-[var(--color-fg-subtle)]">
+            Covers {active.includedCodes.length} service
+            {active.includedCodes.length === 1 ? "" : "s"} — each posts at ₹0 on this visit while
+            enrolled.
+          </p>
+        </div>
+      ) : canEnroll ? (
+        packages.length === 0 ? (
+          <p className="text-xs text-[var(--color-fg-subtle)]">
+            No packages defined. Create one under Care packages first.
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="block text-xs text-[var(--color-fg-muted)]">
+              Package
+              <select
+                value={packageCode}
+                onChange={(e) => setPackageCode(e.target.value)}
+                className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+              >
+                {packages.map((p) => (
+                  <option key={p.id} value={p.code}>
+                    {p.name} · {rupees(p.price)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              disabled={busy || !encounterId || !packageCode}
+              onClick={() => void act(() => api.enrollInPackage(encounterId, packageCode))}
+            >
+              Enrol visit
+            </Button>
+          </div>
+        )
+      ) : (
+        <p className="text-xs text-[var(--color-fg-subtle)]">No package on this visit.</p>
+      )}
+    </Card>
   );
 }
 

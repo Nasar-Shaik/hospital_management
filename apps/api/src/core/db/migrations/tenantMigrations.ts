@@ -1667,4 +1667,37 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0043-care-packages",
+    description:
+      "Care packages (F5): `servicePackages` (fixed-price bundle definitions, unique code) and " +
+      "`packageEnrollments` (a package on a visit — snapshots price + covered codes, points at its " +
+      "charge). Enrolling charges the bundle once; covered services then post at ₹0.",
+    up: async (db) => {
+      await db.createCollection("servicePackages").catch(() => undefined);
+      await db.createCollection("packageEnrollments").catch(() => undefined);
+
+      // A package code is the human key enrollment looks up — unique per tenant.
+      await db
+        .collection("servicePackages")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_package_code_per_tenant", background: true },
+        );
+      // The coverage check reads the active enrollment on a visit — index the hot path.
+      await db
+        .collection("packageEnrollments")
+        .createIndex({ tenantId: 1, encounterId: 1, status: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("servicePackages")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("packageEnrollments")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

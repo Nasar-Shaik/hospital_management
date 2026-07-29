@@ -35,6 +35,9 @@ export const CHARGE_CATEGORIES = [
   "pharmacy",
   "procedure",
   "bed",
+  // The fixed price of a care PACKAGE (a maternity bundle, a health check). The one line the
+  // patient pays; the services it covers post at ₹0 against it. See servicePackages below.
+  "package",
   "other",
 ] as const;
 export type ChargeCategory = (typeof CHARGE_CATEGORIES)[number];
@@ -86,7 +89,14 @@ serviceItemSchema.plugin(auditPlugin, { resource: "serviceItem", category: "fina
 /* ── The charge ledger ─────────────────────────────────────────────────────── */
 
 /** Where the charge came from. `sourceId` is the order/prescription/encounter it names. */
-export const CHARGE_SOURCES = ["encounter", "order", "pharmacy", "bed", "manual"] as const;
+export const CHARGE_SOURCES = [
+  "encounter",
+  "order",
+  "pharmacy",
+  "bed",
+  "manual",
+  "package",
+] as const;
 export type ChargeSource = (typeof CHARGE_SOURCES)[number];
 
 export interface ChargeDoc {
@@ -357,5 +367,142 @@ export function getChargeModel(conn: Connection): Model<ChargeDoc> {
 export function getInvoiceModel(conn: Connection): Model<InvoiceDoc> {
   return (
     (conn.models.Invoice as Model<InvoiceDoc>) ?? conn.model<InvoiceDoc>("Invoice", invoiceSchema)
+  );
+}
+
+/* ── Care packages ─────────────────────────────────────────────────────────── */
+
+/**
+ * A care PACKAGE — a fixed-price bundle (a maternity package, a health check) that bills as ONE
+ * line regardless of the services inside it.
+ *
+ * ── HOW IT BILLS ────────────────────────────────────────────────────────────
+ * Enrolling a visit posts one `package` charge for `price`. Every service in `includedCodes`, when
+ * it is later ordered or dispensed, posts at ₹0 against the package instead of its tariff price —
+ * so the bundle is charged once and its contents are not double-billed. The `includedCodes` and
+ * `price` are SNAPSHOT onto the enrollment at enrol time, so editing the package here never changes
+ * what a patient already enrolled is owed. This is the definition; the enrollment is the instance.
+ */
+export interface PackageDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+
+  /** The package's own code — `MATERNITY_NORMAL`, `HEALTH_CHECK_BASIC`. Unique per tenant. */
+  code: string;
+  name: string;
+  description?: string;
+  /** Paise. The one price the patient pays for the whole bundle. */
+  price: number;
+  /** The tariff codes this package covers — each posts at ₹0 while the enrollment is active. */
+  includedCodes: string[];
+  active: boolean;
+
+  createdBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const packageSchema = new Schema<PackageDoc>(
+  {
+    tenantId: { type: String, required: true, index: true },
+    branchId: { type: String },
+
+    code: { type: String, required: true, trim: true, uppercase: true, maxlength: 64 },
+    name: { type: String, required: true, trim: true, maxlength: 200 },
+    description: { type: String, trim: true, maxlength: 1000 },
+    price: { type: Number, required: true, min: 0 },
+    includedCodes: { type: [String], default: undefined },
+    active: { type: Boolean, required: true, default: true },
+
+    createdBy: { type: String },
+  },
+  // Indexes owned by migration 0043, never autoIndex.
+  { timestamps: true, collection: "servicePackages", autoIndex: false },
+);
+
+packageSchema.plugin(tenantScopePlugin);
+packageSchema.plugin(auditPlugin, { resource: "servicePackage", category: "financial" });
+
+export const PACKAGE_ENROLLMENT_STATUSES = ["active", "cancelled"] as const;
+export type PackageEnrollmentStatus = (typeof PACKAGE_ENROLLMENT_STATUSES)[number];
+
+/**
+ * A patient's enrollment in a package for one visit — the INSTANCE of a package on an encounter.
+ * Carries a SNAPSHOT of the package's price and covered codes at enrol time, so it is immune to
+ * later edits of the catalogue, and points at the `package` charge it raised so cancelling can
+ * reverse it.
+ */
+export interface PackageEnrollmentDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+
+  packageId: Types.ObjectId;
+  packageCode: string;
+  packageName: string;
+  /** Paise. Snapshot of the package price at enrol time. */
+  price: number;
+  /** Snapshot of the covered codes — what this enrollment zeroes, frozen at enrol time. */
+  includedCodes: string[];
+
+  encounterId: Types.ObjectId;
+  patientId: Types.ObjectId;
+  episodeId: Types.ObjectId;
+
+  status: PackageEnrollmentStatus;
+  /** The `package` charge this enrollment raised — voided when the enrollment is cancelled. */
+  chargeId?: Types.ObjectId;
+
+  enrolledBy?: string;
+  enrolledAt: Date;
+  cancelledAt?: Date;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const packageEnrollmentSchema = new Schema<PackageEnrollmentDoc>(
+  {
+    tenantId: { type: String, required: true, index: true },
+    branchId: { type: String },
+
+    packageId: { type: Schema.Types.ObjectId, required: true },
+    packageCode: { type: String, required: true },
+    packageName: { type: String, required: true },
+    price: { type: Number, required: true, min: 0 },
+    includedCodes: { type: [String], default: undefined },
+
+    encounterId: { type: Schema.Types.ObjectId, required: true },
+    patientId: { type: Schema.Types.ObjectId, required: true },
+    episodeId: { type: Schema.Types.ObjectId, required: true },
+
+    status: { type: String, enum: PACKAGE_ENROLLMENT_STATUSES, required: true, default: "active" },
+    chargeId: { type: Schema.Types.ObjectId },
+
+    enrolledBy: { type: String },
+    enrolledAt: { type: Date, required: true },
+    cancelledAt: { type: Date },
+  },
+  { timestamps: true, collection: "packageEnrollments", autoIndex: false },
+);
+
+packageEnrollmentSchema.plugin(tenantScopePlugin);
+packageEnrollmentSchema.plugin(auditPlugin, {
+  resource: "packageEnrollment",
+  category: "financial",
+});
+
+export function getPackageModel(conn: Connection): Model<PackageDoc> {
+  return (
+    (conn.models.ServicePackage as Model<PackageDoc>) ??
+    conn.model<PackageDoc>("ServicePackage", packageSchema)
+  );
+}
+
+export function getPackageEnrollmentModel(conn: Connection): Model<PackageEnrollmentDoc> {
+  return (
+    (conn.models.PackageEnrollment as Model<PackageEnrollmentDoc>) ??
+    conn.model<PackageEnrollmentDoc>("PackageEnrollment", packageEnrollmentSchema)
   );
 }

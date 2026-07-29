@@ -124,6 +124,12 @@
       "name": "ot-bookings"
     },
     {
+      "name": "package-enrollments"
+    },
+    {
+      "name": "packages"
+    },
+    {
       "name": "patients"
     },
     {
@@ -3627,6 +3633,216 @@
           }
         ],
         "x-permission": "insurance:link",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/packages": {
+      "get": {
+        "operationId": "get_v1_packages",
+        "tags": ["packages"],
+        "summary": "GET /api/v1/packages",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      },
+      "post": {
+        "operationId": "post_v1_packages",
+        "tags": ["packages"],
+        "summary": "POST /api/v1/packages",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "tariff:manage",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/packages/{id}": {
+      "patch": {
+        "operationId": "patch_v1_packages_id",
+        "tags": ["packages"],
+        "summary": "PATCH /api/v1/packages/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "tariff:manage",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/encounters/{id}/package-enrollments": {
+      "get": {
+        "operationId": "get_v1_encounters_id_package_enrollments",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}/package-enrollments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      },
+      "post": {
+        "operationId": "post_v1_encounters_id_package_enrollments",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/package-enrollments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "package:enroll",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/package-enrollments/{id}/cancel": {
+      "post": {
+        "operationId": "post_v1_package_enrollments_id_cancel",
+        "tags": ["package-enrollments"],
+        "summary": "POST /api/v1/package-enrollments/{id}/cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "package:enroll",
         "x-feature": "module.ops.opd"
       }
     },

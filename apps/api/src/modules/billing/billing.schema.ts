@@ -59,6 +59,36 @@ export const payerSplitSchema = z
   })
   .strict();
 
+const packageCode = z.string().trim().min(1).max(64);
+const includedCodes = z.array(z.string().trim().min(1).max(64)).max(200);
+
+export const createPackageSchema = z
+  .object({
+    code: packageCode,
+    name: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(1000).optional(),
+    price: paise.refine((v) => v > 0, "a package with no price is not a package"),
+    includedCodes: includedCodes.default([]),
+  })
+  .strict();
+
+export const updatePackageSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.string().trim().max(1000).optional(),
+    price: paise.optional(),
+    includedCodes: includedCodes.optional(),
+    active: z.boolean().optional(),
+  })
+  .strict()
+  .refine((b) => Object.keys(b).length > 0, { message: "nothing to update" });
+
+export const enrollPackageSchema = z.object({ packageCode }).strict();
+
+export const listPackagesQuerySchema = z
+  .object({ includeInactive: z.coerce.boolean().optional() })
+  .strict();
+
 export const listInvoicesQuerySchema = z
   .object({
     status: z.enum(INVOICE_STATUSES).optional(),
@@ -106,6 +136,10 @@ export type RecordPaymentBody = z.infer<typeof recordPaymentSchema>;
 export type ApplyDiscountBody = z.infer<typeof applyDiscountSchema>;
 export type RecordRefundBody = z.infer<typeof recordRefundSchema>;
 export type PayerSplitBody = z.infer<typeof payerSplitSchema>;
+export type CreatePackageBody = z.infer<typeof createPackageSchema>;
+export type UpdatePackageBody = z.infer<typeof updatePackageSchema>;
+export type EnrollPackageBody = z.infer<typeof enrollPackageSchema>;
+export type ListPackagesQuery = z.infer<typeof listPackagesQuerySchema>;
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
 export type CreateServiceBody = z.infer<typeof createServiceSchema>;
 export type UpdateServiceBody = z.infer<typeof updateServiceSchema>;
