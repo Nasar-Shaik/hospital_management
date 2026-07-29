@@ -708,6 +708,53 @@ export interface AssetMaintenance {
   branchId?: string;
 }
 
+/* ── feedback & complaints (B10) ── */
+
+export type FeedbackKind = "feedback" | "complaint";
+export type FeedbackCategory =
+  | "service"
+  | "staff"
+  | "billing"
+  | "cleanliness"
+  | "food"
+  | "waiting_time"
+  | "clinical"
+  | "facilities"
+  | "other";
+export type FeedbackChannel = "in_person" | "phone" | "email" | "web" | "suggestion_box" | "other";
+export type ComplaintSeverity = "low" | "medium" | "high";
+export type FeedbackStatus = "open" | "in_progress" | "resolved" | "closed";
+
+export interface FeedbackStatusChange {
+  from: FeedbackStatus;
+  to: FeedbackStatus;
+  at: string;
+  by?: string;
+  note?: string;
+}
+
+/** A compliment or grievance on the register, with its lifecycle history. */
+export interface FeedbackTicket {
+  id: string;
+  kind: FeedbackKind;
+  category: FeedbackCategory;
+  channel: FeedbackChannel;
+  subject: string;
+  description: string;
+  patientId?: string;
+  reporterName?: string;
+  reporterPhone?: string;
+  rating?: number;
+  severity?: ComplaintSeverity;
+  status: FeedbackStatus;
+  assignedTo?: string;
+  resolutionNote?: string;
+  statusHistory: FeedbackStatusChange[];
+  branchId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /* ── hospital profile (B1) ── */
 
 export type OwnershipType = "government" | "private" | "trust" | "charitable" | "corporate";
@@ -2362,6 +2409,56 @@ export class ApiClient {
     },
   ): Promise<AssetMaintenance> {
     return this.request<AssetMaintenance>("POST", `/api/v1/assets/${id}/maintenance`, input);
+  }
+
+  /* ── feedback & complaints (B10) ── */
+
+  /** The feedback/complaint register, optionally filtered. Needs `feedback:manage`. */
+  listFeedback(
+    query: {
+      kind?: FeedbackKind;
+      status?: FeedbackStatus;
+      category?: FeedbackCategory;
+      assignedTo?: string;
+    } = {},
+  ): Promise<FeedbackTicket[]> {
+    const qs = new URLSearchParams(
+      Object.entries(query).filter(([, v]) => v != null) as [string, string][],
+    ).toString();
+    return this.request<FeedbackTicket[]>("GET", `/api/v1/feedback${qs ? `?${qs}` : ""}`);
+  }
+
+  /** Logs a compliment or complaint. Needs `feedback:manage`. */
+  createFeedback(input: {
+    kind: FeedbackKind;
+    category: FeedbackCategory;
+    channel: FeedbackChannel;
+    subject: string;
+    description: string;
+    patientId?: string;
+    reporterName?: string;
+    reporterPhone?: string;
+    rating?: number;
+    severity?: ComplaintSeverity;
+  }): Promise<FeedbackTicket> {
+    return this.request<FeedbackTicket>("POST", "/api/v1/feedback", input);
+  }
+
+  getFeedback(id: string): Promise<FeedbackTicket> {
+    return this.request<FeedbackTicket>("GET", `/api/v1/feedback/${id}`);
+  }
+
+  /** Assigns (or, with `null`, un-assigns) a ticket to a staff member. Needs `complaint:manage`. */
+  assignFeedback(id: string, assignedTo: string | null): Promise<FeedbackTicket> {
+    return this.request<FeedbackTicket>("POST", `/api/v1/feedback/${id}/assign`, { assignedTo });
+  }
+
+  /** Moves a ticket along its lifecycle; resolving requires a note. Needs `complaint:manage`. */
+  transitionFeedback(
+    id: string,
+    input: { to: FeedbackStatus; note?: string },
+  ): Promise<FeedbackTicket> {
+    return this.request<FeedbackTicket>("POST", `/api/v1/feedback/${id}/transition`, input);
   }
 
   /* ── vitals ── */

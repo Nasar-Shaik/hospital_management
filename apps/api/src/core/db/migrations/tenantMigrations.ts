@@ -1495,4 +1495,31 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0037-feedback",
+    description:
+      "Feedback & complaints (B10) — one register (`feedbackTickets`) for compliments and " +
+      "grievances, each moving through a small status lifecycle. This owns the collection and its " +
+      "indexes.",
+    up: async (db) => {
+      await db.createCollection("feedbackTickets").catch(() => undefined);
+      // The desk works its list by kind + status, newest first.
+      await db
+        .collection("feedbackTickets")
+        .createIndex({ tenantId: 1, kind: 1, status: 1, createdAt: -1 }, { background: true });
+      // "My assigned tickets" and per-patient history.
+      await db
+        .collection("feedbackTickets")
+        .createIndex({ tenantId: 1, assignedTo: 1, status: 1 }, { background: true });
+      await db
+        .collection("feedbackTickets")
+        .createIndex({ tenantId: 1, patientId: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("feedbackTickets")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

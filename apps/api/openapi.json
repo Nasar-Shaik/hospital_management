@@ -73,6 +73,9 @@
       "name": "feature-flags"
     },
     {
+      "name": "feedback"
+    },
+    {
       "name": "hospital-profile"
     },
     {
@@ -5669,6 +5672,174 @@
         ],
         "x-permission": "asset:manage",
         "x-feature": "module.support.assets"
+      }
+    },
+    "/api/v1/feedback": {
+      "get": {
+        "operationId": "get_v1_feedback",
+        "tags": ["feedback"],
+        "summary": "GET /api/v1/feedback",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "feedback:manage"
+      },
+      "post": {
+        "operationId": "post_v1_feedback",
+        "tags": ["feedback"],
+        "summary": "POST /api/v1/feedback",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "feedback:manage"
+      }
+    },
+    "/api/v1/feedback/{id}": {
+      "get": {
+        "operationId": "get_v1_feedback_id",
+        "tags": ["feedback"],
+        "summary": "GET /api/v1/feedback/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "feedback:manage"
+      }
+    },
+    "/api/v1/feedback/{id}/assign": {
+      "post": {
+        "operationId": "post_v1_feedback_id_assign",
+        "tags": ["feedback"],
+        "summary": "POST /api/v1/feedback/{id}/assign",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "complaint:manage"
+      }
+    },
+    "/api/v1/feedback/{id}/transition": {
+      "post": {
+        "operationId": "post_v1_feedback_id_transition",
+        "tags": ["feedback"],
+        "summary": "POST /api/v1/feedback/{id}/transition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "complaint:manage"
       }
     },
     "/api/v1/hospital-profile": {
