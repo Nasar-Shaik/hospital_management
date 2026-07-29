@@ -755,6 +755,60 @@ export interface FeedbackTicket {
   updatedAt: string;
 }
 
+/* ── insurance (patient policies + claims) ── */
+
+export type PolicyType = "cashless" | "reimbursement" | "government" | "corporate";
+export type PolicyRelationship = "self" | "spouse" | "child" | "parent" | "other";
+export type PolicyStatus = "active" | "inactive";
+export type ClaimType = "cashless" | "reimbursement" | "preauth";
+export type ClaimStatus =
+  "draft" | "submitted" | "approved" | "partially_approved" | "rejected" | "settled";
+
+/** A patient's insurance policy. Money (`sumInsured`) is PAISE; dates are `YYYY-MM-DD`. */
+export interface InsurancePolicy {
+  id: string;
+  patientId: string;
+  insurer: string;
+  tpaName?: string;
+  policyNumber: string;
+  policyType: PolicyType;
+  planName?: string;
+  policyHolderName?: string;
+  relationship?: PolicyRelationship;
+  validFrom?: string;
+  validTo?: string;
+  sumInsured?: number;
+  status: PolicyStatus;
+  notes?: string;
+  branchId?: string;
+}
+
+export interface ClaimStatusChange {
+  from: ClaimStatus;
+  to: ClaimStatus;
+  at: string;
+  by?: string;
+  note?: string;
+}
+
+/** A claim filed against a policy. All amounts are PAISE. */
+export interface InsuranceClaim {
+  id: string;
+  patientId: string;
+  policyId: string;
+  encounterId?: string;
+  claimType: ClaimType;
+  claimNumber?: string;
+  claimedAmount: number;
+  approvedAmount?: number;
+  settledAmount?: number;
+  status: ClaimStatus;
+  notes?: string;
+  statusHistory: ClaimStatusChange[];
+  branchId?: string;
+  createdAt: string;
+}
+
 /* ── hospital profile (B1) ── */
 
 export type OwnershipType = "government" | "private" | "trust" | "charitable" | "corporate";
@@ -2459,6 +2513,101 @@ export class ApiClient {
     input: { to: FeedbackStatus; note?: string },
   ): Promise<FeedbackTicket> {
     return this.request<FeedbackTicket>("POST", `/api/v1/feedback/${id}/transition`, input);
+  }
+
+  /* ── insurance (patient policies + claims) ── */
+
+  /** A patient's insurance policies. Needs `insurance:link` + the insurance module. */
+  listInsurancePolicies(patientId: string): Promise<InsurancePolicy[]> {
+    return this.request<InsurancePolicy[]>(
+      "GET",
+      `/api/v1/patients/${patientId}/insurance-policies`,
+    );
+  }
+
+  /** Attaches a policy to a patient. Needs `insurance:link`. */
+  linkInsurancePolicy(
+    patientId: string,
+    input: {
+      insurer: string;
+      tpaName?: string;
+      policyNumber: string;
+      policyType: PolicyType;
+      planName?: string;
+      policyHolderName?: string;
+      relationship?: PolicyRelationship;
+      validFrom?: string;
+      validTo?: string;
+      sumInsured?: number;
+      notes?: string;
+    },
+  ): Promise<InsurancePolicy> {
+    return this.request<InsurancePolicy>(
+      "POST",
+      `/api/v1/patients/${patientId}/insurance-policies`,
+      input,
+    );
+  }
+
+  /** Edits a policy — including retiring it via `status`. Needs `insurance:link`. */
+  updateInsurancePolicy(
+    id: string,
+    patch: Partial<{
+      insurer: string;
+      tpaName: string;
+      policyNumber: string;
+      policyType: PolicyType;
+      planName: string;
+      policyHolderName: string;
+      relationship: PolicyRelationship;
+      validFrom: string;
+      validTo: string;
+      sumInsured: number;
+      status: PolicyStatus;
+      notes: string;
+    }>,
+  ): Promise<InsurancePolicy> {
+    return this.request<InsurancePolicy>("PATCH", `/api/v1/insurance-policies/${id}`, patch);
+  }
+
+  /** A patient's claims, newest first. Needs `insurance:link`. */
+  listInsuranceClaims(patientId: string): Promise<InsuranceClaim[]> {
+    return this.request<InsuranceClaim[]>("GET", `/api/v1/patients/${patientId}/insurance-claims`);
+  }
+
+  /** Files a claim against one of the patient's policies. Needs `insurance:claim`. */
+  fileInsuranceClaim(
+    patientId: string,
+    input: {
+      policyId: string;
+      encounterId?: string;
+      claimType: ClaimType;
+      claimNumber?: string;
+      claimedAmount: number;
+      notes?: string;
+    },
+  ): Promise<InsuranceClaim> {
+    return this.request<InsuranceClaim>(
+      "POST",
+      `/api/v1/patients/${patientId}/insurance-claims`,
+      input,
+    );
+  }
+
+  /** Moves a claim through submission and the payer's decision. Needs `insurance:claim`. */
+  transitionInsuranceClaim(
+    id: string,
+    input: { to: ClaimStatus; approvedAmount?: number; note?: string },
+  ): Promise<InsuranceClaim> {
+    return this.request<InsuranceClaim>("POST", `/api/v1/insurance-claims/${id}/transition`, input);
+  }
+
+  /** Records the payer's settlement — reconciliation. Needs `insurance:reconcile`. */
+  settleInsuranceClaim(
+    id: string,
+    input: { settledAmount: number; note?: string },
+  ): Promise<InsuranceClaim> {
+    return this.request<InsuranceClaim>("POST", `/api/v1/insurance-claims/${id}/settle`, input);
   }
 
   /* ── vitals ── */

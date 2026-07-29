@@ -28,6 +28,12 @@ import {
   type VitalsReading,
   type Wallet,
   type WalletEntry,
+  type InsurancePolicy,
+  type InsuranceClaim,
+  type PolicyType,
+  type PolicyRelationship,
+  type ClaimType,
+  type ClaimStatus,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
@@ -96,11 +102,22 @@ const ORDER_TONE: Record<string, "neutral" | "warning" | "success" | "brand"> = 
 /* ── page ────────────────────────────────────────────────────────────────────── */
 
 type TabKey =
-  "timeline" | "visits" | "vitals" | "tests" | "prescriptions" | "bills" | "wallet" | "documents";
+  | "timeline"
+  | "visits"
+  | "vitals"
+  | "tests"
+  | "prescriptions"
+  | "bills"
+  | "wallet"
+  | "insurance"
+  | "documents";
 
 function Profile() {
   const { can, api } = useAuth();
   const canWallet = can("wallet:manage");
+  const canInsurance = can("insurance:link");
+  const canFileClaim = can("insurance:claim");
+  const canReconcile = can("insurance:reconcile");
   const canReadVitals = can("emr:read");
   const canRecordVitals = can("vitals:record");
   const canReadDocs = can("file:read");
@@ -226,6 +243,7 @@ function Profile() {
     { key: "prescriptions", label: "Prescriptions", count: prescriptions.length },
     { key: "bills", label: "Bills", count: invoices.length },
     ...(canWallet ? [{ key: "wallet" as const, label: "Wallet" }] : []),
+    ...(canInsurance ? [{ key: "insurance" as const, label: "Insurance" }] : []),
     ...(canReadDocs
       ? [{ key: "documents" as const, label: "Documents", count: documents.length }]
       : []),
@@ -368,6 +386,14 @@ function Profile() {
         )}
         {tab === "wallet" && canWallet && (
           <WalletPanel patientId={id} wallet={wallet} dues={dues} api={api} reload={load} />
+        )}
+        {tab === "insurance" && canInsurance && (
+          <Insurance
+            patientId={id}
+            encounters={encounters}
+            canFile={canFileClaim}
+            canReconcile={canReconcile}
+          />
         )}
         {tab === "documents" && canReadDocs && (
           <Documents
@@ -1179,6 +1205,516 @@ function Documents({
         </Rows>
       )}
     </div>
+  );
+}
+
+/* ── insurance tab ─────────────────────────────────────────────────────────────── */
+
+const POLICY_TYPE_LABEL: Record<PolicyType, string> = {
+  cashless: "Cashless",
+  reimbursement: "Reimbursement",
+  government: "Government",
+  corporate: "Corporate",
+};
+const CLAIM_STATUS_META: Record<
+  ClaimStatus,
+  { label: string; tone: "neutral" | "brand" | "warning" | "success" | "danger" }
+> = {
+  draft: { label: "Draft", tone: "neutral" },
+  submitted: { label: "Submitted", tone: "brand" },
+  approved: { label: "Approved", tone: "success" },
+  partially_approved: { label: "Partially approved", tone: "warning" },
+  rejected: { label: "Rejected", tone: "danger" },
+  settled: { label: "Settled", tone: "success" },
+};
+
+function InsField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const insInput =
+  "w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm outline-none focus:border-[var(--color-brand-500)] focus:ring-2 focus:ring-[var(--color-brand-500)]/30";
+
+function Insurance({
+  patientId,
+  encounters,
+  canFile,
+  canReconcile,
+}: {
+  patientId: string;
+  encounters: Encounter[];
+  canFile: boolean;
+  canReconcile: boolean;
+}) {
+  const { api } = useAuth();
+  const [policies, setPolicies] = useState<InsurancePolicy[]>([]);
+  const [claims, setClaims] = useState<InsuranceClaim[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<unknown>(null);
+  const [showPolicy, setShowPolicy] = useState(false);
+  const [showClaim, setShowClaim] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    Promise.all([api.listInsurancePolicies(patientId), api.listInsuranceClaims(patientId)])
+      .then(([p, c]) => {
+        setPolicies(p);
+        setClaims(c);
+      })
+      .catch((e: unknown) => setError(e))
+      .finally(() => setLoading(false));
+  }, [api, patientId]);
+  useEffect(load, [load]);
+
+  const insurerOf = (policyId: string) =>
+    policies.find((p) => p.id === policyId)?.insurer ?? "Policy";
+
+  async function act(fn: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await fn();
+      load();
+    } catch (e) {
+      setError(e);
+    }
+  }
+
+  // A claim's actions depend on its state; amount-bearing steps prompt for the figure.
+  function decide(claim: InsuranceClaim, to: ClaimStatus) {
+    if (to === "approved" || to === "partially_approved") {
+      const raw = window.prompt(
+        "Amount the payer approved (₹):",
+        (claim.claimedAmount / 100).toString(),
+      );
+      if (raw === null || !raw.trim()) return;
+      void act(() => api.transitionInsuranceClaim(claim.id, { to, approvedAmount: toPaise(raw) }));
+    } else {
+      void act(() => api.transitionInsuranceClaim(claim.id, { to }));
+    }
+  }
+  function settle(claim: InsuranceClaim) {
+    const base = claim.approvedAmount ?? claim.claimedAmount;
+    const raw = window.prompt("Amount settled by the payer (₹):", (base / 100).toString());
+    if (raw === null || !raw.trim()) return;
+    void act(() => api.settleInsuranceClaim(claim.id, { settledAmount: toPaise(raw) }));
+  }
+
+  if (loading) {
+    return <p className="py-6 text-center text-sm text-[var(--color-fg-muted)]">Loading…</p>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {error != null && (
+        <Alert tone="danger">
+          {error instanceof ApiClientError ? error.message : "Something went wrong."}
+        </Alert>
+      )}
+
+      {/* Policies */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="font-semibold text-[var(--color-fg)]">Policies</h2>
+          <Button variant="ghost" onClick={() => setShowPolicy((s) => !s)}>
+            {showPolicy ? "Cancel" : "Link policy"}
+          </Button>
+        </div>
+
+        {showPolicy && (
+          <PolicyForm
+            onSubmit={(v) =>
+              void act(async () => {
+                await api.linkInsurancePolicy(patientId, v);
+                setShowPolicy(false);
+              })
+            }
+          />
+        )}
+
+        {policies.length === 0 ? (
+          <p className="text-sm text-[var(--color-fg-subtle)]">No policies on record.</p>
+        ) : (
+          <div className="space-y-2">
+            {policies.map((p) => (
+              <Card key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 p-3.5">
+                <div className="min-w-40 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-[var(--color-fg)]">{p.insurer}</span>
+                    <Badge tone="neutral">{POLICY_TYPE_LABEL[p.policyType]}</Badge>
+                    {p.status === "inactive" && <Badge tone="warning">Inactive</Badge>}
+                  </div>
+                  <p className="mt-0.5 font-mono text-xs text-[var(--color-fg-subtle)]">
+                    {p.policyNumber}
+                    {p.tpaName ? ` · ${p.tpaName}` : ""}
+                    {p.planName ? ` · ${p.planName}` : ""}
+                  </p>
+                </div>
+                <div className="text-right text-xs text-[var(--color-fg-muted)]">
+                  {p.sumInsured != null && <div>Cover {rupees(p.sumInsured)}</div>}
+                  {(p.validFrom || p.validTo) && (
+                    <div>
+                      {fmtDate(p.validFrom)} – {fmtDate(p.validTo)}
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="text-xs text-[var(--color-brand-600)] hover:underline"
+                  onClick={() =>
+                    void act(() =>
+                      api.updateInsurancePolicy(p.id, {
+                        status: p.status === "active" ? "inactive" : "active",
+                      }),
+                    )
+                  }
+                >
+                  {p.status === "active" ? "Deactivate" : "Reactivate"}
+                </button>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Claims */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="font-semibold text-[var(--color-fg)]">Claims</h2>
+          {canFile && policies.length > 0 && (
+            <Button variant="ghost" onClick={() => setShowClaim((s) => !s)}>
+              {showClaim ? "Cancel" : "File claim"}
+            </Button>
+          )}
+        </div>
+
+        {showClaim && canFile && (
+          <ClaimForm
+            policies={policies.filter((p) => p.status === "active")}
+            encounters={encounters}
+            onSubmit={(v) =>
+              void act(async () => {
+                await api.fileInsuranceClaim(patientId, v);
+                setShowClaim(false);
+              })
+            }
+          />
+        )}
+
+        {claims.length === 0 ? (
+          <p className="text-sm text-[var(--color-fg-subtle)]">No claims filed.</p>
+        ) : (
+          <div className="space-y-2">
+            {claims.map((c) => {
+              const meta = CLAIM_STATUS_META[c.status];
+              return (
+                <Card key={c.id} className="p-3.5">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <div className="min-w-40 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-[var(--color-fg)]">
+                          {insurerOf(c.policyId)}
+                        </span>
+                        <Badge tone="neutral">{c.claimType}</Badge>
+                        <Badge tone={meta.tone}>{meta.label}</Badge>
+                      </div>
+                      <p className="mt-0.5 text-xs text-[var(--color-fg-subtle)]">
+                        {c.claimNumber ? `${c.claimNumber} · ` : ""}
+                        filed {fmtDate(c.createdAt)}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-[var(--color-fg-muted)] tabular-nums">
+                      <div>Claimed {rupees(c.claimedAmount)}</div>
+                      {c.approvedAmount != null && <div>Approved {rupees(c.approvedAmount)}</div>}
+                      {c.settledAmount != null && (
+                        <div className="text-[var(--color-success)]">
+                          Settled {rupees(c.settledAmount)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Lifecycle actions */}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {canFile && c.status === "draft" && (
+                      <>
+                        <ClaimBtn onClick={() => decide(c, "submitted")}>Submit</ClaimBtn>
+                        <ClaimBtn danger onClick={() => decide(c, "rejected")}>
+                          Reject
+                        </ClaimBtn>
+                      </>
+                    )}
+                    {canFile && c.status === "submitted" && (
+                      <>
+                        <ClaimBtn onClick={() => decide(c, "approved")}>Approve</ClaimBtn>
+                        <ClaimBtn onClick={() => decide(c, "partially_approved")}>
+                          Partially approve
+                        </ClaimBtn>
+                        <ClaimBtn danger onClick={() => decide(c, "rejected")}>
+                          Reject
+                        </ClaimBtn>
+                      </>
+                    )}
+                    {canReconcile &&
+                      (c.status === "approved" || c.status === "partially_approved") && (
+                        <ClaimBtn onClick={() => settle(c)}>Record settlement</ClaimBtn>
+                      )}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ClaimBtn({
+  children,
+  onClick,
+  danger,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+        danger
+          ? "border-[var(--color-danger)]/40 text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]"
+          : "border-[var(--color-border-strong)] text-[var(--color-fg-muted)] hover:border-[var(--color-brand-500)] hover:text-[var(--color-brand-700)]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PolicyForm({
+  onSubmit,
+}: {
+  onSubmit: (v: Parameters<ReturnType<typeof useAuth>["api"]["linkInsurancePolicy"]>[1]) => void;
+}) {
+  const [insurer, setInsurer] = useState("");
+  const [policyNumber, setPolicyNumber] = useState("");
+  const [policyType, setPolicyType] = useState<PolicyType>("cashless");
+  const [tpaName, setTpaName] = useState("");
+  const [planName, setPlanName] = useState("");
+  const [holder, setHolder] = useState("");
+  const [relationship, setRelationship] = useState<PolicyRelationship>("self");
+  const [validFrom, setValidFrom] = useState("");
+  const [validTo, setValidTo] = useState("");
+  const [sumInsured, setSumInsured] = useState("");
+  const opt = (s: string) => (s.trim() ? s.trim() : undefined);
+
+  return (
+    <Card className="mb-3 space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <InsField label="Insurer">
+          <input
+            className={insInput}
+            value={insurer}
+            onChange={(e) => setInsurer(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Policy number">
+          <input
+            className={insInput}
+            value={policyNumber}
+            onChange={(e) => setPolicyNumber(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Type">
+          <select
+            className={insInput}
+            value={policyType}
+            onChange={(e) => setPolicyType(e.target.value as PolicyType)}
+          >
+            {(Object.keys(POLICY_TYPE_LABEL) as PolicyType[]).map((t) => (
+              <option key={t} value={t}>
+                {POLICY_TYPE_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        </InsField>
+        <InsField label="TPA (optional)">
+          <input
+            className={insInput}
+            value={tpaName}
+            onChange={(e) => setTpaName(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Plan (optional)">
+          <input
+            className={insInput}
+            value={planName}
+            onChange={(e) => setPlanName(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Sum insured (₹)">
+          <input
+            type="number"
+            className={insInput}
+            value={sumInsured}
+            onChange={(e) => setSumInsured(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Policy holder (optional)">
+          <input className={insInput} value={holder} onChange={(e) => setHolder(e.target.value)} />
+        </InsField>
+        <InsField label="Relationship">
+          <select
+            className={insInput}
+            value={relationship}
+            onChange={(e) => setRelationship(e.target.value as PolicyRelationship)}
+          >
+            {(["self", "spouse", "child", "parent", "other"] as PolicyRelationship[]).map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </InsField>
+        <InsField label="Valid from">
+          <input
+            type="date"
+            className={insInput}
+            value={validFrom}
+            onChange={(e) => setValidFrom(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Valid to">
+          <input
+            type="date"
+            className={insInput}
+            value={validTo}
+            onChange={(e) => setValidTo(e.target.value)}
+          />
+        </InsField>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          disabled={!insurer.trim() || !policyNumber.trim()}
+          onClick={() =>
+            onSubmit({
+              insurer: insurer.trim(),
+              policyNumber: policyNumber.trim(),
+              policyType,
+              ...(opt(tpaName) ? { tpaName: opt(tpaName) } : {}),
+              ...(opt(planName) ? { planName: opt(planName) } : {}),
+              ...(opt(holder) ? { policyHolderName: opt(holder) } : {}),
+              relationship,
+              ...(opt(validFrom) ? { validFrom: opt(validFrom) } : {}),
+              ...(opt(validTo) ? { validTo: opt(validTo) } : {}),
+              ...(sumInsured.trim() ? { sumInsured: toPaise(sumInsured) } : {}),
+            })
+          }
+        >
+          Link policy
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function ClaimForm({
+  policies,
+  encounters,
+  onSubmit,
+}: {
+  policies: InsurancePolicy[];
+  encounters: Encounter[];
+  onSubmit: (v: Parameters<ReturnType<typeof useAuth>["api"]["fileInsuranceClaim"]>[1]) => void;
+}) {
+  const [policyId, setPolicyId] = useState(policies[0]?.id ?? "");
+  const [claimType, setClaimType] = useState<ClaimType>("cashless");
+  const [claimedAmount, setClaimedAmount] = useState("");
+  const [claimNumber, setClaimNumber] = useState("");
+  const [encounterId, setEncounterId] = useState("");
+
+  return (
+    <Card className="mb-3 space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <InsField label="Policy">
+          <select
+            className={insInput}
+            value={policyId}
+            onChange={(e) => setPolicyId(e.target.value)}
+          >
+            {policies.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.insurer} · {p.policyNumber}
+              </option>
+            ))}
+          </select>
+        </InsField>
+        <InsField label="Claim type">
+          <select
+            className={insInput}
+            value={claimType}
+            onChange={(e) => setClaimType(e.target.value as ClaimType)}
+          >
+            {(["cashless", "reimbursement", "preauth"] as ClaimType[]).map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </InsField>
+        <InsField label="Claimed amount (₹)">
+          <input
+            type="number"
+            className={insInput}
+            value={claimedAmount}
+            onChange={(e) => setClaimedAmount(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Claim number (optional)">
+          <input
+            className={insInput}
+            value={claimNumber}
+            onChange={(e) => setClaimNumber(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Against visit (optional)">
+          <select
+            className={insInput}
+            value={encounterId}
+            onChange={(e) => setEncounterId(e.target.value)}
+          >
+            <option value="">— none —</option>
+            {encounters.map((e) => (
+              <option key={e.id} value={e.id}>
+                {fmtDate(e.arrivedAt)} · {e.class}
+              </option>
+            ))}
+          </select>
+        </InsField>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          disabled={!policyId || !claimedAmount.trim()}
+          onClick={() =>
+            onSubmit({
+              policyId,
+              claimType,
+              claimedAmount: toPaise(claimedAmount),
+              ...(claimNumber.trim() ? { claimNumber: claimNumber.trim() } : {}),
+              ...(encounterId ? { encounterId } : {}),
+            })
+          }
+        >
+          File claim
+        </Button>
+      </div>
+    </Card>
   );
 }
 

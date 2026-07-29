@@ -1522,4 +1522,40 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0038-insurance",
+    description:
+      "Patient insurance — policies (`insurancePolicies`) and the claims filed against them " +
+      "(`insuranceClaims`, each moving through a status lifecycle). This owns the two collections " +
+      "and their indexes.",
+    up: async (db) => {
+      await db.createCollection("insurancePolicies").catch(() => undefined);
+      await db.createCollection("insuranceClaims").catch(() => undefined);
+
+      // A patient's policies are read on their profile.
+      await db
+        .collection("insurancePolicies")
+        .createIndex({ tenantId: 1, patientId: 1, status: 1 }, { background: true });
+      // A patient's claims, newest first; and the claim desk works its list by status.
+      await db
+        .collection("insuranceClaims")
+        .createIndex({ tenantId: 1, patientId: 1, createdAt: -1 }, { background: true });
+      await db
+        .collection("insuranceClaims")
+        .createIndex({ tenantId: 1, policyId: 1 }, { background: true });
+      await db
+        .collection("insuranceClaims")
+        .createIndex({ tenantId: 1, status: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("insurancePolicies")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("insuranceClaims")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

@@ -85,6 +85,12 @@
       "name": "inpatients"
     },
     {
+      "name": "insurance-claims"
+    },
+    {
+      "name": "insurance-policies"
+    },
+    {
       "name": "invoices"
     },
     {
@@ -5840,6 +5846,275 @@
           }
         ],
         "x-permission": "complaint:manage"
+      }
+    },
+    "/api/v1/patients/{patientId}/insurance-policies": {
+      "get": {
+        "operationId": "get_v1_patients_patientId_insurance_policies",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/insurance-policies",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:link",
+        "x-feature": "module.finance.insurance"
+      },
+      "post": {
+        "operationId": "post_v1_patients_patientId_insurance_policies",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/{patientId}/insurance-policies",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:link",
+        "x-feature": "module.finance.insurance"
+      }
+    },
+    "/api/v1/insurance-policies/{id}": {
+      "patch": {
+        "operationId": "patch_v1_insurance_policies_id",
+        "tags": ["insurance-policies"],
+        "summary": "PATCH /api/v1/insurance-policies/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:link",
+        "x-feature": "module.finance.insurance"
+      }
+    },
+    "/api/v1/patients/{patientId}/insurance-claims": {
+      "get": {
+        "operationId": "get_v1_patients_patientId_insurance_claims",
+        "tags": ["patients"],
+        "summary": "GET /api/v1/patients/{patientId}/insurance-claims",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:link",
+        "x-feature": "module.finance.insurance"
+      },
+      "post": {
+        "operationId": "post_v1_patients_patientId_insurance_claims",
+        "tags": ["patients"],
+        "summary": "POST /api/v1/patients/{patientId}/insurance-claims",
+        "parameters": [
+          {
+            "name": "patientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:claim",
+        "x-feature": "module.finance.insurance"
+      }
+    },
+    "/api/v1/insurance-claims/{id}/transition": {
+      "post": {
+        "operationId": "post_v1_insurance_claims_id_transition",
+        "tags": ["insurance-claims"],
+        "summary": "POST /api/v1/insurance-claims/{id}/transition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:claim",
+        "x-feature": "module.finance.insurance"
+      }
+    },
+    "/api/v1/insurance-claims/{id}/settle": {
+      "post": {
+        "operationId": "post_v1_insurance_claims_id_settle",
+        "tags": ["insurance-claims"],
+        "summary": "POST /api/v1/insurance-claims/{id}/settle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "insurance:reconcile",
+        "x-feature": "module.finance.insurance"
       }
     },
     "/api/v1/hospital-profile": {
