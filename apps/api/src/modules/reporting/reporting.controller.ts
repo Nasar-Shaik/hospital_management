@@ -148,6 +148,31 @@ export const revenueLeakage: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Dues ageing — billed but unpaid, aged. The CSV's principal table is the debtor list (who owes,
+ * how much, how old), the collections desk's call sheet; the buckets are the screen summary.
+ */
+export const duesAgeing: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.duesAgeing(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "dues-ageing",
+      ["Bill No", "UHID", "Patient", "Outstanding (INR)", "Age (days)"],
+      report.topDebtors.map((r) => [
+        r.number ?? "",
+        r.uhid,
+        r.patientName,
+        rupees(r.outstanding),
+        r.ageDays,
+      ]),
+    );
+    return;
+  }
+  ok(res, report);
+};
+
+/**
  * The advance register — admission advances in, utilised and refunded, plus the balance held.
  * The CSV's principal table is deposits by method (the drawer view); utilisation and the current
  * liability are the summary a screen shows around it.

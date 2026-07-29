@@ -52,6 +52,7 @@ export function reportingRouter(): Router {
   report("/reports/diagnostics", controller.diagnostics);
   report("/reports/collections", controller.collections);
   report("/reports/revenue-leakage", controller.revenueLeakage);
+  report("/reports/dues-ageing", controller.duesAgeing);
   report("/reports/wallet", controller.walletRegister);
 
   // The receipts register is a RECONCILIATION view, not a management report: it exists so a cashier

@@ -18,6 +18,7 @@ import {
   type DiagnosticsReport,
   type DischargeRegister,
   type DoctorLoadRow,
+  type DuesAgeingReport,
   type ReportRange,
   type RevenueLeakageReport,
   type StockRegisterRow,
@@ -35,6 +36,7 @@ type Tab =
   | "diagnostics"
   | "collections"
   | "leakage"
+  | "dues"
   | "advances"
   | "discharges";
 
@@ -45,9 +47,18 @@ const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "diagnostics", label: "Diagnostics", slug: "diagnostics" },
   { id: "collections", label: "Collections", slug: "collections" },
   { id: "leakage", label: "Revenue leakage", slug: "revenue-leakage" },
+  { id: "dues", label: "Dues ageing", slug: "dues-ageing" },
   { id: "advances", label: "Advances", slug: "wallet" },
   { id: "discharges", label: "Discharges", slug: "discharge-outcomes" },
 ];
+
+/** Human labels for the ageing buckets — the collections desk reads days, not raw keys. */
+const DUES_BUCKET_LABEL: Record<string, string> = {
+  "0-30": "0–30 days",
+  "31-60": "31–60 days",
+  "61-90": "61–90 days",
+  "90+": "Over 90 days",
+};
 
 /** The human name for each way a stay ends — what an auditor reads, not the wire value. */
 const DISPOSITION_LABEL: Record<string, string> = {
@@ -156,6 +167,7 @@ function ReportsPage() {
   const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null);
   const [collections, setCollections] = useState<CollectionsReport | null>(null);
   const [leakage, setLeakage] = useState<RevenueLeakageReport | null>(null);
+  const [dues, setDues] = useState<DuesAgeingReport | null>(null);
   const [advances, setAdvances] = useState<WalletRegister | null>(null);
   const [discharges, setDischarges] = useState<DischargeRegister | null>(null);
 
@@ -174,6 +186,7 @@ function ReportsPage() {
       else if (tab === "diagnostics") setDiagnostics(await api.reportDiagnostics(range));
       else if (tab === "collections") setCollections(await api.reportCollections(range));
       else if (tab === "leakage") setLeakage(await api.reportRevenueLeakage(range));
+      else if (tab === "dues") setDues(await api.reportDuesAgeing(range));
       else if (tab === "advances") setAdvances(await api.reportWallet(range));
       else if (tab === "discharges") setDischarges(await api.reportDischargeOutcomes(range));
     } catch (e) {
@@ -595,6 +608,50 @@ function ReportsPage() {
                   />
                 </Card>
               </div>
+            </div>
+          )}
+
+          {tab === "dues" && dues && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Stat label="Outstanding (billed, unpaid)" value={rupees(dues.totalOutstanding)} />
+                <Stat label="Bills with a balance" value={String(dues.invoiceCount)} />
+              </div>
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                Finalized bills not yet fully paid, as of{" "}
+                {periodLabel.split(" – ")[1] || "the To date"}, aged by when the bill was raised.
+                The older a debt, the harder it is to collect — work the oldest buckets first.
+              </p>
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  By age
+                </h3>
+                <ReportTable
+                  headers={["Age", "Outstanding", "Bills"]}
+                  rows={dues.buckets.map((b) => [
+                    DUES_BUCKET_LABEL[b.bucket] ?? b.bucket,
+                    rupees(b.amount),
+                    b.count,
+                  ])}
+                  empty="Nothing outstanding."
+                />
+              </Card>
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  Who owes (heaviest first)
+                </h3>
+                <ReportTable
+                  headers={["Bill", "UHID", "Patient", "Outstanding", "Age (days)"]}
+                  rows={dues.topDebtors.map((r) => [
+                    r.number ?? "—",
+                    r.uhid,
+                    r.patientName,
+                    rupees(r.outstanding),
+                    r.ageDays,
+                  ])}
+                  empty="No outstanding bills — everything billed has been paid."
+                />
+              </Card>
             </div>
           )}
         </>

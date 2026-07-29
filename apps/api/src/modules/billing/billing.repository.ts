@@ -397,6 +397,121 @@ export async function revenueLeakage(from: Date, to: Date): Promise<RevenueLeaka
   };
 }
 
+/* ── Reporting: dues ageing (billed but unpaid, by how old the debt is) ── */
+
+export const DUES_BUCKETS = ["0-30", "31-60", "61-90", "90+"] as const;
+export type DuesBucket = (typeof DUES_BUCKETS)[number];
+
+export interface DuesAgeingReport {
+  /** Paise still owed on finalized-but-unpaid bills, as of the report date. */
+  totalOutstanding: number;
+  /** Number of bills carrying a balance. */
+  invoiceCount: number;
+  /** Outstanding split by how old the debt is — the ageing the collections desk chases down. */
+  buckets: { bucket: DuesBucket; amount: number; count: number }[];
+  /** The heaviest debts, oldest money first — who to call. */
+  topDebtors: {
+    invoiceId: string;
+    number?: string;
+    patientId: string;
+    outstanding: number;
+    ageDays: number;
+  }[];
+}
+
+/**
+ * Money BILLED BUT NOT YET COLLECTED, aged.
+ *
+ * A `finalized` invoice is one handed to the patient but not fully paid (payment flips it to
+ * `paid`), so `total − paid` on every finalized bill is the hospital's outstanding receivable. This
+ * ages each balance by how long ago the bill was raised (`finalizedAt`, falling back to
+ * `createdAt`) into the 0-30 / 31-60 / 61-90 / 90+ day buckets a collections desk works, and lists
+ * the heaviest debts so someone can chase them. `asOf` is the snapshot date — the report's `to`, so
+ * "dues as of the 31st" is answerable. Paise; tenant-scoped by the aggregate hook.
+ */
+export async function duesAgeing(asOf: Date): Promise<DuesAgeingReport> {
+  const day = 86_400_000;
+  const d30 = new Date(asOf.getTime() - 30 * day);
+  const d60 = new Date(asOf.getTime() - 60 * day);
+  const d90 = new Date(asOf.getTime() - 90 * day);
+
+  const model = getInvoiceModel(getTenantDb());
+  const facet = await model.aggregate<{
+    total: { amount: number; count: number }[];
+    buckets: { _id: DuesBucket; amount: number; count: number }[];
+    top: {
+      _id: Types.ObjectId;
+      number?: string;
+      patientId: Types.ObjectId;
+      outstanding: number;
+      ageDays: number;
+    }[];
+  }>([
+    { $match: { status: "finalized", finalizedAt: { $lte: asOf } } },
+    {
+      $addFields: {
+        outstanding: { $subtract: ["$total", "$paid"] },
+        refDate: { $ifNull: ["$finalizedAt", "$createdAt"] },
+      },
+    },
+    { $match: { outstanding: { $gt: 0 } } },
+    {
+      $addFields: {
+        ageDays: { $floor: { $divide: [{ $subtract: [asOf, "$refDate"] }, day] } },
+        bucket: {
+          $switch: {
+            branches: [
+              { case: { $gte: ["$refDate", d30] }, then: "0-30" },
+              { case: { $gte: ["$refDate", d60] }, then: "31-60" },
+              { case: { $gte: ["$refDate", d90] }, then: "61-90" },
+            ],
+            default: "90+",
+          },
+        },
+      },
+    },
+    {
+      $facet: {
+        total: [{ $group: { _id: null, amount: { $sum: "$outstanding" }, count: { $sum: 1 } } }],
+        buckets: [
+          { $group: { _id: "$bucket", amount: { $sum: "$outstanding" }, count: { $sum: 1 } } },
+        ],
+        top: [
+          { $sort: { outstanding: -1 } },
+          { $limit: 50 },
+          {
+            $project: {
+              number: 1,
+              patientId: 1,
+              outstanding: 1,
+              ageDays: 1,
+            },
+          },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  const found = new Map((f?.buckets ?? []).map((b) => [b._id, b]));
+  return {
+    totalOutstanding: f?.total[0]?.amount ?? 0,
+    invoiceCount: f?.total[0]?.count ?? 0,
+    // Emit every bucket in a fixed order, zero-filled — a report with a missing row reads as a
+    // gap in the data, not the "nothing is 61-90 days overdue" it actually means.
+    buckets: DUES_BUCKETS.map((bucket) => {
+      const b = found.get(bucket);
+      return { bucket, amount: b?.amount ?? 0, count: b?.count ?? 0 };
+    }),
+    topDebtors: (f?.top ?? []).map((r) => ({
+      invoiceId: r._id.toString(),
+      patientId: r.patientId.toString(),
+      outstanding: r.outstanding,
+      ageDays: r.ageDays,
+      ...(r.number ? { number: r.number } : {}),
+    })),
+  };
+}
+
 /* ── Charges ───────────────────────────────────────────────────────────────── */
 
 export interface PostChargeInput {

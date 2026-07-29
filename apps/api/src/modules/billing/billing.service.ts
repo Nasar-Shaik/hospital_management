@@ -286,6 +286,7 @@ export const getInvoice = repo.findInvoiceById;
 /** The collections register for a period — used by the reporting module. */
 export const collectionsReport = repo.collectionsReport;
 export const revenueLeakage = repo.revenueLeakage;
+export const duesAgeing = repo.duesAgeing;
 
 /* ── Tariff management (the price list a hospital edits) ────────────────────── */
 

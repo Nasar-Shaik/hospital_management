@@ -24,9 +24,11 @@ import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
 import {
   collectionsReport,
   revenueLeakage as billingRevenueLeakage,
+  duesAgeing as billingDuesAgeing,
   listReceipts,
   type CollectionsReport,
   type RevenueLeakageReport,
+  type DuesAgeingReport,
 } from "../billing/index.js";
 import { walletReport, listDeposits, type WalletRegister } from "../wallet/index.js";
 import { getById as getUser } from "../users/index.js";
@@ -41,6 +43,7 @@ export type {
   DiagnosticsReport,
   CollectionsReport,
   RevenueLeakageReport,
+  DuesAgeingReport,
   DischargeRegister,
   WalletRegister,
 };
@@ -54,6 +57,19 @@ export interface RevenueLeakageReportNamed extends Omit<RevenueLeakageReport, "b
     uhid: string;
     amount: number;
     count: number;
+  }[];
+}
+
+/** Dues ageing with each debtor named — a patient and UHID beside each outstanding bill. */
+export interface DuesAgeingReportNamed extends Omit<DuesAgeingReport, "topDebtors"> {
+  topDebtors: {
+    invoiceId: string;
+    number?: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    outstanding: number;
+    ageDays: number;
   }[];
 }
 
@@ -102,6 +118,32 @@ export async function revenueLeakage(range: DateRange): Promise<RevenueLeakageRe
         uhid: p?.uhid ?? "",
         amount: r.amount,
         count: r.count,
+      };
+    }),
+  };
+}
+
+/**
+ * Dues ageing — billed but unpaid, bucketed by age — with each debtor named. `asOf` is the report's
+ * `to` date, so the ageing is a snapshot "as of" that day. Billing owns the balances; this names the
+ * bills so the collections desk sees who to call, not a column of ids.
+ */
+export async function duesAgeing(range: DateRange): Promise<DuesAgeingReportNamed> {
+  const report = await billingDuesAgeing(range.to);
+  const named = await namesByIds(report.topDebtors.map((r) => r.patientId));
+  const byId = new Map(named.map((n) => [n.id, n]));
+  return {
+    ...report,
+    topDebtors: report.topDebtors.map((r) => {
+      const p = byId.get(r.patientId);
+      return {
+        invoiceId: r.invoiceId,
+        patientId: r.patientId,
+        patientName: p?.name ?? `Unknown (${r.patientId.slice(-6)})`,
+        uhid: p?.uhid ?? "",
+        outstanding: r.outstanding,
+        ageDays: r.ageDays,
+        ...(r.number ? { number: r.number } : {}),
       };
     }),
   };

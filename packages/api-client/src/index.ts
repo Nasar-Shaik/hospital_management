@@ -1561,6 +1561,24 @@ export interface RevenueLeakageReport {
   }[];
 }
 
+/** Dues ageing — billed but unpaid, bucketed by age. Amounts are PAISE. */
+export interface DuesAgeingReport {
+  /** Paise still owed on finalized-but-unpaid bills, as of the report date. */
+  totalOutstanding: number;
+  invoiceCount: number;
+  buckets: { bucket: "0-30" | "31-60" | "61-90" | "90+"; amount: number; count: number }[];
+  /** The heaviest debts, for the collections desk to chase. */
+  topDebtors: {
+    invoiceId: string;
+    number?: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    outstanding: number;
+    ageDays: number;
+  }[];
+}
+
 /** A row of the advance register broken down by how the advance was collected. */
 export interface WalletMethodRow {
   method: string;
@@ -3485,6 +3503,11 @@ export class ApiClient {
       "GET",
       `/api/v1/reports/revenue-leakage${rangeQs(range)}`,
     );
+  }
+
+  /** Dues ageing — billed but unpaid as of the range's `to` date, bucketed by age of the debt. */
+  reportDuesAgeing(range: ReportRange): Promise<DuesAgeingReport> {
+    return this.request<DuesAgeingReport>("GET", `/api/v1/reports/dues-ageing${rangeQs(range)}`);
   }
 
   /** The advance (wallet) register — admission advances in, utilised, refunded, and held. */

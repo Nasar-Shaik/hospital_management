@@ -36,6 +36,7 @@ export {
   setPayerSplit,
   collectionsReport,
   revenueLeakage,
+  duesAgeing,
   orderPaymentStatus,
   listReceipts,
   type Charge,
@@ -45,7 +46,12 @@ export {
   type PostChargeInput,
   type OrderPaymentState,
 } from "./billing.service.js";
-export type { CollectionsReport, RevenueLeakageReport } from "./billing.repository.js";
+export type {
+  CollectionsReport,
+  RevenueLeakageReport,
+  DuesAgeingReport,
+  DuesBucket,
+} from "./billing.repository.js";
 
 export {
   CHARGE_CATEGORIES,
