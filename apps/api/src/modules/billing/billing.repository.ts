@@ -19,6 +19,7 @@ import {
   type InvoiceLine,
   type InvoiceStatus,
   type PaymentEntry,
+  type RefundEntry,
   type ServiceItemDoc,
 } from "./billing.model.js";
 
@@ -69,9 +70,12 @@ export interface Invoice {
   lines: InvoiceLine[];
   subtotal: number;
   discount: number;
+  discountReason?: string;
   total: number;
   paid: number;
   payments: PaymentEntry[];
+  refunds: RefundEntry[];
+  refunded: number;
   finalizedAt?: Date;
   createdAt: Date;
 }
@@ -125,7 +129,10 @@ function toInvoice(d: InvoiceDoc): Invoice {
     total: d.total,
     paid: d.paid,
     payments: d.payments ?? [],
+    refunds: d.refunds ?? [],
+    refunded: d.refunded ?? 0,
     createdAt: d.createdAt,
+    ...(d.discountReason ? { discountReason: d.discountReason } : {}),
     ...(d.number ? { number: d.number } : {}),
     ...(d.finalizedAt ? { finalizedAt: d.finalizedAt } : {}),
   };
@@ -593,6 +600,23 @@ export async function addPayment(
     .findOneAndUpdate(
       { _id: id },
       { $push: { payments: payment }, $set: { paid, status } },
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<InvoiceDoc>();
+  return doc ? toInvoice(doc) : undefined;
+}
+
+/** Records money handed back. `refunded` is the new running total, not a delta — the caller computed it. */
+export async function addRefund(
+  id: string,
+  refund: RefundEntry,
+  refunded: number,
+  session?: ClientSession,
+): Promise<Invoice | undefined> {
+  const doc = await getInvoiceModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: id },
+      { $push: { refunds: refund }, $set: { refunded } },
       { new: true, ...(session ? { session } : {}) },
     )
     .lean<InvoiceDoc>();

@@ -31,6 +31,8 @@ export {
   listInvoices,
   listServices,
   getInvoice,
+  applyDiscount,
+  recordRefund,
   collectionsReport,
   orderPaymentStatus,
   listReceipts,
@@ -49,4 +51,5 @@ export {
   type ChargeCategory,
   type InvoiceStatus,
   type InvoiceLine,
+  type RefundEntry,
 } from "./billing.model.js";

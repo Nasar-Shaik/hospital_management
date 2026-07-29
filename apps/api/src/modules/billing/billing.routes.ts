@@ -32,6 +32,8 @@ import {
   updateServiceSchema,
   postChargeSchema,
   recordPaymentSchema,
+  applyDiscountSchema,
+  recordRefundSchema,
   voidChargeSchema,
 } from "./billing.schema.js";
 
@@ -227,6 +229,30 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(recordPaymentSchema),
     asyncHandler(controller.recordPayment),
+  );
+
+  /**
+   * Approved adjustments to a finalized bill. Deliberately NOT the cashier's own permissions —
+   * the CASHIER role reads "Cannot discount or refund without approval", and these two routes are
+   * where that line is enforced. `billing:discount` writes down the bill; `billing:refund` hands
+   * money back. Both are a separate authority from posting a charge or taking a payment.
+   */
+  router.post(
+    "/invoices/:id/discount",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_DISCOUNT, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(applyDiscountSchema),
+    asyncHandler(controller.applyDiscount),
+  );
+
+  router.post(
+    "/invoices/:id/refund",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_REFUND, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(recordRefundSchema),
+    asyncHandler(controller.recordRefund),
   );
 
   return router;

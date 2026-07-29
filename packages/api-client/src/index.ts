@@ -1316,10 +1316,15 @@ export interface Invoice {
   status: InvoiceStatus;
   lines: InvoiceLine[];
   subtotal: number;
+  /** Paise off the subtotal — an approved write-down. `total = subtotal − discount`. */
   discount: number;
+  discountReason?: string;
   total: number;
   paid: number;
   payments: { amount: number; method: string; reference?: string; at: string }[];
+  /** Money handed back. Net collected is `paid − refunded`. */
+  refunds: { amount: number; method: string; reason: string; at: string }[];
+  refunded: number;
   finalizedAt?: string;
 }
 
@@ -3852,6 +3857,22 @@ export class ApiClient {
       amount,
       method: "wallet",
     });
+  }
+
+  /**
+   * Applies an approved discount to a finalized bill. `amount` is PAISE. Needs `billing:discount`
+   * (not the cashier's own authority — a write-down is approved, not self-served).
+   */
+  applyDiscount(invoiceId: string, input: { amount: number; reason: string }): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/discount`, input);
+  }
+
+  /** Hands money back. `amount` is PAISE, never more than net collected. Needs `billing:refund`. */
+  recordRefund(
+    invoiceId: string,
+    input: { amount: number; method: string; reason: string },
+  ): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/refund`, input);
   }
 
   /* ── wallet (patient advance) ── */

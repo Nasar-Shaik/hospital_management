@@ -33,6 +33,7 @@ import {
   type InvoiceLine,
   type InvoiceStatus,
   type PaymentEntry,
+  type RefundEntry,
 } from "./billing.model.js";
 
 const logger = createLogger({ service: "billing" });
@@ -585,6 +586,110 @@ export async function recordPayment(
   const updated = await repo.addPayment(invoiceId, payment, status, paid);
   if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
 
+  return updated;
+}
+
+export interface ApplyDiscountInput {
+  amount: number;
+  reason: string;
+}
+
+/**
+ * Applies an approved discount to a FINALIZED bill — a supervisor's write-down, gated on
+ * `billing:discount` (the cashier cannot self-approve; see the CASHIER role).
+ *
+ * ── WHY FINALIZED, NOT DRAFT ────────────────────────────────────────────────
+ * `finalizeInvoice` recomputes `total = subtotal` from the frozen lines, so a discount set on a
+ * draft would be wiped the moment the bill is finalized. The discount is therefore an adjustment
+ * to the finalized total, NOT a line edit: the itemisation stays frozen and auditable, and the
+ * concession is a separate, named figure — which is exactly why `discount` and `total` are
+ * distinct fields on the invoice. A cancelled bill takes no discount; a fully-paid one has nothing
+ * left to discount (a return of money is a refund, not a discount).
+ */
+export async function applyDiscount(
+  invoiceId: string,
+  input: ApplyDiscountInput,
+): Promise<repo.Invoice> {
+  const ctx = getContext();
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  if (invoice.status !== "finalized") {
+    throw new AppError("HMS-STATE-001", 422, "Only a finalized, unpaid bill can be discounted", {
+      id: invoiceId,
+      status: invoice.status,
+      hint: "finalize the bill first; a fully-paid bill needs a refund, not a discount",
+    });
+  }
+  if (input.amount > invoice.subtotal) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [
+        `a discount of ${String(input.amount)} exceeds the bill of ${String(invoice.subtotal)} paise`,
+      ],
+    });
+  }
+  const total = invoice.subtotal - input.amount;
+  // The discount cannot drop the bill below what has already been collected — that money is in the
+  // drawer, and reducing the total under it would invent a refund the cashier never made.
+  if (total < invoice.paid) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [
+        `the bill is already ${String(invoice.paid)} paise paid — refund the excess instead`,
+      ],
+    });
+  }
+  // If the write-down clears the balance, the bill is settled — the same rule payment follows.
+  const status: InvoiceStatus = invoice.paid >= total ? "paid" : "finalized";
+  const updated = await repo.updateInvoice(invoiceId, {
+    discount: input.amount,
+    total,
+    status,
+    discountReason: input.reason,
+    ...(ctx.userId ? { discountBy: ctx.userId } : {}),
+  });
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  return updated;
+}
+
+export interface RecordRefundInput {
+  amount: number;
+  method: string;
+  reason: string;
+}
+
+/**
+ * Hands money back — an overpayment or a paid-for service that was cancelled. Gated on
+ * `billing:refund` (again, not the cashier's own authority).
+ *
+ * A refund can never exceed the NET already collected (`paid − refunded`): the hospital cannot
+ * return money it never took. It is recorded as its own entry with a reason, never as a deletion
+ * of the original payment — both legs of the money stay on the record for the drawer and the audit.
+ */
+export async function recordRefund(
+  invoiceId: string,
+  input: RecordRefundInput,
+): Promise<repo.Invoice> {
+  const ctx = getContext();
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  const netCollected = invoice.paid - invoice.refunded;
+  if (input.amount > netCollected) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [
+        `a refund of ${String(input.amount)} exceeds the ${String(netCollected)} paise collected`,
+      ],
+    });
+  }
+
+  const refund: RefundEntry = {
+    amount: input.amount,
+    method: input.method,
+    reason: input.reason,
+    at: new Date(),
+    ...(ctx.userId ? { by: ctx.userId } : {}),
+  };
+  const updated = await repo.addRefund(invoiceId, refund, invoice.refunded + input.amount);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
   return updated;
 }
 

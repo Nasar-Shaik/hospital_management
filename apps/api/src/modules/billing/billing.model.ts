@@ -219,6 +219,21 @@ export interface PaymentEntry {
   by?: string;
 }
 
+/**
+ * Money handed BACK — an overpayment returned, a cancelled service refunded. Kept as its own
+ * list rather than a negative payment: a refund has a REASON a payment does not, and the net
+ * collected (`paid − refunded`) must stay separable from what was ever taken, for the drawer to
+ * reconcile and the audit to read. A refund is never a delete of a payment — the money came in
+ * and went out, and both legs are on the record.
+ */
+export interface RefundEntry {
+  amount: number;
+  method: string;
+  reason: string;
+  at: Date;
+  by?: string;
+}
+
 export interface InvoiceDoc {
   _id: Types.ObjectId;
   tenantId: string;
@@ -235,11 +250,17 @@ export interface InvoiceDoc {
   lines: InvoiceLine[];
   /** Paise. */
   subtotal: number;
+  /** Paise off the subtotal — an approved adjustment, NOT a line edit. `total = subtotal − discount`. */
   discount: number;
+  discountReason?: string;
+  discountBy?: string;
   total: number;
   paid: number;
 
   payments: PaymentEntry[];
+  refunds: RefundEntry[];
+  /** Paise handed back so far. Net collected is `paid − refunded`. */
+  refunded: number;
 
   finalizedAt?: Date;
   finalizedBy?: string;
@@ -273,6 +294,8 @@ const invoiceSchema = new Schema<InvoiceDoc>(
     ],
     subtotal: { type: Number, required: true, default: 0 },
     discount: { type: Number, required: true, default: 0 },
+    discountReason: { type: String },
+    discountBy: { type: String },
     total: { type: Number, required: true, default: 0 },
     paid: { type: Number, required: true, default: 0 },
 
@@ -286,6 +309,17 @@ const invoiceSchema = new Schema<InvoiceDoc>(
         by: { type: String },
       },
     ],
+    refunds: [
+      {
+        _id: false,
+        amount: { type: Number, required: true },
+        method: { type: String, required: true },
+        reason: { type: String, required: true },
+        at: { type: Date, required: true },
+        by: { type: String },
+      },
+    ],
+    refunded: { type: Number, required: true, default: 0 },
 
     finalizedAt: { type: Date },
     finalizedBy: { type: String },

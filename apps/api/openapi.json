@@ -3513,6 +3513,84 @@
         "x-feature": "module.ops.opd"
       }
     },
+    "/api/v1/invoices/{id}/discount": {
+      "post": {
+        "operationId": "post_v1_invoices_id_discount",
+        "tags": ["invoices"],
+        "summary": "POST /api/v1/invoices/{id}/discount",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:discount",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/invoices/{id}/refund": {
+      "post": {
+        "operationId": "post_v1_invoices_id_refund",
+        "tags": ["invoices"],
+        "summary": "POST /api/v1/invoices/{id}/refund",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:refund",
+        "x-feature": "module.ops.opd"
+      }
+    },
     "/api/v1/prescriptions": {
       "post": {
         "operationId": "post_v1_prescriptions",

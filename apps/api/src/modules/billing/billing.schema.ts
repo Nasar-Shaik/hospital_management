@@ -37,6 +37,21 @@ export const recordPaymentSchema = z
   })
   .strict();
 
+export const applyDiscountSchema = z
+  .object({
+    amount: paise.refine((v) => v > 0, "a discount of nothing is not a discount"),
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+
+export const recordRefundSchema = z
+  .object({
+    amount: paise.refine((v) => v > 0, "a refund of nothing is not a refund"),
+    method: z.enum(["cash", "card", "upi", "netbanking", "cheque", "insurance", "wallet"]),
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+
 export const listInvoicesQuerySchema = z
   .object({
     status: z.enum(INVOICE_STATUSES).optional(),
@@ -81,6 +96,8 @@ export const updateServiceSchema = z
 
 export type PostChargeBody = z.infer<typeof postChargeSchema>;
 export type RecordPaymentBody = z.infer<typeof recordPaymentSchema>;
+export type ApplyDiscountBody = z.infer<typeof applyDiscountSchema>;
+export type RecordRefundBody = z.infer<typeof recordRefundSchema>;
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
 export type CreateServiceBody = z.infer<typeof createServiceSchema>;
 export type UpdateServiceBody = z.infer<typeof updateServiceSchema>;

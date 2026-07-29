@@ -126,6 +126,153 @@ function PaymentForm({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void
   );
 }
 
+/** An approved write-down on a finalized bill. A reason is mandatory — a discount without one is a leak. */
+function DiscountForm({ invoice, onDone }: { invoice: Invoice; onDone: () => void }) {
+  const { api } = useAuth();
+  const headroom = invoice.subtotal - invoice.paid;
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.applyDiscount(invoice.id, { amount: toPaise(amount), reason });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not apply the discount.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+      <div className="grid gap-2 sm:grid-cols-[1fr_2fr_auto]">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Discount (₹)
+          </span>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Reason (recorded)
+          </span>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. management concession, camp rate"
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+        <div className="flex items-end">
+          <Button
+            disabled={busy || !amount.trim() || reason.trim().length < 3}
+            onClick={() => void submit()}
+          >
+            {busy ? "Applying…" : "Apply discount"}
+          </Button>
+        </div>
+      </div>
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        Reduces the bill of {rupees(invoice.subtotal)}; cannot drop below the {rupees(invoice.paid)}{" "}
+        already paid ({rupees(headroom)} of room).
+      </p>
+    </div>
+  );
+}
+
+/** Hands money back. Never more than net collected; a reason is mandatory. */
+function RefundForm({ invoice, onDone }: { invoice: Invoice; onDone: () => void }) {
+  const { api } = useAuth();
+  const net = invoice.paid - invoice.refunded;
+  const [amount, setAmount] = useState((net / 100).toFixed(2));
+  const [method, setMethod] = useState<string>("cash");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.recordRefund(invoice.id, { amount: toPaise(amount), method, reason });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not record the refund.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+      <div className="grid gap-2 sm:grid-cols-[1fr_1fr_2fr_auto]">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Refund (₹)
+          </span>
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Method
+          </span>
+          <select
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          >
+            {METHODS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+            Reason (recorded)
+          </span>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. overpayment, cancelled test"
+            className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+          />
+        </label>
+        <div className="flex items-end">
+          <Button
+            variant="danger"
+            disabled={busy || !amount.trim() || reason.trim().length < 3}
+            onClick={() => void submit()}
+          >
+            {busy ? "Refunding…" : "Refund"}
+          </Button>
+        </div>
+      </div>
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        {rupees(net)} available to refund (collected less what was already returned).
+      </p>
+    </div>
+  );
+}
+
 function InvoiceRow({
   invoice,
   nameOf,
@@ -138,8 +285,11 @@ function InvoiceRow({
   const { can } = useAuth();
   const [open, setOpen] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [discounting, setDiscounting] = useState(false);
+  const [refunding, setRefunding] = useState(false);
 
   const owes = invoice.total - invoice.paid;
+  const net = invoice.paid - invoice.refunded;
 
   return (
     <li className="rounded-lg border border-[var(--color-border)] p-3.5">
@@ -161,11 +311,21 @@ function InvoiceRow({
 
         <div className="text-right">
           <p className="text-lg font-semibold text-[var(--color-fg)]">{rupees(invoice.total)}</p>
+          {invoice.discount > 0 && (
+            <p className="text-xs text-[var(--color-fg-subtle)]">
+              after {rupees(invoice.discount)} discount
+            </p>
+          )}
           {owes > 0 && (
             <p className="text-xs text-[var(--color-danger)]">{rupees(owes)} outstanding</p>
           )}
           {invoice.paid > 0 && invoice.paid < invoice.total && (
             <p className="text-xs text-[var(--color-fg-subtle)]">{rupees(invoice.paid)} paid</p>
+          )}
+          {invoice.refunded > 0 && (
+            <p className="text-xs text-[var(--color-warning)]">
+              {rupees(invoice.refunded)} refunded
+            </p>
           )}
         </div>
       </div>
@@ -178,6 +338,20 @@ function InvoiceRow({
           <PermissionGate can={can} permission="payment:collect">
             <Button variant="secondary" onClick={() => setPaying(!paying)}>
               {paying ? "Cancel" : "Take payment"}
+            </Button>
+          </PermissionGate>
+        )}
+        {owes > 0 && invoice.status === "finalized" && (
+          <PermissionGate can={can} permission="billing:discount">
+            <Button variant="ghost" onClick={() => setDiscounting(!discounting)}>
+              {discounting ? "Cancel" : "Discount"}
+            </Button>
+          </PermissionGate>
+        )}
+        {net > 0 && (
+          <PermissionGate can={can} permission="billing:refund">
+            <Button variant="ghost" onClick={() => setRefunding(!refunding)}>
+              {refunding ? "Cancel" : "Refund"}
             </Button>
           </PermissionGate>
         )}
@@ -207,6 +381,12 @@ function InvoiceRow({
         </table>
       )}
 
+      {invoice.discount > 0 && invoice.discountReason && (
+        <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
+          Discount {rupees(invoice.discount)} — {invoice.discountReason}
+        </p>
+      )}
+
       {invoice.payments.length > 0 && (
         <ul className="mt-2 space-y-0.5">
           {invoice.payments.map((p, i) => (
@@ -219,11 +399,40 @@ function InvoiceRow({
         </ul>
       )}
 
+      {invoice.refunds.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {invoice.refunds.map((r, i) => (
+            <li key={i} className="text-xs text-[var(--color-warning)]">
+              −{rupees(r.amount)} refund · {r.method} · {r.reason} ·{" "}
+              {new Date(r.at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+            </li>
+          ))}
+        </ul>
+      )}
+
       {paying && (
         <PaymentForm
           invoice={invoice}
           onPaid={() => {
             setPaying(false);
+            onChanged();
+          }}
+        />
+      )}
+      {discounting && (
+        <DiscountForm
+          invoice={invoice}
+          onDone={() => {
+            setDiscounting(false);
+            onChanged();
+          }}
+        />
+      )}
+      {refunding && (
+        <RefundForm
+          invoice={invoice}
+          onDone={() => {
+            setRefunding(false);
             onChanged();
           }}
         />

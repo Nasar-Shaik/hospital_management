@@ -10,6 +10,8 @@ import type {
   ListInvoicesQuery,
   PostChargeBody,
   RecordPaymentBody,
+  ApplyDiscountBody,
+  RecordRefundBody,
   CreateServiceBody,
   UpdateServiceBody,
 } from "./billing.schema.js";
@@ -222,4 +224,14 @@ export const getInvoice: RequestHandler = async (req, res) => {
 export const recordPayment: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await billing.recordPayment(id, req.body as RecordPaymentBody), 201);
+};
+
+export const applyDiscount: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.applyDiscount(id, req.body as ApplyDiscountBody));
+};
+
+export const recordRefund: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.recordRefund(id, req.body as RecordRefundBody), 201);
 };
