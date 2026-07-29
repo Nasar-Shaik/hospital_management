@@ -34,6 +34,9 @@ import {
   type PolicyRelationship,
   type ClaimType,
   type ClaimStatus,
+  type Consent,
+  type ConsentType,
+  type ConsentSigner,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
@@ -110,6 +113,7 @@ type TabKey =
   | "bills"
   | "wallet"
   | "insurance"
+  | "consent"
   | "documents";
 
 function Profile() {
@@ -120,6 +124,7 @@ function Profile() {
   const canReconcile = can("insurance:reconcile");
   const canReadVitals = can("emr:read");
   const canRecordVitals = can("vitals:record");
+  const canManageConsent = can("consent:manage");
   const canReadDocs = can("file:read");
   const canUploadDocs = can("file:upload");
   const canDeleteDocs = can("file:delete");
@@ -244,6 +249,7 @@ function Profile() {
     { key: "bills", label: "Bills", count: invoices.length },
     ...(canWallet ? [{ key: "wallet" as const, label: "Wallet" }] : []),
     ...(canInsurance ? [{ key: "insurance" as const, label: "Insurance" }] : []),
+    ...(canReadVitals || canManageConsent ? [{ key: "consent" as const, label: "Consent" }] : []),
     ...(canReadDocs
       ? [{ key: "documents" as const, label: "Documents", count: documents.length }]
       : []),
@@ -394,6 +400,9 @@ function Profile() {
             canFile={canFileClaim}
             canReconcile={canReconcile}
           />
+        )}
+        {tab === "consent" && (canReadVitals || canManageConsent) && (
+          <ConsentPanel patientId={id} encounters={encounters} canManage={canManageConsent} />
         )}
         {tab === "documents" && canReadDocs && (
           <Documents
@@ -1712,6 +1721,288 @@ function ClaimForm({
           }
         >
           File claim
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+/* ── consent (C3 / medico-legal) ─────────────────────────────────────────── */
+
+const CONSENT_TYPE_LABEL: Record<ConsentType, string> = {
+  general: "General",
+  admission: "Admission",
+  surgical: "Surgical",
+  anaesthesia: "Anaesthesia",
+  procedure: "Procedure",
+  blood_transfusion: "Blood transfusion",
+  high_risk: "High-risk",
+  hiv_test: "HIV test",
+  dnr: "DNR",
+  research: "Research",
+};
+
+const CONSENT_SIGNER_LABEL: Record<ConsentSigner, string> = {
+  patient: "Patient",
+  guardian: "Guardian",
+  spouse: "Spouse",
+  parent: "Parent",
+  next_of_kin: "Next of kin",
+};
+
+function ConsentPanel({
+  patientId,
+  encounters,
+  canManage,
+}: {
+  patientId: string;
+  encounters: Encounter[];
+  canManage: boolean;
+}) {
+  const { api } = useAuth();
+  const [consents, setConsents] = useState<Consent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<unknown>(null);
+  const [showForm, setShowForm] = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api
+      .listConsents(patientId)
+      .then(setConsents)
+      .catch((e: unknown) => setError(e))
+      .finally(() => setLoading(false));
+  }, [api, patientId]);
+  useEffect(load, [load]);
+
+  async function act(fn: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await fn();
+      load();
+    } catch (e) {
+      setError(e);
+    }
+  }
+
+  function withdraw(c: Consent) {
+    const reason = window.prompt("Why is this consent being withdrawn?");
+    if (reason === null || !reason.trim()) return;
+    void act(() => api.withdrawConsent(c.id, reason.trim()));
+  }
+
+  if (loading) {
+    return <p className="py-6 text-center text-sm text-[var(--color-fg-muted)]">Loading…</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {error != null && (
+        <Alert tone="danger">
+          {error instanceof ApiClientError ? error.message : "Something went wrong."}
+        </Alert>
+      )}
+
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold text-[var(--color-fg)]">Consents</h2>
+        {canManage && (
+          <Button variant="ghost" onClick={() => setShowForm((s) => !s)}>
+            {showForm ? "Cancel" : "Record consent"}
+          </Button>
+        )}
+      </div>
+
+      {showForm && canManage && (
+        <ConsentForm
+          encounters={encounters}
+          onSubmit={(v) =>
+            void act(async () => {
+              await api.recordConsent({ patientId, ...v });
+              setShowForm(false);
+            })
+          }
+        />
+      )}
+
+      {consents.length === 0 ? (
+        <p className="text-sm text-[var(--color-fg-subtle)]">No consents on record.</p>
+      ) : (
+        <div className="space-y-2">
+          {consents.map((c) => (
+            <Card key={c.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 p-3.5">
+              <div className="min-w-40 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="neutral">{CONSENT_TYPE_LABEL[c.type]}</Badge>
+                  <span className="font-medium text-[var(--color-fg)]">{c.procedure}</span>
+                  {c.status === "withdrawn" && <Badge tone="danger">Withdrawn</Badge>}
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--color-fg-subtle)]">
+                  Signed by {c.signerName} ({CONSENT_SIGNER_LABEL[c.signedBy]}
+                  {c.relationship ? `, ${c.relationship}` : ""})
+                  {c.language ? ` · in ${c.language}` : ""}
+                  {c.witnessName ? ` · witness ${c.witnessName}` : ""}
+                </p>
+                {c.risksExplained && (
+                  <p className="mt-1 text-xs text-[var(--color-fg-muted)]">
+                    Risks: {c.risksExplained}
+                  </p>
+                )}
+                {c.status === "withdrawn" && c.withdrawalReason && (
+                  <p className="mt-1 text-xs text-[var(--color-danger)]">
+                    Withdrawn: {c.withdrawalReason}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-col items-end gap-1 text-right text-xs text-[var(--color-fg-muted)]">
+                <span>{fmtDate(c.signedAt)}</span>
+                {canManage && c.status === "active" && (
+                  <Button variant="ghost" onClick={() => withdraw(c)}>
+                    Withdraw
+                  </Button>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConsentForm({
+  encounters,
+  onSubmit,
+}: {
+  encounters: Encounter[];
+  onSubmit: (
+    v: Omit<Parameters<ReturnType<typeof useAuth>["api"]["recordConsent"]>[0], "patientId">,
+  ) => void;
+}) {
+  const [type, setType] = useState<ConsentType>("general");
+  const [procedure, setProcedure] = useState("");
+  const [signedBy, setSignedBy] = useState<ConsentSigner>("patient");
+  const [signerName, setSignerName] = useState("");
+  const [relationship, setRelationship] = useState("");
+  const [language, setLanguage] = useState("");
+  const [witnessName, setWitnessName] = useState("");
+  const [risksExplained, setRisksExplained] = useState("");
+  const [encounterId, setEncounterId] = useState("");
+
+  const relationshipNeeded = signedBy !== "patient";
+  const valid =
+    procedure.trim() && signerName.trim() && (!relationshipNeeded || relationship.trim());
+
+  return (
+    <Card className="mb-3 space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <InsField label="Consent for">
+          <select
+            className={insInput}
+            value={type}
+            onChange={(e) => setType(e.target.value as ConsentType)}
+          >
+            {(Object.keys(CONSENT_TYPE_LABEL) as ConsentType[]).map((t) => (
+              <option key={t} value={t}>
+                {CONSENT_TYPE_LABEL[t]}
+              </option>
+            ))}
+          </select>
+        </InsField>
+        <InsField label="Procedure / description">
+          <input
+            className={insInput}
+            value={procedure}
+            placeholder="e.g. Laparoscopic cholecystectomy"
+            onChange={(e) => setProcedure(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Signed by">
+          <select
+            className={insInput}
+            value={signedBy}
+            onChange={(e) => setSignedBy(e.target.value as ConsentSigner)}
+          >
+            {(Object.keys(CONSENT_SIGNER_LABEL) as ConsentSigner[]).map((s) => (
+              <option key={s} value={s}>
+                {CONSENT_SIGNER_LABEL[s]}
+              </option>
+            ))}
+          </select>
+        </InsField>
+        <InsField label="Signer's name">
+          <input
+            className={insInput}
+            value={signerName}
+            onChange={(e) => setSignerName(e.target.value)}
+          />
+        </InsField>
+        {relationshipNeeded && (
+          <InsField label="Relationship to patient">
+            <input
+              className={insInput}
+              value={relationship}
+              placeholder="e.g. son, wife"
+              onChange={(e) => setRelationship(e.target.value)}
+            />
+          </InsField>
+        )}
+        <InsField label="Language explained in (optional)">
+          <input
+            className={insInput}
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Witness (optional)">
+          <input
+            className={insInput}
+            value={witnessName}
+            onChange={(e) => setWitnessName(e.target.value)}
+          />
+        </InsField>
+        <InsField label="Against visit (optional)">
+          <select
+            className={insInput}
+            value={encounterId}
+            onChange={(e) => setEncounterId(e.target.value)}
+          >
+            <option value="">— none —</option>
+            {encounters.map((e) => (
+              <option key={e.id} value={e.id}>
+                {fmtDate(e.arrivedAt)} · {e.class}
+              </option>
+            ))}
+          </select>
+        </InsField>
+      </div>
+      <InsField label="Risks explained (optional)">
+        <textarea
+          className={insInput}
+          rows={2}
+          value={risksExplained}
+          onChange={(e) => setRisksExplained(e.target.value)}
+        />
+      </InsField>
+      <div className="flex justify-end">
+        <Button
+          disabled={!valid}
+          onClick={() =>
+            onSubmit({
+              type,
+              procedure: procedure.trim(),
+              signedBy,
+              signerName: signerName.trim(),
+              ...(relationshipNeeded && relationship.trim()
+                ? { relationship: relationship.trim() }
+                : {}),
+              ...(language.trim() ? { language: language.trim() } : {}),
+              ...(witnessName.trim() ? { witnessName: witnessName.trim() } : {}),
+              ...(risksExplained.trim() ? { risksExplained: risksExplained.trim() } : {}),
+              ...(encounterId ? { encounterId } : {}),
+            })
+          }
+        >
+          Record consent
         </Button>
       </div>
     </Card>

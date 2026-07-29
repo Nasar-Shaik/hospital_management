@@ -27,6 +27,7 @@ import {
   type Prescription,
   type MedicationAdministration,
   type MarStatus,
+  type MannerOfDeath,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
@@ -421,6 +422,18 @@ const OUTCOMES: Record<TerminalOutcome, { label: string; verb: string; prompt: s
   },
 };
 
+const MANNER_LABEL: Record<MannerOfDeath, string> = {
+  natural: "Natural",
+  accident: "Accident",
+  suicide: "Suicide",
+  homicide: "Homicide",
+  pending: "Pending enquiry",
+  undetermined: "Undetermined",
+};
+
+const wardInput =
+  "mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]";
+
 function OutcomeForm({
   encounterId,
   onRecorded,
@@ -428,17 +441,46 @@ function OutcomeForm({
   encounterId: string;
   onRecorded: (outcome: TerminalOutcome) => void;
 }) {
-  const { api } = useAuth();
+  const { api, can } = useAuth();
+  const canCertify = can("death:certify");
   const [outcome, setOutcome] = useState<TerminalOutcome>("lama");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const chosen = OUTCOMES[outcome];
 
+  // Structured death record — filed alongside the outcome note when a certifier records a death.
+  const [immediateCause, setImmediateCause] = useState("");
+  const [antecedentCause, setAntecedentCause] = useState("");
+  const [underlyingCause, setUnderlyingCause] = useState("");
+  const [manner, setManner] = useState<MannerOfDeath>("natural");
+  const [medicoLegal, setMedicoLegal] = useState(false);
+  const [postmortemRequired, setPostmortemRequired] = useState(false);
+
+  // When a certifier records a death, the statutory cause is required — it is the whole point of
+  // the record. LAMA/absconded, and deaths logged by someone who cannot certify, need only the note.
+  const deathRecordActive = outcome === "deceased" && canCertify;
+  const canSubmit =
+    text.trim().length > 0 && (!deathRecordActive || immediateCause.trim().length > 0);
+
   async function submit() {
     setBusy(true);
     setError(null);
     try {
+      // File the structured record FIRST: if it fails (e.g. one already exists), the stay stays
+      // open and recoverable — closing it first would strand a death with no cause on record.
+      if (deathRecordActive) {
+        await api.recordDeath({
+          encounterId,
+          diedAt: new Date().toISOString(),
+          immediateCause: immediateCause.trim(),
+          ...(antecedentCause.trim() ? { antecedentCause: antecedentCause.trim() } : {}),
+          ...(underlyingCause.trim() ? { underlyingCause: underlyingCause.trim() } : {}),
+          manner,
+          medicoLegal,
+          postmortemRequired,
+        });
+      }
       await api.recordOutcome(encounterId, { outcome, text });
       onRecorded(outcome);
     } catch (err) {
@@ -457,7 +499,7 @@ function OutcomeForm({
         <select
           value={outcome}
           onChange={(e) => setOutcome(e.target.value as TerminalOutcome)}
-          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+          className={wardInput}
         >
           {OUTCOME_ORDER.map((value) => (
             <option key={value} value={value}>
@@ -466,6 +508,73 @@ function OutcomeForm({
           ))}
         </select>
       </label>
+
+      {deathRecordActive && (
+        <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+          <p className="text-xs font-semibold text-[var(--color-fg)]">
+            Death record — the statutory cause of death
+          </p>
+          <label className="block text-xs text-[var(--color-fg-muted)]">
+            Immediate cause (the condition directly leading to death)
+            <input
+              value={immediateCause}
+              onChange={(e) => setImmediateCause(e.target.value)}
+              placeholder="e.g. Cardiogenic shock"
+              className={wardInput}
+            />
+          </label>
+          <label className="block text-xs text-[var(--color-fg-muted)]">
+            Antecedent cause (optional — what gave rise to it)
+            <input
+              value={antecedentCause}
+              onChange={(e) => setAntecedentCause(e.target.value)}
+              placeholder="e.g. Acute myocardial infarction"
+              className={wardInput}
+            />
+          </label>
+          <label className="block text-xs text-[var(--color-fg-muted)]">
+            Underlying cause (optional — the disease that started the sequence)
+            <input
+              value={underlyingCause}
+              onChange={(e) => setUnderlyingCause(e.target.value)}
+              placeholder="e.g. Coronary artery disease"
+              className={wardInput}
+            />
+          </label>
+          <label className="block text-xs text-[var(--color-fg-muted)]">
+            Manner of death
+            <select
+              value={manner}
+              onChange={(e) => setManner(e.target.value as MannerOfDeath)}
+              className={wardInput}
+            >
+              {(Object.keys(MANNER_LABEL) as MannerOfDeath[]).map((m) => (
+                <option key={m} value={m}>
+                  {MANNER_LABEL[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-4 text-xs text-[var(--color-fg)]">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={medicoLegal}
+                onChange={(e) => setMedicoLegal(e.target.checked)}
+              />
+              Medico-legal case (police to be informed)
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={postmortemRequired}
+                onChange={(e) => setPostmortemRequired(e.target.checked)}
+              />
+              Post-mortem required
+            </label>
+          </div>
+        </div>
+      )}
 
       <label className="block text-xs text-[var(--color-fg-muted)]">
         {chosen.prompt}
@@ -477,11 +586,7 @@ function OutcomeForm({
         />
       </label>
 
-      <Button
-        variant="danger"
-        disabled={busy || text.trim().length === 0}
-        onClick={() => void submit()}
-      >
+      <Button variant="danger" disabled={busy || !canSubmit} onClick={() => void submit()}>
         {busy ? "Recording…" : chosen.verb}
       </Button>
       <p className="text-xs text-[var(--color-fg-subtle)]">

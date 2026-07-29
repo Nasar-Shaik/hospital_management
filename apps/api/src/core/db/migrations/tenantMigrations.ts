@@ -1630,4 +1630,41 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0042-medicolegal-records",
+    description:
+      "Medico-legal records (C3): `consents` (structured informed consent, withdrawable) and " +
+      "`deathRecords` (statutory death capture — cause-of-death chain, manner, medico-legal flag). " +
+      "One death record per encounter, enforced by a unique index.",
+    up: async (db) => {
+      await db.createCollection("consents").catch(() => undefined);
+      await db.createCollection("deathRecords").catch(() => undefined);
+
+      // A patient's consents, newest first — the Consent tab's read.
+      await db
+        .collection("consents")
+        .createIndex({ tenantId: 1, patientId: 1, signedAt: -1 }, { background: true });
+
+      // A death is recorded once per stay — the unique key that refuses a second.
+      await db
+        .collection("deathRecords")
+        .createIndex(
+          { tenantId: 1, encounterId: 1 },
+          { unique: true, name: "one_death_record_per_encounter", background: true },
+        );
+      await db
+        .collection("deathRecords")
+        .createIndex({ tenantId: 1, patientId: 1, diedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("consents")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("deathRecords")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

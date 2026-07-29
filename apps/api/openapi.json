@@ -52,6 +52,12 @@
       "name": "charges"
     },
     {
+      "name": "consents"
+    },
+    {
+      "name": "death-records"
+    },
+    {
       "name": "departments"
     },
     {
@@ -6404,6 +6410,152 @@
         ],
         "x-permission": "lab:approve",
         "x-feature": "module.clinical.lis"
+      }
+    },
+    "/api/v1/consents": {
+      "get": {
+        "operationId": "get_v1_consents",
+        "tags": ["consents"],
+        "summary": "GET /api/v1/consents",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read"
+      },
+      "post": {
+        "operationId": "post_v1_consents",
+        "tags": ["consents"],
+        "summary": "POST /api/v1/consents",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "consent:manage"
+      }
+    },
+    "/api/v1/consents/{id}/withdraw": {
+      "post": {
+        "operationId": "post_v1_consents_id_withdraw",
+        "tags": ["consents"],
+        "summary": "POST /api/v1/consents/{id}/withdraw",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "consent:manage"
+      }
+    },
+    "/api/v1/death-records": {
+      "get": {
+        "operationId": "get_v1_death_records",
+        "tags": ["death-records"],
+        "summary": "GET /api/v1/death-records",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read"
+      },
+      "post": {
+        "operationId": "post_v1_death_records",
+        "tags": ["death-records"],
+        "summary": "POST /api/v1/death-records",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "death:certify"
       }
     },
     "/api/v1/hospital-profile": {

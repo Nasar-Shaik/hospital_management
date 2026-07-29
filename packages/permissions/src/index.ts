@@ -167,6 +167,7 @@ const PATIENT = {
   RECORD_READ: p("record:read", "Read medical records", "branch"),
   RECORD_WRITE: p("record:write", "Write medical records", "branch"),
   CONSENT_MANAGE: p("consent:manage", "Capture consent", "branch"),
+  DEATH_CERTIFY: p("death:certify", "Certify a death (licensed)", "branch"),
   DISCHARGE_CREATE: p("discharge:create", "Write a discharge summary", "branch"),
   REFERRAL_MANAGE: p("referral:manage", "Referrals in and out", "branch"),
   TRANSFER_MANAGE: p("transfer:manage", "Patient transfers", "branch"),
@@ -673,6 +674,12 @@ export const DEFAULT_ROLES = [
       PATIENT.RECORD_READ,
       PATIENT.RECORD_WRITE,
       PATIENT.DISCHARGE_CREATE,
+      // Explaining the risks and taking the consent is the treating doctor's act; certifying a
+      // death is a licensed one only they can make. These sat in the catalog held by NOBODY (the
+      // "a permission nobody holds is a feature nobody has" trap the admit permissions fell into) —
+      // consent is captured by the nurse too, death is certified by the doctor alone.
+      PATIENT.CONSENT_MANAGE,
+      PATIENT.DEATH_CERTIFY,
       PATIENT.REFERRAL_MANAGE,
       CLINICAL.EMR_READ,
       CLINICAL.EMR_WRITE,
@@ -712,6 +719,8 @@ export const DEFAULT_ROLES = [
       OPERATIONS.ENCOUNTER_READ,
       OPERATIONS.ENCOUNTER_UPDATE,
       PATIENT.RECORD_READ,
+      // The nurse at the bedside witnesses and records the consent the doctor explained.
+      PATIENT.CONSENT_MANAGE,
       CLINICAL.EMR_READ,
       CLINICAL.VITALS_RECORD,
       CLINICAL.ALLERGY_READ,

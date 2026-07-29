@@ -778,6 +778,68 @@ export interface LabTest {
   branchId?: string;
 }
 
+/* ── medico-legal records (C3): consent + death record ── */
+
+export type ConsentType =
+  | "general"
+  | "admission"
+  | "surgical"
+  | "anaesthesia"
+  | "procedure"
+  | "blood_transfusion"
+  | "high_risk"
+  | "hiv_test"
+  | "dnr"
+  | "research";
+
+export type ConsentSigner = "patient" | "guardian" | "spouse" | "parent" | "next_of_kin";
+export type ConsentStatus = "active" | "withdrawn";
+
+/** A structured informed consent — the facts on the form, not a scan of it. Withdrawable. */
+export interface Consent {
+  id: string;
+  patientId: string;
+  encounterId?: string;
+  type: ConsentType;
+  procedure: string;
+  risksExplained?: string;
+  signedBy: ConsentSigner;
+  signerName: string;
+  relationship?: string;
+  language?: string;
+  witnessName?: string;
+  explainedBy?: string;
+  signedAt: string;
+  status: ConsentStatus;
+  withdrawnAt?: string;
+  withdrawalReason?: string;
+  createdAt: string;
+}
+
+export type MannerOfDeath =
+  "natural" | "accident" | "suicide" | "homicide" | "pending" | "undetermined";
+
+/** The statutory death record — cause-of-death chain, manner, medico-legal flag. One per stay. */
+export interface DeathRecord {
+  id: string;
+  patientId: string;
+  encounterId: string;
+  diedAt: string;
+  pronouncedAt?: string;
+  immediateCause: string;
+  antecedentCause?: string;
+  underlyingCause?: string;
+  contributingConditions?: string;
+  manner: MannerOfDeath;
+  medicoLegal: boolean;
+  postmortemRequired: boolean;
+  certifiedBy?: string;
+  bodyHandedTo?: string;
+  bodyHandedRelationship?: string;
+  remarks?: string;
+  createdAt: string;
+}
+
 /* ── consultation note (D3 / EMR depth) ── */
 
 export type DiagnosisType = "provisional" | "final";
@@ -2613,6 +2675,65 @@ export class ApiClient {
     patch: { name?: string; specimenType?: string; analytes?: Analyte[]; active?: boolean },
   ): Promise<LabTest> {
     return this.request<LabTest>("PATCH", `/api/v1/lab-tests/${id}`, patch);
+  }
+
+  /* ── medico-legal records (C3): consent + death record ── */
+
+  /** A patient's consents, newest first. Needs `emr:read`. */
+  listConsents(patientId: string): Promise<Consent[]> {
+    return this.request<Consent[]>(
+      "GET",
+      `/api/v1/consents?patientId=${encodeURIComponent(patientId)}`,
+    );
+  }
+
+  /** Records an informed consent. Needs `consent:manage`. */
+  recordConsent(input: {
+    patientId: string;
+    encounterId?: string;
+    type: ConsentType;
+    procedure: string;
+    risksExplained?: string;
+    signedBy?: ConsentSigner;
+    signerName: string;
+    relationship?: string;
+    language?: string;
+    witnessName?: string;
+    signedAt?: string;
+  }): Promise<Consent> {
+    return this.request<Consent>("POST", "/api/v1/consents", input);
+  }
+
+  /** Withdraws a standing consent. Needs `consent:manage`. */
+  withdrawConsent(id: string, reason: string): Promise<Consent> {
+    return this.request<Consent>("POST", `/api/v1/consents/${id}/withdraw`, { reason });
+  }
+
+  /** The death record for a visit, or null if none. Needs `emr:read`. */
+  getDeathRecord(encounterId: string): Promise<DeathRecord | null> {
+    return this.request<DeathRecord | null>(
+      "GET",
+      `/api/v1/death-records?encounterId=${encodeURIComponent(encounterId)}`,
+    );
+  }
+
+  /** Files the statutory death record. Needs `death:certify` (licensed). */
+  recordDeath(input: {
+    encounterId: string;
+    diedAt: string;
+    pronouncedAt?: string;
+    immediateCause: string;
+    antecedentCause?: string;
+    underlyingCause?: string;
+    contributingConditions?: string;
+    manner?: MannerOfDeath;
+    medicoLegal?: boolean;
+    postmortemRequired?: boolean;
+    bodyHandedTo?: string;
+    bodyHandedRelationship?: string;
+    remarks?: string;
+  }): Promise<DeathRecord> {
+    return this.request<DeathRecord>("POST", "/api/v1/death-records", input);
   }
 
   /* ── MAR — medication administration (D5 / nursing) ── */
