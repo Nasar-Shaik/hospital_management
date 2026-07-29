@@ -199,6 +199,12 @@ export const Icons = {
       <path d="M8 9h8M8 13h5" />
     </Svg>
   ),
+  lab: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M9 3h6M10 3v6.5L5.2 17a2 2 0 0 0 1.7 3h10.2a2 2 0 0 0 1.7-3L14 9.5V3" />
+      <path d="M7.5 14h9" />
+    </Svg>
+  ),
   billing: (p: IconProps) => (
     <Svg {...p}>
       <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1V2l-2 1-2-1-2 1-2-1-2 1-2-1Z" />

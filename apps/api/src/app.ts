@@ -42,6 +42,7 @@ import { feedbackRouter } from "./modules/feedback/index.js";
 import { insuranceRouter } from "./modules/insurance/index.js";
 import { consultationRouter } from "./modules/consultations/index.js";
 import { marRouter } from "./modules/mar/index.js";
+import { labCatalogueRouter } from "./modules/labCatalogue/index.js";
 import { hospitalProfileRouter } from "./modules/hospitalProfile/index.js";
 import { vitalsRouter } from "./modules/vitals/index.js";
 import { reportRouter } from "./modules/reports/index.js";
@@ -187,6 +188,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(insuranceRouter());
   v1Router.use(consultationRouter());
   v1Router.use(marRouter());
+  v1Router.use(labCatalogueRouter());
   v1Router.use(hospitalProfileRouter());
   v1Router.use(reportRouter());
   v1Router.use(documentRouter());

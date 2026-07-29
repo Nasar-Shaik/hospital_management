@@ -755,6 +755,29 @@ export interface FeedbackTicket {
   updatedAt: string;
 }
 
+/* ── lab test catalogue (D6 / LIS depth) ── */
+
+/** One measured parameter of a test. Numeric bounds drive auto-flagging; `refText` prints. */
+export interface Analyte {
+  code: string;
+  label: string;
+  unit?: string;
+  refLow?: number;
+  refHigh?: number;
+  refText?: string;
+}
+
+/** A catalogue test — defined once, with its analytes and ranges. */
+export interface LabTest {
+  id: string;
+  code: string;
+  name: string;
+  specimenType?: string;
+  analytes: Analyte[];
+  active: boolean;
+  branchId?: string;
+}
+
 /* ── consultation note (D3 / EMR depth) ── */
 
 export type DiagnosisType = "provisional" | "final";
@@ -2559,6 +2582,37 @@ export class ApiClient {
     input: { to: FeedbackStatus; note?: string },
   ): Promise<FeedbackTicket> {
     return this.request<FeedbackTicket>("POST", `/api/v1/feedback/${id}/transition`, input);
+  }
+
+  /* ── lab test catalogue (D6 / LIS depth) ── */
+
+  /** The lab test catalogue. Needs `order:read`. */
+  listLabTests(includeInactive = false): Promise<LabTest[]> {
+    const qs = includeInactive ? "?includeInactive=true" : "";
+    return this.request<LabTest[]>("GET", `/api/v1/lab-tests${qs}`);
+  }
+
+  /** One test by its catalogue code — ordering + result entry look it up. Needs `order:read`. */
+  getLabTest(code: string): Promise<LabTest> {
+    return this.request<LabTest>("GET", `/api/v1/lab-tests/${encodeURIComponent(code)}`);
+  }
+
+  /** Defines a test. Needs `lab:approve` (the pathologist owns the master). */
+  createLabTest(input: {
+    code: string;
+    name: string;
+    specimenType?: string;
+    analytes?: Analyte[];
+  }): Promise<LabTest> {
+    return this.request<LabTest>("POST", "/api/v1/lab-tests", input);
+  }
+
+  /** Edits a test — including retiring it via `active`. Needs `lab:approve`. */
+  updateLabTest(
+    id: string,
+    patch: { name?: string; specimenType?: string; analytes?: Analyte[]; active?: boolean },
+  ): Promise<LabTest> {
+    return this.request<LabTest>("PATCH", `/api/v1/lab-tests/${id}`, patch);
   }
 
   /* ── MAR — medication administration (D5 / nursing) ── */

@@ -110,6 +110,8 @@ const NAVIGATION: NavSection[] = [
         permission: "order:create",
       },
       { label: "Worklist", href: "/worklist", icon: "worklist", permission: "order:read" },
+      // The lab's test master — analytes + reference ranges (D6). The pathologist owns it.
+      { label: "Lab catalogue", href: "/lab-catalogue", icon: "lab", permission: "lab:approve" },
       // `pharmacy:dispense`, not `order:read` — this screen is for the person who HANDS THE DRUGS
       // OVER; the read permission would show a dispensing counter to every nurse and pathologist.
       { label: "Pharmacy", href: "/pharmacy", icon: "pharmacy", permission: "pharmacy:dispense" },

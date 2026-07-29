@@ -1608,4 +1608,26 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0041-lab-test-catalogue",
+    description:
+      "Lab test catalogue (D6 / LIS) — the laboratory's service master (`labTests`: each test with " +
+      "its analytes + reference ranges). This owns the collection and its unique code index.",
+    up: async (db) => {
+      await db.createCollection("labTests").catch(() => undefined);
+      // A test code is the human key ordering + result entry look up — unique per tenant.
+      await db
+        .collection("labTests")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_lab_test_code_per_tenant", background: true },
+        );
+    },
+    down: async (db) => {
+      await db
+        .collection("labTests")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

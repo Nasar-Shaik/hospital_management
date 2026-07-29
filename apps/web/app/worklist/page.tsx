@@ -28,6 +28,7 @@ import {
   type OrderPriority,
   type OrderResultValue,
   type Patient,
+  type Analyte,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
@@ -79,6 +80,24 @@ const DEPARTMENTS: { label: string; category: OrderCategory }[] = [
  * to come back from lunch. The checkbox is deliberately blunt and deliberately
  * frightening, because so is the number.
  */
+/** Auto-flag a typed value against an analyte's numeric bounds — the machine's half of the range. */
+function flagAgainst(raw: string, a?: Analyte): string | undefined {
+  if (!a || (a.refLow == null && a.refHigh == null)) return undefined;
+  const n = parseFloat(raw);
+  if (Number.isNaN(n)) return undefined;
+  if (a.refLow != null && n < a.refLow) return "low";
+  if (a.refHigh != null && n > a.refHigh) return "high";
+  return "normal";
+}
+
+const FLAG_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
+  normal: "success",
+  low: "warning",
+  high: "warning",
+  critical_low: "danger",
+  critical_high: "danger",
+};
+
 function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
   const { api } = useAuth();
   const [summary, setSummary] = useState("");
@@ -86,8 +105,37 @@ function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
   const [values, setValues] = useState<OrderResultValue[]>([
     { code: "", label: "", value: "", unit: "" },
   ]);
+  const [analytes, setAnalytes] = useState<Analyte[]>([]);
+  const [specimen, setSpecimen] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Look the order's test up in the catalogue (D6). When it is defined, pre-fill the analyte grid
+  // and reference ranges so the technician enters values, not paperwork — and the ranges are the
+  // ones the lab agreed, not typed from memory.
+  useEffect(() => {
+    let live = true;
+    api
+      .getLabTest(order.code)
+      .then((test) => {
+        if (!live || test.analytes.length === 0) return;
+        setAnalytes(test.analytes);
+        setSpecimen(test.specimenType);
+        setValues(
+          test.analytes.map((a) => ({
+            code: a.code,
+            label: a.label,
+            value: "",
+            unit: a.unit ?? "",
+            ...(a.refText ? { referenceRange: a.refText } : {}),
+          })),
+        );
+      })
+      .catch(() => undefined); // No catalogue entry — the manual grid stays.
+    return () => {
+      live = false;
+    };
+  }, [api, order.code]);
 
   function setValue(i: number, patch: Partial<OrderResultValue>) {
     setValues((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -132,10 +180,18 @@ function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
 
       <div>
         <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
-          Values (optional)
+          Values {analytes.length > 0 ? "(from catalogue)" : "(optional)"}
+          {specimen && (
+            <span className="ml-2 font-normal text-[var(--color-fg-subtle)]">
+              Specimen: {specimen}
+            </span>
+          )}
         </span>
         {values.map((v, i) => (
-          <div key={i} className="mb-1.5 grid grid-cols-[2fr_1fr_1fr_1.5fr] gap-1.5">
+          <div
+            key={i}
+            className="mb-1.5 grid grid-cols-[2fr_1fr_1fr_1.5fr_auto] items-center gap-1.5"
+          >
             <input
               value={v.label}
               onChange={(e) => setValue(i, { label: e.target.value })}
@@ -144,7 +200,15 @@ function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
             />
             <input
               value={v.value}
-              onChange={(e) => setValue(i, { value: e.target.value })}
+              onChange={(e) =>
+                setValue(i, {
+                  value: e.target.value,
+                  flag: flagAgainst(
+                    e.target.value,
+                    analytes.find((a) => a.code === v.code),
+                  ),
+                })
+              }
               placeholder="11.9"
               className="rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs text-[var(--color-fg)]"
             />
@@ -160,6 +224,13 @@ function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
               placeholder="12–15"
               className="rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs text-[var(--color-fg)]"
             />
+            {v.flag && v.flag !== "normal" ? (
+              <Badge tone={FLAG_TONE[v.flag] ?? "neutral"}>{v.flag.replace("_", " ")}</Badge>
+            ) : v.flag === "normal" ? (
+              <span className="text-xs text-[var(--color-success)]">✓</span>
+            ) : (
+              <span />
+            )}
           </div>
         ))}
         <button
