@@ -1543,6 +1543,24 @@ export interface CollectionsReport {
   settledFromAdvance: number;
 }
 
+/** Revenue leakage — care given but never billed. Amounts are PAISE. */
+export interface RevenueLeakageReport {
+  /** Paise posted as a charge in the period but never put on a bill. The money at risk. */
+  total: number;
+  count: number;
+  byCategory: { category: string; amount: number; count: number }[];
+  bySource: { source: string; amount: number; count: number }[];
+  /** The visits carrying unbilled charges, heaviest first — where to go and bill. */
+  byEncounter: {
+    encounterId: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    amount: number;
+    count: number;
+  }[];
+}
+
 /** A row of the advance register broken down by how the advance was collected. */
 export interface WalletMethodRow {
   method: string;
@@ -3459,6 +3477,14 @@ export class ApiClient {
 
   reportCollections(range: ReportRange): Promise<CollectionsReport> {
     return this.request<CollectionsReport>("GET", `/api/v1/reports/collections${rangeQs(range)}`);
+  }
+
+  /** Revenue leakage — care given but never billed, by category/source and the visits that hold it. */
+  reportRevenueLeakage(range: ReportRange): Promise<RevenueLeakageReport> {
+    return this.request<RevenueLeakageReport>(
+      "GET",
+      `/api/v1/reports/revenue-leakage${rangeQs(range)}`,
+    );
   }
 
   /** The advance (wallet) register — admission advances in, utilised, refunded, and held. */

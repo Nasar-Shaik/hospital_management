@@ -21,7 +21,13 @@ import {
   type DischargeRegister,
 } from "../encounters/index.js";
 import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
-import { collectionsReport, listReceipts, type CollectionsReport } from "../billing/index.js";
+import {
+  collectionsReport,
+  revenueLeakage as billingRevenueLeakage,
+  listReceipts,
+  type CollectionsReport,
+  type RevenueLeakageReport,
+} from "../billing/index.js";
 import { walletReport, listDeposits, type WalletRegister } from "../wallet/index.js";
 import { getById as getUser } from "../users/index.js";
 import { encountersByDoctor } from "../encounters/index.js";
@@ -34,9 +40,22 @@ export type {
   VisitReport,
   DiagnosticsReport,
   CollectionsReport,
+  RevenueLeakageReport,
   DischargeRegister,
   WalletRegister,
 };
+
+/** Revenue leakage with the visits named — a patient and UHID beside each unbilled amount. */
+export interface RevenueLeakageReportNamed extends Omit<RevenueLeakageReport, "byEncounter"> {
+  byEncounter: {
+    encounterId: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    amount: number;
+    count: number;
+  }[];
+}
 
 export interface DateRange {
   from: Date;
@@ -63,6 +82,30 @@ export const patientVisits = (range: DateRange): Promise<VisitReport> =>
 
 export const collections = (range: DateRange): Promise<CollectionsReport> =>
   collectionsReport(range.from, range.to);
+
+/**
+ * Revenue leakage — care given but never billed — with each carrying visit named. Billing owns the
+ * money; this only puts a patient and UHID beside the bare ids so the auditor can act on the list.
+ */
+export async function revenueLeakage(range: DateRange): Promise<RevenueLeakageReportNamed> {
+  const report = await billingRevenueLeakage(range.from, range.to);
+  const named = await namesByIds(report.byEncounter.map((r) => r.patientId));
+  const byId = new Map(named.map((n) => [n.id, n]));
+  return {
+    ...report,
+    byEncounter: report.byEncounter.map((r) => {
+      const p = byId.get(r.patientId);
+      return {
+        encounterId: r.encounterId,
+        patientId: r.patientId,
+        patientName: p?.name ?? `Unknown (${r.patientId.slice(-6)})`,
+        uhid: p?.uhid ?? "",
+        amount: r.amount,
+        count: r.count,
+      };
+    }),
+  };
+}
 
 /**
  * The advance register — admission advances collected, refunded, utilised against bills, and the

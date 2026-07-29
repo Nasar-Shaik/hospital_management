@@ -129,6 +129,25 @@ export const collections: RequestHandler = async (req, res) => {
 };
 
 /**
+ * Revenue leakage — care given but never billed. The CSV's principal table is the visit list (who
+ * to bill and how much), the actionable output; the category/source breakdowns are screen summaries.
+ */
+export const revenueLeakage: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.revenueLeakage(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "revenue-leakage",
+      ["UHID", "Patient", "Unbilled (INR)", "Charges"],
+      report.byEncounter.map((r) => [r.uhid, r.patientName, rupees(r.amount), r.count]),
+    );
+    return;
+  }
+  ok(res, report);
+};
+
+/**
  * The advance register — admission advances in, utilised and refunded, plus the balance held.
  * The CSV's principal table is deposits by method (the drawer view); utilisation and the current
  * liability are the summary a screen shows around it.

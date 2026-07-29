@@ -19,6 +19,7 @@ import {
   type DischargeRegister,
   type DoctorLoadRow,
   type ReportRange,
+  type RevenueLeakageReport,
   type StockRegisterRow,
   type VisitReport,
   type WalletRegister,
@@ -28,7 +29,14 @@ import { Alert, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
 type Tab =
-  "stock" | "visits" | "doctors" | "diagnostics" | "collections" | "advances" | "discharges";
+  | "stock"
+  | "visits"
+  | "doctors"
+  | "diagnostics"
+  | "collections"
+  | "leakage"
+  | "advances"
+  | "discharges";
 
 const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "stock", label: "Pharmacy stock", slug: "pharmacy-stock" },
@@ -36,6 +44,7 @@ const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "doctors", label: "Doctor load", slug: "doctor-load" },
   { id: "diagnostics", label: "Diagnostics", slug: "diagnostics" },
   { id: "collections", label: "Collections", slug: "collections" },
+  { id: "leakage", label: "Revenue leakage", slug: "revenue-leakage" },
   { id: "advances", label: "Advances", slug: "wallet" },
   { id: "discharges", label: "Discharges", slug: "discharge-outcomes" },
 ];
@@ -146,6 +155,7 @@ function ReportsPage() {
   const [doctors, setDoctors] = useState<DoctorLoadRow[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null);
   const [collections, setCollections] = useState<CollectionsReport | null>(null);
+  const [leakage, setLeakage] = useState<RevenueLeakageReport | null>(null);
   const [advances, setAdvances] = useState<WalletRegister | null>(null);
   const [discharges, setDischarges] = useState<DischargeRegister | null>(null);
 
@@ -163,6 +173,7 @@ function ReportsPage() {
       else if (tab === "doctors") setDoctors(await api.reportDoctorLoad(range));
       else if (tab === "diagnostics") setDiagnostics(await api.reportDiagnostics(range));
       else if (tab === "collections") setCollections(await api.reportCollections(range));
+      else if (tab === "leakage") setLeakage(await api.reportRevenueLeakage(range));
       else if (tab === "advances") setAdvances(await api.reportWallet(range));
       else if (tab === "discharges") setDischarges(await api.reportDischargeOutcomes(range));
     } catch (e) {
@@ -530,6 +541,57 @@ function ReportsPage() {
                     headers={["Method", "Received", "Payments"]}
                     rows={collections.byMethod.map((m) => [m.method, rupees(m.amount), m.count])}
                     empty="No payments."
+                  />
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {tab === "leakage" && leakage && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Stat label="Unbilled (revenue at risk)" value={rupees(leakage.total)} />
+                <Stat label="Unbilled charges" value={String(leakage.count)} />
+              </div>
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                Care that was given and priced but never put on a bill — a charge posted in this
+                period, worth more than ₹0, not voided, and still on no invoice. Finalize these
+                visits&apos; bills to recover the money.
+              </p>
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  Visits to bill
+                </h3>
+                <ReportTable
+                  headers={["UHID", "Patient", "Unbilled", "Charges"]}
+                  rows={leakage.byEncounter.map((r) => [
+                    r.uhid,
+                    r.patientName,
+                    rupees(r.amount),
+                    r.count,
+                  ])}
+                  empty="Nothing unbilled in this period — every charge is on a bill."
+                />
+              </Card>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    By category
+                  </h3>
+                  <ReportTable
+                    headers={["Category", "Unbilled", "Charges"]}
+                    rows={leakage.byCategory.map((c) => [c.category, rupees(c.amount), c.count])}
+                    empty="Nothing unbilled."
+                  />
+                </Card>
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    By source
+                  </h3>
+                  <ReportTable
+                    headers={["Source", "Unbilled", "Charges"]}
+                    rows={leakage.bySource.map((s) => [s.source, rupees(s.amount), s.count])}
+                    empty="Nothing unbilled."
                   />
                 </Card>
               </div>

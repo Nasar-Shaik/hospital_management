@@ -313,6 +313,90 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
   };
 }
 
+/* ── Reporting: revenue leakage (charges posted but never billed) ── */
+
+export interface RevenueLeakageReport {
+  /** Paise posted as a charge in the period but never put on a bill. The money at risk. */
+  total: number;
+  /** Number of unbilled charges. */
+  count: number;
+  byCategory: { category: string; amount: number; count: number }[];
+  bySource: { source: string; amount: number; count: number }[];
+  /** The visits carrying unbilled charges, heaviest first — where to go and bill. */
+  byEncounter: { encounterId: string; patientId: string; amount: number; count: number }[];
+}
+
+/**
+ * Money EARNED BUT NOT BILLED — the leak.
+ *
+ * A charge posts the moment care is given (a test ordered, a bed-day, a manual item); it becomes
+ * money the hospital can collect only when it is FINALIZED onto a bill, which stamps its
+ * `invoiceId`. A charge posted in the period, worth more than ₹0, not voided, and still carrying no
+ * `invoiceId` is care the hospital gave and never charged for — revenue walking out of the door.
+ * This finds it, sums it by category and by source, and lists the visits that hold it so someone
+ * can raise the bills. Paise; tenant-scoped by the aggregate hook. The window is half-open on
+ * `postedAt`, matching every other register.
+ */
+export async function revenueLeakage(from: Date, to: Date): Promise<RevenueLeakageReport> {
+  const model = getChargeModel(getTenantDb());
+  const facet = await model.aggregate<{
+    total: { amount: number; count: number }[];
+    byCategory: { _id: string; amount: number; count: number }[];
+    bySource: { _id: string; amount: number; count: number }[];
+    byEncounter: { _id: { e: Types.ObjectId; p: Types.ObjectId }; amount: number; count: number }[];
+  }>([
+    {
+      $match: {
+        postedAt: { $gte: from, $lt: to },
+        amount: { $gt: 0 },
+        voided: { $ne: true },
+        invoiceId: { $exists: false },
+      },
+    },
+    {
+      $facet: {
+        total: [{ $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } }],
+        byCategory: [
+          { $group: { _id: "$category", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+        ],
+        bySource: [
+          { $group: { _id: "$source", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+        ],
+        byEncounter: [
+          {
+            $group: {
+              _id: { e: "$encounterId", p: "$patientId" },
+              amount: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+          { $limit: 50 },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  return {
+    total: f?.total[0]?.amount ?? 0,
+    count: f?.total[0]?.count ?? 0,
+    byCategory: (f?.byCategory ?? []).map((r) => ({
+      category: r._id,
+      amount: r.amount,
+      count: r.count,
+    })),
+    bySource: (f?.bySource ?? []).map((r) => ({ source: r._id, amount: r.amount, count: r.count })),
+    byEncounter: (f?.byEncounter ?? []).map((r) => ({
+      encounterId: r._id.e.toString(),
+      patientId: r._id.p.toString(),
+      amount: r.amount,
+      count: r.count,
+    })),
+  };
+}
+
 /* ── Charges ───────────────────────────────────────────────────────────────── */
 
 export interface PostChargeInput {
