@@ -110,6 +110,8 @@ export interface InsuranceClaimDoc {
   policyId: Types.ObjectId;
   /** The clinical visit this claim is for, when linked (ADR-0013). */
   encounterId?: Types.ObjectId;
+  /** The bill this claim is against — the invoice whose insurer share it recovers (payer split). */
+  invoiceId?: Types.ObjectId;
 
   claimType: ClaimType;
   /** The payer's own reference for this claim, once they issue one. */
@@ -163,6 +165,7 @@ const insuranceClaimSchema = new Schema<InsuranceClaimDoc>(
     patientId: { type: String, required: true },
     policyId: { type: Schema.Types.ObjectId, required: true },
     encounterId: { type: Schema.Types.ObjectId },
+    invoiceId: { type: Schema.Types.ObjectId },
 
     claimType: { type: String, enum: CLAIM_TYPES, required: true, default: "cashless" },
     claimNumber: { type: String, trim: true, maxlength: 64 },

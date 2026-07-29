@@ -16,6 +16,8 @@ export type { InsurancePolicy, InsuranceClaim } from "./insurance.repository.js"
 export const listPolicies = repo.listPolicies;
 export const listClaims = repo.listClaims;
 export const linkPolicy = repo.createPolicy;
+/** One policy by id — billing's payer split uses it to confirm the insurer share is the patient's own policy. */
+export const getPolicy = repo.findPolicyById;
 
 export async function updatePolicy(
   id: string,
@@ -30,6 +32,8 @@ export interface FileClaimInput {
   patientId: string;
   policyId: string;
   encounterId?: string;
+  /** The bill this claim recovers the insurer share of — the payer split's other half. */
+  invoiceId?: string;
   claimType: repo.CreateClaimInput["claimType"];
   claimNumber?: string;
   claimedAmount: number;

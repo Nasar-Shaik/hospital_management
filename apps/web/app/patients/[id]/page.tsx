@@ -397,6 +397,7 @@ function Profile() {
           <Insurance
             patientId={id}
             encounters={encounters}
+            invoices={invoices}
             canFile={canFileClaim}
             canReconcile={canReconcile}
           />
@@ -1252,11 +1253,13 @@ const insInput =
 function Insurance({
   patientId,
   encounters,
+  invoices,
   canFile,
   canReconcile,
 }: {
   patientId: string;
   encounters: Encounter[];
+  invoices: Invoice[];
   canFile: boolean;
   canReconcile: boolean;
 }) {
@@ -1404,6 +1407,7 @@ function Insurance({
           <ClaimForm
             policies={policies.filter((p) => p.status === "active")}
             encounters={encounters}
+            invoices={invoices}
             onSubmit={(v) =>
               void act(async () => {
                 await api.fileInsuranceClaim(patientId, v);
@@ -1636,10 +1640,12 @@ function PolicyForm({
 function ClaimForm({
   policies,
   encounters,
+  invoices,
   onSubmit,
 }: {
   policies: InsurancePolicy[];
   encounters: Encounter[];
+  invoices: Invoice[];
   onSubmit: (v: Parameters<ReturnType<typeof useAuth>["api"]["fileInsuranceClaim"]>[1]) => void;
 }) {
   const [policyId, setPolicyId] = useState(policies[0]?.id ?? "");
@@ -1647,6 +1653,10 @@ function ClaimForm({
   const [claimedAmount, setClaimedAmount] = useState("");
   const [claimNumber, setClaimNumber] = useState("");
   const [encounterId, setEncounterId] = useState("");
+  const [invoiceId, setInvoiceId] = useState("");
+  // Bills that carry an insurer share are the ones a claim recovers — offer those first, pre-filling
+  // the claimed amount from the split so the two numbers agree.
+  const splitInvoices = invoices.filter((i) => i.coveredByInsurer > 0);
 
   return (
     <Card className="mb-3 space-y-3 p-4">
@@ -1706,6 +1716,26 @@ function ClaimForm({
             ))}
           </select>
         </InsField>
+        <InsField label="Against bill (optional)">
+          <select
+            className={insInput}
+            value={invoiceId}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInvoiceId(v);
+              // Pre-fill the claimed amount from the bill's insurer share so they line up.
+              const inv = splitInvoices.find((i) => i.id === v);
+              if (inv) setClaimedAmount((inv.coveredByInsurer / 100).toFixed(2));
+            }}
+          >
+            <option value="">— none —</option>
+            {splitInvoices.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.number ?? "draft"} · insurer {rupees(i.coveredByInsurer)}
+              </option>
+            ))}
+          </select>
+        </InsField>
       </div>
       <div className="flex justify-end">
         <Button
@@ -1717,6 +1747,7 @@ function ClaimForm({
               claimedAmount: toPaise(claimedAmount),
               ...(claimNumber.trim() ? { claimNumber: claimNumber.trim() } : {}),
               ...(encounterId ? { encounterId } : {}),
+              ...(invoiceId ? { invoiceId } : {}),
             })
           }
         >

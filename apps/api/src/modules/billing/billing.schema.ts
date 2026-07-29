@@ -52,6 +52,13 @@ export const recordRefundSchema = z
   })
   .strict();
 
+export const payerSplitSchema = z
+  .object({
+    policyId: objectId,
+    coveredAmount: paise,
+  })
+  .strict();
+
 export const listInvoicesQuerySchema = z
   .object({
     status: z.enum(INVOICE_STATUSES).optional(),
@@ -98,6 +105,7 @@ export type PostChargeBody = z.infer<typeof postChargeSchema>;
 export type RecordPaymentBody = z.infer<typeof recordPaymentSchema>;
 export type ApplyDiscountBody = z.infer<typeof applyDiscountSchema>;
 export type RecordRefundBody = z.infer<typeof recordRefundSchema>;
+export type PayerSplitBody = z.infer<typeof payerSplitSchema>;
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
 export type CreateServiceBody = z.infer<typeof createServiceSchema>;
 export type UpdateServiceBody = z.infer<typeof updateServiceSchema>;

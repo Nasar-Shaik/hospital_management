@@ -151,6 +151,7 @@ export interface InsuranceClaim {
   patientId: string;
   policyId: string;
   encounterId?: string;
+  invoiceId?: string;
   claimType: ClaimType;
   claimNumber?: string;
   claimedAmount: number;
@@ -169,6 +170,7 @@ function toClaim(doc: InsuranceClaimDoc): InsuranceClaim {
     patientId: doc.patientId,
     policyId: doc.policyId.toString(),
     ...(doc.encounterId ? { encounterId: doc.encounterId.toString() } : {}),
+    ...(doc.invoiceId ? { invoiceId: doc.invoiceId.toString() } : {}),
     claimType: doc.claimType,
     ...(doc.claimNumber ? { claimNumber: doc.claimNumber } : {}),
     claimedAmount: doc.claimedAmount,
@@ -186,6 +188,7 @@ export interface CreateClaimInput {
   patientId: string;
   policyId: string;
   encounterId?: string;
+  invoiceId?: string;
   claimType: ClaimType;
   claimNumber?: string;
   claimedAmount: number;
@@ -200,6 +203,7 @@ export async function createClaim(input: CreateClaimInput): Promise<InsuranceCla
     patientId: input.patientId,
     policyId: new Types.ObjectId(input.policyId),
     ...(input.encounterId ? { encounterId: new Types.ObjectId(input.encounterId) } : {}),
+    ...(input.invoiceId ? { invoiceId: new Types.ObjectId(input.invoiceId) } : {}),
     claimType: input.claimType,
     ...(input.claimNumber ? { claimNumber: input.claimNumber } : {}),
     claimedAmount: input.claimedAmount,

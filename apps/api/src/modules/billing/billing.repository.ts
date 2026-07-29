@@ -73,6 +73,11 @@ export interface Invoice {
   discountReason?: string;
   total: number;
   paid: number;
+  /** Paise the insurer is expected to bear. */
+  coveredByInsurer: number;
+  insurerPolicyId?: string;
+  /** Derived: `total − coveredByInsurer`. What the patient's own money must cover. */
+  patientResponsibility: number;
   payments: PaymentEntry[];
   refunds: RefundEntry[];
   refunded: number;
@@ -128,10 +133,13 @@ function toInvoice(d: InvoiceDoc): Invoice {
     discount: d.discount,
     total: d.total,
     paid: d.paid,
+    coveredByInsurer: d.coveredByInsurer ?? 0,
+    patientResponsibility: d.total - (d.coveredByInsurer ?? 0),
     payments: d.payments ?? [],
     refunds: d.refunds ?? [],
     refunded: d.refunded ?? 0,
     createdAt: d.createdAt,
+    ...(d.insurerPolicyId ? { insurerPolicyId: d.insurerPolicyId } : {}),
     ...(d.discountReason ? { discountReason: d.discountReason } : {}),
     ...(d.number ? { number: d.number } : {}),
     ...(d.finalizedAt ? { finalizedAt: d.finalizedAt } : {}),

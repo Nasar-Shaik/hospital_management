@@ -34,6 +34,7 @@ import {
   recordPaymentSchema,
   applyDiscountSchema,
   recordRefundSchema,
+  payerSplitSchema,
   voidChargeSchema,
 } from "./billing.schema.js";
 
@@ -253,6 +254,20 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(recordRefundSchema),
     asyncHandler(controller.recordRefund),
+  );
+
+  /**
+   * The payer split: how much of a finalized bill an insurer bears. `insurance:link` — the desk
+   * that attaches insurance to a patient also decides the split, NOT the cashier. After it, the
+   * counter collects only the patient's share; the insurer's is expected via an `insurance` payment.
+   */
+  router.post(
+    "/invoices/:id/payer-split",
+    authenticate(),
+    authorize(PERMISSIONS.INSURANCE_LINK, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(payerSplitSchema),
+    asyncHandler(controller.setPayerSplit),
   );
 
   return router;

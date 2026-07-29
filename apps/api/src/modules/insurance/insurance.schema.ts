@@ -53,6 +53,7 @@ export const createClaimSchema = z
   .object({
     policyId: objectId,
     encounterId: objectId.optional(),
+    invoiceId: objectId.optional(),
     claimType: z.enum(CLAIM_TYPES),
     claimNumber: z.string().trim().max(64).optional(),
     claimedAmount: paise,

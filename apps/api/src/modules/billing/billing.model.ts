@@ -257,6 +257,16 @@ export interface InvoiceDoc {
   total: number;
   paid: number;
 
+  /**
+   * Paise of `total` an insurer is expected to bear (the payer split). The patient's share is
+   * `total − coveredByInsurer` — that, not the whole bill, is what the counter collects. The
+   * insurer's portion arrives later as an `insurance`-method payment (usually on claim settlement).
+   * Zero on an ordinary self-pay bill.
+   */
+  coveredByInsurer: number;
+  /** The policy the insurer share is billed to. Set with `coveredByInsurer`, by the payer split. */
+  insurerPolicyId?: string;
+
   payments: PaymentEntry[];
   refunds: RefundEntry[];
   /** Paise handed back so far. Net collected is `paid − refunded`. */
@@ -298,6 +308,9 @@ const invoiceSchema = new Schema<InvoiceDoc>(
     discountBy: { type: String },
     total: { type: Number, required: true, default: 0 },
     paid: { type: Number, required: true, default: 0 },
+
+    coveredByInsurer: { type: Number, required: true, default: 0 },
+    insurerPolicyId: { type: String },
 
     payments: [
       {

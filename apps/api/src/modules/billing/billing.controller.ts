@@ -12,6 +12,7 @@ import type {
   RecordPaymentBody,
   ApplyDiscountBody,
   RecordRefundBody,
+  PayerSplitBody,
   CreateServiceBody,
   UpdateServiceBody,
 } from "./billing.schema.js";
@@ -234,4 +235,9 @@ export const applyDiscount: RequestHandler = async (req, res) => {
 export const recordRefund: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await billing.recordRefund(id, req.body as RecordRefundBody), 201);
+};
+
+export const setPayerSplit: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.setPayerSplit(id, req.body as PayerSplitBody));
 };

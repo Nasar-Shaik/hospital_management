@@ -21,6 +21,7 @@ import {
   ApiClientError,
   type Invoice,
   type InvoiceStatus,
+  type InsurancePolicy,
   type Patient,
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
@@ -36,14 +37,23 @@ function statusTone(s: InvoiceStatus): "success" | "danger" | "brand" | "neutral
   return "neutral";
 }
 
+/** Payments the patient made themselves — everything except the insurer's `insurance`-method money. */
+function patientPaidOf(invoice: Invoice): number {
+  return invoice.payments.filter((p) => p.method !== "insurance").reduce((s, p) => s + p.amount, 0);
+}
+
 /** Taking money. Partial payments are normal; the server refuses an overpayment. */
 function PaymentForm({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void }) {
   const { api } = useAuth();
   const balance = invoice.total - invoice.paid;
+  // With a payer split, the counter collects the PATIENT'S share, not the whole balance — the
+  // insurer's part arrives separately (method `insurance`). Default to whichever the counter owes.
+  const patientOwes = Math.max(0, invoice.patientResponsibility - patientPaidOf(invoice));
+  const defaultAmount = invoice.coveredByInsurer > 0 ? patientOwes : balance;
 
-  // Pre-filled with the balance, because that is what is paid nine times in ten —
+  // Pre-filled with what is owed, because that is what is paid nine times in ten —
   // and typing an amount is the one place a human can put money in the wrong column.
-  const [amount, setAmount] = useState((balance / 100).toFixed(2));
+  const [amount, setAmount] = useState((defaultAmount / 100).toFixed(2));
   const [method, setMethod] = useState<string>("cash");
   const [reference, setReference] = useState("");
   const [busy, setBusy] = useState(false);
@@ -273,6 +283,94 @@ function RefundForm({ invoice, onDone }: { invoice: Invoice; onDone: () => void 
   );
 }
 
+/** Assigns an insurer share to the bill — the patient then owes only the rest. */
+function PayerSplitForm({ invoice, onDone }: { invoice: Invoice; onDone: () => void }) {
+  const { api } = useAuth();
+  const [policies, setPolicies] = useState<InsurancePolicy[]>([]);
+  const [policyId, setPolicyId] = useState(invoice.insurerPolicyId ?? "");
+  const [covered, setCovered] = useState(
+    invoice.coveredByInsurer > 0 ? (invoice.coveredByInsurer / 100).toFixed(2) : "",
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .listInsurancePolicies(invoice.patientId)
+      .then((p) => {
+        setPolicies(p);
+        setPolicyId((cur) => cur || p[0]?.id || "");
+      })
+      .catch(() => setPolicies([]));
+  }, [api, invoice.patientId]);
+
+  async function submit() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setPayerSplit(invoice.id, { policyId, coveredAmount: toPaise(covered) });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not set the payer split.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+      {policies.length === 0 ? (
+        <p className="text-xs text-[var(--color-fg-muted)]">
+          This patient has no insurance policy on record. Add one on their profile first.
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-[2fr_1fr_auto]">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+                Insurer policy
+              </span>
+              <select
+                value={policyId}
+                onChange={(e) => setPolicyId(e.target.value)}
+                className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              >
+                {policies.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.insurer} · {p.policyNumber}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+                Insurer covers (₹)
+              </span>
+              <input
+                value={covered}
+                onChange={(e) => setCovered(e.target.value)}
+                inputMode="decimal"
+                className="w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+            <div className="flex items-end">
+              <Button disabled={busy || !policyId || !covered.trim()} onClick={() => void submit()}>
+                {busy ? "Saving…" : "Set split"}
+              </Button>
+            </div>
+          </div>
+          <p className="text-xs text-[var(--color-fg-subtle)]">
+            Of the {rupees(invoice.total)} bill, the patient then owes the balance. The
+            insurer&apos;s share is collected separately (method “insurance”) and recovered by a
+            claim.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function InvoiceRow({
   invoice,
   nameOf,
@@ -287,9 +385,11 @@ function InvoiceRow({
   const [paying, setPaying] = useState(false);
   const [discounting, setDiscounting] = useState(false);
   const [refunding, setRefunding] = useState(false);
+  const [splitting, setSplitting] = useState(false);
 
   const owes = invoice.total - invoice.paid;
   const net = invoice.paid - invoice.refunded;
+  const patientOwes = Math.max(0, invoice.patientResponsibility - patientPaidOf(invoice));
 
   return (
     <li className="rounded-lg border border-[var(--color-border)] p-3.5">
@@ -316,8 +416,18 @@ function InvoiceRow({
               after {rupees(invoice.discount)} discount
             </p>
           )}
-          {owes > 0 && (
-            <p className="text-xs text-[var(--color-danger)]">{rupees(owes)} outstanding</p>
+          {invoice.coveredByInsurer > 0 && (
+            <p className="text-xs text-[var(--color-brand)]">
+              insurer {rupees(invoice.coveredByInsurer)} · patient{" "}
+              {rupees(invoice.patientResponsibility)}
+            </p>
+          )}
+          {invoice.coveredByInsurer > 0 && patientOwes > 0 ? (
+            <p className="text-xs text-[var(--color-danger)]">{rupees(patientOwes)} patient owes</p>
+          ) : (
+            owes > 0 && (
+              <p className="text-xs text-[var(--color-danger)]">{rupees(owes)} outstanding</p>
+            )
           )}
           {invoice.paid > 0 && invoice.paid < invoice.total && (
             <p className="text-xs text-[var(--color-fg-subtle)]">{rupees(invoice.paid)} paid</p>
@@ -352,6 +462,17 @@ function InvoiceRow({
           <PermissionGate can={can} permission="billing:refund">
             <Button variant="ghost" onClick={() => setRefunding(!refunding)}>
               {refunding ? "Cancel" : "Refund"}
+            </Button>
+          </PermissionGate>
+        )}
+        {invoice.status === "finalized" && (
+          <PermissionGate can={can} permission="insurance:link">
+            <Button variant="ghost" onClick={() => setSplitting(!splitting)}>
+              {splitting
+                ? "Cancel"
+                : invoice.coveredByInsurer > 0
+                  ? "Edit payer split"
+                  : "Payer split"}
             </Button>
           </PermissionGate>
         )}
@@ -433,6 +554,15 @@ function InvoiceRow({
           invoice={invoice}
           onDone={() => {
             setRefunding(false);
+            onChanged();
+          }}
+        />
+      )}
+      {splitting && (
+        <PayerSplitForm
+          invoice={invoice}
+          onDone={() => {
+            setSplitting(false);
             onChanged();
           }}
         />

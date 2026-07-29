@@ -22,6 +22,7 @@ import { withTransaction } from "../../core/db/transaction.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
 import { getEncounter } from "../encounters/index.js";
 import { getBranch } from "../branches/index.js";
+import { getPolicy } from "../insurance/index.js";
 import {
   debitForInvoice as debitWalletForInvoice,
   getBalance as walletBalance,
@@ -689,6 +690,57 @@ export async function recordRefund(
     ...(ctx.userId ? { by: ctx.userId } : {}),
   };
   const updated = await repo.addRefund(invoiceId, refund, invoice.refunded + input.amount);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  return updated;
+}
+
+export interface PayerSplitInput {
+  policyId: string;
+  coveredAmount: number;
+}
+
+/**
+ * Sets the payer split on a finalized bill — how much of it an insurer will bear, and under which
+ * policy. Gated on `insurance:link` (the insurance desk's authority, not the counter's).
+ *
+ * After this, `patientResponsibility = total − coveredByInsurer` is what the counter collects from
+ * the patient; the insurer's share is expected later as an `insurance`-method payment (typically on
+ * claim settlement). The claim itself is filed separately (insurance:claim) and points back here by
+ * `invoiceId` — this endpoint records the split, not the claim, so the two permissions stay distinct.
+ *
+ * The covered figure cannot exceed the bill, and the policy must be THIS patient's own — a split to
+ * someone else's insurer is either a mistake or a leak, and both are refused here.
+ */
+export async function setPayerSplit(
+  invoiceId: string,
+  input: PayerSplitInput,
+): Promise<repo.Invoice> {
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  if (invoice.status !== "finalized") {
+    throw new AppError("HMS-STATE-001", 422, "Only a finalized bill can be split to an insurer", {
+      id: invoiceId,
+      status: invoice.status,
+      hint: "finalize the bill first",
+    });
+  }
+  if (input.coveredAmount > invoice.total) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      coveredAmount: [`the insurer share cannot exceed the bill of ${String(invoice.total)} paise`],
+    });
+  }
+
+  const policy = await getPolicy(input.policyId);
+  if (!policy || policy.patientId !== invoice.patientId) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      policyId: ["choose one of this patient's policies"],
+    });
+  }
+
+  const updated = await repo.updateInvoice(invoiceId, {
+    coveredByInsurer: input.coveredAmount,
+    insurerPolicyId: input.policyId,
+  });
   if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
   return updated;
 }

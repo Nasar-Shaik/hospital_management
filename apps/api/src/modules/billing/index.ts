@@ -33,6 +33,7 @@ export {
   getInvoice,
   applyDiscount,
   recordRefund,
+  setPayerSplit,
   collectionsReport,
   orderPaymentStatus,
   listReceipts,

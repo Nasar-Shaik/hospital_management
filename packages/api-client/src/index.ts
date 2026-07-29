@@ -928,6 +928,8 @@ export interface InsuranceClaim {
   patientId: string;
   policyId: string;
   encounterId?: string;
+  /** The bill whose insurer share this claim recovers (payer split). */
+  invoiceId?: string;
   claimType: ClaimType;
   claimNumber?: string;
   claimedAmount: number;
@@ -1321,6 +1323,11 @@ export interface Invoice {
   discountReason?: string;
   total: number;
   paid: number;
+  /** Paise an insurer is expected to bear (payer split). */
+  coveredByInsurer: number;
+  insurerPolicyId?: string;
+  /** `total − coveredByInsurer` — the patient's own share, what the counter collects. */
+  patientResponsibility: number;
   payments: { amount: number; method: string; reference?: string; at: string }[];
   /** Money handed back. Net collected is `paid − refunded`. */
   refunds: { amount: number; method: string; reason: string; at: string }[];
@@ -2836,6 +2843,7 @@ export class ApiClient {
     input: {
       policyId: string;
       encounterId?: string;
+      invoiceId?: string;
       claimType: ClaimType;
       claimNumber?: string;
       claimedAmount: number;
@@ -3873,6 +3881,17 @@ export class ApiClient {
     input: { amount: number; method: string; reason: string },
   ): Promise<Invoice> {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/refund`, input);
+  }
+
+  /**
+   * Sets the payer split on a finalized bill: `coveredAmount` (PAISE) is the insurer's share under
+   * `policyId`, so the patient owes only `total − coveredAmount`. Needs `insurance:link`.
+   */
+  setPayerSplit(
+    invoiceId: string,
+    input: { policyId: string; coveredAmount: number },
+  ): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payer-split`, input);
   }
 
   /* ── wallet (patient advance) ── */

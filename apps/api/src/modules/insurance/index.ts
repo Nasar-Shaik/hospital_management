@@ -11,6 +11,7 @@ export {
   listPolicies,
   listClaims,
   linkPolicy,
+  getPolicy,
   updatePolicy,
   fileClaim,
   transitionClaim,
