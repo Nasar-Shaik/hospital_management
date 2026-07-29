@@ -28,6 +28,9 @@
       "name": "appointments"
     },
     {
+      "name": "assets"
+    },
+    {
       "name": "audit"
     },
     {
@@ -5495,6 +5498,177 @@
         ],
         "x-permission": "ambulance:dispatch",
         "x-feature": "module.support.ambulance"
+      }
+    },
+    "/api/v1/assets": {
+      "get": {
+        "operationId": "get_v1_assets",
+        "tags": ["assets"],
+        "summary": "GET /api/v1/assets",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "asset:manage",
+        "x-feature": "module.support.assets"
+      },
+      "post": {
+        "operationId": "post_v1_assets",
+        "tags": ["assets"],
+        "summary": "POST /api/v1/assets",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "asset:manage",
+        "x-feature": "module.support.assets"
+      }
+    },
+    "/api/v1/assets/{id}": {
+      "patch": {
+        "operationId": "patch_v1_assets_id",
+        "tags": ["assets"],
+        "summary": "PATCH /api/v1/assets/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "asset:manage",
+        "x-feature": "module.support.assets"
+      }
+    },
+    "/api/v1/assets/{id}/maintenance": {
+      "get": {
+        "operationId": "get_v1_assets_id_maintenance",
+        "tags": ["assets"],
+        "summary": "GET /api/v1/assets/{id}/maintenance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "asset:manage",
+        "x-feature": "module.support.assets"
+      },
+      "post": {
+        "operationId": "post_v1_assets_id_maintenance",
+        "tags": ["assets"],
+        "summary": "POST /api/v1/assets/{id}/maintenance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "asset:manage",
+        "x-feature": "module.support.assets"
       }
     },
     "/api/v1/hospital-profile": {

@@ -82,6 +82,8 @@ const NAVIGATION: NavSection[] = [
         icon: "departments",
         permission: "department:manage",
       },
+      // The estate register — equipment + its service history (B7). Facilities/biomedical work.
+      { label: "Assets", href: "/assets", icon: "assets", permission: "asset:manage" },
       {
         label: "API keys",
         href: "/settings/api-keys",

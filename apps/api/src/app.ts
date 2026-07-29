@@ -37,6 +37,7 @@ import { departmentRouter } from "./modules/departments/index.js";
 import { wardRouter } from "./modules/wards/index.js";
 import { theatreRouter } from "./modules/theatres/index.js";
 import { ambulanceRouter } from "./modules/ambulance/index.js";
+import { assetRouter } from "./modules/assets/index.js";
 import { hospitalProfileRouter } from "./modules/hospitalProfile/index.js";
 import { vitalsRouter } from "./modules/vitals/index.js";
 import { reportRouter } from "./modules/reports/index.js";
@@ -177,6 +178,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(wardRouter());
   v1Router.use(theatreRouter());
   v1Router.use(ambulanceRouter());
+  v1Router.use(assetRouter());
   v1Router.use(hospitalProfileRouter());
   v1Router.use(reportRouter());
   v1Router.use(documentRouter());

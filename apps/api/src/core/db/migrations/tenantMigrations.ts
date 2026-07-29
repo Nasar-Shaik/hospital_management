@@ -1459,4 +1459,40 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0036-assets",
+    description:
+      "Asset register + maintenance (B7) — the equipment a hospital owns (`assets`) and every " +
+      "service done on it (`assetMaintenance`). Estate configuration, no PHI. This owns the two " +
+      "collections and their indexes.",
+    up: async (db) => {
+      await db.createCollection("assets").catch(() => undefined);
+      await db.createCollection("assetMaintenance").catch(() => undefined);
+
+      /** An asset tag is the human key on the register — unique per tenant. */
+      await db
+        .collection("assets")
+        .createIndex(
+          { tenantId: 1, assetTag: 1 },
+          { unique: true, name: "one_asset_tag_per_tenant", background: true },
+        );
+      // The register filters by working state and by kind.
+      await db.collection("assets").createIndex({ tenantId: 1, status: 1 }, { background: true });
+      await db.collection("assets").createIndex({ tenantId: 1, category: 1 }, { background: true });
+      // An asset's history is read newest-first by asset.
+      await db
+        .collection("assetMaintenance")
+        .createIndex({ tenantId: 1, assetId: 1, performedOn: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("assets")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("assetMaintenance")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

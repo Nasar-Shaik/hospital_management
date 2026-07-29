@@ -660,6 +660,54 @@ export interface ListTripsQuery {
   status?: AmbulanceTripStatus;
 }
 
+/* ── assets & maintenance (B7) ── */
+
+export type AssetCategory =
+  | "biomedical"
+  | "imaging"
+  | "it_equipment"
+  | "furniture"
+  | "vehicle"
+  | "hvac"
+  | "electrical"
+  | "other";
+export type AssetStatus = "in_service" | "under_maintenance" | "retired";
+export type MaintenanceType = "preventive" | "repair" | "inspection" | "calibration";
+
+/** A piece of equipment on the register. Money fields are PAISE. Dates are `YYYY-MM-DD`. */
+export interface Asset {
+  id: string;
+  assetTag: string;
+  name: string;
+  category: AssetCategory;
+  status: AssetStatus;
+  location?: string;
+  manufacturer?: string;
+  modelNumber?: string;
+  serialNumber?: string;
+  purchaseDate?: string;
+  purchaseCost?: number;
+  warrantyExpiry?: string;
+  serviceIntervalDays?: number;
+  nextServiceDue?: string;
+  lastServicedOn?: string;
+  notes?: string;
+  branchId?: string;
+}
+
+/** One service done on an asset. `cost` is PAISE; dates are `YYYY-MM-DD`. */
+export interface AssetMaintenance {
+  id: string;
+  assetId: string;
+  type: MaintenanceType;
+  performedOn: string;
+  performedBy?: string;
+  cost?: number;
+  notes?: string;
+  nextServiceDue?: string;
+  branchId?: string;
+}
+
 /* ── hospital profile (B1) ── */
 
 export type OwnershipType = "government" | "private" | "trust" | "charitable" | "corporate";
@@ -2247,6 +2295,73 @@ export class ApiClient {
     input: { to: AmbulanceTripStatus; reason?: string },
   ): Promise<AmbulanceTrip> {
     return this.request<AmbulanceTrip>("POST", `/api/v1/ambulance-trips/${id}/transition`, input);
+  }
+
+  /* ── assets & maintenance (B7) ── */
+
+  /** The asset register, optionally filtered by state or category. Needs `asset:manage`. */
+  listAssets(query: { status?: AssetStatus; category?: AssetCategory } = {}): Promise<Asset[]> {
+    const qs = new URLSearchParams(
+      Object.entries(query).filter(([, v]) => v != null) as [string, string][],
+    ).toString();
+    return this.request<Asset[]>("GET", `/api/v1/assets${qs ? `?${qs}` : ""}`);
+  }
+
+  createAsset(input: {
+    assetTag: string;
+    name: string;
+    category: AssetCategory;
+    location?: string;
+    manufacturer?: string;
+    modelNumber?: string;
+    serialNumber?: string;
+    purchaseDate?: string;
+    purchaseCost?: number;
+    warrantyExpiry?: string;
+    serviceIntervalDays?: number;
+    nextServiceDue?: string;
+  }): Promise<Asset> {
+    return this.request<Asset>("POST", "/api/v1/assets", input);
+  }
+
+  updateAsset(
+    id: string,
+    patch: {
+      name?: string;
+      category?: AssetCategory;
+      status?: AssetStatus;
+      location?: string;
+      manufacturer?: string;
+      modelNumber?: string;
+      serialNumber?: string;
+      purchaseDate?: string;
+      purchaseCost?: number;
+      warrantyExpiry?: string;
+      serviceIntervalDays?: number;
+      nextServiceDue?: string;
+    },
+  ): Promise<Asset> {
+    return this.request<Asset>("PATCH", `/api/v1/assets/${id}`, patch);
+  }
+
+  /** An asset's maintenance history, newest first. Needs `asset:manage`. */
+  listAssetMaintenance(id: string): Promise<AssetMaintenance[]> {
+    return this.request<AssetMaintenance[]>("GET", `/api/v1/assets/${id}/maintenance`);
+  }
+
+  /** Logs a service and rolls its date onto the asset. Needs `asset:manage`. */
+  addAssetMaintenance(
+    id: string,
+    input: {
+      type: MaintenanceType;
+      performedOn: string;
+      performedBy?: string;
+      cost?: number;
+      notes?: string;
+      nextServiceDue?: string;
+    },
+  ): Promise<AssetMaintenance> {
+    return this.request<AssetMaintenance>("POST", `/api/v1/assets/${id}/maintenance`, input);
   }
 
   /* ── vitals ── */
