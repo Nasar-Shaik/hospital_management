@@ -42,6 +42,7 @@ import {
   type SafetyAlert,
   type VitalsReading,
   type DoctorRef,
+  type DiagnosisType,
 } from "@medicore/api-client";
 import { VitalsPanel } from "../../components/Vitals";
 import { useAuth } from "../../components/AuthProvider";
@@ -1651,14 +1652,15 @@ function MyPatients() {
                   </PermissionGate>
 
                   <PermissionGate can={can} permission="emr:write">
-                    <CollapsibleCard title="Visit summary" defaultOpen={false}>
+                    <CollapsibleCard title="Consultation note" defaultOpen={false}>
                       <p className="mb-3 text-xs text-[var(--color-fg-muted)]">
-                        The diagnosis and advice printed on the patient&apos;s OPD slip.
+                        The structured record of the visit. The final diagnoses and plan are what
+                        print on the patient&apos;s OPD slip.
                       </p>
-                      <VisitSummary
+                      <ConsultationNoteEditor
                         encounter={selected}
                         onSaved={() => {
-                          setNotice("Visit summary saved — it prints on the OPD slip.");
+                          setNotice("Consultation note saved — the OPD slip reflects it.");
                           void load();
                         }}
                       />
@@ -1757,29 +1759,80 @@ function CollapsibleCard({
 }
 
 /**
- * The doctor's OP visit summary — diagnosis and advice, for the OPD slip the patient takes home.
- * Seeds from what is already recorded and re-seeds when the doctor switches to another patient.
+ * The structured consultation note (D3 / EMR depth) — chief complaint, history, examination, the
+ * typed diagnoses and the plan. The OPD slip's diagnosis/advice lines are DERIVED from it on the
+ * server, so the doctor writes the record once. Seeds from the saved note and re-seeds when the
+ * doctor switches patients.
  */
-function VisitSummary({ encounter, onSaved }: { encounter: Encounter; onSaved: () => void }) {
+const noteArea =
+  "mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]";
+
+type DxRow = { text: string; code: string; type: DiagnosisType };
+
+function ConsultationNoteEditor({
+  encounter,
+  onSaved,
+}: {
+  encounter: Encounter;
+  onSaved: () => void;
+}) {
   const { api } = useAuth();
-  const [diagnosis, setDiagnosis] = useState(encounter.diagnosis ?? "");
-  const [advice, setAdvice] = useState(encounter.advice ?? "");
+  const [chiefComplaint, setChiefComplaint] = useState("");
+  const [history, setHistory] = useState("");
+  const [examination, setExamination] = useState("");
+  const [diagnoses, setDiagnoses] = useState<DxRow[]>([]);
+  const [plan, setPlan] = useState("");
+  const [followUp, setFollowUp] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Load the saved note for this visit; reset when the doctor moves to another patient.
   useEffect(() => {
-    setDiagnosis(encounter.diagnosis ?? "");
-    setAdvice(encounter.advice ?? "");
-  }, [encounter.id, encounter.diagnosis, encounter.advice]);
+    let live = true;
+    api
+      .getConsultation(encounter.id)
+      .then((n) => {
+        if (!live) return;
+        setChiefComplaint(n?.chiefComplaint ?? "");
+        setHistory(n?.history ?? "");
+        setExamination(n?.examination ?? "");
+        setDiagnoses(
+          (n?.diagnoses ?? []).map((d) => ({ text: d.text, code: d.code ?? "", type: d.type })),
+        );
+        setPlan(n?.plan ?? "");
+        setFollowUp(n?.followUpDays != null ? String(n.followUpDays) : "");
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [api, encounter.id]);
+
+  function setDx(i: number, patch: Partial<DxRow>) {
+    setDiagnoses((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
 
   async function save() {
     setBusy(true);
     setError(null);
     try {
-      await api.recordVisitSummary(encounter.id, { diagnosis, advice });
+      await api.saveConsultation(encounter.id, {
+        chiefComplaint,
+        history,
+        examination,
+        diagnoses: diagnoses
+          .filter((d) => d.text.trim())
+          .map((d) => ({
+            text: d.text.trim(),
+            type: d.type,
+            ...(d.code.trim() ? { code: d.code.trim() } : {}),
+          })),
+        plan,
+        ...(followUp.trim() ? { followUpDays: Number(followUp) } : { followUpDays: 0 }),
+      });
       onSaved();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not save the summary.");
+      setError(err instanceof ApiClientError ? err.message : "Could not save the note.");
     } finally {
       setBusy(false);
     }
@@ -1788,28 +1841,113 @@ function VisitSummary({ encounter, onSaved }: { encounter: Encounter; onSaved: (
   return (
     <div className="space-y-3">
       {error && <Alert tone="danger">{error}</Alert>}
+
       <label className="block text-xs text-[var(--color-fg-muted)]">
-        Diagnosis
+        Chief complaint
         <textarea
-          value={diagnosis}
-          onChange={(e) => setDiagnosis(e.target.value)}
+          value={chiefComplaint}
+          onChange={(e) => setChiefComplaint(e.target.value)}
           rows={2}
-          placeholder="Clinical impression…"
-          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+          placeholder="What brought the patient in…"
+          className={noteArea}
         />
       </label>
       <label className="block text-xs text-[var(--color-fg-muted)]">
-        Advice
+        History
         <textarea
-          value={advice}
-          onChange={(e) => setAdvice(e.target.value)}
+          value={history}
+          onChange={(e) => setHistory(e.target.value)}
           rows={2}
-          placeholder="Rest, diet, follow-up…"
-          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+          placeholder="History of the presenting illness…"
+          className={noteArea}
         />
       </label>
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Examination
+        <textarea
+          value={examination}
+          onChange={(e) => setExamination(e.target.value)}
+          rows={2}
+          placeholder="Findings on examination…"
+          className={noteArea}
+        />
+      </label>
+
+      {/* Diagnoses — a typed list, not a comma string. */}
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs text-[var(--color-fg-muted)]">Diagnoses</span>
+          <button
+            type="button"
+            className="text-xs text-[var(--color-brand-600)] hover:underline"
+            onClick={() => setDiagnoses((r) => [...r, { text: "", code: "", type: "provisional" }])}
+          >
+            + Add diagnosis
+          </button>
+        </div>
+        {diagnoses.length === 0 ? (
+          <p className="text-xs text-[var(--color-fg-subtle)]">None recorded.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {diagnoses.map((d, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-1.5">
+                <input
+                  value={d.text}
+                  onChange={(e) => setDx(i, { text: e.target.value })}
+                  placeholder="Condition"
+                  className="min-w-40 flex-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm"
+                />
+                <input
+                  value={d.code}
+                  onChange={(e) => setDx(i, { code: e.target.value.toUpperCase() })}
+                  placeholder="ICD"
+                  className="w-24 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 font-mono text-xs"
+                />
+                <select
+                  value={d.type}
+                  onChange={(e) => setDx(i, { type: e.target.value as DiagnosisType })}
+                  className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs"
+                >
+                  <option value="provisional">Provisional</option>
+                  <option value="final">Final</option>
+                </select>
+                <button
+                  type="button"
+                  className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-danger)]"
+                  onClick={() => setDiagnoses((r) => r.filter((_, idx) => idx !== i))}
+                  aria-label="Remove diagnosis"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Plan &amp; advice
+        <textarea
+          value={plan}
+          onChange={(e) => setPlan(e.target.value)}
+          rows={2}
+          placeholder="Investigations, medication, rest, diet…"
+          className={noteArea}
+        />
+      </label>
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Follow-up in (days)
+        <input
+          type="number"
+          value={followUp}
+          onChange={(e) => setFollowUp(e.target.value)}
+          placeholder="e.g. 7"
+          className={`${noteArea} max-w-32`}
+        />
+      </label>
+
       <Button disabled={busy} onClick={() => void save()}>
-        {busy ? "Saving…" : "Save summary"}
+        {busy ? "Saving…" : "Save note"}
       </Button>
     </div>
   );

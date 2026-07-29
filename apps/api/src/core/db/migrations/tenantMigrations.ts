@@ -1558,4 +1558,31 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0039-consultation-notes",
+    description:
+      "Consultation notes (D3 / EMR depth) — the structured note for a visit (chief complaint, " +
+      "history, examination, typed diagnoses, plan). ONE per encounter. This owns the collection " +
+      "and its unique index.",
+    up: async (db) => {
+      await db.createCollection("consultationNotes").catch(() => undefined);
+      // One note per encounter — the note is 1:1 with the visit, written by upsert.
+      await db
+        .collection("consultationNotes")
+        .createIndex(
+          { tenantId: 1, encounterId: 1 },
+          { unique: true, name: "one_note_per_encounter", background: true },
+        );
+      // A patient's notes across visits, for the profile.
+      await db
+        .collection("consultationNotes")
+        .createIndex({ tenantId: 1, patientId: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("consultationNotes")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

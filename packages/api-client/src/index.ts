@@ -755,6 +755,31 @@ export interface FeedbackTicket {
   updatedAt: string;
 }
 
+/* ── consultation note (D3 / EMR depth) ── */
+
+export type DiagnosisType = "provisional" | "final";
+
+export interface Diagnosis {
+  text: string;
+  code?: string;
+  type: DiagnosisType;
+}
+
+/** The structured note for one visit — one per encounter. */
+export interface ConsultationNote {
+  encounterId: string;
+  patientId: string;
+  doctorId?: string;
+  chiefComplaint?: string;
+  history?: string;
+  examination?: string;
+  diagnoses: Diagnosis[];
+  plan?: string;
+  followUpDays?: number;
+  branchId?: string;
+  updatedAt: string;
+}
+
 /* ── insurance (patient policies + claims) ── */
 
 export type PolicyType = "cashless" | "reimbursement" | "government" | "corporate";
@@ -2952,6 +2977,39 @@ export class ApiClient {
     input: { diagnosis?: string; advice?: string },
   ): Promise<Encounter> {
     return this.request<Encounter>("POST", `/api/v1/encounters/${id}/summary`, input);
+  }
+
+  /**
+   * The structured consultation note for a visit (D3). `null` when the doctor has not started one.
+   * Needs `emr:read`.
+   */
+  getConsultation(encounterId: string): Promise<ConsultationNote | null> {
+    return this.request<ConsultationNote | null>(
+      "GET",
+      `/api/v1/encounters/${encounterId}/consultation`,
+    );
+  }
+
+  /**
+   * Writes the consultation note; the encounter's OPD-slip lines are derived from it server-side.
+   * Only the fields sent are touched (a blank string / empty list clears one). Needs `emr:write`.
+   */
+  saveConsultation(
+    encounterId: string,
+    input: {
+      chiefComplaint?: string;
+      history?: string;
+      examination?: string;
+      diagnoses?: Diagnosis[];
+      plan?: string;
+      followUpDays?: number;
+    },
+  ): Promise<ConsultationNote> {
+    return this.request<ConsultationNote>(
+      "PUT",
+      `/api/v1/encounters/${encounterId}/consultation`,
+      input,
+    );
   }
 
   cancelEncounter(id: string, reason: string): Promise<Encounter> {

@@ -30,6 +30,7 @@ export {
   queuePatient,
   startConsultation,
   sendForInvestigations,
+  recordVisitSummary,
   closeEncounter,
   cancelEncounter,
   markLeftWithoutBeingSeen,
