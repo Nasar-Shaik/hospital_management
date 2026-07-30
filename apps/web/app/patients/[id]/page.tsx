@@ -39,6 +39,8 @@ import {
   type ConsentSigner,
   type CarePackage,
   type PackageEnrollment,
+  type IcdCode,
+  type CodedDiagnosis,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
@@ -116,6 +118,7 @@ type TabKey =
   | "wallet"
   | "insurance"
   | "consent"
+  | "coding"
   | "documents";
 
 function Profile() {
@@ -128,6 +131,7 @@ function Profile() {
   const canRecordVitals = can("vitals:record");
   const canManageConsent = can("consent:manage");
   const canEnrollPackage = can("package:enroll");
+  const canCode = can("mrd:code");
   const canReadDocs = can("file:read");
   const canUploadDocs = can("file:upload");
   const canDeleteDocs = can("file:delete");
@@ -253,6 +257,7 @@ function Profile() {
     ...(canWallet ? [{ key: "wallet" as const, label: "Wallet" }] : []),
     ...(canInsurance ? [{ key: "insurance" as const, label: "Insurance" }] : []),
     ...(canReadVitals || canManageConsent ? [{ key: "consent" as const, label: "Consent" }] : []),
+    ...(canCode ? [{ key: "coding" as const, label: "Coding" }] : []),
     ...(canReadDocs
       ? [{ key: "documents" as const, label: "Documents", count: documents.length }]
       : []),
@@ -410,6 +415,7 @@ function Profile() {
         {tab === "consent" && (canReadVitals || canManageConsent) && (
           <ConsentPanel patientId={id} encounters={encounters} canManage={canManageConsent} />
         )}
+        {tab === "coding" && canCode && <CodingPanel encounters={encounters} api={api} />}
         {tab === "documents" && canReadDocs && (
           <Documents
             patientId={id}
@@ -2200,6 +2206,199 @@ function ConsentForm({
         </Button>
       </div>
     </Card>
+  );
+}
+
+/* ── ICD-10 coding (MRD) ─────────────────────────────────────────────────────── */
+
+function CodingPanel({
+  encounters,
+  api,
+}: {
+  encounters: Encounter[];
+  api: ReturnType<typeof useAuth>["api"];
+}) {
+  const visits = [...encounters].sort(
+    (a, b) => new Date(b.arrivedAt).getTime() - new Date(a.arrivedAt).getTime(),
+  );
+  const [encounterId, setEncounterId] = useState(visits[0]?.id ?? "");
+  const [codes, setCodes] = useState<CodedDiagnosis[]>([]);
+  const [noteDx, setNoteDx] = useState<string[]>([]);
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState<IcdCode[]>([]);
+  const [error, setError] = useState<unknown>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // Load the existing coding + the note's diagnoses (as a reference for what to code) per visit.
+  useEffect(() => {
+    if (!encounterId) return;
+    setSaved(false);
+    void api
+      .getCoding(encounterId)
+      .then((c) => setCodes(c?.codes ?? []))
+      .catch(() => setCodes([]));
+    void api
+      .getConsultation(encounterId)
+      .then((n) => setNoteDx(n ? n.diagnoses.map((d) => d.text) : []))
+      .catch(() => setNoteDx([]));
+  }, [api, encounterId]);
+
+  // Search the ICD master as the coder types (debounced-ish: only when 2+ chars).
+  useEffect(() => {
+    if (search.trim().length < 2) {
+      setResults([]);
+      return;
+    }
+    let live = true;
+    void api
+      .listIcdCodes(search.trim())
+      .then((r) => live && setResults(r))
+      .catch(() => live && setResults([]));
+    return () => {
+      live = false;
+    };
+  }, [api, search]);
+
+  function addCode(c: IcdCode) {
+    if (codes.some((x) => x.code === c.code)) return;
+    // The first code added becomes primary; the rest are secondary until the coder says otherwise.
+    setCodes((cur) => [...cur, { code: c.code, title: c.title, primary: cur.length === 0 }]);
+    setSearch("");
+    setResults([]);
+    setSaved(false);
+  }
+  function removeCode(code: string) {
+    setCodes((cur) => {
+      const next = cur.filter((c) => c.code !== code);
+      // If we removed the primary, promote the first remaining so a coding is never primary-less.
+      const first = next[0];
+      if (first && !next.some((c) => c.primary)) next[0] = { ...first, primary: true };
+      return next;
+    });
+    setSaved(false);
+  }
+  function setPrimary(code: string) {
+    setCodes((cur) => cur.map((c) => ({ ...c, primary: c.code === code })));
+    setSaved(false);
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.saveCoding(encounterId, codes);
+      setSaved(true);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (visits.length === 0) return <Empty>No visits to code.</Empty>;
+
+  return (
+    <div className="space-y-4">
+      {error != null && (
+        <Alert tone="danger">
+          {error instanceof ApiClientError ? error.message : "Could not save the coding."}
+        </Alert>
+      )}
+      {saved && <Alert tone="success">Coding saved.</Alert>}
+
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Visit
+        <select
+          value={encounterId}
+          onChange={(e) => setEncounterId(e.target.value)}
+          className="mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)]"
+        >
+          {visits.map((v) => (
+            <option key={v.id} value={v.id}>
+              {fmtDate(v.arrivedAt)} · {v.class}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {noteDx.length > 0 && (
+        <p className="text-xs text-[var(--color-fg-subtle)]">From the note: {noteDx.join("; ")}</p>
+      )}
+
+      {/* Assigned codes */}
+      {codes.length === 0 ? (
+        <p className="text-sm text-[var(--color-fg-subtle)]">
+          No codes yet. Search below to add ICD-10 codes for this visit.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {codes.map((c) => (
+            <Card key={c.code} className="flex flex-wrap items-center gap-x-3 gap-y-1 p-3">
+              <span className="font-mono text-sm font-semibold text-[var(--color-fg)]">
+                {c.code}
+              </span>
+              <span className="min-w-40 flex-1 text-sm text-[var(--color-fg)]">{c.title}</span>
+              <label className="flex items-center gap-1.5 text-xs text-[var(--color-fg-muted)]">
+                <input
+                  type="radio"
+                  name="primary-dx"
+                  checked={c.primary}
+                  onChange={() => setPrimary(c.code)}
+                />
+                Primary
+              </label>
+              <button
+                type="button"
+                onClick={() => removeCode(c.code)}
+                className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-danger)]"
+                aria-label="Remove"
+              >
+                ✕
+              </button>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Search + add */}
+      <div className="relative">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search ICD-10 code or diagnosis…"
+          className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+        />
+        {results.length > 0 && (
+          <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-lg">
+            {results.map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => addCode(r)}
+                className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-[var(--color-bg-subtle)]"
+              >
+                <span className="font-mono text-xs font-semibold text-[var(--color-fg)]">
+                  {r.code}
+                </span>
+                <span className="text-[var(--color-fg-muted)]">{r.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {search.trim().length >= 2 && results.length === 0 && (
+        <p className="text-xs text-[var(--color-fg-subtle)]">
+          No matching code. Add it under Medical records first.
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        <Button disabled={busy} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save coding"}
+        </Button>
+      </div>
+    </div>
   );
 }
 

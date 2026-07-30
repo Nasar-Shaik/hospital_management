@@ -1700,4 +1700,42 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0044-mrd-coding",
+    description:
+      "MRD (medical records): `icdCodes` (the ICD-10 master, unique code) and `encounterCodings` " +
+      "(the coded diagnoses on a visit — one per encounter, feeds the disease register).",
+    up: async (db) => {
+      await db.createCollection("icdCodes").catch(() => undefined);
+      await db.createCollection("encounterCodings").catch(() => undefined);
+
+      await db
+        .collection("icdCodes")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, name: "one_icd_code_per_tenant", background: true },
+        );
+      // One coding per encounter — the upsert key.
+      await db
+        .collection("encounterCodings")
+        .createIndex(
+          { tenantId: 1, encounterId: 1 },
+          { unique: true, name: "one_coding_per_encounter", background: true },
+        );
+      // The disease register aggregates by coding date.
+      await db
+        .collection("encounterCodings")
+        .createIndex({ tenantId: 1, codedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("icdCodes")
+        .drop()
+        .catch(() => undefined);
+      await db
+        .collection("encounterCodings")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

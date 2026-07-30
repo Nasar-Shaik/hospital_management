@@ -62,6 +62,7 @@ const NAVIGATION: NavSection[] = [
       },
       { label: "Service tariff", href: "/tariff", icon: "tariff", permission: "tariff:manage" },
       { label: "Care packages", href: "/packages", icon: "tariff", permission: "tariff:manage" },
+      { label: "Medical records", href: "/mrd", icon: "reports", permission: "mrd:register:view" },
       {
         label: "Public website",
         href: "/settings/site",

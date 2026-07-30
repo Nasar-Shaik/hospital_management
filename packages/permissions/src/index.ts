@@ -680,6 +680,9 @@ export const DEFAULT_ROLES = [
       // consent is captured by the nurse too, death is certified by the doctor alone.
       PATIENT.CONSENT_MANAGE,
       PATIENT.DEATH_CERTIFY,
+      // Assigning the ICD-10 code to the visit's diagnosis. In practice the treating doctor codes
+      // their own case; a dedicated records coder (a role a hospital can add) would also hold this.
+      PATIENT.MRD_CODE,
       PATIENT.REFERRAL_MANAGE,
       CLINICAL.EMR_READ,
       CLINICAL.EMR_WRITE,

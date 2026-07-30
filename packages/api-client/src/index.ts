@@ -840,6 +840,37 @@ export interface DeathRecord {
   createdAt: string;
 }
 
+/* ── MRD: ICD-10 coding + disease register ── */
+
+export interface IcdCode {
+  id: string;
+  code: string;
+  title: string;
+  chapter?: string;
+  active: boolean;
+}
+
+export interface CodedDiagnosis {
+  code: string;
+  title: string;
+  primary: boolean;
+}
+
+/** The coded diagnoses on one visit — one coding per encounter. */
+export interface EncounterCoding {
+  encounterId: string;
+  patientId: string;
+  codes: CodedDiagnosis[];
+  codedBy?: string;
+  codedAt: string;
+}
+
+export interface DiseaseRegisterRow {
+  code: string;
+  title: string;
+  cases: number;
+}
+
 /* ── consultation note (D3 / EMR depth) ── */
 
 export type DiagnosisType = "provisional" | "final";
@@ -3314,6 +3345,48 @@ export class ApiClient {
 
   cancelEncounter(id: string, reason: string): Promise<Encounter> {
     return this.request<Encounter>("POST", `/api/v1/encounters/${id}/cancel`, { reason });
+  }
+
+  /* ── MRD: ICD-10 coding + disease register ── */
+
+  /** Search the ICD-10 master (code or title). Needs `mrd:code`. */
+  listIcdCodes(search?: string, includeInactive = false): Promise<IcdCode[]> {
+    const qs = new URLSearchParams();
+    if (search) qs.set("search", search);
+    if (includeInactive) qs.set("includeInactive", "true");
+    const s = qs.toString();
+    return this.request<IcdCode[]>("GET", `/api/v1/mrd/icd-codes${s ? `?${s}` : ""}`);
+  }
+
+  /** Adds an ICD-10 code to the master. Needs `mrd:manage`. */
+  createIcdCode(input: { code: string; title: string; chapter?: string }): Promise<IcdCode> {
+    return this.request<IcdCode>("POST", "/api/v1/mrd/icd-codes", input);
+  }
+
+  /** Edits an ICD-10 code (including retiring it). Needs `mrd:manage`. */
+  updateIcdCode(
+    id: string,
+    patch: { title?: string; chapter?: string; active?: boolean },
+  ): Promise<IcdCode> {
+    return this.request<IcdCode>("PATCH", `/api/v1/mrd/icd-codes/${id}`, patch);
+  }
+
+  /** The coding on a visit, or null. Needs `mrd:code`. */
+  getCoding(encounterId: string): Promise<EncounterCoding | null> {
+    return this.request<EncounterCoding | null>("GET", `/api/v1/mrd/codings/${encounterId}`);
+  }
+
+  /** Codes a visit — replaces the whole set; exactly one code must be primary. Needs `mrd:code`. */
+  saveCoding(encounterId: string, codes: CodedDiagnosis[]): Promise<EncounterCoding> {
+    return this.request<EncounterCoding>("PUT", `/api/v1/mrd/codings/${encounterId}`, { codes });
+  }
+
+  /** The disease/morbidity register — primary diagnoses by ICD code in a period. Needs `mrd:register:view`. */
+  mrdDiseaseRegister(range: ReportRange): Promise<DiseaseRegisterRow[]> {
+    return this.request<DiseaseRegisterRow[]>(
+      "GET",
+      `/api/v1/mrd/disease-register${rangeQs(range)}`,
+    );
   }
 
   /** They waited and left. Distinct from cancelled — a rising LWBS is a slow queue. */
