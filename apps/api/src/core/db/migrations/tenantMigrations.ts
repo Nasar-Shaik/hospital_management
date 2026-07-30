@@ -1738,4 +1738,31 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0045-mortuary-register",
+    description:
+      "Mortuary: `mortuaryRegister` (the body custody log — one entry per encounter, from receipt " +
+      "into storage to release).",
+    up: async (db) => {
+      await db.createCollection("mortuaryRegister").catch(() => undefined);
+
+      // One body per stay — the register is keyed on the encounter, and a second entry is a mistake.
+      await db
+        .collection("mortuaryRegister")
+        .createIndex(
+          { tenantId: 1, encounterId: 1 },
+          { unique: true, name: "one_body_per_encounter", background: true },
+        );
+      // The occupancy board reads the currently-stored bodies, newest first.
+      await db
+        .collection("mortuaryRegister")
+        .createIndex({ tenantId: 1, status: 1, receivedAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("mortuaryRegister")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

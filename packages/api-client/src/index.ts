@@ -871,6 +871,31 @@ export interface DiseaseRegisterRow {
   cases: number;
 }
 
+/* ── mortuary: body custody register ── */
+
+export type MortuaryStatus = "in_storage" | "released";
+
+export interface MortuaryEntry {
+  id: string;
+  patientId: string;
+  encounterId: string;
+  deathRecordId?: string;
+  deceasedName: string;
+  receivedAt: string;
+  receivedBy?: string;
+  tagNumber: string;
+  storageUnit?: string;
+  medicoLegal: boolean;
+  status: MortuaryStatus;
+  releasedAt?: string;
+  releasedBy?: string;
+  releasedTo?: string;
+  releasedRelationship?: string;
+  clearanceRef?: string;
+  remarks?: string;
+  createdAt: string;
+}
+
 /* ── consultation note (D3 / EMR depth) ── */
 
 export type DiagnosisType = "provisional" | "final";
@@ -3387,6 +3412,51 @@ export class ApiClient {
       "GET",
       `/api/v1/mrd/disease-register${rangeQs(range)}`,
     );
+  }
+
+  /* ── mortuary: body custody register ── */
+
+  /** The mortuary register; pass `in_storage` for the occupancy board. Needs `mortuary:manage`. */
+  listMortuary(status?: MortuaryStatus): Promise<MortuaryEntry[]> {
+    const qs = status ? `?status=${status}` : "";
+    return this.request<MortuaryEntry[]>("GET", `/api/v1/mortuary/register${qs}`);
+  }
+
+  /** The mortuary entry for a visit, or null. Needs `mortuary:manage`. */
+  getMortuaryForEncounter(encounterId: string): Promise<MortuaryEntry | null> {
+    return this.request<MortuaryEntry | null>(
+      "GET",
+      `/api/v1/mortuary/for-encounter/${encounterId}`,
+    );
+  }
+
+  /**
+   * Receives a deceased body into the mortuary. The death must already be recorded — the patient and
+   * medico-legal status are derived from it. Needs `mortuary:manage`.
+   */
+  receiveBody(input: {
+    encounterId: string;
+    tagNumber: string;
+    storageUnit?: string;
+    remarks?: string;
+  }): Promise<MortuaryEntry> {
+    return this.request<MortuaryEntry>("POST", "/api/v1/mortuary/register", input);
+  }
+
+  /**
+   * Releases a stored body. A medico-legal body needs a `clearanceRef` (police/magistrate NOC) or the
+   * server refuses. Needs `mortuary:release`.
+   */
+  releaseBody(
+    id: string,
+    input: {
+      releasedTo: string;
+      releasedRelationship: string;
+      clearanceRef?: string;
+      remarks?: string;
+    },
+  ): Promise<MortuaryEntry> {
+    return this.request<MortuaryEntry>("POST", `/api/v1/mortuary/register/${id}/release`, input);
   }
 
   /** They waited and left. Distinct from cancelled — a rising LWBS is a slow queue. */

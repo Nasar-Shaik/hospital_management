@@ -147,6 +147,9 @@ const NAVIGATION: NavSection[] = [
         icon: "ambulance",
         permission: "ambulance:dispatch",
       },
+      // The body custody register (support.mortuary) — receive and release. `mortuary:manage` is the
+      // ward/mortuary staff who run it; release refuses a medico-legal body without clearance.
+      { label: "Mortuary", href: "/mortuary", icon: "ward", permission: "mortuary:manage" },
     ],
   },
   {

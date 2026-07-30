@@ -109,6 +109,9 @@
       "name": "medicines"
     },
     {
+      "name": "mortuary"
+    },
+    {
       "name": "mrd"
     },
     {
@@ -7092,6 +7095,140 @@
         ],
         "x-permission": "mrd:register:view",
         "x-feature": "module.support.mrd"
+      }
+    },
+    "/api/v1/mortuary/register": {
+      "get": {
+        "operationId": "get_v1_mortuary_register",
+        "tags": ["mortuary"],
+        "summary": "GET /api/v1/mortuary/register",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "mortuary:manage",
+        "x-feature": "module.support.mortuary"
+      },
+      "post": {
+        "operationId": "post_v1_mortuary_register",
+        "tags": ["mortuary"],
+        "summary": "POST /api/v1/mortuary/register",
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "mortuary:manage",
+        "x-feature": "module.support.mortuary"
+      }
+    },
+    "/api/v1/mortuary/for-encounter/{encounterId}": {
+      "get": {
+        "operationId": "get_v1_mortuary_for_encounter_encounterId",
+        "tags": ["mortuary"],
+        "summary": "GET /api/v1/mortuary/for-encounter/{encounterId}",
+        "parameters": [
+          {
+            "name": "encounterId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "mortuary:manage",
+        "x-feature": "module.support.mortuary"
+      }
+    },
+    "/api/v1/mortuary/register/{id}/release": {
+      "post": {
+        "operationId": "post_v1_mortuary_register_id_release",
+        "tags": ["mortuary"],
+        "summary": "POST /api/v1/mortuary/register/{id}/release",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success — `{ success: true, data }`."
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "mortuary:release",
+        "x-feature": "module.support.mortuary"
       }
     },
     "/api/v1/hospital-profile": {

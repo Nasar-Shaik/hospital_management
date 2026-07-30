@@ -735,6 +735,13 @@ export const DEFAULT_ROLES = [
       CLINICAL.ORDER_READ,
       CLINICAL.ORDER_PERFORM,
       ORGANIZATION.BED_ALLOCATE,
+      // The mortuary. Receiving a body into custody and handing it over is ward/mortuary work — the
+      // nurse does it. These sat in the catalog held by NOBODY (the "a permission nobody holds is a
+      // feature nobody has" trap); a hospital that adds a dedicated mortuary attendant role would
+      // give it these too. Release still refuses a medico-legal body without a police clearance,
+      // whoever holds the permission.
+      ORGANIZATION.MORTUARY_MANAGE,
+      ORGANIZATION.MORTUARY_RELEASE,
       OPERATIONS.APPOINTMENT_READ,
       PLATFORM.FILE_READ,
     ),
