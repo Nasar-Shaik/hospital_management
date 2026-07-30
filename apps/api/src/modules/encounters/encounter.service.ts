@@ -825,9 +825,43 @@ export const dischargeRegister = repo.dischargeRegister;
 export const startConsultation = (id: string): Promise<repo.Encounter> =>
   transition(id, "in_progress");
 
-/** Sent for tests. THEY KEEP THIS ENCOUNTER — see the model header. */
-export const sendForInvestigations = (id: string): Promise<repo.Encounter> =>
-  transition(id, "awaiting_results");
+/**
+ * Sent for tests. THEY KEEP THIS ENCOUNTER — see the model header.
+ *
+ * ── AT LEAST ONE TEST MUST BE ORDERED FIRST ─────────────────────────────────
+ * "Send for tests" parks the patient in `awaiting_results` to wait for the lab. Doing that with
+ * nothing ordered strands the patient in a waiting state no result will ever release them from — so
+ * the guard refuses it. The count is maintained by the orders module inside the order's transaction
+ * (`activeOrderCount`), which is why a doctor who orders a test and immediately clicks send is not
+ * wrongly blocked. The doctor orders as many tests as they like (each is live the instant it is
+ * placed); this transition is the separate "I am done ordering, send them to wait" step.
+ */
+export async function sendForInvestigations(id: string): Promise<repo.Encounter> {
+  const encounter = await repo.findById(id);
+  if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+  if ((encounter.activeOrderCount ?? 0) <= 0) {
+    throw new AppError("HMS-STATE-001", 422, "Order at least one test before sending for tests", {
+      encounterId: id,
+      hint: "place the tests first — an investigations visit with nothing ordered never comes back",
+    });
+  }
+  return transition(id, "awaiting_results");
+}
+
+/**
+ * The orders module's hooks into the live order count (see `encounter.model.ts`). Called from
+ * INSIDE the order's own transaction so the count and the order commit together — never an event,
+ * which would let a doctor send for tests before an async consumer had counted the order they just
+ * placed. The direction is orders → encounters, which the module graph already allows.
+ */
+export const recordOrderPlaced = (
+  id: string,
+  session?: Parameters<typeof repo.bumpOrderCount>[2],
+) => repo.bumpOrderCount(id, 1, session);
+export const recordOrderCancelled = (
+  id: string,
+  session?: Parameters<typeof repo.bumpOrderCount>[2],
+) => repo.bumpOrderCount(id, -1, session);
 
 export const queuePatient = (id: string): Promise<repo.Encounter> => transition(id, "in_queue");
 

@@ -49,6 +49,8 @@ export interface Encounter {
   dischargedAt?: Date;
   disposition?: DischargeDisposition;
   admittedFrom?: string;
+  /** Still-live orders on this visit — the guard on "send for investigations" reads it. */
+  activeOrderCount: number;
   history: EncounterHistoryEntry[];
   createdAt: Date;
 }
@@ -62,6 +64,7 @@ function toEncounter(doc: EncounterDoc): Encounter {
     class: doc.class,
     status: doc.status,
     arrivedAt: doc.arrivedAt,
+    activeOrderCount: doc.activeOrderCount ?? 0,
     history: doc.history ?? [],
     createdAt: doc.createdAt,
     ...(doc.appointmentId ? { appointmentId: doc.appointmentId.toString() } : {}),
@@ -242,6 +245,26 @@ export async function setBed(
     )
     .lean<EncounterDoc>();
   return doc ? toEncounter(doc) : undefined;
+}
+
+/**
+ * Adjusts the live order count by `delta` (`+1` when an order is placed, `−1` when one is cancelled).
+ *
+ * Called by the ORDERS module inside the order's OWN transaction, so the count moves in lockstep with
+ * the order and a doctor who orders then immediately sends for investigations sees it already counted.
+ * `$inc` is atomic; the count cannot go negative in practice because a place always precedes its
+ * cancel and each runs exactly once (place dedupes on `requestId`, cancel is a one-way state move).
+ */
+export async function bumpOrderCount(
+  id: string,
+  delta: number,
+  session?: ClientSession,
+): Promise<void> {
+  await getEncounterModel(getTenantDb()).updateOne(
+    { _id: id },
+    { $inc: { activeOrderCount: delta } },
+    { ...(session ? { session } : {}) },
+  );
 }
 
 /**

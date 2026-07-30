@@ -269,6 +269,16 @@ export interface EncounterDoc {
   /** The OP encounter this admission came out of, so the story can be walked backwards. */
   admittedFrom?: Types.ObjectId;
 
+  /**
+   * How many still-live orders (tests) sit on this visit. Maintained by the ORDERS module inside the
+   * order's own transaction (`+1` on place, `−1` on cancel), so it is exact and race-free — a doctor
+   * who orders a test and immediately sends the patient for investigations sees the count already
+   * reflect it, which an async event consumer could not promise. Its one job is the guard on
+   * `sendForInvestigations`: a visit cannot be sent to the lab with nothing ordered. Absent on
+   * pre-existing visits — read it as `?? 0`.
+   */
+  activeOrderCount?: number;
+
   createdBy?: string;
   history: EncounterHistoryEntry[];
   createdAt: Date;
@@ -297,6 +307,9 @@ const encounterSchema = new Schema<EncounterDoc>(
     reason: { type: String, trim: true, maxlength: 500 },
     diagnosis: { type: String, trim: true, maxlength: 2000 },
     advice: { type: String, trim: true, maxlength: 2000 },
+
+    // Live order count — maintained by the orders module (see the interface). Not indexed.
+    activeOrderCount: { type: Number, default: 0 },
 
     // `default: undefined`, never `false` — see the interface. A stored `false`
     // would sit in the unique index and lock the patient out of ever returning.

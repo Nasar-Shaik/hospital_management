@@ -140,7 +140,7 @@ function OrderPad({
       }
 
       setNotice(
-        `${String(placed)} sent for tests${duplicates > 0 ? `, ${String(duplicates)} already ordered` : ""}.`,
+        `${String(placed)} test${placed === 1 ? "" : "s"} ordered — on the department worklist now${duplicates > 0 ? `, ${String(duplicates)} already ordered` : ""}.`,
       );
       setSelected(new Set());
       onOrdered();
@@ -222,10 +222,10 @@ function OrderPad({
       <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-3">
         <Button disabled={busy || selected.size === 0} onClick={() => void sendSelected()}>
           {busy
-            ? "Sending…"
+            ? "Ordering…"
             : selected.size === 0
-              ? "Select tests to send"
-              : `Send ${String(selected.size)} for tests`}
+              ? "Select tests to order"
+              : `Order ${String(selected.size)} test${selected.size === 1 ? "" : "s"}`}
         </Button>
         {selected.size > 0 && !busy && (
           <button
@@ -1358,6 +1358,9 @@ function MyPatients() {
   // The consultation has actually started — the patient was CALLED IN. Ordering tests and
   // prescribing are held until then: you do not investigate or medicate someone still in the queue.
   const consulting = !!selected && ["in_progress", "awaiting_results"].includes(selected.status);
+  // Live tests on this visit (a cancelled order no longer counts). "Send for tests" needs at least
+  // one — parking a patient in the lab queue with nothing ordered strands them there.
+  const activeOrders = orders.filter((o) => o.status !== "cancelled");
 
   useEffect(() => {
     if (selectedId) {
@@ -1530,7 +1533,12 @@ function MyPatients() {
                     {selected.status === "in_progress" && can("encounter:update") && (
                       <Button
                         variant="secondary"
-                        disabled={busy}
+                        disabled={busy || activeOrders.length === 0}
+                        title={
+                          activeOrders.length === 0
+                            ? "Order at least one test below first"
+                            : undefined
+                        }
                         onClick={() => void act("investigations")}
                       >
                         Send for tests
@@ -1555,6 +1563,24 @@ function MyPatients() {
                       OPD slip →
                     </a>
                   </div>
+
+                  {selected.status === "in_progress" && (
+                    <p className="text-xs text-[var(--color-fg-muted)]">
+                      {activeOrders.length === 0 ? (
+                        <>
+                          Order the tests below first. <em>Send for tests</em> then moves the
+                          patient to the lab to wait for results — you can keep adding tests until
+                          they go to pay.
+                        </>
+                      ) : (
+                        <>
+                          {activeOrders.length} test{activeOrders.length === 1 ? "" : "s"} ordered
+                          on this visit. Add more if needed, then <em>Send for tests</em> to send
+                          the patient to wait for results.
+                        </>
+                      )}
+                    </p>
+                  )}
                 </div>
 
                 <AdmitOrTransfer
@@ -1570,7 +1596,8 @@ function MyPatients() {
                 {selected.status === "awaiting_results" && (
                   <Alert tone="info">
                     At the lab. They keep this visit — when the last result is released they come
-                    back to your list on their own.
+                    back to your list on their own. You can still order more tests below if you need
+                    to.
                   </Alert>
                 )}
               </Card>
@@ -1617,10 +1644,14 @@ function MyPatients() {
               ) : (
                 <>
                   <PermissionGate can={can} permission="order:create">
-                    <CollapsibleCard title="Order" defaultOpen={selected.status === "in_progress"}>
+                    <CollapsibleCard
+                      title="Order"
+                      defaultOpen={["in_progress", "awaiting_results"].includes(selected.status)}
+                    >
                       <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
-                        Ordering puts it in that department&apos;s worklist immediately. There is no
-                        &ldquo;send to lab&rdquo; step.
+                        Each test reaches its department&apos;s worklist the moment you order it.
+                        Order as many as you need — <em>Send for tests</em> above then sends the
+                        patient to wait for the results.
                       </p>
                       <OrderPad
                         encounter={selected}

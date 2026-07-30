@@ -1259,6 +1259,8 @@ export interface Encounter {
   advice?: string;
   branchId?: string;
   arrivedAt: string;
+  /** Still-live orders (tests) on this visit. "Send for tests" needs at least one. */
+  activeOrderCount: number;
   closedAt?: string;
   /** Present when `class` is `IP`. The bed is RECORDED, not reserved — there is no
    * bed inventory, so nothing stops two patients being recorded in the same bed. */

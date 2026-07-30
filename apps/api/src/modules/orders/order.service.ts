@@ -23,7 +23,12 @@ import { getContext } from "../../core/context/requestContext.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
-import { getEncounter, isOpen } from "../encounters/index.js";
+import {
+  getEncounter,
+  isOpen,
+  recordOrderPlaced,
+  recordOrderCancelled,
+} from "../encounters/index.js";
 import { getPatient } from "../patients/index.js";
 import { notify } from "../notifications/index.js";
 import { getById as getUser } from "../users/index.js";
@@ -144,6 +149,14 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
       );
 
       /**
+       * Count this test on the visit, in the SAME transaction as the order. This is what lets
+       * "send for tests" refuse an empty investigations visit the instant after the order is
+       * placed — an event consumer would not have caught up yet. Only genuinely new orders reach
+       * here; a duplicate `requestId` throws below and never counts twice.
+       */
+      await recordOrderPlaced(encounter.id, session);
+
+      /**
        * THIS is the hand-off. Published in the SAME transaction as the order, so the
        * lab cannot be told about work that was never committed, and work cannot be
        * committed that the lab is never told about.
@@ -222,6 +235,11 @@ async function transition(
     if (!updated) throw new AppError("HMS-GEN-404", 404, "Order not found", { id });
 
     if (to === "cancelled") {
+      // The test is no longer live — take it off the visit's count, in the same transaction as the
+      // cancellation, so "send for tests" reflects it immediately (and a visit whose every order was
+      // cancelled is correctly blocked again).
+      await recordOrderCancelled(updated.encounterId, session);
+
       await publish(
         {
           name: EVENTS.ORDER_CANCELLED,
