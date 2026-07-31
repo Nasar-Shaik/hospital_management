@@ -25,6 +25,8 @@ import { getTenantConnection, closeAllTenantConnections } from "../core/db/conne
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
 import { provisionTenant, getBySlug } from "../modules/tenants/index.js";
+import { bootstrapFirstOperator } from "../modules/platform/index.js";
+import { AppError } from "../core/errors/appError.js";
 import { createUser, transitionStatus, getByEmail } from "../modules/users/index.js";
 import { assignRoleByCode, seedRbac } from "../modules/rbac/index.js";
 import { setPassword } from "../modules/auth/index.js";
@@ -37,6 +39,33 @@ const logger = createLogger({ service: "seed-demo" });
 
 /** The one password every demo account uses. Dev only — see the header. */
 const PASSWORD = "123456";
+
+/** The platform operator the summary promises — the login for the console at :3001. */
+const OPERATOR_EMAIL = "ops@paperlesstech.in";
+
+/**
+ * Create the first platform operator, so the console login the summary prints actually works.
+ *
+ * The bootstrap refuses (409) once ANY operator exists — that refusal is a security property, not a
+ * bug. Here it just means "already seeded", so we swallow that one case and treat everything else as
+ * a real failure. Re-running `seed:demo` is therefore safe.
+ */
+async function seedOperator(): Promise<void> {
+  try {
+    await bootstrapFirstOperator({
+      email: OPERATOR_EMAIL,
+      name: "Platform Operator",
+      password: PASSWORD,
+    });
+    logger.info({ email: OPERATOR_EMAIL }, "platform operator created");
+  } catch (err) {
+    if (err instanceof AppError && err.httpStatus === 409) {
+      logger.info({ email: OPERATOR_EMAIL }, "platform operator already exists — leaving it be");
+      return;
+    }
+    throw err;
+  }
+}
 
 interface StaffSeed {
   key: string;
@@ -213,6 +242,7 @@ async function main(): Promise<void> {
     throw new Error("seed:demo creates accounts with the password '123456' — never in production");
   }
 
+  await seedOperator();
   for (const h of HOSPITALS) await seedHospital(h);
 
   const base = env.TENANT_BASE_DOMAIN;
