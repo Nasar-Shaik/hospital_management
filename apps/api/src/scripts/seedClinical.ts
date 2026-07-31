@@ -40,8 +40,15 @@ import { placeOrder } from "../modules/orders/index.js";
 
 const logger = createLogger({ service: "seed-clinical" });
 
-const SLUG = "sunrise";
-const DOCTOR_EMAIL = "drrao@sunrise.test";
+function arg(flag: string): string | undefined {
+  const index = process.argv.indexOf(flag);
+  return index !== -1 ? process.argv[index + 1] : undefined;
+}
+
+// Defaults target the ready-made Sunrise demo; override to seed a hospital you provisioned yourself.
+//   pnpm --filter @medicore/api seed:clinical -- --slug apollo --doctor drx@apollo.test
+const SLUG = arg("--slug") ?? "sunrise";
+const DOCTOR_EMAIL = arg("--doctor") ?? `drrao@${SLUG}.test`;
 
 /** A test the doctor can order — the code resolves against Sunrise's seeded tariff. */
 interface OrderSpec {

@@ -718,3 +718,47 @@ export async function bootstrapFirstOperator(input: {
 
   return { created: true, email: user.email };
 }
+
+/**
+ * DEV ONLY — make a console operator that definitely works: create it if the email is new, or reset
+ * its password if it already exists.
+ *
+ * Unlike `bootstrapFirstOperator`, this does NOT refuse when operators exist — which is exactly why
+ * it must never run in production (it would let anyone with shell access seize a super-admin login).
+ * The caller (`scripts/ensureOperator.ts`) guards `NODE_ENV`; this function trusts that guard, the
+ * same contract `seed:demo` runs under. It is the "I locked myself out of my laptop's console"
+ * escape hatch, nothing more.
+ */
+export async function upsertDevOperator(input: {
+  email: string;
+  name: string;
+  password: string;
+}): Promise<{ created: boolean; email: string }> {
+  const email = input.email.toLowerCase().trim();
+  const passwordHash = await hashPassword(input.password);
+
+  const existing = await repo.findCredentialByEmail(email);
+  if (existing) {
+    await repo.setPlatformPassword(existing.id, passwordHash, false);
+    await repo.recordPlatformAudit({
+      action: "platform.operator.dev_password_reset",
+      actorEmail: email,
+      meta: { note: "dev operator password reset via ensureOperator" },
+    });
+    return { created: false, email: existing.email };
+  }
+
+  const user = await repo.createPlatformUser({
+    email,
+    name: input.name,
+    passwordHash,
+    roles: ["SUPER_ADMIN"],
+    mustChangePassword: false,
+  });
+  await repo.recordPlatformAudit({
+    action: "platform.operator.dev_created",
+    actorEmail: email,
+    meta: { note: "dev operator created via ensureOperator" },
+  });
+  return { created: true, email: user.email };
+}
