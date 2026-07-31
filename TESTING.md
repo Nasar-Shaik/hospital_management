@@ -1,5 +1,155 @@
 # TESTING — How to run and test locally
 
+> ### 👉 New here or feeling lost? Read only **Section 0** below.
+>
+> Everything after it (Ports, replica sets, 47 numbered scenarios…) is **reference**.
+> You do **not** need any of it to start testing. Come back to it when you want detail on
+> one specific feature.
+
+---
+
+## 0. The simple guide — walk one patient through the hospital (15 min)
+
+This is the whole product in one story: a patient arrives, sees a doctor, gets a test and a
+medicine, and pays. You will log in as a different staff member at each step — that is the point.
+
+### Step 1 · Start it (do this once)
+
+Open **three terminals** in the project folder and run one command in each, in order:
+
+```bash
+pnpm docker:dev    # terminal 1 · the databases (leave it running)
+pnpm dev           # terminal 2 · the actual app  (leave it running)
+pnpm verify        # terminal 3 · "is it working?" — run anytime
+```
+
+The **first time only**, load the demo hospital (two hospitals, staff, prices) in a 4th terminal:
+
+```bash
+pnpm --filter @medicore/api migrate --all   # set up the database (safe to re-run)
+pnpm --filter @medicore/api seed:demo        # create the demo hospital + logins
+```
+
+> **If anything looks broken, run `pnpm verify` first.** It checks everything and prints the
+> _fix_, not the error. Don't debug the login screen by hand.
+
+### Step 2 · Open the hospital
+
+|                         |                                   |
+| ----------------------- | --------------------------------- |
+| **Open this**           | **http://sunrise.localhost:3000** |
+| **Password (everyone)** | `123456`                          |
+
+The web address **is** the hospital — `sunrise.localhost` is "Sunrise Hospital". (There's a second
+demo hospital, a free government one, at `district.localhost:3000` — same steps, every price ₹0.)
+
+You'll log in as these people. Use one browser tab per person, **or** just log out and back in
+between steps:
+
+| Log in as                  | This person is…                     |
+| -------------------------- | ----------------------------------- |
+| `reception@sunrise.test`   | the front desk                      |
+| `drrao@sunrise.test`       | the doctor (Dr Rao)                 |
+| `cashier@sunrise.test`     | the billing counter                 |
+| `labtech@sunrise.test`     | the lab technician                  |
+| `pathologist@sunrise.test` | the senior who approves lab results |
+| `pharmacy@sunrise.test`    | the pharmacy counter                |
+
+### Step 3 · The walkthrough
+
+Follow it top to bottom. Each step says **who to log in as**, **what to do**, and ✅ **what you
+should see** (so you know it worked).
+
+**1. Reception registers the patient** — log in as `reception@sunrise.test`, open **Reception**.
+
+- Register a walk-in, pick **Dr Rao**, click **Add to queue**.
+- ✅ The patient appears in the day's list, and a ₹500 consultation fee shows on their bill.
+
+**2. Cashier takes the consultation fee** — log in as `cashier@sunrise.test`, open **Billing**.
+
+- Find the patient, **Finalize** the bill, then **Collect payment**.
+- ✅ The bill is marked paid. (A government hospital's ₹0 bill is paid the moment it's finalized.)
+
+**3. Doctor sees the patient and orders a test** — log in as `drrao@sunrise.test`, open **My patients**.
+
+- You only see _your own_ patients. Click the patient → **Call in**.
+- In the **Order** section, tap a test (e.g. **CBC** or **Chest X-ray**), then **Order 1 test**.
+- ✅ It says the test is on the department's worklist. You can tap more tests and order again —
+  add as many as you like.
+- When you're done ordering, click **Send for tests** (the button above).
+- ✅ **New:** if you ordered _nothing_, **Send for tests** is greyed out — you must order at
+  least one test first. Once you've ordered one, it works and the patient moves to "at the lab".
+
+**4. Cashier takes payment for the test** — log in as `cashier@sunrise.test`, open **Billing**.
+
+- **Finalize** and **Collect payment** for the new test charge.
+- ✅ Paid. This is what lets the lab actually run the test. Tests ordered _after_ this payment
+  become a separate bill — that's by design.
+
+**5. Lab runs the test** — log in as `labtech@sunrise.test`, open **Worklist**.
+
+- The test is _already there_ (nobody "sent" it — it appeared the moment it was ordered).
+- **Accept** → **Start** → enter a result.
+- ✅ It says "awaiting verification — not yet visible to the doctor". A lab tech can't approve
+  their own work.
+
+**6. Pathologist approves the result** — log in as `pathologist@sunrise.test`, open **Worklist**.
+
+- **Verify** → **Release**.
+- ✅ Only now can the doctor see the number, and the patient returns to the doctor's list
+  automatically.
+
+**7. Doctor prescribes a medicine** — back as `drrao@sunrise.test`, open the patient.
+
+- In **Prescribe**, pick a drug, set dose / route / frequency / days / quantity, **Sign**.
+- ✅ It's now on the pharmacy counter. Nothing is charged yet — medicine is billed only when
+  it's actually handed over.
+
+**8. Pharmacy dispenses** — log in as `pharmacy@sunrise.test`, open **Pharmacy**.
+
+- The prescription is already there. Hand over some (e.g. 6 of 10), **Dispense**.
+- ✅ The badge shows "6/10 given", and the patient is billed for 6, not 10.
+
+**That's the full loop.** The one idea behind all of it: **nothing is ever "sent" anywhere** —
+work shows up in the next department the instant it's created. The one exception you just used,
+"Send for tests", only moves the _patient_ to a waiting state; the tests were already at the lab.
+
+### Logging in as the platform operator (a different app)
+
+The hospital app (`sunrise.localhost:3000`) and the **operator console** are two separate apps with
+two separate user lists. The console is where the _software company_ creates and manages hospitals —
+not a hospital login.
+
+|               |                                                                    |
+| ------------- | ------------------------------------------------------------------ |
+| **Open this** | **http://localhost:3001** (the operator console, a different port) |
+| **Email**     | `ops@paperlesstech.in`                                             |
+| **Password**  | `123456`                                                           |
+
+There is **only one** seeded operator: `ops@paperlesstech.in`. An email like `nasar@paperlesstech.in`
+does not exist until you create it, and logging in with it just fails — the error is deliberately the
+same for a wrong password, an unknown email, and a disabled account, so it always _looks_ like a
+password problem. To add another operator, log in as `ops@…` first and create it from the console
+(the bootstrap CLI only works on a brand-new database with no operators yet).
+
+### If you get stuck
+
+| Problem                                      | Do this                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------- |
+| Login page won't load / "can't connect"      | Run `pnpm verify` — it names the cause and the fix.                        |
+| Blank page at `localhost:3000`               | Use `sunrise.localhost:3000`. Plain `localhost` is "no hospital".          |
+| "No patients" as the doctor                  | Reception must register one **and pick that doctor** first.                |
+| Rx pad (prescribe) is empty                  | Run `pnpm --filter @medicore/api migrate --all` — it loads the drug list.  |
+| A number seems ~1–2s behind after dispensing | Normal — billing catches up a moment later. Don't take payment off it yet. |
+
+### Where to go next (reference sections below)
+
+- **Section 1d** — the same demo in more depth, plus "try to break it" security tests.
+- **Section 1** — ports and URLs, if a port is taken.
+- **Sections 23–47** — one feature at a time (wallet, express visits, receipts, vitals, branches…).
+
+---
+
 **Start here: open http://demo.localhost:3000 and sign in.** That is the app.
 
 Two things trip everyone up:
