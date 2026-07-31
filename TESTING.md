@@ -26,9 +26,20 @@ pnpm verify        # terminal 3 · "is it working?" — run anytime
 The **first time only**, load the demo hospital (two hospitals, staff, prices) in a 4th terminal:
 
 ```bash
-pnpm --filter @medicore/api migrate --all   # set up the database (safe to re-run)
-pnpm --filter @medicore/api seed:demo        # create the demo hospital + logins
+pnpm --filter @medicore/api migrate --all    # set up the database (safe to re-run)
+pnpm --filter @medicore/api seed:demo         # operator + 2 hospitals + staff + prices + drugs
+pnpm --filter @medicore/api seed:clinical     # OPTIONAL: fill Sunrise with demo patients & visits
 ```
+
+**You only seed once.** The data lives in the database and survives restarts — `pnpm dev` never
+touches it. Re-seed only if you wipe the database (a fresh machine, or `docker:dev:down` with
+volumes removed). All three commands above are safe to re-run.
+
+- `seed:demo` creates the login accounts, both hospitals, the price list and the drug list — but
+  **no patients**.
+- `seed:clinical` (optional) adds ~6 patients to **Sunrise**, already spread across the flow: some
+  waiting in the doctor's queue, some mid-consult, some with tests at the lab. Run it with
+  `pnpm dev` up so the bills catch up. Great if you don't want to register patients by hand first.
 
 > **If anything looks broken, run `pnpm verify` first.** It checks everything and prints the
 > _fix_, not the error. Don't debug the login screen by hand.
