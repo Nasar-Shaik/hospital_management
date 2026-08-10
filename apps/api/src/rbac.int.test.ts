@@ -897,6 +897,328 @@ const PROBES: Record<string, Probe> = {
     method: "delete",
     url: "/api/v1/doctors/schedule/64b7f0000000000000000001",
   },
+
+  /* ──────────────────────────────────────────────────────────────────────────
+   * Routes that shipped between 2026-07-28 and 2026-07-30 without a probe.
+   *
+   * They were never unprotected — every one carries `authorize()`, which is why
+   * the coverage test could see them at all. What was missing is the DECISION:
+   * nobody had written down which roles may call them, so nothing verified the
+   * grants. The money-moving ones (discount, refund, payer-split, settle) are the
+   * reason this mattered — an over-wide grant there is a cashier who can write off
+   * their own till.
+   * ────────────────────────────────────────────────────────────────────────── */
+
+  // ── billing adjustments: a separate authority from taking payment ──────────
+  "POST /api/v1/invoices/:id/discount": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/discount",
+    body: { amount: 100, reason: "Approved concession" },
+  },
+  "POST /api/v1/invoices/:id/refund": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/refund",
+    body: { amount: 100, method: "cash", reason: "Overpayment returned" },
+  },
+  "POST /api/v1/invoices/:id/payer-split": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/payer-split",
+    body: { policyId: "64b7f0000000000000000001", coveredAmount: 100 },
+  },
+
+  // ── care packages ──────────────────────────────────────────────────────────
+  "GET /api/v1/packages": { method: "get", url: "/api/v1/packages" },
+  "POST /api/v1/packages": {
+    method: "post",
+    url: "/api/v1/packages",
+    body: { code: "PKG-PROBE", name: "Probe Package", price: 1000 },
+  },
+  "PATCH /api/v1/packages/:id": {
+    method: "patch",
+    url: "/api/v1/packages/64b7f0000000000000000001",
+    body: { name: "Probe Package" },
+  },
+  "GET /api/v1/encounters/:id/package-enrollments": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/package-enrollments",
+  },
+  "POST /api/v1/encounters/:id/package-enrollments": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/package-enrollments",
+    body: { packageId: "64b7f0000000000000000001" },
+  },
+  "POST /api/v1/package-enrollments/:id/cancel": {
+    method: "post",
+    url: "/api/v1/package-enrollments/64b7f0000000000000000001/cancel",
+    body: { reason: "Probe" },
+  },
+
+  // ── beds and rooms (B4) ────────────────────────────────────────────────────
+  "POST /api/v1/encounters/:id/transfer-bed": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/transfer-bed",
+    body: { ward: "A", bedCode: "A-12", reason: "Probe" },
+  },
+  "GET /api/v1/rooms": { method: "get", url: "/api/v1/rooms" },
+  "POST /api/v1/rooms": {
+    method: "post",
+    url: "/api/v1/rooms",
+    body: { wardId: "64b7f0000000000000000001", code: "R-PROBE", name: "Probe Room" },
+  },
+  "PATCH /api/v1/rooms/:id": {
+    method: "patch",
+    url: "/api/v1/rooms/64b7f0000000000000000001",
+    body: { name: "Probe Room" },
+  },
+
+  // ── ambulance (B6) ─────────────────────────────────────────────────────────
+  "GET /api/v1/ambulances": { method: "get", url: "/api/v1/ambulances" },
+  "POST /api/v1/ambulances": {
+    method: "post",
+    url: "/api/v1/ambulances",
+    body: { code: "AMB-PROBE", registrationNumber: "KA01AB1234" },
+  },
+  "PATCH /api/v1/ambulances/:id": {
+    method: "patch",
+    url: "/api/v1/ambulances/64b7f0000000000000000001",
+    body: { code: "AMB-PROBE" },
+  },
+  "GET /api/v1/ambulance-trips": { method: "get", url: "/api/v1/ambulance-trips" },
+  "POST /api/v1/ambulance-trips": {
+    method: "post",
+    url: "/api/v1/ambulance-trips",
+    body: {
+      ambulanceId: "64b7f0000000000000000001",
+      purpose: "emergency",
+      startAt: "2026-01-01T09:00:00.000Z",
+      endAt: "2026-01-01T10:00:00.000Z",
+    },
+  },
+  "POST /api/v1/ambulance-trips/:id/transition": {
+    method: "post",
+    url: "/api/v1/ambulance-trips/64b7f0000000000000000001/transition",
+    body: { status: "in_progress" },
+  },
+
+  // ── assets (B7) ────────────────────────────────────────────────────────────
+  "GET /api/v1/assets": { method: "get", url: "/api/v1/assets" },
+  "POST /api/v1/assets": {
+    method: "post",
+    url: "/api/v1/assets",
+    body: { tag: "AST-PROBE", name: "Probe Monitor", category: "biomedical" },
+  },
+  "PATCH /api/v1/assets/:id": {
+    method: "patch",
+    url: "/api/v1/assets/64b7f0000000000000000001",
+    body: { name: "Probe Monitor" },
+  },
+  "GET /api/v1/assets/:id/maintenance": {
+    method: "get",
+    url: "/api/v1/assets/64b7f0000000000000000001/maintenance",
+  },
+  "POST /api/v1/assets/:id/maintenance": {
+    method: "post",
+    url: "/api/v1/assets/64b7f0000000000000000001/maintenance",
+    body: { type: "preventive", performedOn: "2026-01-01" },
+  },
+
+  // ── feedback & complaints (B10) ────────────────────────────────────────────
+  "GET /api/v1/feedback": { method: "get", url: "/api/v1/feedback" },
+  "POST /api/v1/feedback": {
+    method: "post",
+    url: "/api/v1/feedback",
+    body: { kind: "feedback", subject: "Probe", description: "Probe description" },
+  },
+  "GET /api/v1/feedback/:id": {
+    method: "get",
+    url: "/api/v1/feedback/64b7f0000000000000000001",
+  },
+  "POST /api/v1/feedback/:id/assign": {
+    method: "post",
+    url: "/api/v1/feedback/64b7f0000000000000000001/assign",
+    body: { assigneeId: "64b7f0000000000000000001" },
+  },
+  "POST /api/v1/feedback/:id/transition": {
+    method: "post",
+    url: "/api/v1/feedback/64b7f0000000000000000001/transition",
+    body: { status: "in_progress" },
+  },
+
+  // ── insurance (F2): link is the desk, claim is adjudication, settle is money ─
+  "GET /api/v1/patients/:patientId/insurance-policies": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-policies",
+  },
+  "POST /api/v1/patients/:patientId/insurance-policies": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-policies",
+    body: { insurer: "Probe Insurer", policyNumber: "POL-1", type: "cashless" },
+  },
+  "PATCH /api/v1/insurance-policies/:id": {
+    method: "patch",
+    url: "/api/v1/insurance-policies/64b7f0000000000000000001",
+    body: { insurer: "Probe Insurer" },
+  },
+  "GET /api/v1/patients/:patientId/insurance-claims": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-claims",
+  },
+  "POST /api/v1/patients/:patientId/insurance-claims": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-claims",
+    body: { policyId: "64b7f0000000000000000001", type: "cashless", claimedAmount: 1000 },
+  },
+  "POST /api/v1/insurance-claims/:id/transition": {
+    method: "post",
+    url: "/api/v1/insurance-claims/64b7f0000000000000000001/transition",
+    body: { status: "submitted" },
+  },
+  "POST /api/v1/insurance-claims/:id/settle": {
+    method: "post",
+    url: "/api/v1/insurance-claims/64b7f0000000000000000001/settle",
+    body: { settledAmount: 1000 },
+  },
+
+  // ── consultation note (D3) ─────────────────────────────────────────────────
+  "GET /api/v1/encounters/:id/consultation": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/consultation",
+  },
+  "PUT /api/v1/encounters/:id/consultation": {
+    method: "put",
+    url: "/api/v1/encounters/64b7f0000000000000000001/consultation",
+    body: { chiefComplaint: "Probe complaint" },
+  },
+
+  // ── medication administration record (D5) ──────────────────────────────────
+  "GET /api/v1/encounters/:id/medication-administrations": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/medication-administrations",
+  },
+  "POST /api/v1/encounters/:id/medication-administrations": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/medication-administrations",
+    body: { prescriptionId: "64b7f0000000000000000001", lineIndex: 0, status: "given" },
+  },
+
+  // ── lab test catalogue (D6) ────────────────────────────────────────────────
+  "GET /api/v1/lab-tests": { method: "get", url: "/api/v1/lab-tests" },
+  "GET /api/v1/lab-tests/:code": { method: "get", url: "/api/v1/lab-tests/CBC" },
+  "POST /api/v1/lab-tests": {
+    method: "post",
+    url: "/api/v1/lab-tests",
+    body: { code: "PROBE", name: "Probe Test" },
+  },
+  "PATCH /api/v1/lab-tests/:id": {
+    method: "patch",
+    url: "/api/v1/lab-tests/64b7f0000000000000000001",
+    body: { name: "Probe Test" },
+  },
+
+  // ── medico-legal (C3): consent is captured, death is CERTIFIED ─────────────
+  "GET /api/v1/consents": { method: "get", url: "/api/v1/consents" },
+  "POST /api/v1/consents": {
+    method: "post",
+    url: "/api/v1/consents",
+    body: { patientId: "64b7f0000000000000000001", type: "procedure", text: "Probe consent" },
+  },
+  "POST /api/v1/consents/:id/withdraw": {
+    method: "post",
+    url: "/api/v1/consents/64b7f0000000000000000001/withdraw",
+    body: { reason: "Probe" },
+  },
+  "GET /api/v1/death-records": { method: "get", url: "/api/v1/death-records" },
+  "POST /api/v1/death-records": {
+    method: "post",
+    url: "/api/v1/death-records",
+    body: { patientId: "64b7f0000000000000000001", diedAt: "2026-01-01T00:00:00.000Z" },
+  },
+
+  // ── MRD / ICD-10 coding (C7) ───────────────────────────────────────────────
+  "GET /api/v1/mrd/icd-codes": { method: "get", url: "/api/v1/mrd/icd-codes" },
+  "POST /api/v1/mrd/icd-codes": {
+    method: "post",
+    url: "/api/v1/mrd/icd-codes",
+    body: { code: "A00", title: "Cholera" },
+  },
+  "PATCH /api/v1/mrd/icd-codes/:id": {
+    method: "patch",
+    url: "/api/v1/mrd/icd-codes/64b7f0000000000000000001",
+    body: { title: "Cholera" },
+  },
+  "GET /api/v1/mrd/codings/:encounterId": {
+    method: "get",
+    url: "/api/v1/mrd/codings/64b7f0000000000000000001",
+  },
+  "PUT /api/v1/mrd/codings/:encounterId": {
+    method: "put",
+    url: "/api/v1/mrd/codings/64b7f0000000000000000001",
+    body: { codes: [] },
+  },
+  "GET /api/v1/mrd/disease-register": { method: "get", url: "/api/v1/mrd/disease-register" },
+
+  // ── mortuary (B13): release still refuses a medico-legal body without clearance ─
+  "GET /api/v1/mortuary/register": { method: "get", url: "/api/v1/mortuary/register" },
+  "GET /api/v1/mortuary/for-encounter/:encounterId": {
+    method: "get",
+    url: "/api/v1/mortuary/for-encounter/64b7f0000000000000000001",
+  },
+  "POST /api/v1/mortuary/register": {
+    method: "post",
+    url: "/api/v1/mortuary/register",
+    body: {
+      patientId: "64b7f0000000000000000001",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+    },
+  },
+  "POST /api/v1/mortuary/register/:id/release": {
+    method: "post",
+    url: "/api/v1/mortuary/register/64b7f0000000000000000001/release",
+    body: { releasedTo: "Probe Relative" },
+  },
+
+  // ── hospital profile (B1) ──────────────────────────────────────────────────
+  "GET /api/v1/hospital-profile": { method: "get", url: "/api/v1/hospital-profile" },
+  "PUT /api/v1/hospital-profile": {
+    method: "put",
+    url: "/api/v1/hospital-profile",
+    body: { name: "Probe Hospital" },
+  },
+
+  // ── doctor roster: sessions + leave (D2) ───────────────────────────────────
+  "GET /api/v1/doctors/:doctorId/availability": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001/availability",
+  },
+  "PUT /api/v1/doctors/availability": {
+    method: "put",
+    url: "/api/v1/doctors/availability",
+    body: { doctorId: "64b7f0000000000000000001", weekday: 1, sessions: ["morning"] },
+  },
+  "GET /api/v1/doctors/:doctorId/leave": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001/leave",
+  },
+  "POST /api/v1/doctors/leave": {
+    method: "post",
+    url: "/api/v1/doctors/leave",
+    body: {
+      doctorId: "64b7f0000000000000000001",
+      fromDate: "2026-01-01",
+      toDate: "2026-01-02",
+    },
+  },
+  "DELETE /api/v1/doctors/leave/:id": {
+    method: "delete",
+    url: "/api/v1/doctors/leave/64b7f0000000000000000001",
+  },
+
+  // ── the two financial registers (I1) — hospital-wide money, `report:view` ──
+  "GET /api/v1/reports/revenue-leakage": {
+    method: "get",
+    url: "/api/v1/reports/revenue-leakage",
+  },
+  "GET /api/v1/reports/dues-ageing": { method: "get", url: "/api/v1/reports/dues-ageing" },
 };
 
 /** The roles under test. Chosen to span the privilege range, not to be exhaustive. */
@@ -1390,6 +1712,82 @@ describe("privilege boundaries that must never move", () => {
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("HMS-AUTH-005");
   });
+
+  /**
+   * ── TAKING MONEY IS NOT ADJUSTING IT ────────────────────────────────────────
+   * These four are the reason the 68 unprobed routes mattered. The MATRIX cannot
+   * defend them: it derives its expectations from `DEFAULT_ROLES`, so widening a
+   * role moves the expectation with the behaviour and the suite stays green. Only a
+   * DELIBERATE FACT catches a grant that should never have been made.
+   *
+   * The line: `payment:collect` takes what the bill says. `billing:discount` changes
+   * what the bill says, `billing:refund` takes money back out of the drawer, and
+   * `insurance:reconcile` declares a payer's money received. Whoever holds the till
+   * must not also hold the authority to write down, reverse, or reconcile it —
+   * that separation is the oldest control in accounting, and it is exactly what an
+   * over-wide grant on a route nobody probed would have quietly removed.
+   */
+  it("a PHARMACIST takes payment but may NOT discount or refund a bill", async () => {
+    // PHARMACIST holds `payment:collect` and `billing:read` on purpose — a counter that
+    // hands over drugs also takes the money for them. Neither must imply adjusting it.
+    for (const id of ["POST /api/v1/invoices/:id/discount", "POST /api/v1/invoices/:id/refund"]) {
+      const probe = PROBES[id];
+      const res = await request(app)
+        [probe!.method](probe!.url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.PHARMACIST}`)
+        .send(probe!.body ?? {});
+
+      expect(res.status, `PHARMACIST must not be able to ${id}`).toBe(403);
+      expect(res.body.error.code).toBe("HMS-AUTH-005");
+    }
+  });
+
+  it("a RECEPTIONIST may read a bill but may NOT write one down or reverse it", async () => {
+    // The front desk holds `billing:read` so it can tell a patient what they owe. A
+    // concession and a refund are a supervisor's approval, not the front desk's.
+    for (const id of ["POST /api/v1/invoices/:id/discount", "POST /api/v1/invoices/:id/refund"]) {
+      const probe = PROBES[id];
+      const res = await request(app)
+        [probe!.method](probe!.url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.RECEPTIONIST}`)
+        .send(probe!.body ?? {});
+
+      expect(res.status, `RECEPTIONIST must not be able to ${id}`).toBe(403);
+    }
+  });
+
+  it("settling an insurance claim is its own authority — no clinical role holds it", async () => {
+    // Adjudication (`insurance:claim`) decides what the payer OWES; settlement
+    // (`insurance:reconcile`) declares the money ARRIVED. Money landing is
+    // reconciliation, not a clinical or front-desk act.
+    const probe = PROBES["POST /api/v1/insurance-claims/:id/settle"];
+    for (const role of ["DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST"] as const) {
+      const res = await request(app)
+        [probe!.method](probe!.url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens[role]}`)
+        .send(probe!.body ?? {});
+
+      expect(res.status, `${role} must not settle an insurance claim`).toBe(403);
+    }
+  });
+
+  it("certifying a death is the doctor's alone — a nurse may run the mortuary but not certify", async () => {
+    // The NURSE deliberately holds `mortuary:manage`/`mortuary:release` (receiving and
+    // handing over a body is ward work). `death:certify` is a licensed medical act and
+    // must not arrive with the custody paperwork.
+    const probe = PROBES["POST /api/v1/death-records"];
+    const res = await request(app)
+      [probe!.method](probe!.url)
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.NURSE}`)
+      .send(probe!.body ?? {});
+
+    expect(res.status, "NURSE must not certify a death").toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -1533,9 +1931,16 @@ describe("entitlement (layer 1): a hospital cannot use what it did not buy", () 
     // A gate on the read but not the write is worse than no gate: the hospital
     // simply uses the parts that were forgotten.
     for (const [id, probe] of Object.entries(PROBES)) {
-      // Appointment + doctor-SCHEDULE routes are the scheduling feature. The plain doctor
-      // directory and a single doctor's card are core (no plan gate), like `GET /doctors`.
-      if (!id.includes("/appointments") && !id.includes("/schedule")) continue;
+      // Appointment + doctor-ROSTER routes are the scheduling feature: the slot schedule, and
+      // the session/leave roster that D2 added beside it (both gate on OPS_APPOINTMENTS). The
+      // plain doctor directory and a single doctor's card are core (no plan gate), like
+      // `GET /doctors`.
+      const isSchedulingFeature =
+        id.includes("/appointments") ||
+        id.includes("/schedule") ||
+        id.includes("/availability") ||
+        id.includes("/leave");
+      if (!isSchedulingFeature) continue;
 
       const res = await request(app)
         [probe.method](probe.url)
