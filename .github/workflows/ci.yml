@@ -108,11 +108,14 @@ jobs:
       # answerable from the log rather than from theory. It is not academic: the
       # same suite OOM-killed its MongoDB on a developer machine, where Docker had
       # 7.75 GB shared with 30 other containers. A runner has 16 GB and three.
+      #
+      # Every command is guarded: a step that only reports must never be the
+      # reason a build goes red.
       - name: Runner capacity
         run: |
-          echo "cpus:   $(nproc)"
-          echo "memory: $(free -h | awk '/^Mem:/ {print $2}')"
-          echo "disk:   $(df -h --output=avail / | tail -1) available"
+          nproc | sed 's/^/cpus:   /' || true
+          free -h || true
+          df -h / || true
 
       # MongoDB must be a single-node REPLICA SET, not a standalone: transactions
       # and change streams do not exist without one. A `services:` container cannot
