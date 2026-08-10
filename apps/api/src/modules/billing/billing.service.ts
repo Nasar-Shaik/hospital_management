@@ -672,6 +672,63 @@ export interface RecordPaymentInput {
   amount: number;
   method: string;
   reference?: string;
+  /** Idempotency key (Doc 03 §5.2). Optional on the wire; the UI always sends one. */
+  requestId?: string;
+}
+
+/**
+ * Explains a refused money write.
+ *
+ * The atomic write carries the invariants in its FILTER, so "no document matched" is the only
+ * signal it can give — and "no match" alone is the least useful thing to hand a cashier with a
+ * patient in front of them. This re-reads the invoice and turns the silence into the specific,
+ * documented answer: what was wrong, and what to do about it.
+ *
+ * It runs only on the failure path, so the cost is paid by the request that was already refused.
+ */
+async function explainRefusedPayment(
+  invoiceId: string,
+  input: { amount: number; requestId?: string },
+): Promise<never> {
+  const current = await repo.findInvoiceById(invoiceId);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  // A replay of a key we already honoured. The money was taken exactly once; hand back the
+  // receipt so the caller can reconcile rather than retry (ERROR_CODES: HMS-PAY-002).
+  if (input.requestId) {
+    const already = current.payments.find((p) => p.requestId === input.requestId);
+    if (already) {
+      throw new AppError("HMS-PAY-002", 409, "Payment already captured", {
+        requestId: input.requestId,
+        receipt: { amount: already.amount, method: already.method, at: already.at },
+        invoice: {
+          id: current.id,
+          paid: current.paid,
+          total: current.total,
+          status: current.status,
+        },
+      });
+    }
+  }
+
+  if (current.status === "cancelled") {
+    throw new AppError("HMS-STATE-001", 422, "Cannot pay a cancelled invoice", { id: invoiceId });
+  }
+  if (current.status === "draft") {
+    throw new AppError("HMS-STATE-001", 422, "Finalize the bill before taking payment", {
+      id: invoiceId,
+    });
+  }
+  if (current.paid + input.amount > current.total) {
+    // Reached when another payment landed between validation and the write — the guard held.
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [`payment exceeds the balance of ${String(current.total - current.paid)} paise`],
+    });
+  }
+  throw new AppError("HMS-STATE-001", 422, "Invalid state transition", {
+    from: current.status,
+    to: "paid",
+  });
 }
 
 /** Takes money. Partial payments are normal; overpayment is refused. */
@@ -683,6 +740,35 @@ export async function recordPayment(
 
   const invoice = await repo.findInvoiceById(invoiceId);
   if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  /**
+   * ── THE REPLAY CHECK COMES FIRST, AND THE ORDER IS THE POINT ────────────────
+   * A retry of a payment that already landed is NOT an overpayment, a cancelled bill, or an
+   * illegal transition — but every one of those checks would fire on it first and give the
+   * cashier a different, wrong answer. Paying ₹300 twice on a ₹500 bill would be refused as
+   * "payment exceeds the balance of ₹200", sending someone to hunt for a ₹300 payment the
+   * screen has not refreshed to show.
+   *
+   * Same reasoning as ADR-0010's layer 1 before layer 2: when two walls can refuse a request,
+   * the error must name the one the caller actually hit, because the remedies are opposite —
+   * here, "do nothing, it worked" versus "look at the balance".
+   */
+  if (input.requestId) {
+    const already = invoice.payments.find((p) => p.requestId === input.requestId);
+    if (already) {
+      throw new AppError("HMS-PAY-002", 409, "Payment already captured", {
+        requestId: input.requestId,
+        receipt: { amount: already.amount, method: already.method, at: already.at },
+        invoice: {
+          id: invoice.id,
+          paid: invoice.paid,
+          total: invoice.total,
+          status: invoice.status,
+        },
+      });
+    }
+  }
+
   if (invoice.status === "cancelled") {
     throw new AppError("HMS-STATE-001", 422, "Cannot pay a cancelled invoice", { id: invoiceId });
   }
@@ -715,6 +801,7 @@ export async function recordPayment(
     at: new Date(),
     ...(input.reference ? { reference: input.reference } : {}),
     ...(ctx.userId ? { by: ctx.userId } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
   };
 
   /**
@@ -724,6 +811,11 @@ export async function recordPayment(
    * patient is never debited for a payment that did not post, nor credited on a bill that was
    * not paid. An insufficient balance throws (422) and rolls the whole thing back — nothing is
    * half-done. A cash/card payment takes the ordinary single-document path below.
+   *
+   * The transaction is what keeps the two documents consistent; it is NOT what makes the invoice
+   * write safe. `withTransaction` may re-run the callback on a write conflict, and the figures
+   * above were read BEFORE it opened — so a retry would recompute from the same stale numbers.
+   * The invoice arithmetic is therefore the database's, inside `addPayment`, on both paths.
    */
   if (input.method === WALLET_METHOD) {
     const updated = await withTransaction(async (session) => {
@@ -733,14 +825,14 @@ export async function recordPayment(
         invoiceId,
         ...(invoice.encounterId ? { encounterId: invoice.encounterId } : {}),
       });
-      return repo.addPayment(invoiceId, payment, status, paid, session);
+      return repo.addPayment(invoiceId, payment, session);
     });
-    if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+    if (!updated) return explainRefusedPayment(invoiceId, input);
     return updated;
   }
 
-  const updated = await repo.addPayment(invoiceId, payment, status, paid);
-  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  const updated = await repo.addPayment(invoiceId, payment);
+  if (!updated) return explainRefusedPayment(invoiceId, input);
 
   return updated;
 }
@@ -795,14 +887,31 @@ export async function applyDiscount(
   }
   // If the write-down clears the balance, the bill is settled — the same rule payment follows.
   const status: InvoiceStatus = invoice.paid >= total ? "paid" : "finalized";
-  const updated = await repo.updateInvoice(invoiceId, {
+
+  /**
+   * Guarded on the version we validated against (Doc 03 §5.2). A discount is a judgement about a
+   * SPECIFIC bill: "this patient owes ₹1,300, write off ₹300". If a payment lands between the read
+   * and the write, `total` computed above would overwrite a bill that no longer exists as read —
+   * silently reviving a stale subtotal and, in the worst case, dropping the total below what has
+   * already been collected. Unlike a payment, there is no correct way to merge two concurrent
+   * discounts, so the loser must be told to look again rather than have its answer guessed.
+   */
+  const updated = await repo.applyDiscountGuarded(invoiceId, invoice.version, {
     discount: input.amount,
     total,
     status,
     discountReason: input.reason,
     ...(ctx.userId ? { discountBy: ctx.userId } : {}),
   });
-  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  if (!updated) {
+    const current = await repo.findInvoiceById(invoiceId);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+    throw new AppError("HMS-REQ-003", 409, "Record was modified by someone else", {
+      id: invoiceId,
+      hint: "the bill changed while the discount was being approved — reload and reapply",
+      current: { paid: current.paid, total: current.total, status: current.status },
+    });
+  }
   return updated;
 }
 
@@ -810,6 +919,8 @@ export interface RecordRefundInput {
   amount: number;
   method: string;
   reason: string;
+  /** Idempotency key (Doc 03 §5.2). Handing money back twice is the worse leg to get wrong. */
+  requestId?: string;
 }
 
 /**
@@ -830,10 +941,10 @@ export async function recordRefund(
 
   const netCollected = invoice.paid - invoice.refunded;
   if (input.amount > netCollected) {
-    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
-      amount: [
-        `a refund of ${String(input.amount)} exceeds the ${String(netCollected)} paise collected`,
-      ],
+    // ERROR_CODES reserves HMS-PAY-003 for exactly this; it had never been used.
+    throw new AppError("HMS-PAY-003", 422, "Refund exceeds source payment", {
+      amount: input.amount,
+      collected: netCollected,
     });
   }
 
@@ -843,9 +954,30 @@ export async function recordRefund(
     reason: input.reason,
     at: new Date(),
     ...(ctx.userId ? { by: ctx.userId } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
   };
-  const updated = await repo.addRefund(invoiceId, refund, invoice.refunded + input.amount);
-  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  const updated = await repo.addRefund(invoiceId, refund);
+  if (!updated) {
+    const current = await repo.findInvoiceById(invoiceId);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+    if (input.requestId) {
+      const already = current.refunds.find((r) => r.requestId === input.requestId);
+      if (already) {
+        // The money went back exactly once. Return the record of it, not a second refund.
+        throw new AppError("HMS-PAY-002", 409, "Refund already recorded", {
+          requestId: input.requestId,
+          receipt: { amount: already.amount, method: already.method, at: already.at },
+        });
+      }
+    }
+    // The filter's only other condition: another refund landed first and this one would now
+    // exceed what was actually collected.
+    throw new AppError("HMS-PAY-003", 422, "Refund exceeds source payment", {
+      amount: input.amount,
+      collected: current.paid - current.refunded,
+    });
+  }
   return updated;
 }
 
@@ -1176,9 +1308,23 @@ export async function settleOrderFromAdvance(orderId: string): Promise<OrderSett
       method: WALLET_METHOD,
       at: new Date(),
       ...(ctx.userId ? { by: ctx.userId } : {}),
+      /**
+       * The order settles from the advance exactly once. Keyed on the INVOICE rather than a
+       * client value because this path has no client key to carry: the doctor's sign-off can be
+       * retried, and `due` was read before the transaction opened — so a retry that raced a
+       * counter payment would otherwise settle a second time against a bill already cleared.
+       */
+      requestId: `invoice:${invoiceId}:advance-settle`,
     };
-    const updated = await repo.addPayment(invoiceId, payment, "paid", invoice.total, session);
-    if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+    const updated = await repo.addPayment(invoiceId, payment, session);
+    // The guard held: the bill was settled by someone else between the read above and here, or
+    // this settlement already ran. Either way the patient owes nothing more — and the wallet
+    // debit in this same transaction rolls back with the throw, so nothing is half-done.
+    if (!updated) {
+      throw new AppError("HMS-PAY-002", 409, "This bill has already been settled", {
+        id: invoiceId,
+      });
+    }
     return balance;
   });
 

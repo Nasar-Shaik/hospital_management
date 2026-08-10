@@ -227,6 +227,18 @@ export interface PaymentEntry {
   reference?: string;
   at: Date;
   by?: string;
+  /**
+   * Client-supplied idempotency key (STATE_MACHINE_CATALOG §5: "idempotency key mandatory at
+   * `initiated`; `captured` posts to journal exactly once"; Doc 03 §5.2: "idempotency keys on all
+   * money-moving POSTs"). Same shape as `orders.requestId` and `dispenses.requestId` — the UI
+   * always sends one; a double-clicked "Collect" must take the money once.
+   *
+   * NOT enforced by a unique index, and that is deliberate: a unique MULTIKEY index de-duplicates
+   * entries WITHIN a document, so it would happily allow the same key to be pushed twice onto the
+   * SAME invoice — which is exactly the double-click case. The guard is a condition on the write
+   * (`payments.requestId: {$ne: key}` in the filter), which is atomic and does hold.
+   */
+  requestId?: string;
 }
 
 /**
@@ -242,6 +254,8 @@ export interface RefundEntry {
   reason: string;
   at: Date;
   by?: string;
+  /** Idempotency key — see `PaymentEntry.requestId`. Handing money back twice is the worse leg. */
+  requestId?: string;
 }
 
 export interface InvoiceDoc {
@@ -284,6 +298,14 @@ export interface InvoiceDoc {
 
   finalizedAt?: Date;
   finalizedBy?: string;
+
+  /**
+   * Optimistic-concurrency counter (Doc 03 §1.4, §5.2 — "optimistic concurrency via `version`
+   * field + `findOneAndUpdate` with version guard"). `tenantScopePlugin` has stamped this on every
+   * collection since Phase 1A; billing is the first module to actually GUARD on it, which is why
+   * it is declared here rather than left implicit.
+   */
+  version: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -330,6 +352,7 @@ const invoiceSchema = new Schema<InvoiceDoc>(
         reference: { type: String },
         at: { type: Date, required: true },
         by: { type: String },
+        requestId: { type: String },
       },
     ],
     refunds: [
@@ -340,6 +363,7 @@ const invoiceSchema = new Schema<InvoiceDoc>(
         reason: { type: String, required: true },
         at: { type: Date, required: true },
         by: { type: String },
+        requestId: { type: String },
       },
     ],
     refunded: { type: Number, required: true, default: 0 },

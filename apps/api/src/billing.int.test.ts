@@ -489,3 +489,166 @@ describe("a missing price does not stop a patient being treated", () => {
     expect(line?.amount).toBe(0);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 6. THE MONEY ADDS UP UNDER CONCURRENCY
+ *
+ * `recordPayment` used to read the invoice, compute `paid + amount` in Node, and
+ * `$set` that absolute back. Two payments landing together both read the same
+ * `paid`, both computed the same total, and the second `$set` overwrote the first:
+ * the `payments` array held BOTH entries while the scalar recorded ONE of them.
+ *
+ * That scalar is what every collections and dues report reads, and what the counter
+ * shows the next patient. Money crossed the counter that the system did not record,
+ * and the patient was asked for it again.
+ *
+ * These tests are the reason to believe it is fixed. Each one FAILED against the
+ * previous implementation (Doc 03 §5.2; STATE_MACHINE_CATALOG §4/§5).
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the money adds up under concurrency", () => {
+  /** A finalized ₹500 consultation bill, ready to take money. */
+  async function finalizedBill(phone: string): Promise<string> {
+    const { encounterId, event } = await arrive(pvt, "Concurrent Payer", phone);
+    await asRelay(pvt, () => dispatchEventInline(event));
+    const invoice = await auth(
+      request(app).post(`/api/v1/encounters/${encounterId}/bill/finalize`),
+      pvt,
+    ).expect(200);
+    expect(invoice.body.data.total).toBe(50_000);
+    return invoice.body.data.id as string;
+  }
+
+  it("two payments landing at the same instant are BOTH recorded", async () => {
+    const invoiceId = await finalizedBill("9000100060");
+
+    // Two cashiers, two halves of one bill, at the same moment.
+    const [a, b] = await Promise.all([
+      auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt).send({
+        amount: 25_000,
+        method: "cash",
+      }),
+      auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt).send({
+        amount: 25_000,
+        method: "card",
+      }),
+    ]);
+
+    expect([a.status, b.status]).toEqual([201, 201]);
+
+    const bill = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt).expect(200);
+    // The scalar and the ledger must agree. Under the old code `paid` was 25,000
+    // while `payments` held two entries totalling 50,000.
+    expect(bill.body.data.payments).toHaveLength(2);
+    expect(bill.body.data.paid).toBe(50_000);
+    expect(bill.body.data.status).toBe("paid");
+  });
+
+  it("the total can never exceed the bill, however many payments race", async () => {
+    const invoiceId = await finalizedBill("9000100061");
+
+    // Four quarter-payments fired at a bill that can only take two of them.
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt).send({
+          amount: 25_000,
+          method: "cash",
+        }),
+      ),
+    );
+
+    const accepted = results.filter((r) => r.status === 201);
+    expect(accepted).toHaveLength(2);
+
+    const bill = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt).expect(200);
+    expect(bill.body.data.paid).toBe(50_000);
+    expect(bill.body.data.payments).toHaveLength(2);
+  });
+
+  it("a retried payment takes the money ONCE and returns the original receipt", async () => {
+    const invoiceId = await finalizedBill("9000100062");
+    const requestId = "idem-key-double-click-0001";
+
+    const first = await auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt)
+      .send({ amount: 30_000, method: "cash", requestId })
+      .expect(201);
+    expect(first.body.data.paid).toBe(30_000);
+
+    // The same intent again — a double-click, or a retry after a response that never
+    // arrived. It must NOT be a second ₹300.
+    const replay = await auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt)
+      .send({ amount: 30_000, method: "cash", requestId })
+      .expect(409);
+    expect(replay.body.error.code).toBe("HMS-PAY-002");
+    // The receipt comes back so the counter can reconcile instead of retrying again.
+    expect(replay.body.error.details.receipt.amount).toBe(30_000);
+
+    const bill = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt).expect(200);
+    expect(bill.body.data.payments).toHaveLength(1);
+    expect(bill.body.data.paid).toBe(30_000);
+
+    // A DIFFERENT key on the same bill is a genuine second part-payment, not a replay.
+    await auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt)
+      .send({ amount: 20_000, method: "upi", requestId: "idem-key-second-part-0002" })
+      .expect(201);
+    const settled = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt);
+    expect(settled.body.data.paid).toBe(50_000);
+    expect(settled.body.data.status).toBe("paid");
+  });
+
+  it("concurrent refunds cannot hand back more than was collected", async () => {
+    const invoiceId = await finalizedBill("9000100063");
+    await auth(request(app).post(`/api/v1/invoices/${invoiceId}/payments`), pvt)
+      .send({ amount: 50_000, method: "cash" })
+      .expect(201);
+
+    // Three refunds of ₹300 against ₹500 collected: at most one can be honoured.
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        auth(request(app).post(`/api/v1/invoices/${invoiceId}/refund`), pvt).send({
+          amount: 30_000,
+          method: "cash",
+          reason: "Cancelled service",
+        }),
+      ),
+    );
+
+    expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+    const bill = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt).expect(200);
+    expect(bill.body.data.refunded).toBe(30_000);
+    expect(bill.body.data.refunded).toBeLessThanOrEqual(bill.body.data.paid);
+  });
+
+  it("a discount computed against a stale bill is refused, not applied", async () => {
+    // The version guard (Doc 03 §5.2). A discount is a judgement about a SPECIFIC bill:
+    // if the bill moved after it was read, the write-down must lose rather than silently
+    // restore a stale total. Asserted at the repository, because the service re-reads
+    // immediately before writing and the racing window cannot be hit reliably over HTTP.
+    const invoiceId = await finalizedBill("9000100064");
+    const before = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt).expect(200);
+
+    await asRelay(pvt, async () => {
+      const repo = await import("./modules/billing/billing.repository.js");
+      const live = await repo.findInvoiceById(invoiceId);
+      expect(live?.version).toBeGreaterThanOrEqual(0);
+
+      // A stale version — someone else changed the bill after we read it.
+      const stale = await repo.applyDiscountGuarded(invoiceId, (live?.version ?? 0) + 99, {
+        discount: 10_000,
+        total: 40_000,
+      });
+      expect(stale).toBeUndefined();
+
+      // The current version still applies cleanly.
+      const ok = await repo.applyDiscountGuarded(invoiceId, live?.version ?? 0, {
+        discount: 10_000,
+        total: 40_000,
+      });
+      expect(ok?.total).toBe(40_000);
+      // ...and the guard moved, so the same version cannot be replayed.
+      expect(ok?.version).toBe((live?.version ?? 0) + 1);
+    });
+
+    expect(before.body.data.total).toBe(50_000);
+  });
+});

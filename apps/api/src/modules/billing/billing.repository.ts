@@ -88,6 +88,8 @@ export interface Invoice {
   refunded: number;
   finalizedAt?: Date;
   createdAt: Date;
+  /** Optimistic-concurrency counter (Doc 03 §5.2). Guarded by `applyDiscountGuarded`. */
+  version: number;
 }
 
 function toServiceItem(d: ServiceItemDoc): ServiceItem {
@@ -143,6 +145,7 @@ function toInvoice(d: InvoiceDoc): Invoice {
     payments: d.payments ?? [],
     refunds: d.refunds ?? [],
     refunded: d.refunded ?? 0,
+    version: d.version ?? 0,
     createdAt: d.createdAt,
     ...(d.insurerPolicyId ? { insurerPolicyId: d.insurerPolicyId } : {}),
     ...(d.discountReason ? { discountReason: d.discountReason } : {}),
@@ -801,34 +804,124 @@ export async function updateInvoice(
   return doc ? toInvoice(doc) : undefined;
 }
 
+/**
+ * ── MONEY IS ADDED BY THE DATABASE, NEVER BY THE CALLER ─────────────────────────────────────
+ *
+ * These two used to take the new ABSOLUTE total (`paid`, `refunded`) that the service had computed
+ * from a document it read moments earlier, and `$set` it. That is a lost update with money in it:
+ *
+ *   two ₹500 payments land on a ₹1,000 bill at the same instant
+ *   → both read `paid: 0`, both compute `500`, both write `$set: { paid: 500 }`
+ *   → the `payments` array correctly holds BOTH entries, and the scalar says ₹500.
+ *
+ * ₹1,000 crossed the counter, the system recorded ₹500, and every collections and dues report
+ * reads the scalar. The patient is asked to pay again, and the drawer does not reconcile.
+ *
+ * So the caller now passes the DELTA and the database does the arithmetic (`$add` in a pipeline
+ * update, which is atomic), while the invariant that used to be an `if` in the service becomes a
+ * CONDITION ON THE WRITE:
+ *
+ *   - overpayment       `$expr: paid + amount <= total`      — refused by the filter, not a check
+ *   - duplicate submit  `payments.requestId != requestId`    — the idempotency guard
+ *   - wrong state       `status` in the filter
+ *
+ * No match means one of those held, and the service re-reads to say WHICH (a bare "not found" on a
+ * payment is the least helpful thing a counter can be told). This is the same move the project
+ * already made for double-booking and double-billing: when correctness needs an atomic decision,
+ * make the DATABASE make it (ADR-0013 §3, `one_charge_per_cause`, `one_doctor_one_slot`).
+ *
+ * `$literal` wraps the entry deliberately. Inside an aggregation pipeline a string beginning with
+ * `$` is a FIELD PATH, so a cashier typing `$total` into the payment reference would otherwise
+ * have it silently replaced by the invoice total. `$literal` stops the value being parsed at all.
+ */
 export async function addPayment(
   id: string,
   payment: PaymentEntry,
-  status: InvoiceStatus,
-  paid: number,
   session?: ClientSession,
 ): Promise<Invoice | undefined> {
   const doc = await getInvoiceModel(getTenantDb())
     .findOneAndUpdate(
-      { _id: id },
-      { $push: { payments: payment }, $set: { paid, status } },
+      {
+        _id: id,
+        // Payment is refused on a draft and on a cancelled bill (STATE_MACHINE_CATALOG §4). A
+        // fully-paid bill is excluded by the overpayment guard below, not by status.
+        status: "finalized",
+        ...(payment.requestId ? { "payments.requestId": { $ne: payment.requestId } } : {}),
+        $expr: { $lte: [{ $add: ["$paid", payment.amount] }, "$total"] },
+      },
+      [
+        {
+          $set: {
+            payments: { $concatArrays: ["$payments", { $literal: [payment] }] },
+            paid: { $add: ["$paid", payment.amount] },
+            version: { $add: [{ $ifNull: ["$version", 0] }, 1] },
+          },
+        },
+        {
+          // A second stage, because it must read the paid total the FIRST stage just wrote.
+          // `partially_paid` is not a state (SMC §4): a part payment stays `finalized`.
+          $set: { status: { $cond: [{ $gte: ["$paid", "$total"] }, "paid", "$status"] } },
+        },
+      ],
       { new: true, ...(session ? { session } : {}) },
     )
     .lean<InvoiceDoc>();
   return doc ? toInvoice(doc) : undefined;
 }
 
-/** Records money handed back. `refunded` is the new running total, not a delta — the caller computed it. */
+/**
+ * Records money handed back. `amount` is the DELTA; the running total is the database's job.
+ * The invariant — a refund never exceeds what was actually collected (BUSINESS_WORKFLOWS §5) —
+ * is enforced in the filter as `refunded + amount <= paid`, so two concurrent refunds cannot
+ * together hand back more than the hospital ever took.
+ */
 export async function addRefund(
   id: string,
   refund: RefundEntry,
-  refunded: number,
   session?: ClientSession,
 ): Promise<Invoice | undefined> {
   const doc = await getInvoiceModel(getTenantDb())
     .findOneAndUpdate(
-      { _id: id },
-      { $push: { refunds: refund }, $set: { refunded } },
+      {
+        _id: id,
+        ...(refund.requestId ? { "refunds.requestId": { $ne: refund.requestId } } : {}),
+        $expr: { $lte: [{ $add: ["$refunded", refund.amount] }, "$paid"] },
+      },
+      [
+        {
+          $set: {
+            refunds: { $concatArrays: ["$refunds", { $literal: [refund] }] },
+            refunded: { $add: ["$refunded", refund.amount] },
+            version: { $add: [{ $ifNull: ["$version", 0] }, 1] },
+          },
+        },
+      ],
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<InvoiceDoc>();
+  return doc ? toInvoice(doc) : undefined;
+}
+
+/**
+ * A discount is a user-edited AGGREGATE, not a ledger append — a supervisor read a bill and
+ * decided a concession against THAT bill. So this one takes the optimistic lock Doc 03 §5.2
+ * names (`version` guard + `findOneAndUpdate`), rather than the additive treatment payments get:
+ * if the bill moved underneath the decision — a payment landed, another discount was applied —
+ * the write must lose and the supervisor must look again at what they are discounting.
+ *
+ * Returns undefined when the version no longer matches, which the service reports as
+ * HMS-REQ-003 ("record was modified by someone else; reload and reapply").
+ */
+export async function applyDiscountGuarded(
+  id: string,
+  expectedVersion: number,
+  set: Record<string, unknown>,
+  session?: ClientSession,
+): Promise<Invoice | undefined> {
+  const doc = await getInvoiceModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: id, version: expectedVersion },
+      { $set: set, $inc: { version: 1 } },
       { new: true, ...(session ? { session } : {}) },
     )
     .lean<InvoiceDoc>();

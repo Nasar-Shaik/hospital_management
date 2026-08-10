@@ -26,6 +26,18 @@ export const postChargeSchema = z
 
 export const voidChargeSchema = z.object({ reason: z.string().min(3).max(500) }).strict();
 
+/**
+ * The idempotency key for a money-moving POST (Doc 03 §5.2, Constitution §7,
+ * STATE_MACHINE_CATALOG §5). Same contract as `orders.requestId` and `dispenses.requestId`:
+ * client-supplied, optional on the wire, and **the UI must always send one** — a cashier
+ * double-clicking "Collect" must take the money once, not twice.
+ *
+ * Optional rather than required because making it mandatory is a breaking change to a shipped
+ * endpoint; the lost-update guard below protects correctness even when no key is sent, so a
+ * caller that omits it is never charged twice by a RACE — only by its own repeated submission.
+ */
+const requestId = z.string().trim().min(8).max(120).optional();
+
 export const recordPaymentSchema = z
   .object({
     amount: paise.refine((v) => v > 0, "a payment of nothing is not a payment"),
@@ -34,6 +46,7 @@ export const recordPaymentSchema = z
     // ways money crosses the counter directly.
     method: z.enum(["cash", "card", "upi", "netbanking", "cheque", "insurance", "wallet"]),
     reference: z.string().max(120).optional(),
+    requestId,
   })
   .strict();
 
@@ -49,6 +62,7 @@ export const recordRefundSchema = z
     amount: paise.refine((v) => v > 0, "a refund of nothing is not a refund"),
     method: z.enum(["cash", "card", "upi", "netbanking", "cheque", "insurance", "wallet"]),
     reason: z.string().min(3).max(500),
+    requestId,
   })
   .strict();
 
