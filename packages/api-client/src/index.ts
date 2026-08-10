@@ -4068,10 +4068,17 @@ export class ApiClient {
     return this.request<EncounterCharge[]>("GET", `/api/v1/encounters/${encounterId}/charges`);
   }
 
-  /** Takes money. `amount` is PAISE. Refused on a draft; overpayment is refused. */
+  /**
+   * Takes money. `amount` is PAISE. Refused on a draft; overpayment is refused.
+   *
+   * **Always pass `requestId`** (Doc 03 §5.2 — idempotency keys on all money-moving POSTs). It
+   * must be stable across RETRIES OF THE SAME INTENT and different for a genuinely new payment,
+   * so mint it once per payment form and renew it after a payment succeeds. A replay answers
+   * `HMS-PAY-002` with the original receipt rather than taking the money twice.
+   */
   recordPayment(
     invoiceId: string,
-    input: { amount: number; method: string; reference?: string },
+    input: { amount: number; method: string; reference?: string; requestId?: string },
   ): Promise<Invoice> {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, input);
   }
@@ -4080,10 +4087,11 @@ export class ApiClient {
    * Settles a bill from the patient's ADVANCE. A convenience over `recordPayment` — it is the
    * same endpoint with `method: "wallet"`, which draws the money from the wallet atomically.
    */
-  payFromWallet(invoiceId: string, amount: number): Promise<Invoice> {
+  payFromWallet(invoiceId: string, amount: number, requestId?: string): Promise<Invoice> {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, {
       amount,
       method: "wallet",
+      ...(requestId ? { requestId } : {}),
     });
   }
 
@@ -4095,10 +4103,13 @@ export class ApiClient {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/discount`, input);
   }
 
-  /** Hands money back. `amount` is PAISE, never more than net collected. Needs `billing:refund`. */
+  /**
+   * Hands money back. `amount` is PAISE, never more than net collected. Needs `billing:refund`.
+   * Pass `requestId` — see `recordPayment`; refunding twice is the worse leg to get wrong.
+   */
   recordRefund(
     invoiceId: string,
-    input: { amount: number; method: string; reason: string },
+    input: { amount: number; method: string; reason: string; requestId?: string },
   ): Promise<Invoice> {
     return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/refund`, input);
   }

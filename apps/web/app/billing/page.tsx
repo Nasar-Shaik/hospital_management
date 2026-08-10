@@ -25,6 +25,7 @@ import {
   type Patient,
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
+import { useIdempotencyKey } from "../../lib/idempotency";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 
@@ -58,6 +59,7 @@ function PaymentForm({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void
   const [reference, setReference] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, renewRequestId] = useIdempotencyKey();
 
   async function submit() {
     setBusy(true);
@@ -67,7 +69,11 @@ function PaymentForm({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void
         amount: toPaise(amount),
         method,
         ...(reference ? { reference } : {}),
+        requestId,
       });
+      // The money has moved. A further payment on this bill is a NEW intent (a second
+      // part-payment), so it must not reuse the key that just succeeded.
+      renewRequestId();
       onPaid();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not record the payment.");
@@ -210,12 +216,14 @@ function RefundForm({ invoice, onDone }: { invoice: Invoice; onDone: () => void 
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, renewRequestId] = useIdempotencyKey();
 
   async function submit() {
     setBusy(true);
     setError(null);
     try {
-      await api.recordRefund(invoice.id, { amount: toPaise(amount), method, reason });
+      await api.recordRefund(invoice.id, { amount: toPaise(amount), method, reason, requestId });
+      renewRequestId();
       onDone();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not record the refund.");

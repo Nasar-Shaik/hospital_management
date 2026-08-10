@@ -32,6 +32,7 @@ import {
   type Patient,
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
+import { useIdempotencyKey } from "../../lib/idempotency";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
 
@@ -219,6 +220,7 @@ function InvoiceRow({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void 
   const [method, setMethod] = useState<(typeof PAYMENT_METHODS)[number]>("cash");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, renewRequestId] = useIdempotencyKey();
 
   // Re-seed when this bill's balance changes (a payment landed) so the box always shows what is left.
   useEffect(() => {
@@ -238,7 +240,9 @@ function InvoiceRow({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void 
     setBusy(true);
     setError(null);
     try {
-      await api.recordPayment(invoice.id, { amount: paise, method });
+      await api.recordPayment(invoice.id, { amount: paise, method, requestId });
+      // A part-payment leaves the form open for the rest, which is a NEW intent.
+      renewRequestId();
       onPaid();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not record the payment.");

@@ -11,7 +11,7 @@
  * It is built ENTIRELY from existing per-patient endpoints — it reads the record, it does not
  * change it, so a receptionist and a doctor can both open it within their own permissions.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -46,6 +46,7 @@ import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
 import { rupees, toPaise } from "../../../lib/money";
+import { newIdempotencyKey } from "../../../lib/idempotency";
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -692,6 +693,7 @@ function Bills({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const settleKeys = useRef<Record<string, string>>({});
 
   async function payFromAdvance(invoiceId: string, outstanding: number) {
     // Draw whatever the advance can cover, up to the outstanding amount. The rest, if any,
@@ -700,8 +702,16 @@ function Bills({
     if (amount <= 0) return;
     setBusy(invoiceId);
     setError(null);
+    /**
+     * Keyed per BILL, not per component: this is a row action, so the intent is "settle this
+     * invoice from the advance". The key is held against the row until the money moves, so a
+     * retry after a lost response reuses it (and is answered with the original receipt) while
+     * settling the remainder later is correctly a new intent.
+     */
+    settleKeys.current[invoiceId] ??= newIdempotencyKey();
     try {
-      await api.payFromWallet(invoiceId, amount);
+      await api.payFromWallet(invoiceId, amount, settleKeys.current[invoiceId]);
+      delete settleKeys.current[invoiceId];
       await reload();
     } catch (err) {
       setError(
