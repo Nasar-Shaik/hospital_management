@@ -20,15 +20,15 @@ The audit below is preserved as written. This block records what has since chang
 never confused: **everything under §2 CRITICAL was found by that audit; four of the five are now
 fixed.** Commits `e81d8ea` · `ca5386e` · `dfa2685` · `fb49561` · `022dafd` · `327f0c2`.
 
-| Audit finding                              | State                                                                              |
-| ------------------------------------------ | ---------------------------------------------------------------------------------- |
-| C2 · release gate RED (2 failures)         | ✅ **Green — 1363/1363, 12/12 files** (was 1012 passed / 2 failed)                 |
-| C3 · 68 routes with no authorization probe | ✅ Probed. None was unprotected; all 340 derived assertions pass. Grants reviewed. |
-| C4 · payment lost-update                   | ✅ Fixed in the database, plus idempotency keys. Falsified.                        |
-| H8 · PHI not redacted in logs              | ✅ Fixed at the logger choke point + the access log. Falsified.                    |
-| C1 · CI has never run                      | ⬜ **Still open.** `main` is still at the initial commit; nothing has been merged. |
-| C5 · no rate limiting                      | ⬜ Still open — Phase 2.                                                           |
-| K6 · no observability                      | ⬜ Still open — Phase 3.                                                           |
+| Audit finding                              | State                                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| C2 · release gate RED (2 failures)         | ✅ **Green — 1363/1363, 12/12 files** (was 1012 passed / 2 failed)                         |
+| C3 · 68 routes with no authorization probe | ✅ Probed. None was unprotected; all 340 derived assertions pass. Grants reviewed.         |
+| C4 · payment lost-update                   | ✅ Fixed in the database, plus idempotency keys. Falsified.                                |
+| H8 · PHI not redacted in logs              | ✅ Fixed at the logger choke point + the access log. Falsified.                            |
+| C1 · CI has never run                      | 🟡 Workflow fixed and verified locally; **execution blocked off-repo** — see next section. |
+| C5 · no rate limiting                      | ⬜ Still open — Phase 2.                                                                   |
+| K6 · no observability                      | ⬜ Still open — Phase 3.                                                                   |
 
 **Gates re-run at close:** typecheck 17/17 · lint 17/17 · format ✅ · boundaries 0 violations
 (539 modules) · unit 55 · integration **1363/1363**.
@@ -40,6 +40,164 @@ with `ECONNREFUSED`. Root cause is **not** the code: `medicore-hms-mongo-1` is O
 Reproduced with and without the Phase 1A changes; green on every run where Mongo stays up.
 **Raise the Docker memory allocation before enabling CI**, or the first thing the new pipeline
 teaches everyone is to ignore it.
+
+---
+
+## CI validation (2026-08-11) · workflow FIXED · execution BLOCKED off-repo
+
+Commits `a2a4177` · `58632a5`.
+
+### The root cause of C1 is not in this repository
+
+The audit was right that CI has never run and wrong about why. It reasoned "there is no PR"; in
+fact **PR #1 existed and was merged on 2026-07-17**, and the Actions history holds three runs. All
+three failed **before their first step**, with the same annotation:
+
+> The job was not started because your account is locked due to a billing issue.
+
+Re-confirmed empirically on 2026-08-11 by re-triggering run `29599403771`: rejected in **8
+seconds**, same annotation. The repository is public, so free minutes are not the constraint — the
+**account** is locked, and the remedy is on GitHub's billing settings, outside this repository. No
+workflow change can affect it. (`main` was later reset to the initial commit; the merge commit for
+PR #1 is unreachable from any ref today.)
+
+### What was wrong with the workflow itself
+
+Unrun code accumulates the defects of unrun code. Two would each have failed the job on its first
+real execution, and one was a security hole:
+
+| Defect                                                                                         | Consequence                                                                                                                  |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm/action-setup` given `version: 10` while package.json pins `packageManager: pnpm@10.34.5` | **Job dies at setup.** The action compares the two literally and throws on any difference — and `10` differs from `10.34.5`. |
+| PR title interpolated into a shell command                                                     | **Remote code execution on the runner** by anyone who can open a PR — this repository is public.                             |
+| `pnpm-lock.yaml` is committed Prettier-formatted; pnpm writes its own style                    | The **first dependency change after CI works** renormalises ~4000 lines and fails `format:check` on a diff nobody wrote.     |
+| `timeout-minutes: 20` set without measurement                                                  | Measured: ~5 min of compute on a 10-core machine, of which integration is 3.5. A runner has 4 vCPU. Raised to 30.            |
+| `cancel-in-progress` applied to `main`                                                         | Superseding a run on `main` leaves a commit that is supposed to be deployable with no verdict. Now PR-only.                  |
+| No `permissions:` block                                                                        | Default token is writable; nothing here writes. Now `contents: read`.                                                        |
+| `mailhog/mailhog:latest`                                                                       | Mailhog is archived upstream, so `:latest` can only move or vanish. Pinned to `v1.0.1`.                                      |
+
+Added, because a pipeline nobody can read is a pipeline nobody fixes: a **preflight** that names
+which service is unreachable rather than letting a suite fail obscurely five minutes later, a
+**capacity line** on every run so "did we run out of memory?" is answerable from the log, a
+**failure-only diagnostics dump** (containers, mongod log, memory, disk), and `workflow_dispatch`
+so the gate can be asked for on demand.
+
+### Verified locally, since CI cannot verify itself
+
+Against a **clean `git clone` with no `.env` files**, on CI's exact infrastructure shape — `mongo:7`
+single-node replica set on 27017, `redis:7-alpine` on 6379, Mailhog — proving the pipeline depends
+on no developer-local configuration:
+
+| Check                                  | Result                             |
+| -------------------------------------- | ---------------------------------- |
+| `pnpm install --frozen-lockfile`       | ✅ lockfile in sync                |
+| `pnpm format:check`                    | ✅                                 |
+| `pnpm lint`                            | ✅ 17/17                           |
+| `pnpm typecheck`                       | ✅ 17/17                           |
+| `pnpm test` (unit)                     | ✅ 55 (logger 13, utils 5, api 37) |
+| `pnpm --filter @medicore/api test:int` | ✅ **1363/1363, 12/12 files**      |
+| `pnpm build`                           | ✅ 11/11 tasks                     |
+| `pnpm boundaries`                      | ✅ 0 violations                    |
+
+Confirmed the CI-shaped Mongo really served that run (845 log lines naming `test_*` databases) and
+that Redis carried the per-suite logical databases `db1`–`db11`, so the pass is not an artefact of
+the harness quietly falling back to the dev containers on 37018/6380.
+
+Then repeated on **CI's platform rather than the developer's** — Linux, Node **22.23.2** (from
+`.nvmrc`), pnpm **10.34.5** (resolved from `packageManager` via corepack), where local development
+runs Node 26 on macOS:
+
+- `pnpm install --frozen-lockfile` on **linux/amd64** ✅ — the check that matters most, because it
+  proves the lockfile carries Linux-x64 native binaries (`@node-rs/argon2`, `sharp`,
+  `msgpackr-extract`). A macOS-only lockfile is a classic first-CI-run failure.
+- format · lint · typecheck · unit (55) · build · boundaries on **linux/amd64, Node 22** ✅
+- The workflow's preflight script, run verbatim inside a container whose services share one network
+  namespace — the runner's "everything on 127.0.0.1" topology ✅
+
+### 🔴 What running on a UTC machine revealed — a genuine product defect
+
+The first run of the gate on a **UTC** machine — which is what every CI runner and every container
+is, and what no developer here has been — failed one test out of 1363:
+
+```
+notifications › "renders the time in the hospital's timezone, not UTC"
+AssertionError: expected 'Dear Meera Nair…' to match /09:15\s*(am|AM)/
+```
+
+Tracing it found something larger than the test. **Two modules resolve time in two different
+zones:**
+
+| Module                     | How it resolves time                                        |
+| -------------------------- | ----------------------------------------------------------- |
+| `appointment.service.ts`   | `startAt.getDay()` + slot arithmetic → the **process** zone |
+| `appointment.consumers.ts` | `Intl` with `env.DEFAULT_TIMEZONE` → **Asia/Kolkata**       |
+
+They agree only when the process zone _is_ the hospital's zone. Nothing enforces that: **no
+Dockerfile, compose file or `.env.example` sets `TZ`**, so the shipped image runs UTC. Verified by
+direct probe — an instant the scheduler treats as "Monday 09:15" renders to the patient as
+**`02:45 pm`**.
+
+So on any real deployment, a clinic's "Monday 09:00–13:00" session is offered at 09:00–13:00 **UTC**
+(14:30–18:30 IST), and the confirmation email tells the patient a time 5½ hours from the one the
+clinic booked. `formatWhen`'s own comment describes the failure exactly: _"a reminder that says
+09:00 when the clinic means 14:30 is worse than sending nothing at all."_
+
+**Why the suite never caught it:** the developer machine is `Asia/Calcutta`, so the machine zone and
+the hospital zone coincide and both implementations produce the same string. The test named
+"renders the time in the hospital's timezone, not UTC" was, on the machine where it was run,
+**incapable of failing for the bug it describes.**
+
+**Not fixed here, deliberately.** The correct zone for a session is a design decision — the tenant
+default, or the branch's own zone, which `branch.model.ts` explicitly allows to differ — and it
+belongs in a milestone with its own tests, not in a CI commit. Nothing is deployed (`main` is at the
+initial commit), so there is no live patient exposure. What _was_ done is one line in
+`apps/api/vitest.config.ts`: **`TZ: "Asia/Kolkata"`**, pinning the process zone so the suite stops
+being a property of the laptop it runs on. That reproduces today's behaviour deterministically
+everywhere; it does not endorse it. It is a no-op on the developer machine, which is already IST.
+
+**This is the strongest argument in this document for getting CI running.** It found a real defect
+within minutes of first execution, in a module that had 1363 passing tests over it.
+
+### Resources: CI does not have the local problem
+
+|         | Developer machine                                                                      | GitHub `ubuntu-latest`      |
+| ------- | -------------------------------------------------------------------------------------- | --------------------------- |
+| Memory  | 7.75 GB **shared with ~30 containers** from other projects                             | 16 GB, 3 service containers |
+| CPU     | 10 cores, contended                                                                    | 4 vCPU, dedicated           |
+| Outcome | Mongo OOM-killed (`Exited 137`); the Docker **daemon itself died** during this session | headroom                    |
+
+**Measured, not estimated.** The entire CI workload — Mongo, Redis, Mailhog and Node running all
+1363 integration tests — peaks at **~1.21 GB** (Mongo 732 MB · Node 444 MB · Mailhog 24 MB · Redis
+11 MB). That is **7.6% of a runner's 16 GB**. Disk: ~1.8 GB of images plus ~965 MB of checkout and
+dependencies, against 14 GB free.
+
+The OOM caveat recorded above is therefore **local only**, and **no alternative execution strategy
+is needed** — the full suite runs as one job, exactly as written, with no coverage sacrificed and
+nothing split, sharded or skipped.
+
+### What is still open
+
+1. **The billing lock.** Until it is cleared, nothing below can happen. A **self-hosted runner on
+   the HMS VPS** is the obvious fallback given each project now has its own VPS — with the caveat
+   that an account-level lock may disable Actions wholesale, self-hosted included. Worth ten minutes
+   to test before assuming either way.
+2. **`main` is not protected** (`"protected": false`, no required status checks) and **must not be**
+   yet: a required `ci` check that can never run would make `main` permanently unmergeable — worse
+   than no protection. Enable it immediately after the first green run, not before.
+3. **The commits are not pushed.** `git push` over SSH fails because `~/.ssh/id_ed25519` is
+   passphrase-locked and not in the agent; over HTTPS it fails because the `gh` token lacks the
+   `workflow` scope. Either `ssh-add ~/.ssh/id_ed25519` or
+   `gh auth refresh -h github.com -s workflow` unblocks it.
+4. **The timezone defect above** — the highest-value thing CI found, and unfixed by design.
+
+### Gaps against Doc 04 §7, left deliberately
+
+Security scans (`pnpm audit`, Trivy, CodeQL, gitleaks), e2e (Playwright/Detox), SBOM generation and
+the coverage gate are all in the target pipeline and are all **P9** per the workflow's own header.
+Not added here — the brief was to make the existing correctness gates execute, not to grow the
+pipeline. Two smaller notes: there is **no turbo remote cache**, so every run is cold (~15 min is
+the expectation, not a regression); and commitlint validates the **PR title** only, which is correct
+for squash-merge, with individual commits covered by the local husky `commit-msg` hook.
 
 ---
 
