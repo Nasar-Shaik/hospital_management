@@ -14,6 +14,35 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## Phase 1A — hardening (2026-08-10) · CLOSED
+
+The audit below is preserved as written. This block records what has since changed, so the two are
+never confused: **everything under §2 CRITICAL was found by that audit; four of the five are now
+fixed.** Commits `e81d8ea` · `ca5386e` · `dfa2685` · `fb49561` · `022dafd` · `327f0c2`.
+
+| Audit finding                              | State                                                                              |
+| ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| C2 · release gate RED (2 failures)         | ✅ **Green — 1363/1363, 12/12 files** (was 1012 passed / 2 failed)                 |
+| C3 · 68 routes with no authorization probe | ✅ Probed. None was unprotected; all 340 derived assertions pass. Grants reviewed. |
+| C4 · payment lost-update                   | ✅ Fixed in the database, plus idempotency keys. Falsified.                        |
+| H8 · PHI not redacted in logs              | ✅ Fixed at the logger choke point + the access log. Falsified.                    |
+| C1 · CI has never run                      | ⬜ **Still open.** `main` is still at the initial commit; nothing has been merged. |
+| C5 · no rate limiting                      | ⬜ Still open — Phase 2.                                                           |
+| K6 · no observability                      | ⬜ Still open — Phase 3.                                                           |
+
+**Gates re-run at close:** typecheck 17/17 · lint 17/17 · format ✅ · boundaries 0 violations
+(539 modules) · unit 55 · integration **1363/1363**.
+
+**One environmental caveat, recorded because it will be mistaken for flaky tests.** On this machine
+the integration suite fails intermittently — wandering single-test 404/401s, sometimes whole files
+with `ECONNREFUSED`. Root cause is **not** the code: `medicore-hms-mongo-1` is OOM-killed
+(`Exited (137)`) under memory pressure from 31 running containers on a 7.75 GB Docker allocation.
+Reproduced with and without the Phase 1A changes; green on every run where Mongo stays up.
+**Raise the Docker memory allocation before enabling CI**, or the first thing the new pipeline
+teaches everyone is to ignore it.
+
+---
+
 ## 0. Executive summary
 
 MediCore HMS is a **genuinely impressive, unusually disciplined codebase** — 94,755 lines across a
