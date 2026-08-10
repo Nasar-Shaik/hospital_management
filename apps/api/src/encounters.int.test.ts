@@ -225,6 +225,17 @@ describe("a patient cannot be in the building twice", () => {
       request(app).post(`/api/v1/encounters/${first.body.data.encounter.id}/start`),
       gov,
     ).expect(200);
+    // A test must be ordered before the patient can be sent to wait for one: sending them with
+    // nothing ordered strands them in a state no result will ever release. That guard is the
+    // point of `activeOrderCount`, so this arrange step is the realistic path, not scaffolding.
+    await auth(request(app).post("/api/v1/orders"), gov)
+      .send({
+        encounterId: first.body.data.encounter.id,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+      })
+      .expect(201);
     await auth(
       request(app).post(`/api/v1/encounters/${first.body.data.encounter.id}/investigations`),
       gov,
