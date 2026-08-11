@@ -27,6 +27,7 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-REQ-001    | 429  | Too many requests                            | Respect `Retry-After`                          | yes           |
 | HMS-REQ-002    | 409  | Duplicate request (idempotency)              | Original response returned in `details`        | no            |
 | HMS-REQ-003    | 409  | Record was modified by someone else          | Reload and reapply changes (version conflict)  | no            |
+| HMS-REQ-004    | 409  | Idempotency-Key still in progress            | Retry shortly; the first attempt is running    | yes (backoff) |
 | HMS-STATE-001  | 422  | Invalid state transition (`details.from→to`) | See STATE_MACHINE_CATALOG                      | no            |
 
 ## Patient & Clinical
@@ -82,3 +83,20 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-GEN-503 | 503  | Service in maintenance/read-only | See MAINTENANCE_MODE; retry after window | yes   |
 
 **Adding a code:** next number in its domain block; include HTTP, message, recovery, retry; add i18n message keys; write the test that asserts the code is returned.
+
+## Idempotency: which 409 means what
+
+`HMS-REQ-002` and `HMS-REQ-004` both answer "this `Idempotency-Key` has been seen before", and they
+are separate codes because the remedies are opposite.
+
+- **`HMS-REQ-002`** — the key was used for a **different request**. The client has a bug: it spent
+  one key on two intents. Nothing is retried; a new key is needed for the new operation.
+  `details.original` carries what that key did the first time (its operation, when it was first
+  seen, and — where it completed — its status and response), which is safe to return because a key
+  is scoped to one tenant _and_ one user, so the original response is always the caller's own.
+- **`HMS-REQ-004`** — the **same** request is still in flight. Usually a double-click. Retry after
+  a short delay and the retry will replay the first attempt's result.
+
+A successful retry of an identical request is **not** an error: it returns the original status and
+body with `Idempotency-Replayed: true`. See `docs/IDEMPOTENCY.md` for the full contract and the
+per-endpoint matrix.

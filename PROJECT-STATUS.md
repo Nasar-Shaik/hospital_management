@@ -14,6 +14,59 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## Idempotency-Key — the documented contract becomes real (2026-08-11) · CLOSED
+
+Migration 0004 created `idempotencyKeys` in week one. Forty-four migrations later **nothing had
+ever written a row to it**, and `app.ts` still carried the comment "remaining chain slot:
+idempotency (P2)". Doc 04 §5.1 had promised the header since the architecture was drawn.
+
+### What was actually there
+
+Two real per-module mechanisms with **different** replay semantics — `orders.requestId` and
+`dispenses.requestId` (unique index, replay at 200 with `duplicate: true`), and
+`invoices.payments[].requestId` / `refunds[].requestId` (atomic `$ne` filter, replay at 409
+`HMS-PAY-002`). **Wallet deposits and refunds had no protection of any kind**: not a header, not a
+`requestId`, not a unique index. Two clicks were two advances.
+
+### What was built
+
+`Idempotency-Key` on **24 of 152 mutating operations** — every money path, every stock movement,
+and the clinical writes where a repeat creates a second real thing. The rule and the reason for
+each of the other 128 are in [IDEMPOTENCY.md](AI_Workflow/docs/IDEMPOTENCY.md).
+
+- **Claim, not lookup.** The unique index `(tenantId, userId, key)` (migration 0048) arbitrates the
+  race. `if (!exists) create()` was never used and would not work: two identical requests both read
+  "not found", and a double-click lands inside that window.
+- **Fingerprint over the post-validation body**, so a retry that reorders its JSON or omits a
+  defaulted field still counts as the same request — and the same key with a different body is a
+  409, never a silent replay.
+- **The request body is never stored.** Only a SHA-256. The response is, for 24 hours (Doc 03 §7).
+- **A failure releases the key**, so a corrected retry works rather than meeting a pinned 500.
+- **`HMS-REQ-004` added** for "the same request is still in flight" — separate from `HMS-REQ-002`
+  because the remedies are opposite: one says "wait", the other says "your client has a bug".
+
+Honoured, not demanded: a mandatory header would be a breaking change inside `/v1`, which Doc 04
+§5.1 forbids. Nothing about the existing endpoints changed — the per-module `requestId` guards are
+untouched and still answer exactly as they did.
+
+### Falsification — 5 controls, 5 reds
+
+| Broken                                           | Red tests |
+| ------------------------------------------------ | --------- |
+| the unique claim index                           | 14        |
+| fingerprint comparison                           | 3         |
+| replay lookup                                    | 9         |
+| per-tenant store scoping                         | 2         |
+| the claim itself (insert-first → check-then-act) | 2         |
+
+Removing `tenantId` from the claim identity stayed **green** — physical database-per-tenant
+isolation already holds that line, and the field is the second lock on the same door. Recorded so
+nobody later reads it as the thing doing the work.
+
+**24 tests** in `idempotency.int.test.ts`; **1437/1437** integration.
+
+---
+
 ## API contract Phase 2.1 — hardening (2026-08-11) · CLOSED
 
 A pass over what Phase 2 left implicit: permanent tests for the defects it found, an honest
@@ -260,8 +313,7 @@ match are comments) — React Native ready as `MOBILE_APP_DEVELOPMENT.md` assume
 - **No success response schemas** — the blocker for generating the client and for typing `data`.
 - **Versioning is a mount path, not a contract.** No version constants, no `Deprecation`/`Sunset`
   headers, no API-key version pinning. Deferred deliberately: `/v1` had to become stable first.
-- **`Idempotency-Key` is unimplemented.** `idempotencyKeys` exists from migration 0004 and nothing
-  writes it; orders carry a one-off `requestId` instead. Deferred until after the contract.
+- ~~**`Idempotency-Key` is unimplemented.**~~ Closed 2026-08-11 — see the section below.
 - **Request-shape conformance is name-based** — it catches a field disappearing from the client
   entirely, not a field on the wrong method. Response DTOs would make it exact.
 
@@ -1243,7 +1295,7 @@ no SaaS billing, no global monitoring.
 | #   | Deviation                                                                         | Authority breached               | Severity |
 | --- | --------------------------------------------------------------------------------- | -------------------------------- | -------- |
 | D1  | **Socket.IO never implemented** — no `realtime/`, package absent                  | ADR-0008 (Accepted), Doc 04 §2.5 | HIGH     |
-| D2  | **No rate-limit or idempotency middleware** in the chain                          | Doc 04 §2.1, Constitution §7/§8  | CRITICAL |
+| D2  | **No rate-limit** middleware in the chain (idempotency closed 2026-08-11)         | Doc 04 §2.1, Constitution §7/§8  | CRITICAL |
 | D3  | **Workers is a heartbeat**; all consumers in-process                              | Doc 04 §2.6 (11 queues)          | HIGH     |
 | D4  | **No TanStack Query / Zustand / React Hook Form / Shadcn UI** — none installed    | Doc 04 §3.1, ADR-0004, ADR-0012  | HIGH     |
 | D5  | **No `apps/web/src/` feature slices**; 2,400-line pages                           | Doc 04 §3.2, Constitution §10    | HIGH     |
@@ -1295,7 +1347,7 @@ undocumented).
 
 ### 6.3 Documented but missing
 
-Socket.IO/realtime (ADR-0008) · E2 work queue (ADR-0014) · rate limiting · idempotency middleware ·
+Socket.IO/realtime (ADR-0008) · E2 work queue (ADR-0014) · rate limiting ·
 `packages/i18n` · mobile apps · `infra/k8s|terraform|nginx` · read models/CQRS (Doc 03 §9) ·
 observability stack · specimen tracking (STATE_MACHINE_CATALOG §7, written, unimplemented) ·
 `discharge_initiated` state.
@@ -1355,7 +1407,7 @@ Reports over OLTP with no read models · E2 work-queue projection absent · file
 scan · SMTP not per-tenant · `packages/ui` ships no components; duplicated per app · admin console is
 one file, no usage/limits view · page bodies not responsive · `EmptyState` unused · no i18n despite
 the NFR · no e2e/Playwright suite · missing ADRs (§6.4) · no permission-orphan test (PROJECT_MEMORY
-proposes it after three incidents) · `idempotencyKeys` collection dead · CI lacks security scanning.
+proposes it after three incidents) · CI lacks security scanning.
 
 ### LOW
 
@@ -1546,7 +1598,7 @@ anticipated and the delivery simply outran.
 | 1   | Fix the 2 failing tests; add the 68 RBAC probes, reviewing each grant as you go                                                    | CRITICAL |
 | 2   | Merge to `main` via PR so CI runs; enable branch protection                                                                        | CRITICAL |
 | 3   | Fix the payment lost-update — `$inc` or optimistic lock — with a falsifying concurrency test first                                 | CRITICAL |
-| 4   | Add `requestId` idempotency to payments, refunds and discounts                                                                     | CRITICAL |
+| 4   | ~~Add idempotency to payments, refunds and discounts~~ — done; `Idempotency-Key` covers 24 operations                              | DONE     |
 | 5   | Implement Redis-backed rate limiting with per-route classes, audited by `routeInventory`                                           | CRITICAL |
 | 6   | Add the permission-orphan test (a permission no role holds)                                                                        | HIGH     |
 | 7   | Ship OpenTelemetry + Prometheus + Sentry before any pilot                                                                          | HIGH     |
