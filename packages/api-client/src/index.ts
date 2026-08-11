@@ -29,6 +29,34 @@ export interface LicenseHeader {
   daysLeft: number | null;
 }
 
+/**
+ * Per-call options — things that belong to ONE request rather than to the client.
+ *
+ * ── `idempotencyKey`, AND WHY IT IS THE CALLER'S JOB ────────────────────────
+ * A retryable mutation is not safe because the client retried carefully; it is safe because the
+ * server can recognise the second attempt as the same intent. That recognition needs a name, and
+ * the only layer that knows which HTTP calls are one intent is the one that formed the intent:
+ * the payment form, the offline mutation queue, the row the user tapped.
+ *
+ * So the rule is: mint the key once when the user commits to the action, PERSIST it alongside the
+ * pending mutation, reuse it for every retry of that action, and mint a fresh one for the next
+ * action. A second part-payment on the same bill is not a duplicate — it is more money, and it
+ * must get a new key and go through.
+ *
+ * The server honours it on the operations `docs/IDEMPOTENCY.md` lists (money, stock, and the
+ * clinical writes where a repeat creates a second real thing). A replayed answer is byte-identical
+ * to the first and carries `Idempotency-Replayed: true`. The same key with a DIFFERENT body is
+ * refused with `HMS-REQ-002` rather than silently replayed, so a key-reuse bug surfaces as an
+ * error instead of as a payment that never happened.
+ *
+ * Mobile: `crypto.randomUUID()` under Expo, stored in the queue row — nothing here needs a
+ * browser, a Node builtin, or a live connection to produce a key.
+ */
+export interface RequestOptions {
+  /** 8–128 chars of `[A-Za-z0-9_.:@+-]`. A UUID per user intent is the intended shape. */
+  idempotencyKey?: string;
+}
+
 export interface ApiClientOptions {
   /** Absolute (`http://apollo.paperlesstech.in:4000`) or same-origin (`""`). */
   baseUrl: string;
@@ -2516,6 +2544,7 @@ export class ApiClient {
     path: string,
     body?: unknown,
     retry = true,
+    options?: RequestOptions,
   ): Promise<{ data: T; meta?: PageMeta }> {
     const token = this.getAccessToken?.();
 
@@ -2525,6 +2554,13 @@ export class ApiClient {
     // The branch this request acts in (ADR-0015). Absent ⇒ the server treats it as aggregate mode.
     const activeBranch = this.getActiveBranch?.();
     if (activeBranch) headers["x-active-branch"] = activeBranch;
+    /**
+     * The caller's name for THIS intent (Doc 04 §5.1). Sent as given and never invented here —
+     * a key minted inside the client would be new on every call, which protects nothing: the
+     * two requests a double-click produces would carry two keys and the server would see two
+     * unrelated payments. Only the caller knows which attempts are the same intent.
+     */
+    if (options?.idempotencyKey) headers["idempotency-key"] = options.idempotencyKey;
 
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
@@ -2565,7 +2601,10 @@ export class ApiClient {
       // this request, so the user never sees a "could not load" on a screen they were using.
       if (error.isUnauthenticated && retry && this.onUnauthorized && !this.isAuthEndpoint(path)) {
         const recovered = await this.onUnauthorized();
-        if (recovered) return this.send<T>(method, path, body, false);
+        // The SAME key on the replay, deliberately: this is one intent that had to be sent
+        // twice, which is precisely the case the key exists for. A fresh key here would let a
+        // token that expired between the write and its response take the money a second time.
+        if (recovered) return this.send<T>(method, path, body, false, options);
       }
 
       throw error;
@@ -2574,8 +2613,13 @@ export class ApiClient {
     return { data: envelope.data as T, ...(envelope.meta ? { meta: envelope.meta } : {}) };
   }
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    return (await this.send<T>(method, path, body)).data;
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options?: RequestOptions,
+  ): Promise<T> {
+    return (await this.send<T>(method, path, body, true, options)).data;
   }
 
   private async paged<T>(path: string): Promise<Paged<T>> {
@@ -3310,8 +3354,11 @@ export class ApiClient {
   settleInsuranceClaim(
     id: string,
     input: { settledAmount: number; note?: string },
+    key?: string,
   ): Promise<InsuranceClaim> {
-    return this.request<InsuranceClaim>("POST", `/api/v1/insurance-claims/${id}/settle`, input);
+    return this.request<InsuranceClaim>("POST", `/api/v1/insurance-claims/${id}/settle`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /* ── vitals ── */
@@ -3804,18 +3851,23 @@ export class ApiClient {
    * double-clicking must not draw two tubes of blood, and a retry after a timeout is
    * the case a disabled button cannot save you from.
    */
-  placeOrder(input: {
-    encounterId: string;
-    category: OrderCategory;
-    code: string;
-    name: string;
-    priority?: OrderPriority;
-    notes?: string;
-    requestId?: string;
-    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
-    branchId?: string;
-  }): Promise<PlaceOrderResult> {
-    return this.request<PlaceOrderResult>("POST", "/api/v1/orders", input);
+  placeOrder(
+    input: {
+      encounterId: string;
+      category: OrderCategory;
+      code: string;
+      name: string;
+      priority?: OrderPriority;
+      notes?: string;
+      requestId?: string;
+      /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+      branchId?: string;
+    },
+    key?: string,
+  ): Promise<PlaceOrderResult> {
+    return this.request<PlaceOrderResult>("POST", "/api/v1/orders", input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /** `{ category: "lab", outstanding: true }` IS the lab's worklist. */
@@ -3885,8 +3937,15 @@ export class ApiClient {
   }
 
   /** Freezes the bill and assigns its number. After this the lines cannot move. */
-  finalizeBill(encounterId: string): Promise<Invoice> {
-    return this.request<Invoice>("POST", `/api/v1/encounters/${encounterId}/bill/finalize`, {});
+  finalizeBill(encounterId: string, key?: string): Promise<Invoice> {
+    return this.request<Invoice>(
+      "POST",
+      `/api/v1/encounters/${encounterId}/bill/finalize`,
+      {},
+      {
+        ...(key ? { idempotencyKey: key } : {}),
+      },
+    );
   }
 
   /** The tariff, WITH prices. Needs `billing:read` — the counter's view. */
@@ -3974,8 +4033,16 @@ export class ApiClient {
    */
   settleOrderFromAdvance(
     orderId: string,
+    key?: string,
   ): Promise<{ orderId: string; invoiceId: string; advanceBalance: number }> {
-    return this.request("POST", `/api/v1/billing/orders/${orderId}/settle-from-advance`, {});
+    return this.request(
+      "POST",
+      `/api/v1/billing/orders/${orderId}/settle-from-advance`,
+      {},
+      {
+        ...(key ? { idempotencyKey: key } : {}),
+      },
+    );
   }
 
   reportPharmacyStock(range: ReportRange): Promise<StockRegisterRow[]> {
@@ -4056,16 +4123,21 @@ export class ApiClient {
     return res.blob();
   }
 
-  postCharge(input: {
-    encounterId: string;
-    code: string;
-    category: ChargeCategory;
-    description?: string;
-    quantity?: number;
-    /** Paise. Overrides the tariff. */
-    unitPrice?: number;
-  }): Promise<unknown> {
-    return this.request("POST", "/api/v1/charges", input);
+  postCharge(
+    input: {
+      encounterId: string;
+      code: string;
+      category: ChargeCategory;
+      description?: string;
+      quantity?: number;
+      /** Paise. Overrides the tariff. */
+      unitPrice?: number;
+    },
+    key?: string,
+  ): Promise<unknown> {
+    return this.request("POST", "/api/v1/charges", input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /* ── Pharmacy medicine master & stock (needs pharmacy:stock) ──────────────── */
@@ -4367,11 +4439,13 @@ export class ApiClient {
        */
       creditOverride?: { reason: string };
     },
+    key?: string,
   ): Promise<DispenseResult> {
     return this.request<DispenseResult>(
       "POST",
       `/api/v1/prescriptions/${prescriptionId}/dispense`,
       input,
+      { ...(key ? { idempotencyKey: key } : {}) },
     );
   }
 
@@ -4412,28 +4486,43 @@ export class ApiClient {
   recordPayment(
     invoiceId: string,
     input: { amount: number; method: string; reference?: string; requestId?: string },
+    key?: string,
   ): Promise<Invoice> {
-    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, input);
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /**
    * Settles a bill from the patient's ADVANCE. A convenience over `recordPayment` — it is the
    * same endpoint with `method: "wallet"`, which draws the money from the wallet atomically.
    */
-  payFromWallet(invoiceId: string, amount: number, requestId?: string): Promise<Invoice> {
-    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/payments`, {
-      amount,
-      method: "wallet",
-      ...(requestId ? { requestId } : {}),
-    });
+  payFromWallet(
+    invoiceId: string,
+    amount: number,
+    requestId?: string,
+    key?: string,
+  ): Promise<Invoice> {
+    return this.request<Invoice>(
+      "POST",
+      `/api/v1/invoices/${invoiceId}/payments`,
+      { amount, method: "wallet", ...(requestId ? { requestId } : {}) },
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
   }
 
   /**
    * Applies an approved discount to a finalized bill. `amount` is PAISE. Needs `billing:discount`
    * (not the cashier's own authority — a write-down is approved, not self-served).
    */
-  applyDiscount(invoiceId: string, input: { amount: number; reason: string }): Promise<Invoice> {
-    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/discount`, input);
+  applyDiscount(
+    invoiceId: string,
+    input: { amount: number; reason: string },
+    key?: string,
+  ): Promise<Invoice> {
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/discount`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /**
@@ -4443,8 +4532,11 @@ export class ApiClient {
   recordRefund(
     invoiceId: string,
     input: { amount: number; method: string; reason: string; requestId?: string },
+    key?: string,
   ): Promise<Invoice> {
-    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/refund`, input);
+    return this.request<Invoice>("POST", `/api/v1/invoices/${invoiceId}/refund`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /**
@@ -4526,13 +4618,17 @@ export class ApiClient {
   }
 
   /** Takes an advance (OP or admission). `amount` is PAISE. Needs `wallet:manage`. */
-  depositToWallet(patientId: string, input: WalletDepositInput): Promise<Wallet> {
-    return this.request<Wallet>("POST", `/api/v1/patients/${patientId}/wallet/deposits`, input);
+  depositToWallet(patientId: string, input: WalletDepositInput, key?: string): Promise<Wallet> {
+    return this.request<Wallet>("POST", `/api/v1/patients/${patientId}/wallet/deposits`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /** Refunds advance to the patient (leftover on discharge). `amount` is PAISE. */
-  refundFromWallet(patientId: string, input: WalletRefundInput): Promise<Wallet> {
-    return this.request<Wallet>("POST", `/api/v1/patients/${patientId}/wallet/refunds`, input);
+  refundFromWallet(patientId: string, input: WalletRefundInput, key?: string): Promise<Wallet> {
+    return this.request<Wallet>("POST", `/api/v1/patients/${patientId}/wallet/refunds`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /* ── rbac ── */
