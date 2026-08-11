@@ -26,6 +26,14 @@
 #
 # Everything else here is unchanged in substance — same job, same checks, same
 # order — because the gate itself was right; it simply never got to prove it.
+#
+# ── THE SAME CHECKS, RUNNABLE BY HAND ───────────────────────────────────────
+# `pnpm gate` (root package.json) runs the steps below in this order, so the
+# release gate is one command on a developer machine and not seven remembered
+# ones. That matters more than usual while Actions is blocked: right now a human
+# running `pnpm gate` IS the gate. If you add or reorder a check here, change it
+# there too — they are deliberately the same list, and the only thing keeping
+# them the same is this sentence.
 name: CI
 
 on:
@@ -126,7 +134,10 @@ jobs:
         run: |
           docker run -d --name mongo -p 27017:27017 mongo:7 \
             mongod --replSet rs0 --bind_ip_all
-          for i in $(seq 1 30); do
+          # `_` rather than `i`: the counter is never read, and shellcheck (via
+          # actionlint) is right to say so — a warning left standing is a warning
+          # nobody reads the next time.
+          for _ in $(seq 1 30); do
             docker exec mongo mongosh --quiet --eval 'db.adminCommand({ping:1})' >/dev/null 2>&1 && break
             sleep 1
           done
@@ -135,7 +146,7 @@ jobs:
           # Wait for the primary to be elected — an RS that has not finished electing
           # rejects writes, and the first test would fail for a reason that has
           # nothing to do with the test.
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break
             sleep 1
           done

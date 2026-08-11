@@ -175,6 +175,96 @@ The OOM caveat recorded above is therefore **local only**, and **no alternative 
 is needed** — the full suite runs as one job, exactly as written, with no coverage sacrificed and
 nothing split, sharded or skipped.
 
+### The workflow validated as a workflow
+
+`actionlint` (which runs shellcheck over every `run:` block) reports **no issues**. That covers the
+YAML, every `${{ }}` expression including the `cancel-in-progress` condition, the inputs of all
+three actions, the service definitions, and the shell in each step. It found one real thing on the
+way — an unused loop counter in the MongoDB wait, fixed — and a linter left with one standing
+warning is a linter whose next warning nobody reads.
+
+```
+docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:latest    # exit 0, no output
+```
+
+### `pnpm gate` — the same checks, runnable by hand
+
+While Actions is blocked, **a human running the gate IS the gate**, and it was seven commands in a
+particular order that only the YAML recorded. `pnpm gate` now runs exactly the sequence the workflow
+runs — format, lint, typecheck, unit, integration, build, boundaries. Not a second test strategy:
+the same package scripts CI invokes, in CI's order, so the two can be compared by reading them.
+(The name was checked against pnpm's built-ins first — `Command "gate" not found` — which is the
+test `scripts/verify.mjs` documents after `pnpm audit` and `pnpm doctor` were both silently
+shadowed.)
+
+`pnpm verify` is unrelated and stays as it is: it answers "is my local stack running" — Docker, DNS,
+CORS, a real login — not "is this releasable".
+
+### Branch protection
+
+Written up concretely in [`.github/BRANCH_PROTECTION.md`](.github/BRANCH_PROTECTION.md) — the exact
+settings, the `gh` commands, and the order to apply them in. Nothing has been applied. Three points
+from it worth surfacing here:
+
+- **The required check is `ci`, lowercase** — the job id, not the workflow name. `CI` would never
+  match and the branch would wait forever.
+- **Do not require an approving review while there is one maintainer.** GitHub does not let you
+  approve your own PR, so `required_approving_review_count: 1` on a solo repository means nothing
+  can ever merge. Same shape of trap as requiring a check that cannot run.
+- **`squash_merge_commit_title=PR_TITLE` is load-bearing** and is a repository setting, not a
+  branch rule. CI lints the PR title because squash-merge makes it the commit message on `main`;
+  under GitHub's default a single-commit PR uses the commit message instead, and the thing CI
+  validated is no longer the thing that lands.
+
+### 🔴 The release gate is GREEN but NOT DETERMINISTIC
+
+Repeated full runs found an **intermittent failure in `rbac.int.test.ts`, roughly 1 run in 4**. It
+was not introduced by this milestone — the earlier `1363/1363` results in this document are real,
+but they were samples of a suite that does not always agree with itself, and reporting them without
+this paragraph would have been reporting luck as a property.
+
+Two manifestations seen so far, both in the same file:
+
+| Symptom                                                                                               | Reading                                                             |
+| ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `DOCTOR may NOT POST /api/v1/invoices/:id/discount` — **timed out after 20 s**                        | Unambiguously environmental: the machine was running 31 containers. |
+| `a user with no role…` — `POST /api/v1/package-enrollments/:id/cancel` returned **404**, expected 403 | **Not yet explained.** See below.                                   |
+
+What was established about the 404, so the next person does not repeat it:
+
+- Tenant resolution is **not** the cause — it returns 404, but the access log for a comparable
+  request carries `tenant` and `userId`, so resolution succeeded.
+- The entitlement and permission layers are **not** the cause — both refuse with **403**
+  (`HMS-PLAN-002`, `HMS-AUTH-005`), never 404.
+- The catch-all `notFoundHandler` is **not** the cause — it would log the unmatched path with the
+  literal ObjectId in it, and no such line exists in the run.
+- Most tellingly: in the failing run the unroled user's request to that route produced **no access
+  log line at all** (5 lines for that route where a passing run has 6), even though `requestLog` is
+  the third middleware in `app.ts` and registers its `finish` handler before anything can answer.
+
+So the request appears not to have completed through the normal chain, while the test still observed
+a 404. Root cause **not established**; it is recorded here rather than guessed at.
+
+**This must be resolved before `ci` becomes a required status check.** A gate that is red one run in
+four teaches everyone to press re-run, which is the failure mode this whole milestone exists to
+avoid — and the one warned about at the top of this section.
+
+**The discriminating experiment was run.** The same suite, six consecutive times, against **fresh,
+private** Mongo/Redis/Mailhog in a container sharing one network namespace — CI's topology:
+
+```
+isolated run 1..6:  Tests  1181 passed (1181)   ×6
+```
+
+Six passes, against **1 failure in 3** on the long-lived shared dev containers. That points away
+from the test code and towards the **state or health of the dev infrastructure** — a Mongo that has
+been running for weeks and OOM-killed repeatedly, versus one that starts clean. CI always starts
+clean, so CI is the favourable case.
+
+Stated honestly, this is **suggestive, not conclusive**: if the true per-run failure rate were the
+observed 1-in-3, six consecutive passes would still happen by chance about 9% of the time. It is
+evidence, not proof, and the finding stays open until a green run is seen on a real runner.
+
 ### What is still open
 
 1. **The billing lock.** Until it is cleared, nothing below can happen. A **self-hosted runner on
