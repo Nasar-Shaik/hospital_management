@@ -134,6 +134,67 @@ function normalise(schema: JsonSchema): JsonSchema {
 
 const isObject = (v: unknown): v is JsonSchema => typeof v === "object" && v !== null;
 
+/**
+ * Inlines every `$ref` that does not name a component.
+ *
+ * ── WHY THE GENERATOR PRODUCES REFS NOBODY CAN FOLLOW ───────────────────────
+ * `zod-to-json-schema` de-duplicates structurally identical sub-schemas by pointing the second
+ * one at the first, wherever the first happened to land:
+ *
+ *     VisitReport.byClass.items  →  #/components/schemas/DischargeRegister/properties/…/items
+ *     BedBoardWard.counts        →  #/components/schemas/BedBoard/properties/totals
+ *
+ * Both are legal JSON Pointers and neither is usable OpenAPI. A generator expects `$ref` to name
+ * a component; pointed into another component's guts it produces a broken type or nothing at all.
+ * Worse, it invents coupling: a visit report would document itself in terms of the discharge
+ * register purely because two anonymous `{ key, count }` shapes coincided, so renaming a field on
+ * one would silently retype the other.
+ *
+ * `$refStrategy: "none"` removes these — and also removes the refs to real components, which are
+ * the point. So they are resolved here instead: a NAMED contract stays a `$ref`, an anonymous
+ * duplicate is written out in full. Repeated because a resolved target can contain one of its own;
+ * the cap is a guard against a cycle, which the schemas do not currently contain.
+ */
+function inlineNonComponentRefs(doc: Record<string, unknown>): void {
+  const isComponentRef = (ref: string): boolean => /^#\/components\/schemas\/[^/]+$/.test(ref);
+
+  const resolvePointer = (ref: string): unknown => {
+    let node: unknown = doc;
+    for (const raw of ref.replace(/^#\//, "").split("/")) {
+      const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+      if (!isObject(node)) return undefined;
+      node = (node as Record<string, unknown>)[segment];
+    }
+    return node;
+  };
+
+  for (let pass = 0; pass < 8; pass += 1) {
+    let replaced = 0;
+
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item);
+        return;
+      }
+      if (!isObject(node)) return;
+
+      const ref = node.$ref;
+      if (typeof ref === "string" && !isComponentRef(ref)) {
+        const target = resolvePointer(ref);
+        if (isObject(target)) {
+          delete node.$ref;
+          Object.assign(node, structuredClone(target));
+          replaced += 1;
+        }
+      }
+      for (const value of Object.values(node)) walk(value);
+    };
+
+    walk(doc);
+    if (replaced === 0) return;
+  }
+}
+
 /** The registered contracts, converted once, for `components/schemas`. */
 function namedContracts(): Record<string, JsonSchema> {
   const registry = contractRegistry();
@@ -169,13 +230,11 @@ function successResponse(tag: ResponseTag): JsonSchema {
    * data schema — because there is no `data`, not because nobody got round to it.
    */
   if (!tag.schema) {
+    const body = tag.mediaSchema ?? { type: "string", format: "binary" };
     return {
       description: tag.description ?? "Success.",
       content: Object.fromEntries(
-        (tag.media ?? ["application/octet-stream"]).map((type) => [
-          type,
-          { schema: { type: "string", format: "binary" } },
-        ]),
+        (tag.media ?? ["application/octet-stream"]).map((type) => [type, { schema: body }]),
       ),
     };
   }
@@ -299,9 +358,15 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
        */
       responses: {
         ...(response
-          ? Object.fromEntries(
-              response.statuses.map((code) => [String(code), successResponse(response)]),
-            )
+          ? Object.fromEntries([
+              ...response.statuses.map((code) => [String(code), successResponse(response)]),
+              // A download that can legitimately answer something other than 200 — an absent
+              // logo, say — says so here rather than leaving the caller to discover it.
+              ...(response.also ?? []).map((r) => [
+                String(r.status),
+                { description: r.description },
+              ]),
+            ])
           : { "200": { description: "Success — `{ success: true, data }`." } }),
         ...(Object.keys(validation).length > 0
           ? {
@@ -330,7 +395,7 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
     paths[oapiPath][route.method.toLowerCase()] = operation;
   }
 
-  return {
+  const document: Record<string, unknown> = {
     openapi: "3.1.0",
     info: {
       title: opts.title ?? "MediCore HMS API",
@@ -391,6 +456,9 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
     },
     paths,
   };
+
+  inlineNonComponentRefs(document);
+  return document;
 }
 
 /** Builds the spec straight from a live Express app. */

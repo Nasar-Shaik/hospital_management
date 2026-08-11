@@ -105,6 +105,10 @@ export interface ResponseTag {
   meta: boolean;
   /** Media types, for a response that is bytes rather than the JSON envelope. */
   media?: string[];
+  /** The body schema for those media types. Defaults to opaque bytes. */
+  mediaSchema?: Record<string, unknown>;
+  /** Other statuses this route answers with — a download that can legitimately 404. */
+  also?: { status: number; description: string }[];
   description?: string;
 }
 

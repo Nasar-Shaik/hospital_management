@@ -137,11 +137,14 @@ describe("branch-aware resources carry branchId the whole way through", () => {
 describe("what the contract deliberately does NOT claim", () => {
   it("documents the five non-JSON responses by media type rather than inventing a schema", () => {
     const paths = (spec as unknown as { paths: Record<string, Record<string, unknown>> }).paths;
+    // The wildcard is the accurate answer for the three that echo back a stored `contentType`:
+    // it is a free string at upload, so naming PDF or images would document a rule nothing
+    // enforces and a client would code against.
     const nonJson = [
       ["/api/v1/audit/export", "text/csv"],
-      ["/api/v1/documents/{id}/file", "application/pdf"],
-      ["/api/v1/reports/{id}/file", "application/pdf"],
-      ["/api/v1/site/logo", "image/*"],
+      ["/api/v1/documents/{id}/file", "*/*"],
+      ["/api/v1/reports/{id}/file", "*/*"],
+      ["/api/v1/site/logo", "*/*"],
       ["/api/v1/openapi.json", "application/json"],
     ] as const;
 
@@ -155,5 +158,23 @@ describe("what the contract deliberately does NOT claim", () => {
       // "nobody got round to this one".
       expect(ok?.description.length).toBeGreaterThan(20);
     }
+  });
+
+  it("the spec document is an object, not a byte stream", () => {
+    const paths = (spec as unknown as { paths: Record<string, Record<string, unknown>> }).paths;
+    const op = paths["/api/v1/openapi.json"]?.get as {
+      responses: Record<string, { content: Record<string, { schema: { type: string } }> }>;
+    };
+    // `format: binary` here would tell a generator to hand callers a Blob for a JSON document.
+    expect(op.responses["200"]?.content["application/json"]?.schema.type).toBe("object");
+  });
+
+  it("the logo documents its empty 404, because that route does not use the error envelope", () => {
+    const paths = (spec as unknown as { paths: Record<string, Record<string, unknown>> }).paths;
+    const op = paths["/api/v1/site/logo"]?.get as {
+      responses: Record<string, { description: string; content?: unknown }>;
+    };
+    expect(op.responses["404"]).toBeDefined();
+    expect(op.responses["404"]?.content).toBeUndefined();
   });
 });

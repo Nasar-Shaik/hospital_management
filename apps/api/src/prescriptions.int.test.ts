@@ -947,3 +947,74 @@ describe("an allergy blocks the signature until it is acknowledged", () => {
     expect(res.body.data.safetyOverride).toBeUndefined();
   });
 });
+
+/**
+ * ── WHAT THE WIRE MUST NEVER CARRY AGAIN ─────────────────────────────────────
+ *
+ * Two defects found by the response contract in Phase 2, both invisible to every test that
+ * existed. Both had the same cause and it is worth naming: a repository mapper that is correct
+ * for the object a `.lean()` READ returns and wrong for the hydrated document `create()` returns.
+ * Seven of eight paths were lean, so seven of eight were right.
+ *
+ * These tests assert the shape of the CREATE response specifically, because that is the path that
+ * was broken and the path no assertion had ever looked at.
+ */
+describe("the create response is the shape the contract promises", () => {
+  it("a prescription's lines are the prescription's lines — never Mongoose's internals", async () => {
+    const encounterId = await arrive(pvt, "Serialization Check", "9400200001");
+
+    const res = await auth(request(app).post("/api/v1/prescriptions"), pvt, pvt.doctorToken)
+      .send({ encounterId, lines: [PARACETAMOL] })
+      .expect(201);
+
+    const line = (res.body as { data: { lines: Record<string, unknown>[] } }).data.lines[0];
+
+    // What a client actually needs off a freshly created prescription.
+    expect(line).toMatchObject({
+      drugCode: PARACETAMOL.drugCode,
+      drugName: PARACETAMOL.drugName,
+      dose: PARACETAMOL.dose,
+      route: PARACETAMOL.route,
+      frequency: PARACETAMOL.frequency,
+      quantity: PARACETAMOL.quantity,
+      dispensedQty: 0,
+    });
+
+    /**
+     * The regression itself. `{ ...subdocument }` copied Mongoose's internals instead of the
+     * fields, so this endpoint answered with `__parentArray`, `__index` and a `$__parent` that
+     * carried the ENTIRE raw document — `tenantId` included — back to the caller. The drug code
+     * and dose a pharmacist needs were not in the payload at all.
+     */
+    for (const forbidden of ["__parentArray", "__index", "$__parent", "$__", "_doc", "$isNew"]) {
+      expect(Object.keys(line ?? {})).not.toContain(forbidden);
+    }
+    // Nothing anywhere in the response may leak the tenant id.
+    expect(JSON.stringify(res.body)).not.toContain(pvt.id);
+  });
+
+  it("an ordinary dispense carries no creditOverride at all — not an empty one", async () => {
+    const encounterId = await arrive(pvt, "Credit Override Check", "9400200002");
+    const rx = await draft(pvt, encounterId, [PARACETAMOL]);
+    await sign(pvt, rx);
+
+    const res = await dispense(pvt, rx.id, [{ lineIndex: 0, quantity: 5 }]);
+    expect(res.status).toBe(201);
+
+    const dispensed = (res.body as { data: { dispense: Record<string, unknown> } }).data.dispense;
+
+    /**
+     * `creditOverride` is declared as a nested path GROUP rather than a subdocument, so a
+     * hydrated document materializes it whether or not anything was ever set. Every handover was
+     * answering with `creditOverride: {}` — an empty object where the type promises either a
+     * complete authorisation record or nothing at all, and where a client reading
+     * `if (d.creditOverride)` would conclude that ordinary medicine had been dispensed on credit.
+     *
+     * The populated case needs no assertion here: the response contract requires all four fields
+     * together, and `ok()` parses every payload against it outside production — so a partial
+     * override cannot reach a caller without failing the suite that produced it.
+     */
+    expect(dispensed).not.toHaveProperty("creditOverride");
+    expect(Object.keys(dispensed)).not.toContain("creditOverride");
+  });
+});

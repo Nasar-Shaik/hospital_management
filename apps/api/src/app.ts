@@ -216,11 +216,15 @@ export function createApp(logger: Logger): Express {
   v1Router.get(
     "/openapi.json",
     authenticate(),
-    respondsFile(
-      ["application/json"],
-      "This document — the OpenAPI 3.1 description of the API. Deliberately NOT enveloped: " +
+    respondsFile({
+      media: ["application/json"],
+      // An OpenAPI document, not a byte stream — `format: binary` would have told a generator to
+      // hand callers a Blob. Left as a free-form object rather than inlining the 3.1 meta-schema.
+      schema: { type: "object", additionalProperties: true },
+      description:
+        "This document — the OpenAPI 3.1 description of the API. Deliberately NOT enveloped: " +
         "tooling expects a spec at the root of the response, not inside `data`.",
-    ),
+    }),
     asyncHandler((req: Request, res: Response) => {
       openApiCache ??= specFromApp(req.app);
       res.json(openApiCache);

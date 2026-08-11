@@ -69,10 +69,33 @@ export function responds(schema: ZodTypeAny, opts: RespondsOptions = {}) {
  * from an operation somebody simply forgot to document; a reader of the spec could not tell
  * "returns a PDF" from "unknown". So each names its media type and what the bytes are.
  *
+ * ── THE MEDIA TYPE HAS TO BE THE ONE THE SERVER SENDS ───────────────────────
+ * These first said `application/pdf` and `image/*`, which read plausibly and was not true: an
+ * upload's `contentType` is a free string and the download echoes back whatever was stored, so
+ * the honest declaration is the wildcard media type, with the rule written down. A media type
+ * nobody enforces is a documented constraint a client codes against and the server violates.
+ *
  * There is no runtime check here — there is no `data` to parse, and `ok()` is not involved.
  */
-export function respondsFile(mediaTypes: string[], description: string) {
-  const tag: ResponseTag = { statuses: [200], meta: false, media: mediaTypes, description };
+export interface FileResponse {
+  /** The media types this route can actually answer with. */
+  media: string[];
+  description: string;
+  /** The body's schema for those media types. Defaults to opaque bytes. */
+  schema?: Record<string, unknown>;
+  /** Other statuses this route answers with, and what they mean. */
+  also?: { status: number; description: string }[];
+}
+
+export function respondsFile(spec: FileResponse) {
+  const tag: ResponseTag = {
+    statuses: [200],
+    meta: false,
+    media: spec.media,
+    description: spec.description,
+    ...(spec.schema ? { mediaSchema: spec.schema } : {}),
+    ...(spec.also ? { also: spec.also } : {}),
+  };
   const handler = (_req: Request, _res: Response, next: NextFunction): void => {
     next();
   };

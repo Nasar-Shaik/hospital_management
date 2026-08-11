@@ -30,10 +30,21 @@ export function siteRouter(): Router {
   // Public — the logo is shown on the logged-out login page and the public site.
   router.get(
     "/site/logo",
-    respondsFile(
-      ["image/*"],
-      "The hospital logo. 404 when none has been uploaded — check `hasLogo` on `GET /site` first.",
-    ),
+    respondsFile({
+      media: ["*/*"],
+      description:
+        "The hospital logo, served with the content type it was uploaded with and cached for " +
+        "five minutes. Public: no token, tenant resolved from the host.",
+      also: [
+        {
+          status: 404,
+          description:
+            "No logo has been uploaded. The body is EMPTY — this one route answers a bare 404 " +
+            "rather than the error envelope, so a client must not try to parse it. `hasLogo` on " +
+            "`GET /site` is the cheap way to know in advance.",
+        },
+      ],
+    }),
     asyncHandler(controller.publicLogo),
   );
 

@@ -503,10 +503,30 @@
         "type": "object",
         "properties": {
           "from": {
-            "$ref": "#/components/schemas/Appointment/properties/status"
+            "type": "string",
+            "enum": [
+              "requested",
+              "confirmed",
+              "checked_in",
+              "in_consultation",
+              "completed",
+              "cancelled",
+              "no_show",
+              "rescheduled"
+            ]
           },
           "to": {
-            "$ref": "#/components/schemas/Appointment/properties/status"
+            "type": "string",
+            "enum": [
+              "requested",
+              "confirmed",
+              "checked_in",
+              "in_consultation",
+              "completed",
+              "cancelled",
+              "no_show",
+              "rescheduled"
+            ]
           },
           "at": {
             "type": "string"
@@ -583,28 +603,36 @@
                 "enum": ["low", "normal", "high"]
               },
               "diastolic": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "pulse": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "respiratoryRate": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "temperature": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "spo2": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "weightKg": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "heightCm": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               },
               "painScore": {
-                "$ref": "#/components/schemas/AssessedVitals/properties/flags/properties/systolic"
+                "type": "string",
+                "enum": ["low", "normal", "high"]
               }
             }
           },
@@ -1116,7 +1144,22 @@
             }
           },
           "counts": {
-            "$ref": "#/components/schemas/BedBoard/properties/totals"
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "number"
+              },
+              "free": {
+                "type": "number"
+              },
+              "occupied": {
+                "type": "number"
+              },
+              "blocked": {
+                "type": "number"
+              }
+            },
+            "required": ["total", "free", "occupied", "blocked"]
           }
         },
         "required": ["wardId", "name", "kind", "status", "tariffCode", "beds", "counts"]
@@ -1134,7 +1177,7 @@
             "type": "integer"
           },
           "total": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "invoice": {
             "$ref": "#/components/schemas/Invoice"
@@ -1229,16 +1272,26 @@
             "type": "string"
           },
           "category": {
-            "$ref": "#/components/schemas/CatalogueItem/properties/category"
+            "type": "string",
+            "enum": [
+              "consultation",
+              "lab",
+              "radiology",
+              "pharmacy",
+              "procedure",
+              "bed",
+              "package",
+              "other"
+            ]
           },
           "quantity": {
             "type": "number"
           },
           "listPrice": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "amount": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "source": {
             "type": "string",
@@ -1292,7 +1345,8 @@
             "enum": ["draft", "submitted", "approved", "partially_approved", "rejected", "settled"]
           },
           "to": {
-            "$ref": "#/components/schemas/ClaimStatusChange/properties/from"
+            "type": "string",
+            "enum": ["draft", "submitted", "approved", "partially_approved", "rejected", "settled"]
           },
           "at": {
             "type": "string"
@@ -1339,7 +1393,7 @@
                   "type": "string"
                 },
                 "amount": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "count": {
                   "type": "number"
@@ -1357,7 +1411,7 @@
                   "type": "string"
                 },
                 "amount": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "count": {
                   "type": "number"
@@ -1367,7 +1421,7 @@
             }
           },
           "settledFromAdvance": {
-            "$ref": "#/components/schemas/CollectionsReport/properties/total"
+            "type": "integer"
           }
         },
         "required": ["total", "count", "byMonth", "byMethod", "settledFromAdvance"]
@@ -1506,28 +1560,28 @@
         "type": "object",
         "properties": {
           "id": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/id"
+            "type": "string"
           },
           "name": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/name"
+            "type": "string"
           },
           "last4": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/last4"
+            "type": "string"
           },
           "createdBy": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/createdBy"
+            "type": "string"
           },
           "createdAt": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/createdAt"
+            "type": "string"
           },
           "expiresAt": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/expiresAt"
+            "type": "string"
           },
           "revokedAt": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/revokedAt"
+            "type": "string"
           },
           "lastUsedAt": {
-            "$ref": "#/components/schemas/ApiKeyMeta/properties/lastUsedAt"
+            "type": "string"
           },
           "key": {
             "type": "string"
@@ -2124,7 +2178,7 @@
         "type": "object",
         "properties": {
           "totalOutstanding": {
-            "$ref": "#/components/schemas/CollectionsReport/properties/total"
+            "type": "integer"
           },
           "invoiceCount": {
             "type": "number"
@@ -2139,7 +2193,7 @@
                   "enum": ["0-30", "31-60", "61-90", "90+"]
                 },
                 "amount": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "count": {
                   "type": "number"
@@ -2169,7 +2223,7 @@
                   "type": "string"
                 },
                 "outstanding": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "ageDays": {
                   "type": "number"
@@ -2439,7 +2493,7 @@
                 }
               },
               "total": {
-                "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+                "type": "integer"
               }
             },
             "required": ["lines", "total"]
@@ -2451,16 +2505,16 @@
             }
           },
           "totalBilled": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "totalPaid": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "grandTotal": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "outstanding": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           }
         },
         "required": ["pending", "invoices", "totalBilled", "totalPaid", "grandTotal", "outstanding"]
@@ -2493,10 +2547,32 @@
         "type": "object",
         "properties": {
           "from": {
-            "$ref": "#/components/schemas/Encounter/properties/status"
+            "type": "string",
+            "enum": [
+              "planned",
+              "arrived",
+              "in_queue",
+              "in_progress",
+              "awaiting_results",
+              "closed",
+              "cancelled",
+              "left_without_being_seen",
+              "admitted"
+            ]
           },
           "to": {
-            "$ref": "#/components/schemas/Encounter/properties/status"
+            "type": "string",
+            "enum": [
+              "planned",
+              "arrived",
+              "in_queue",
+              "in_progress",
+              "awaiting_results",
+              "closed",
+              "cancelled",
+              "left_without_being_seen",
+              "admitted"
+            ]
           },
           "at": {
             "type": "string"
@@ -2518,7 +2594,8 @@
             "enum": ["open", "in_progress", "resolved", "closed"]
           },
           "to": {
-            "$ref": "#/components/schemas/FeedbackStatusChange/properties/from"
+            "type": "string",
+            "enum": ["open", "in_progress", "resolved", "closed"]
           },
           "at": {
             "type": "string"
@@ -2583,7 +2660,8 @@
             "enum": ["low", "medium", "high"]
           },
           "status": {
-            "$ref": "#/components/schemas/FeedbackStatusChange/properties/from"
+            "type": "string",
+            "enum": ["open", "in_progress", "resolved", "closed"]
           },
           "assignedTo": {
             "type": "string"
@@ -2749,34 +2827,44 @@
         "type": "object",
         "properties": {
           "id": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/id"
+            "type": "string"
           },
           "slug": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/slug"
+            "type": "string"
           },
           "hospitalName": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/hospitalName"
+            "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/status"
+            "type": "string",
+            "enum": [
+              "provisioning",
+              "trial",
+              "active",
+              "suspended",
+              "expired",
+              "terminated",
+              "exported",
+              "purged"
+            ]
           },
           "planCode": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/planCode"
+            "type": "string"
           },
           "databaseName": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/databaseName"
+            "type": "string"
           },
           "maxBranches": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/maxBranches"
+            "type": "number"
           },
           "customDomain": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/customDomain"
+            "type": "string"
           },
           "license": {
             "$ref": "#/components/schemas/LicenseView"
           },
           "url": {
-            "$ref": "#/components/schemas/HospitalDetail/properties/url"
+            "type": "string"
           }
         },
         "required": ["id", "slug", "hospitalName", "status", "databaseName", "license", "url"]
@@ -2831,13 +2919,14 @@
             "type": "integer"
           },
           "approvedAmount": {
-            "$ref": "#/components/schemas/InsuranceClaim/properties/claimedAmount"
+            "type": "integer"
           },
           "settledAmount": {
-            "$ref": "#/components/schemas/InsuranceClaim/properties/claimedAmount"
+            "type": "integer"
           },
           "status": {
-            "$ref": "#/components/schemas/ClaimStatusChange/properties/from"
+            "type": "string",
+            "enum": ["draft", "submitted", "approved", "partially_approved", "rejected", "settled"]
           },
           "notes": {
             "type": "string"
@@ -2905,7 +2994,7 @@
             "type": "string"
           },
           "sumInsured": {
-            "$ref": "#/components/schemas/InsuranceClaim/properties/claimedAmount"
+            "type": "integer"
           },
           "status": {
             "type": "string",
@@ -2949,28 +3038,28 @@
             }
           },
           "subtotal": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "discount": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "discountReason": {
             "type": "string"
           },
           "total": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "paid": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "coveredByInsurer": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "insurerPolicyId": {
             "type": "string"
           },
           "patientResponsibility": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "payments": {
             "type": "array",
@@ -2985,7 +3074,7 @@
             }
           },
           "refunded": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "finalizedAt": {
             "type": "string"
@@ -3027,16 +3116,26 @@
             "type": "string"
           },
           "category": {
-            "$ref": "#/components/schemas/CatalogueItem/properties/category"
+            "type": "string",
+            "enum": [
+              "consultation",
+              "lab",
+              "radiology",
+              "pharmacy",
+              "procedure",
+              "bed",
+              "package",
+              "other"
+            ]
           },
           "quantity": {
             "type": "number"
           },
           "listPrice": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "amount": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           }
         },
         "required": ["code", "description", "category", "quantity", "listPrice", "amount"]
@@ -3576,7 +3675,8 @@
             "type": "string"
           },
           "channel": {
-            "$ref": "#/components/schemas/Notification/properties/channel"
+            "type": "string",
+            "enum": ["email", "sms", "whatsapp", "push", "inapp"]
           },
           "description": {
             "type": "string"
@@ -3662,7 +3762,8 @@
               "roles": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/OperatorIdentity/properties/roles/items"
+                  "type": "string",
+                  "enum": ["SUPER_ADMIN", "SUPPORT"]
                 }
               },
               "mustChangePassword": {
@@ -3798,10 +3899,28 @@
         "type": "object",
         "properties": {
           "from": {
-            "$ref": "#/components/schemas/Order/properties/status"
+            "type": "string",
+            "enum": [
+              "placed",
+              "accepted",
+              "in_progress",
+              "completed",
+              "verified",
+              "released",
+              "cancelled"
+            ]
           },
           "to": {
-            "$ref": "#/components/schemas/Order/properties/status"
+            "type": "string",
+            "enum": [
+              "placed",
+              "accepted",
+              "in_progress",
+              "completed",
+              "verified",
+              "released",
+              "cancelled"
+            ]
           },
           "at": {
             "type": "string"
@@ -3818,7 +3937,8 @@
       "OrderPaymentStates": {
         "type": "object",
         "additionalProperties": {
-          "$ref": "#/components/schemas/ConsultationPaymentStates/additionalProperties"
+          "type": "string",
+          "enum": ["paid", "unpaid", "unbilled", "free"]
         }
       },
       "OrderResultValue": {
@@ -3852,10 +3972,10 @@
             "type": "boolean"
           },
           "advanceBalance": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "amount": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           }
         },
         "required": ["admitted", "advanceBalance", "amount"]
@@ -3876,7 +3996,7 @@
             "type": "string"
           },
           "advanceBalance": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           }
         },
         "required": ["orderId", "invoiceId", "advanceBalance"]
@@ -3974,7 +4094,7 @@
             "type": "string"
           },
           "price": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "includedCodes": {
             "type": "array",
@@ -4004,7 +4124,7 @@
             "type": "string"
           },
           "price": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "includedCodes": {
             "type": "array",
@@ -4149,7 +4269,7 @@
         "type": "object",
         "properties": {
           "amount": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "method": {
             "type": "string"
@@ -4279,7 +4399,8 @@
           "roles": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/OperatorIdentity/properties/roles/items"
+              "type": "string",
+              "enum": ["SUPER_ADMIN", "SUPPORT"]
             }
           },
           "status": {
@@ -4427,10 +4548,26 @@
         "type": "object",
         "properties": {
           "from": {
-            "$ref": "#/components/schemas/Prescription/properties/status"
+            "type": "string",
+            "enum": [
+              "draft",
+              "signed",
+              "partially_dispensed",
+              "dispensed",
+              "discarded",
+              "cancelled"
+            ]
           },
           "to": {
-            "$ref": "#/components/schemas/Prescription/properties/status"
+            "type": "string",
+            "enum": [
+              "draft",
+              "signed",
+              "partially_dispensed",
+              "dispensed",
+              "discarded",
+              "cancelled"
+            ]
           },
           "at": {
             "type": "string"
@@ -4539,25 +4676,31 @@
         "type": "object",
         "properties": {
           "hospitalName": {
-            "$ref": "#/components/schemas/EditableSite/properties/hospitalName"
+            "type": "string"
           },
           "displayName": {
-            "$ref": "#/components/schemas/EditableSite/properties/displayName"
+            "type": "string"
           },
           "accentColor": {
-            "$ref": "#/components/schemas/EditableSite/properties/accentColor"
+            "type": "string"
           },
           "tagline": {
-            "$ref": "#/components/schemas/EditableSite/properties/tagline"
+            "type": "string"
           },
           "about": {
-            "$ref": "#/components/schemas/EditableSite/properties/about"
+            "type": "string"
           },
           "services": {
-            "$ref": "#/components/schemas/EditableSite/properties/services"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteService"
+            }
           },
           "stats": {
-            "$ref": "#/components/schemas/EditableSite/properties/stats"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteStat"
+            }
           },
           "contact": {
             "$ref": "#/components/schemas/SiteContact"
@@ -4566,13 +4709,13 @@
             "$ref": "#/components/schemas/SiteSocial"
           },
           "metaDescription": {
-            "$ref": "#/components/schemas/EditableSite/properties/metaDescription"
+            "type": "string"
           },
           "hasLogo": {
-            "$ref": "#/components/schemas/EditableSite/properties/hasLogo"
+            "type": "boolean"
           },
           "published": {
-            "$ref": "#/components/schemas/EditableSite/properties/published"
+            "type": "boolean"
           },
           "announcement": {
             "$ref": "#/components/schemas/SiteAnnouncement"
@@ -4623,7 +4766,7 @@
             "type": "string"
           },
           "amount": {
-            "$ref": "#/components/schemas/CollectionsReport/properties/total"
+            "type": "integer"
           },
           "method": {
             "type": "string"
@@ -4647,7 +4790,7 @@
         "type": "object",
         "properties": {
           "amount": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "method": {
             "type": "string"
@@ -4767,7 +4910,7 @@
         "type": "object",
         "properties": {
           "total": {
-            "$ref": "#/components/schemas/CollectionsReport/properties/total"
+            "type": "integer"
           },
           "count": {
             "type": "number"
@@ -4781,7 +4924,7 @@
                   "type": "string"
                 },
                 "amount": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "count": {
                   "type": "number"
@@ -4799,7 +4942,7 @@
                   "type": "string"
                 },
                 "amount": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "count": {
                   "type": "number"
@@ -4826,7 +4969,7 @@
                   "type": "string"
                 },
                 "amount": {
-                  "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                  "type": "integer"
                 },
                 "count": {
                   "type": "number"
@@ -4996,10 +5139,20 @@
             "type": "string"
           },
           "category": {
-            "$ref": "#/components/schemas/CatalogueItem/properties/category"
+            "type": "string",
+            "enum": [
+              "consultation",
+              "lab",
+              "radiology",
+              "pharmacy",
+              "procedure",
+              "bed",
+              "package",
+              "other"
+            ]
           },
           "price": {
-            "$ref": "#/components/schemas/BillPreview/properties/subtotal"
+            "type": "integer"
           },
           "followUpDays": {
             "type": "number"
@@ -5369,49 +5522,60 @@
         "type": "object",
         "properties": {
           "id": {
-            "$ref": "#/components/schemas/Medicine/properties/id"
+            "type": "string"
           },
           "code": {
-            "$ref": "#/components/schemas/Medicine/properties/code"
+            "type": "string"
           },
           "name": {
-            "$ref": "#/components/schemas/Medicine/properties/name"
+            "type": "string"
           },
           "manufacturer": {
-            "$ref": "#/components/schemas/Medicine/properties/manufacturer"
+            "type": "string"
           },
           "generic": {
-            "$ref": "#/components/schemas/Medicine/properties/generic"
+            "type": "string"
           },
           "form": {
-            "$ref": "#/components/schemas/Medicine/properties/form"
+            "type": "string",
+            "enum": [
+              "tablet",
+              "capsule",
+              "syrup",
+              "injection",
+              "ointment",
+              "drops",
+              "inhaler",
+              "sachet",
+              "other"
+            ]
           },
           "strength": {
-            "$ref": "#/components/schemas/Medicine/properties/strength"
+            "type": "string"
           },
           "unitsPerSheet": {
-            "$ref": "#/components/schemas/Medicine/properties/unitsPerSheet"
+            "type": "number"
           },
           "sheetsPerPack": {
-            "$ref": "#/components/schemas/Medicine/properties/sheetsPerPack"
+            "type": "number"
           },
           "stockUnits": {
-            "$ref": "#/components/schemas/Medicine/properties/stockUnits"
+            "type": "number"
           },
           "reorderLevel": {
-            "$ref": "#/components/schemas/Medicine/properties/reorderLevel"
+            "type": "number"
           },
           "active": {
-            "$ref": "#/components/schemas/Medicine/properties/active"
+            "type": "boolean"
           },
           "branchId": {
-            "$ref": "#/components/schemas/Medicine/properties/branchId"
+            "type": "string"
           },
           "createdAt": {
-            "$ref": "#/components/schemas/Medicine/properties/createdAt"
+            "type": "string"
           },
           "updatedAt": {
-            "$ref": "#/components/schemas/Medicine/properties/updatedAt"
+            "type": "string"
           },
           "status": {
             "type": "string",
@@ -5540,7 +5704,16 @@
             "required": ["ward", "bedCode"]
           },
           "to": {
-            "$ref": "#/components/schemas/TransferBedResult/properties/from"
+            "type": "object",
+            "properties": {
+              "ward": {
+                "type": "string"
+              },
+              "bedCode": {
+                "type": "string"
+              }
+            },
+            "required": ["ward", "bedCode"]
           }
         },
         "required": ["from", "to"]
@@ -5620,19 +5793,46 @@
           "byClass": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DischargeRegister/properties/byDisposition/items"
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": ["key", "count"]
             }
           },
           "byOrigin": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DischargeRegister/properties/byDisposition/items"
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": ["key", "count"]
             }
           },
           "byMonth": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DischargeRegister/properties/byMonth/items"
+              "type": "object",
+              "properties": {
+                "month": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": ["month", "count"]
             }
           }
         },
@@ -5655,7 +5855,7 @@
             "type": "integer"
           },
           "balanceAfter": {
-            "$ref": "#/components/schemas/WalletEntry/properties/amount"
+            "type": "integer"
           },
           "method": {
             "type": "string"
@@ -5688,7 +5888,7 @@
             "type": "object",
             "properties": {
               "total": {
-                "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                "type": "integer"
               },
               "count": {
                 "type": "number"
@@ -5702,7 +5902,7 @@
                       "type": "string"
                     },
                     "amount": {
-                      "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                      "type": "integer"
                     },
                     "count": {
                       "type": "number"
@@ -5718,7 +5918,7 @@
             "type": "object",
             "properties": {
               "total": {
-                "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                "type": "integer"
               },
               "count": {
                 "type": "number"
@@ -5726,7 +5926,19 @@
               "byMethod": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/components/schemas/WalletRegister/properties/deposits/properties/byMethod/items"
+                  "type": "object",
+                  "properties": {
+                    "method": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "integer"
+                    },
+                    "count": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["method", "amount", "count"]
                 }
               }
             },
@@ -5736,7 +5948,7 @@
             "type": "object",
             "properties": {
               "total": {
-                "$ref": "#/components/schemas/CollectionsReport/properties/total"
+                "type": "integer"
               },
               "count": {
                 "type": "number"
@@ -5745,7 +5957,7 @@
             "required": ["total", "count"]
           },
           "outstandingHeld": {
-            "$ref": "#/components/schemas/CollectionsReport/properties/total"
+            "type": "integer"
           }
         },
         "required": ["deposits", "refunds", "utilized", "outstandingHeld"]
@@ -5757,7 +5969,7 @@
             "type": "string"
           },
           "balance": {
-            "$ref": "#/components/schemas/WalletEntry/properties/amount"
+            "type": "integer"
           },
           "entries": {
             "type": "array",
@@ -9850,7 +10062,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The audit trail as CSV. Row count and truncation travel in `x-audit-rows` / `x-audit-truncated`.",
+            "description": "The audit trail as CSV, streamed as an attachment. The row count and whether the export hit its cap travel in the `x-audit-rows` and `x-audit-truncated` headers — a truncated export looks identical to a complete one in the body alone.",
             "content": {
               "text/csv": {
                 "schema": {
@@ -24169,15 +24381,9 @@
         ],
         "responses": {
           "200": {
-            "description": "The uploaded report file, inline, with its stored content type.",
+            "description": "The stored file, inline, served with the content type it was uploaded with and a `Content-Disposition` filename.",
             "content": {
-              "application/pdf": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              },
-              "image/*": {
+              "*/*": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -24415,15 +24621,9 @@
         ],
         "responses": {
           "200": {
-            "description": "The uploaded document, inline, with its stored content type.",
+            "description": "The stored file, inline, served with the content type it was uploaded with and a `Content-Disposition` filename.",
             "content": {
-              "application/pdf": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              },
-              "image/*": {
+              "*/*": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -27491,15 +27691,18 @@
         "summary": "GET /api/v1/site/logo",
         "responses": {
           "200": {
-            "description": "The hospital logo. 404 when none has been uploaded — check `hasLogo` on `GET /site` first.",
+            "description": "The hospital logo, served with the content type it was uploaded with and cached for five minutes. Public: no token, tenant resolved from the host.",
             "content": {
-              "image/*": {
+              "*/*": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
                 }
               }
             }
+          },
+          "404": {
+            "description": "No logo has been uploaded. The body is EMPTY — this one route answers a bare 404 rather than the error envelope, so a client must not try to parse it. `hasLogo` on `GET /site` is the cheap way to know in advance."
           },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
@@ -28208,8 +28411,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "string",
-                  "format": "binary"
+                  "type": "object",
+                  "additionalProperties": true
                 }
               }
             }

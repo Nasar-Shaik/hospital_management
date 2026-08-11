@@ -14,6 +14,80 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## API contract Phase 2.1 — hardening (2026-08-11) · CLOSED
+
+A pass over what Phase 2 left implicit: permanent tests for the defects it found, an honest
+description of the five non-JSON responses, and a client check deep enough to see inside a field.
+
+### Regression tests for the three live defects, each falsified
+
+| Defect                                   | Test                                                                                                                                              | Restoring the defect |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Prescription lines as Mongoose internals | `prescriptions.int` — asserts the create response's line fields, forbids `__parentArray`/`$__parent`, and that no response contains the tenant id | 🔴                   |
+| `creditOverride: {}` on every dispense   | `prescriptions.int` — an ordinary handover carries no `creditOverride` key at all                                                                 | 🔴                   |
+| `getRole` without permissions            | `auth.int` — one role returns its codes; the LIST endpoint deliberately does not                                                                  | 🔴                   |
+| `Notification.branchId` never sent       | `notifications.int` — the confirmation for a booking names its site                                                                               | 🔴                   |
+
+The notification test asserts the row it creates, not every row: a message raised outside a request
+has no active branch to stamp and `deliveryBranchId()` fails soft there on purpose — a
+critical-result alert must never go unsent because nobody had picked a site.
+
+### The five non-JSON responses now describe reality
+
+They claimed `application/pdf` and `image/*`. An upload's `contentType` is a free string and the
+download echoes back whatever was stored, so the accurate answer is the wildcard, and the rule is
+now written down. `GET /openapi.json` was typed `format: binary` — which would tell a generator to
+hand callers a Blob for a JSON document — and `GET /site/logo` did not document that it answers a
+bare, envelope-less 404 when no logo exists.
+
+### A spec defect this pass found: `$ref`s nobody can follow
+
+`zod-to-json-schema` de-duplicates identical sub-schemas by pointing the second at the first,
+wherever it landed — `VisitReport.byClass.items` → `#/…/DischargeRegister/properties/byDisposition/items`.
+Legal JSON Pointer, unusable OpenAPI: a generator expects `$ref` to name a component. It also
+invented coupling between unrelated types whose anonymous shapes happened to coincide, so renaming
+a field on a discharge register would have silently retyped a visit report. Named contracts stay
+`$ref`s; anonymous duplicates are now written out in full. **0 non-component `$ref`s remain.**
+
+### client:check went from category-deep to shape-deep
+
+Was: string vs number vs boolean vs array, top level only. Now: nested objects, array item types,
+`Record<>` values, nullability in both directions, enum membership, and nested optional/required —
+plus a fifth check on each METHOD's declared return type. It resolves names through interfaces and
+aliases and skips what it cannot resolve; it is not a second type checker.
+
+**Eleven more defects**, none visible to the old check:
+
+- `Invoice.payments[].by` and `.requestId` — who took the money, and the idempotency key. Both sides
+  were "an array", so both sides passed.
+- `createOperator` typed `PlatformOperator`; it returns the ONE-TIME password, which the server
+  stores only as a hash and cannot reissue.
+- `rescheduleAppointment` typed `Appointment`; it returns `{ cancelled, booked }`, so the caller
+  could not learn the new appointment's id from the call that created it.
+- `setRolePermissions` typed `Role`; `assignStaffRole`/`revokeUserRole` typed `void` while the
+  server returns the effective roles, branches and permissions — a derived set a screen must not
+  guess at. `setFeatureFlag` likewise discarded the subscription it had just changed.
+- `Hospital.status` accepted five of the eight tenant states; `license.state` accepted `EXPIRING`,
+  which is a per-request HEADER state no hospital record is ever returned in.
+- `HospitalDetail.usage` was an inline copy that had lost `label` and `ratio` and could not hold
+  `limit: null` (unlimited).
+- `Encounter.bed.branchId` and `Prescription.safetyOverride.alerts[].drugCodes` — fields the client
+  declared and the server has never sent.
+- `Edition`, `TariffItem`, `EncounterCharge` — second hand-written copies of `Plan`, `ServiceItem`
+  and `Charge`, one of them missing six fields. Now deprecated aliases: one shape, one thing to keep
+  in step.
+
+Falsified across seven mutations — wrong nested type, missing nested field, enum narrowing, nullable
+in both directions, wrong method return, list-vs-single — all 🔴, all restored.
+
+### Named types created, and the ones deliberately not
+
+`PaymentEntry`, `RefundEntry`, `RolePermissions`, `UserRoles`, `CreatedCredential`,
+`RescheduleResult`. Each was created because a real defect proved the shape needed a name, not to
+move a number. 34 small contracts remain unnamed — acknowledgements like `{ removed: true }` and
+nested pieces the client writes inline — and three more aliases (`Wallet`, `StockMoveResult`,
+`HospitalLicense`) were recorded rather than renamed, which brings them under the deep check.
+
 ## API contract Phase 2 — response contracts (2026-08-11) · CLOSED
 
 The remaining half of the contract. 265 operations described what a client could SEND and nothing

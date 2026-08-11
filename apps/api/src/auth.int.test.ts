@@ -429,6 +429,45 @@ describe("authenticate middleware", () => {
     expect(res.body.data.roles).toEqual(["TENANT_ADMIN"]);
     expect(res.body.data).not.toHaveProperty("passwordHash");
   });
+
+  /**
+   * ── THE ROLE EDITOR'S PAYLOAD ────────────────────────────────────────────
+   * `GET /roles/:id` has always answered with the role AND its permission codes; the api-client
+   * typed the result as `Role`, which has no codes. So the one screen that exists to edit a
+   * role's permissions had no typed way to read them — a mismatch invisible from either side
+   * alone, because both were internally consistent.
+   *
+   * Asserted here rather than in the RBAC matrix suite, which probes authorization outcomes and
+   * is deliberately left alone. This is about the PAYLOAD, not who may ask for it.
+   */
+  it("a single role is returned WITH its permission codes, not just its name", async () => {
+    const login = await loginAs(HOST_A, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const token = login.body.data.accessToken as string;
+
+    const list = await request(app)
+      .get("/api/v1/roles")
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+
+    const admin = (list.body.data as { id: string; code: string }[]).find(
+      (r) => r.code === "TENANT_ADMIN",
+    );
+    expect(admin).toBeDefined();
+
+    const one = await request(app)
+      .get(`/api/v1/roles/${admin?.id ?? ""}`)
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+
+    expect(one.body.data.code).toBe("TENANT_ADMIN");
+    expect(Array.isArray(one.body.data.permissions)).toBe(true);
+    expect(one.body.data.permissions.length).toBeGreaterThan(0);
+    // The list endpoint deliberately does NOT carry them — that difference is the whole reason
+    // `Role` and `RoleDetail` are two types.
+    expect(admin).not.toHaveProperty("permissions");
+  });
 });
 
 describe("logout and session management", () => {

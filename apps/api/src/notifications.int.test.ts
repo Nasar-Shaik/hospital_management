@@ -437,6 +437,36 @@ describe('the ledger is the answer to "did they get it?"', () => {
     expect(res.body.data[0]).toHaveProperty("dedupeKey");
   });
 
+  /**
+   * ── THE SITE A MESSAGE WAS RAISED AT ─────────────────────────────────────
+   * Notifications have carried a `branchId` since Multi-Branch Phase 1 — `deliveryBranchId()`
+   * stamps it on the way in. The READ mapper dropped it, so the record knew which hospital site
+   * it belonged to and no caller could find out. The api-client, meanwhile, declared the field:
+   * a promise the server never kept, undetectable until the two could be compared.
+   *
+   * A single-branch hospital still has a Main Branch, so this holds here and is not a
+   * multi-branch-only property.
+   */
+  it("a notification says which site it was raised at", async () => {
+    const { appointmentId, event } = await book(slotAt(12, 15));
+    await asTenant(() => dispatchEventInline(event));
+    await waitForMail(1);
+
+    const res = await auth(request(app).get("/api/v1/notifications?limit=20")).expect(200);
+    const rows = res.body.data as { dedupeKey: string; branchId?: string }[];
+    const confirmation = rows.find(
+      (r) => r.dedupeKey === `appointment.confirmation:${appointmentId}`,
+    );
+
+    expect(confirmation).toBeDefined();
+    expect(confirmation?.branchId).toEqual(expect.any(String));
+
+    // Not asserted of EVERY row, and the exception is real rather than a weakening: a message
+    // raised outside a request — a job, a test calling `notify()` directly — has no active branch
+    // to stamp, and `deliveryBranchId()` fails SOFT there on purpose. A critical-result alert must
+    // never go unsent because nobody had picked a site.
+  });
+
   it("exposes the template catalog for the admin who wants to rewrite it", async () => {
     const res = await auth(request(app).get("/api/v1/notifications/templates")).expect(200);
 

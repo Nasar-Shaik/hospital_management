@@ -58,10 +58,14 @@ export function documentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FILE_READ),
     validate(documentIdParamSchema, "params"),
-    respondsFile(
-      ["application/pdf", "image/*"],
-      "The uploaded document, inline, with its stored content type.",
-    ),
+    respondsFile({
+      // Whatever content type was stored at upload — `contentType` is a free string there, and
+      // this route echoes it back. Naming PDF and images would document a rule nothing enforces.
+      media: ["*/*"],
+      description:
+        "The stored file, inline, served with the content type it was uploaded with and a " +
+        "`Content-Disposition` filename.",
+    }),
     asyncHandler(controller.downloadDocument),
   );
 

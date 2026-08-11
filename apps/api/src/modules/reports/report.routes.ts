@@ -56,10 +56,14 @@ export function reportRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(reportIdParamSchema, "params"),
-    respondsFile(
-      ["application/pdf", "image/*"],
-      "The uploaded report file, inline, with its stored content type.",
-    ),
+    respondsFile({
+      // Whatever content type was stored at upload — `contentType` is a free string there, and
+      // this route echoes it back. Naming PDF and images would document a rule nothing enforces.
+      media: ["*/*"],
+      description:
+        "The stored file, inline, served with the content type it was uploaded with and a " +
+        "`Content-Disposition` filename.",
+    }),
     asyncHandler(controller.downloadReport),
   );
 

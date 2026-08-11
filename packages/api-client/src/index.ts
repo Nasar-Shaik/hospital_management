@@ -336,6 +336,22 @@ export interface Role {
  * Separate from `Role` because the list endpoint does not carry the codes, and typing both as
  * `Role` is how the role editor came to be unable to read the permissions it exists to edit.
  */
+/**
+ * A user's effective authorization after a role change: the roles they hold, the branches they are
+ * confined to (empty = hospital-wide), and the permission codes those add up to.
+ */
+export interface UserRoles {
+  roles: string[];
+  branchIds: string[];
+  permissions: string[];
+}
+
+/** What `setRolePermissions` answers with: the role's id and the codes as stored. */
+export interface RolePermissions {
+  roleId: string;
+  permissions: string[];
+}
+
 export interface RoleDetail extends Role {
   permissions: string[];
 }
@@ -445,6 +461,18 @@ export interface Charge {
   voidReason?: string;
   /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
   branchId?: string;
+}
+
+/**
+ * A newly issued login and its ONE-TIME password.
+ *
+ * Returned by the two endpoints that mint a credential — a new operator, and a hospital's first
+ * administrator. The password appears on this response and nowhere else: the server keeps only a
+ * hash, so a console that fails to show it has locked somebody out.
+ */
+export interface CreatedCredential {
+  email: string;
+  temporaryPassword: string;
 }
 
 /** A platform OPERATOR — our staff, not a hospital's. A different population entirely. */
@@ -1325,6 +1353,13 @@ export interface Appointment {
   statusHistory: AppointmentStatusChange[];
 }
 
+/** What a reschedule answers with: the retired appointment and the one that replaced it. */
+export interface RescheduleResult {
+  /** The original, now `rescheduled`. Its `rescheduledTo` points at the new one. */
+  cancelled: Appointment;
+  booked: Appointment;
+}
+
 /** A bookable slot. Computed per day from the doctor's weekly template — never stored. */ /* ── Status histories ───────────────────────────────────────────────────────
  * Every long-lived record carries the trail of how it got to its current state. The API has always
  * sent these; the client simply never declared them, so a screen that wanted to show "who
@@ -1591,18 +1626,42 @@ export interface InvoiceLine {
 }
 
 /** One posted charge WITH its date — for the day-wise money on the IP treatment sheet. */
-export interface EncounterCharge {
-  id: string;
-  code: string;
-  description: string;
-  category: ChargeCategory;
-  quantity: number;
-  listPrice: number;
-  /** Paise owed. */
+/**
+ * @deprecated Use `Charge`. This declared ten of the eighteen fields the server sends, so a
+ * caller could not read `branchId`, `doctorId`, `source` or `voidReason` off a charge it already
+ * had in hand.
+ */
+export type EncounterCharge = Charge;
+
+/**
+ * One payment taken against a bill.
+ *
+ * Named rather than written inline on `Invoice`, and the reason is the two fields the inline copy
+ * had been missing for months: `by` (who took the money) and `requestId` (the idempotency key that
+ * makes a double-clicked "Collect" take it once). A receipt screen needs the first and a retry
+ * needs the second, and neither was reachable.
+ */
+export interface PaymentEntry {
+  /** Paise. */
   amount: number;
-  postedAt: string;
-  invoiceId?: string;
-  voided?: boolean;
+  method: string;
+  reference?: string;
+  at: string;
+  /** The user who recorded it. */
+  by?: string;
+  /** Client-supplied idempotency key — the same key never takes the money twice. */
+  requestId?: string;
+}
+
+/** Money handed back. Same shape as a payment, with a mandatory reason. */
+export interface RefundEntry {
+  /** Paise. */
+  amount: number;
+  method: string;
+  reason: string;
+  at: string;
+  by?: string;
+  requestId?: string;
 }
 
 export interface Invoice {
@@ -1624,9 +1683,9 @@ export interface Invoice {
   insurerPolicyId?: string;
   /** `total − coveredByInsurer` — the patient's own share, what the counter collects. */
   patientResponsibility: number;
-  payments: { amount: number; method: string; reference?: string; at: string }[];
+  payments: PaymentEntry[];
   /** Money handed back. Net collected is `paid − refunded`. */
-  refunds: { amount: number; method: string; reason: string; at: string }[];
+  refunds: RefundEntry[];
   refunded: number;
   finalizedAt?: string;
   createdAt: string;
@@ -1731,20 +1790,11 @@ export interface CatalogueItem {
  * from `CatalogueItem` (the doctor's price-free view) precisely because this one carries money:
  * it is only ever returned by the `tariff:manage` endpoints.
  */
-export interface TariffItem {
-  id: string;
-  code: string;
-  name: string;
-  category: ChargeCategory;
-  /** Paise. */
-  price: number;
-  /**
-   * Consultation entries only: how many days this fee buys free revisits to the SAME doctor
-   * ("OP validity"). Absent or 0 means every visit is charged.
-   */
-  followUpDays?: number;
-  active: boolean;
-}
+/**
+ * @deprecated Use `ServiceItem`, which is the name the contract publishes. Kept as an alias
+ * because two identical hand-written copies of one server type are two things to keep in step.
+ */
+export type TariffItem = ServiceItem;
 
 export interface CreateTariffInput {
   code: string;
@@ -1998,7 +2048,14 @@ export interface Prescription {
     reason: string;
     by: string;
     at: string;
-    alerts: SafetyAlert[];
+    /**
+     * The alerts as they stood when the prescriber signed through them.
+     *
+     * NOT `SafetyAlert[]`: this is a frozen copy kept for the audit trail, and it is deliberately
+     * smaller than the live screening result — it has no `drugCodes`. Typing it as the full alert
+     * promised a field the server has never stored on this record.
+     */
+    alerts: { kind: string; severity: string; allergen?: string; message: string }[];
   };
   /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
   branchId?: string;
@@ -2161,8 +2218,8 @@ export interface Bed {
   tariffCode: string;
   /** The inventory bed (B4) this stay occupies, when admitted from the catalogue. */
   bedId?: string;
-  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
-  branchId?: string;
+  // No `branchId`: this is the bed recorded ON an encounter, and the ENCOUNTER carries the site.
+  // The field was declared here and never sent, so every read of it was `undefined`.
 }
 
 export type WardNoteType = "progress" | "discharge_summary" | "outcome_note";
@@ -2320,8 +2377,14 @@ export interface OperatorSession {
   };
 }
 
-/** Runtime licence state for the console (ADR-0016). */
-export type LicenseRuntimeState = "ACTIVE" | "GRACE" | "EXPIRED" | "EXPIRING" | "PERPETUAL";
+/**
+ * Runtime licence state for the console (ADR-0016).
+ *
+ * `EXPIRING` is deliberately absent: it is a HEADER state (see `LicenseHeader`), computed per
+ * request from the warning window, and no hospital record is ever stored or returned in it. One
+ * type serving both meant the console carried a branch for a value the API cannot send.
+ */
+export type LicenseRuntimeState = "ACTIVE" | "GRACE" | "EXPIRED" | "PERPETUAL";
 
 export interface HospitalLicense {
   state: LicenseRuntimeState;
@@ -2336,7 +2399,15 @@ export interface Hospital {
   id: string;
   slug: string;
   hospitalName: string;
-  status: "provisioning" | "trial" | "active" | "suspended" | "terminated";
+  status:
+    | "provisioning"
+    | "trial"
+    | "active"
+    | "suspended"
+    | "expired"
+    | "terminated"
+    | "exported"
+    | "purged";
   planCode?: string;
   databaseName: string;
   /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
@@ -2350,16 +2421,21 @@ export interface Hospital {
 }
 
 export interface HospitalDetail extends Hospital {
-  usage: { metric: string; used: number; limit?: number; warning?: boolean; exceeded?: boolean }[];
+  /**
+   * The same rows `GET /subscription` returns. This was an inline copy that had lost `label` and
+   * `ratio` and had made `limit`, `warning` and `exceeded` optional — so the console could not
+   * render the usage bar it fetches this endpoint for, and `limit: null` (unlimited) did not
+   * type-check against it at all.
+   */
+  usage: UsageLine[];
   features: string[];
 }
 
-export interface Edition {
-  code: string;
-  name: string;
-  entitlements: string[];
-  limits: Record<string, number | undefined>;
-}
+/**
+ * @deprecated Use `Plan`. This was a second, incomplete copy of the same server type — it had
+ * lost `priceMinor` and `currency`, so the console could not show what an edition costs.
+ */
+export type Edition = Plan;
 
 export interface OperatorAuditEntry {
   id: string;
@@ -2628,8 +2704,18 @@ export class ApiClient {
    * them to exactly those sites. Re-assigning the same role updates the binding, so this is how a
    * receptionist is moved from one branch to another.
    */
-  assignStaffRole(userId: string, roleCode: string, branchIds: string[]): Promise<void> {
-    return this.request<void>("POST", `/api/v1/users/${userId}/roles`, { roleCode, branchIds });
+  /**
+   * Grants a role, and answers with the user's EFFECTIVE roles, branches and permissions after it.
+   *
+   * Typed `void` until Phase 2.1, which threw that away: a caller had to re-read the user to
+   * discover what its own write had produced, and the permission set is derived (roles × branch
+   * scope), so guessing it client-side is how a screen ends up disagreeing with the server.
+   */
+  assignStaffRole(userId: string, roleCode: string, branchIds: string[]): Promise<UserRoles> {
+    return this.request<UserRoles>("POST", `/api/v1/users/${userId}/roles`, {
+      roleCode,
+      branchIds,
+    });
   }
 
   /**
@@ -4580,8 +4666,9 @@ export class ApiClient {
     return this.request("POST", `/api/platform/v1/hospitals/${id}/admin`, input);
   }
 
-  listEditions(): Promise<Edition[]> {
-    return this.request<Edition[]>("GET", "/api/platform/v1/editions");
+  /** The plan catalogue, as the control plane sees it — the same shape `listPlans` returns. */
+  listEditions(): Promise<Plan[]> {
+    return this.request<Plan[]>("GET", "/api/platform/v1/editions");
   }
 
   operatorAudit(): Promise<OperatorAuditEntry[]> {
@@ -4629,12 +4716,16 @@ export class ApiClient {
     return this.request<void>("DELETE", `/api/v1/roles/${id}`);
   }
 
-  setRolePermissions(id: string, permissions: string[]): Promise<Role> {
-    return this.request<Role>("PUT", `/api/v1/roles/${id}/permissions`, { permissions });
+  /** Answers with the codes as stored, not with the role — confirmation of what was written. */
+  setRolePermissions(id: string, permissions: string[]): Promise<RolePermissions> {
+    return this.request<RolePermissions>("PUT", `/api/v1/roles/${id}/permissions`, {
+      permissions,
+    });
   }
 
-  revokeUserRole(userId: string, roleCode: string): Promise<void> {
-    return this.request<void>("DELETE", `/api/v1/users/${userId}/roles/${roleCode}`);
+  /** Revokes a role, answering with what the user is left holding. */
+  revokeUserRole(userId: string, roleCode: string): Promise<UserRoles> {
+    return this.request<UserRoles>("DELETE", `/api/v1/users/${userId}/roles/${roleCode}`);
   }
 
   /* ── multi-factor authentication ── */
@@ -4667,13 +4758,14 @@ export class ApiClient {
   }
 
   /** A per-hospital flag override. `reason` is required — an override with no why is noise. */
+  /** Overrides one feature flag, answering with the subscription as it now stands. */
   setFeatureFlag(input: {
     flag: string;
     enabled: boolean;
     reason: string;
     expiresAt?: string;
-  }): Promise<void> {
-    return this.request<void>("POST", "/api/v1/feature-flags", input);
+  }): Promise<SubscriptionView> {
+    return this.request<SubscriptionView>("POST", "/api/v1/feature-flags", input);
   }
 
   /* ── patients, appointments, billing ── */
@@ -4687,8 +4779,16 @@ export class ApiClient {
     return this.request<Appointment>("GET", `/api/v1/appointments/${id}`);
   }
 
-  rescheduleAppointment(id: string, startAt: string, reason: string): Promise<Appointment> {
-    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/reschedule`, {
+  /**
+   * Moves an appointment. Answers with BOTH halves — the original, now `rescheduled`, and the new
+   * booking that replaced it.
+   *
+   * Typed `Promise<Appointment>` until Phase 2.1, which was simply wrong: the payload has never
+   * been an appointment, so `.id` on the result was `undefined` and the caller could not learn the
+   * new appointment's id from the call that created it.
+   */
+  rescheduleAppointment(id: string, startAt: string, reason: string): Promise<RescheduleResult> {
+    return this.request<RescheduleResult>("POST", `/api/v1/appointments/${id}/reschedule`, {
       startAt,
       reason,
     });
@@ -4742,12 +4842,19 @@ export class ApiClient {
     return this.request<PlatformOperator[]>("GET", "/api/platform/v1/operators");
   }
 
+  /**
+   * Creates a platform operator and returns their ONE-TIME password.
+   *
+   * Typed `Promise<PlatformOperator>` until Phase 2.1 — a shape this endpoint has never sent. The
+   * console had no typed way to read the temporary password it exists to display once, and only
+   * once: the server stores a hash and cannot reissue it.
+   */
   createOperator(input: {
     email: string;
     name: string;
     roles: string[];
-  }): Promise<PlatformOperator> {
-    return this.request<PlatformOperator>("POST", "/api/platform/v1/operators", input);
+  }): Promise<CreatedCredential> {
+    return this.request<CreatedCredential>("POST", "/api/platform/v1/operators", input);
   }
 
   changeOperatorPassword(currentPassword: string, newPassword: string): Promise<void> {
