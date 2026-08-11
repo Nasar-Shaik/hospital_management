@@ -431,6 +431,8 @@ export interface Allergy {
   refutedBy?: string;
   refutedAt?: string;
   refutedReason?: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 /* ── Branches (ADR-0015) ──────────────────────────────────────────────────────── */
@@ -1186,6 +1188,8 @@ export interface DoctorSchedule {
   endMinute: number;
   slotMinutes: number;
   active: boolean;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 /** The named parts of a clinic day (Doc 02 D2). `full_day` is its own option. */
@@ -1321,6 +1325,8 @@ export interface Order {
   releasedAt?: string;
   result?: { summary?: string; values?: OrderResultValue[]; critical?: boolean };
   cancelReason?: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 export interface PlaceOrderResult {
@@ -1780,6 +1786,8 @@ export interface Prescription {
     at: string;
     alerts: SafetyAlert[];
   };
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 export type SafetyAlertKind = "allergy" | "cross_sensitivity" | "duplicate_therapy" | "interaction";
@@ -1830,6 +1838,8 @@ export interface Dispense {
   lines: DispenseLine[];
   dispensedBy: string;
   dispensedAt: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 export interface DispenseResult {
@@ -1875,6 +1885,8 @@ export interface Medicine {
   active: boolean;
   createdAt: string;
   updatedAt: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 /** How the stock report reads a medicine's position. */
@@ -1930,6 +1942,8 @@ export interface Bed {
   tariffCode: string;
   /** The inventory bed (B4) this stay occupies, when admitted from the catalogue. */
   bedId?: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 export type WardNoteType = "progress" | "discharge_summary" | "outcome_note";
@@ -1946,6 +1960,8 @@ export interface WardNote {
   followUpOn?: string;
   authorId: string;
   at: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
 }
 
 export interface AdmitResult {
@@ -3165,6 +3181,8 @@ export class ApiClient {
     doctorId: string;
     startAt: Date;
     reason?: string;
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
   }): Promise<Appointment> {
     return this.request<Appointment>("POST", "/api/v1/appointments", {
       ...input,
@@ -3211,6 +3229,8 @@ export class ApiClient {
     startMinute: number;
     endMinute: number;
     slotMinutes: number;
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
   }): Promise<DoctorSchedule> {
     return this.request<DoctorSchedule>("PUT", "/api/v1/doctors/schedule", input);
   }
@@ -3227,6 +3247,8 @@ export class ApiClient {
     doctorId: string;
     weekday: number;
     sessions: DoctorSession[];
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
   }): Promise<DoctorAvailability | null> {
     return this.request<DoctorAvailability | null>("PUT", "/api/v1/doctors/availability", input);
   }
@@ -3240,6 +3262,8 @@ export class ApiClient {
     fromDate: string;
     toDate: string;
     reason?: string;
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
   }): Promise<DoctorLeave> {
     return this.request<DoctorLeave>("POST", "/api/v1/doctors/leave", input);
   }
@@ -3269,6 +3293,8 @@ export class ApiClient {
     reason?: string;
     /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
     express?: boolean;
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
   }): Promise<StartEncounterResult> {
     return this.request<StartEncounterResult>("POST", "/api/v1/encounters", input);
   }
@@ -3481,6 +3507,8 @@ export class ApiClient {
     priority?: OrderPriority;
     notes?: string;
     requestId?: string;
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
   }): Promise<PlaceOrderResult> {
     return this.request<PlaceOrderResult>("POST", "/api/v1/orders", input);
   }
