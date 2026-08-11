@@ -26,7 +26,17 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./appointment.controller.js";
+import {
+  appointment,
+  doctorAvailability,
+  doctorLeave,
+  doctorSchedule,
+  removedAck,
+  rescheduleResult,
+  slot,
+} from "./appointment.contract.js";
 import {
   availabilityQuerySchema,
   bookAppointmentSchema,
@@ -56,6 +66,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(availabilityQuerySchema, "query"),
+    responds(slot.array()),
     asyncHandler(controller.getAvailability),
   );
 
@@ -64,6 +75,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(listAppointmentsQuerySchema, "query"),
+    responds(appointment.array(), { meta: true }),
     asyncHandler(controller.listAppointments),
   );
 
@@ -72,6 +84,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.getAppointment),
   );
 
@@ -80,6 +93,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_CREATE, FEATURE),
     validate(bookAppointmentSchema),
+    responds(appointment, { status: 201 }),
     asyncHandler(controller.bookAppointment),
   );
 
@@ -90,6 +104,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.confirmAppointment),
   );
 
@@ -98,6 +113,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.checkIn),
   );
 
@@ -106,6 +122,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.startConsultation),
   );
 
@@ -114,6 +131,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.completeAppointment),
   );
 
@@ -123,6 +141,7 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(rescheduleAppointmentSchema),
+    responds(rescheduleResult, { status: 201 }),
     asyncHandler(controller.rescheduleAppointment),
   );
 
@@ -132,6 +151,7 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(noShowSchema),
+    responds(appointment),
     asyncHandler(controller.markNoShow),
   );
 
@@ -142,6 +162,7 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_CANCEL, FEATURE),
     validate(idParamSchema, "params"),
     validate(cancelAppointmentSchema),
+    responds(appointment),
     asyncHandler(controller.cancelAppointment),
   );
 
@@ -152,6 +173,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(doctorIdParamSchema, "params"),
+    responds(doctorSchedule.array()),
     asyncHandler(controller.getDoctorSchedules),
   );
 
@@ -160,6 +182,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(setScheduleSchema),
+    responds(doctorSchedule, { status: 201 }),
     asyncHandler(controller.setDoctorSchedule),
   );
 
@@ -168,6 +191,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(removedAck),
     asyncHandler(controller.removeDoctorSchedule),
   );
 
@@ -178,6 +202,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(doctorIdParamSchema, "params"),
+    responds(doctorAvailability.array()),
     asyncHandler(controller.getDoctorAvailability),
   );
 
@@ -186,6 +211,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(setAvailabilitySchema),
+    responds(doctorAvailability.optional()),
     asyncHandler(controller.setDoctorAvailability),
   );
 
@@ -194,6 +220,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(doctorIdParamSchema, "params"),
+    responds(doctorLeave.array()),
     asyncHandler(controller.getDoctorLeave),
   );
 
@@ -202,6 +229,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(addLeaveSchema),
+    responds(doctorLeave, { status: 201 }),
     asyncHandler(controller.addDoctorLeave),
   );
 
@@ -210,6 +238,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(removedAck),
     asyncHandler(controller.removeDoctorLeave),
   );
 

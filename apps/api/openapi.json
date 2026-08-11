@@ -190,6 +190,79 @@
       }
     },
     "schemas": {
+      "Branch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "inactive"]
+          },
+          "isMain": {
+            "type": "boolean"
+          },
+          "address": {
+            "type": "string"
+          },
+          "contactPhone": {
+            "type": "string"
+          },
+          "contactEmail": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "gstin": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "name", "code", "status", "isMain"]
+      },
+      "MyBranches": {
+        "type": "object",
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Branch"
+            }
+          },
+          "canAggregate": {
+            "type": "boolean"
+          }
+        },
+        "required": ["branches", "canAggregate"]
+      },
+      "PageMeta": {
+        "type": "object",
+        "description": "Present on paginated list responses, alongside `data`.",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "example": 1
+          },
+          "limit": {
+            "type": "integer",
+            "example": 20
+          },
+          "total": {
+            "type": "integer"
+          },
+          "hasMore": {
+            "type": "boolean"
+          }
+        },
+        "required": ["page", "limit"]
+      },
       "ApiError": {
         "type": "object",
         "properties": {
@@ -9414,7 +9487,24 @@
         "summary": "GET /api/v1/me/branches",
         "responses": {
           "200": {
-            "description": "Success — `{ success: true, data }`."
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/MyBranches"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
           },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
@@ -9441,7 +9531,27 @@
         "summary": "GET /api/v1/branches",
         "responses": {
           "200": {
-            "description": "Success — `{ success: true, data }`."
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Branch"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
           },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
@@ -9511,8 +9621,25 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Success — `{ success: true, data }`."
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Branch"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
@@ -9604,7 +9731,24 @@
         },
         "responses": {
           "200": {
-            "description": "Success — `{ success: true, data }`."
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Branch"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",

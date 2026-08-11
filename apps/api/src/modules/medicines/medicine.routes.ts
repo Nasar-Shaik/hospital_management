@@ -19,7 +19,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./medicine.controller.js";
+import { medicine, stockChange, stockMovement, stockReportRow } from "./medicine.contract.js";
 import {
   createMedicineSchema,
   updateMedicineSchema,
@@ -39,6 +41,7 @@ export function medicineRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(listQuerySchema, "query"),
+    responds(medicine.array()),
     asyncHandler(controller.list),
   );
 
@@ -47,6 +50,7 @@ export function medicineRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(listQuerySchema, "query"),
+    responds(stockReportRow.array()),
     asyncHandler(controller.report),
   );
 
@@ -55,6 +59,7 @@ export function medicineRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(idParamSchema, "params"),
+    responds(medicine),
     asyncHandler(controller.get),
   );
 
@@ -63,6 +68,7 @@ export function medicineRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(idParamSchema, "params"),
+    responds(stockMovement.array()),
     asyncHandler(controller.movements),
   );
 
@@ -71,6 +77,7 @@ export function medicineRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(createMedicineSchema),
+    responds(medicine, { status: 201 }),
     asyncHandler(controller.create),
   );
 
@@ -80,6 +87,7 @@ export function medicineRouter(): Router {
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateMedicineSchema),
+    responds(medicine),
     asyncHandler(controller.update),
   );
 
@@ -89,6 +97,7 @@ export function medicineRouter(): Router {
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(idParamSchema, "params"),
     validate(receiveStockSchema),
+    responds(stockChange, { status: 201 }),
     asyncHandler(controller.receive),
   );
 
@@ -98,6 +107,7 @@ export function medicineRouter(): Router {
     authorize(PERMISSIONS.PHARMACY_STOCK, FEATURE),
     validate(idParamSchema, "params"),
     validate(adjustStockSchema),
+    responds(stockChange, { status: 201 }),
     asyncHandler(controller.adjust),
   );
 

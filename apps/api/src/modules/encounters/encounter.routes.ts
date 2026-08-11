@@ -26,7 +26,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./encounter.controller.js";
+import { admitResult, encounter, startEncounterResult } from "./encounter.contract.js";
 import {
   admitSchema,
   transferSchema,
@@ -56,6 +58,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_CREATE, FEATURE),
     validate(startEncounterSchema),
+    responds(startEncounterResult, { status: [200, 201] }),
     asyncHandler(controller.startEncounter),
   );
 
@@ -69,6 +72,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(listEncountersQuerySchema, "query"),
+    responds(encounter.array(), { meta: true }),
     asyncHandler(controller.listEncounters),
   );
 
@@ -77,6 +81,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.getEncounter),
   );
 
@@ -90,6 +95,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter.array()),
     asyncHandler(controller.getEpisodeTimeline),
   );
 
@@ -101,6 +107,7 @@ export function encounterRouter(): Router {
     "/inpatients",
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, IPD_FEATURE),
+    responds(encounter.array()),
     asyncHandler(controller.listInpatients),
   );
 
@@ -123,6 +130,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ADMISSION_CREATE, IPD_FEATURE),
     validate(idParamSchema, "params"),
     validate(admitSchema),
+    responds(admitResult, { status: 201 }),
     asyncHandler(controller.admitPatient),
   );
 
@@ -142,6 +150,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(transferSchema),
+    responds(encounter),
     asyncHandler(controller.transferDoctor),
   );
 
@@ -150,6 +159,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.queuePatient),
   );
 
@@ -158,6 +168,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.startConsultation),
   );
 
@@ -172,6 +183,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.sendForInvestigations),
   );
 
@@ -181,6 +193,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_CLOSE, FEATURE),
     validate(idParamSchema, "params"),
     validate(closeEncounterSchema),
+    responds(encounter),
     asyncHandler(controller.closeEncounter),
   );
 
@@ -194,6 +207,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.EMR_WRITE, FEATURE),
     validate(idParamSchema, "params"),
     validate(visitSummarySchema),
+    responds(encounter),
     asyncHandler(controller.recordVisitSummary),
   );
 
@@ -203,6 +217,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(cancelEncounterSchema),
+    responds(encounter),
     asyncHandler(controller.cancelEncounter),
   );
 
@@ -217,6 +232,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.markLeftWithoutBeingSeen),
   );
 

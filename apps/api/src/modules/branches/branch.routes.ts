@@ -19,19 +19,27 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./branch.controller.js";
+import { branch, myBranches } from "./branch.contract.js";
 import { branchIdParamSchema, createBranchSchema, updateBranchSchema } from "./branch.schema.js";
 
 export function branchRouter(): Router {
   const router = Router();
 
   // The switcher — self-service, no permission (see the header).
-  router.get("/me/branches", authenticate(), asyncHandler(controller.listMine));
+  router.get(
+    "/me/branches",
+    authenticate(),
+    responds(myBranches),
+    asyncHandler(controller.listMine),
+  );
 
   router.get(
     "/branches",
     authenticate(),
     authorize(PERMISSIONS.BRANCH_MANAGE),
+    responds(branch.array()),
     asyncHandler(controller.list),
   );
 
@@ -40,6 +48,7 @@ export function branchRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BRANCH_MANAGE),
     validate(createBranchSchema),
+    responds(branch, { status: 201 }),
     asyncHandler(controller.create),
   );
 
@@ -49,6 +58,7 @@ export function branchRouter(): Router {
     authorize(PERMISSIONS.BRANCH_MANAGE),
     validate(branchIdParamSchema, "params"),
     validate(updateBranchSchema),
+    responds(branch),
     asyncHandler(controller.update),
   );
 

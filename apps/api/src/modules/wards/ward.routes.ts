@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./ward.controller.js";
+import { bed, room, ward } from "./ward.contract.js";
 import {
   createWardSchema,
   updateWardSchema,
@@ -42,6 +44,7 @@ export function wardRouter(): Router {
     "/wards",
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
+    responds(ward.array()),
     asyncHandler(controller.listWards),
   );
 
@@ -50,6 +53,7 @@ export function wardRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BED_MANAGE, FEATURE),
     validate(createWardSchema),
+    responds(ward, { status: 201 }),
     asyncHandler(controller.createWard),
   );
 
@@ -59,6 +63,7 @@ export function wardRouter(): Router {
     authorize(PERMISSIONS.BED_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateWardSchema),
+    responds(ward),
     asyncHandler(controller.updateWard),
   );
 
@@ -67,6 +72,7 @@ export function wardRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(listRoomsQuerySchema, "query"),
+    responds(room.array()),
     asyncHandler(controller.listRooms),
   );
 
@@ -75,6 +81,7 @@ export function wardRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BED_MANAGE, FEATURE),
     validate(createRoomSchema),
+    responds(room, { status: 201 }),
     asyncHandler(controller.createRoom),
   );
 
@@ -84,6 +91,7 @@ export function wardRouter(): Router {
     authorize(PERMISSIONS.BED_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateRoomSchema),
+    responds(room),
     asyncHandler(controller.updateRoom),
   );
 
@@ -92,6 +100,7 @@ export function wardRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(listBedsQuerySchema, "query"),
+    responds(bed.array()),
     asyncHandler(controller.listBeds),
   );
 
@@ -100,6 +109,7 @@ export function wardRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BED_MANAGE, FEATURE),
     validate(createBedSchema),
+    responds(bed, { status: 201 }),
     asyncHandler(controller.createBed),
   );
 
@@ -109,6 +119,7 @@ export function wardRouter(): Router {
     authorize(PERMISSIONS.BED_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateBedSchema),
+    responds(bed),
     asyncHandler(controller.updateBed),
   );
 

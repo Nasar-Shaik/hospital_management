@@ -22,7 +22,15 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./admission.controller.js";
+import {
+  bedBoard,
+  dischargeResult,
+  outcomeResult,
+  transferBedResult,
+  wardNote,
+} from "./admission.contract.js";
 import {
   addNoteSchema,
   dischargeSchema,
@@ -46,6 +54,7 @@ export function admissionRouter(): Router {
     "/bed-board",
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
+    responds(bedBoard),
     asyncHandler(controller.getBedBoard),
   );
 
@@ -55,6 +64,7 @@ export function admissionRouter(): Router {
     authorize(PERMISSIONS.EMR_WRITE, FEATURE),
     validate(idParamSchema, "params"),
     validate(addNoteSchema),
+    responds(wardNote, { status: 201 }),
     asyncHandler(controller.addNote),
   );
 
@@ -64,6 +74,7 @@ export function admissionRouter(): Router {
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(idParamSchema, "params"),
     validate(listNotesQuerySchema, "query"),
+    responds(wardNote.array()),
     asyncHandler(controller.listNotes),
   );
 
@@ -74,6 +85,7 @@ export function admissionRouter(): Router {
     authorize(PERMISSIONS.ADMISSION_DISCHARGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(dischargeSchema),
+    responds(dischargeResult, { status: 201 }),
     asyncHandler(controller.discharge),
   );
 
@@ -88,6 +100,7 @@ export function admissionRouter(): Router {
     authorize(PERMISSIONS.BED_ALLOCATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(transferBedSchema),
+    responds(transferBedResult),
     asyncHandler(controller.transferBed),
   );
 
@@ -102,6 +115,7 @@ export function admissionRouter(): Router {
     authorize(PERMISSIONS.ADMISSION_DISCHARGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(outcomeSchema),
+    responds(outcomeResult, { status: 201 }),
     asyncHandler(controller.recordOutcome),
   );
 

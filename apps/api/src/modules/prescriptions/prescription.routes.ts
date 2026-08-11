@@ -27,7 +27,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./prescription.controller.js";
+import { prescription, prescriptionScreening } from "./prescription.contract.js";
 import {
   cancelPrescriptionSchema,
   createPrescriptionSchema,
@@ -47,6 +49,7 @@ export function prescriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PRESCRIPTION_CREATE, FEATURE),
     validate(createPrescriptionSchema),
+    responds(prescription, { status: 201 }),
     asyncHandler(controller.createPrescription),
   );
 
@@ -62,6 +65,7 @@ export function prescriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(listPrescriptionsQuerySchema, "query"),
+    responds(prescription.array(), { meta: true }),
     asyncHandler(controller.listPrescriptions),
   );
 
@@ -70,6 +74,7 @@ export function prescriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(prescription),
     asyncHandler(controller.getPrescription),
   );
 
@@ -80,6 +85,7 @@ export function prescriptionRouter(): Router {
     authorize(PERMISSIONS.PRESCRIPTION_CREATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updatePrescriptionSchema),
+    responds(prescription),
     asyncHandler(controller.updatePrescription),
   );
 
@@ -94,6 +100,7 @@ export function prescriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(prescriptionScreening),
     asyncHandler(controller.screenPrescription),
   );
 
@@ -104,6 +111,7 @@ export function prescriptionRouter(): Router {
     authorize(PERMISSIONS.PRESCRIPTION_SIGN, FEATURE),
     validate(idParamSchema, "params"),
     validate(signPrescriptionSchema),
+    responds(prescription),
     asyncHandler(controller.signPrescription),
   );
 
@@ -120,6 +128,7 @@ export function prescriptionRouter(): Router {
     authorize(PERMISSIONS.PRESCRIPTION_SIGN, FEATURE),
     validate(idParamSchema, "params"),
     validate(cancelPrescriptionSchema),
+    responds(prescription),
     asyncHandler(controller.cancelPrescription),
   );
 
@@ -129,6 +138,7 @@ export function prescriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PRESCRIPTION_CREATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(prescription),
     asyncHandler(controller.discardPrescription),
   );
 
@@ -143,6 +153,7 @@ export function prescriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PRESCRIPTION_CREATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(prescription, { status: 201 }),
     asyncHandler(controller.amendPrescription),
   );
 

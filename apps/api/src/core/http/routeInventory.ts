@@ -51,6 +51,7 @@ export interface AuthTag {
 
 const TAG = Symbol.for("medicore.authTag");
 const VALIDATION_TAG = Symbol.for("medicore.validationTag");
+const RESPONSE_TAG = Symbol.for("medicore.responseTag");
 
 /** Stamps a middleware with what it enforces. Called by the middleware factories. */
 export function tagMiddleware<T extends RequestHandler>(handler: T, tag: AuthTag): T {
@@ -83,6 +84,32 @@ function readValidation(handler: unknown): ValidationTag | undefined {
   return (handler as Record<symbol, ValidationTag> | undefined)?.[VALIDATION_TAG];
 }
 
+/**
+ * The success payload a route actually sends (`responds()` stamps this).
+ *
+ * A third symbol for the same reason as the second: this answers "what comes back", which is a
+ * different question from "what may go in" and from "who may ask". Merging the three bags would
+ * mean a route could only ever declare one of them.
+ */
+export interface ResponseTag {
+  /** The shape of `data` inside the envelope — NOT the envelope itself. */
+  schema: ZodTypeAny;
+  /** Every success status this route can send. Two entries where a create can also resume. */
+  statuses: number[];
+  /** True when the route also sends `meta` (a paginated list). */
+  meta: boolean;
+  description?: string;
+}
+
+export function tagResponse<T extends RequestHandler>(handler: T, tag: ResponseTag): T {
+  (handler as unknown as Record<symbol, ResponseTag>)[RESPONSE_TAG] = tag;
+  return handler;
+}
+
+function readResponse(handler: unknown): ResponseTag | undefined {
+  return (handler as Record<symbol, ResponseTag> | undefined)?.[RESPONSE_TAG];
+}
+
 export interface RouteInfo {
   method: string;
   /** The full mounted path, e.g. `/api/v1/patients/:id`. */
@@ -94,6 +121,8 @@ export interface RouteInfo {
   platformRoles?: string[];
   /** The Zod schemas this route validates against, by target. Feeds the OpenAPI request shapes. */
   validation?: Partial<Record<ValidationTag["target"], ZodTypeAny>>;
+  /** The success payload this route declares. Feeds the OpenAPI response schemas. */
+  response?: ResponseTag;
 }
 
 /**
@@ -139,12 +168,14 @@ export function routeInventory(app: Application): RouteInfo[] {
       if (layer.route) {
         const tag: AuthTag = {};
         const validation: Partial<Record<ValidationTag["target"], ZodTypeAny>> = {};
+        let response: ResponseTag | undefined;
         for (const entry of layer.route.stack) {
           Object.assign(tag, readTag(entry.handle) ?? {});
           const v = readValidation(entry.handle);
           // Last one wins per target, matching Express: the final middleware to parse a
           // target is the one whose shape the handler actually receives.
           if (v) validation[v.target] = v.schema;
+          response ??= readResponse(entry.handle);
         }
         const hasValidation = Object.keys(validation).length > 0;
 
@@ -158,6 +189,7 @@ export function routeInventory(app: Application): RouteInfo[] {
             ...(tag.platformAuth ? { platformAuth: true } : {}),
             ...(tag.platformRoles ? { platformRoles: tag.platformRoles } : {}),
             ...(hasValidation ? { validation } : {}),
+            ...(response ? { response } : {}),
           });
         }
       } else if (layer.handle?.stack) {

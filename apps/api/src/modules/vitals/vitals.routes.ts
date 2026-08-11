@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./vitals.controller.js";
+import { assessedVitals } from "./vitals.contract.js";
 import {
   encounterIdParamSchema,
   listPatientVitalsQuerySchema,
@@ -37,6 +39,7 @@ export function vitalsRouter(): Router {
     authorize(PERMISSIONS.VITALS_RECORD),
     validate(encounterIdParamSchema, "params"),
     validate(recordVitalsSchema),
+    responds(assessedVitals, { status: 201 }),
     asyncHandler(controller.record),
   );
 
@@ -45,6 +48,7 @@ export function vitalsRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(encounterIdParamSchema, "params"),
+    responds(assessedVitals.array()),
     asyncHandler(controller.listForEncounter),
   );
 
@@ -55,6 +59,7 @@ export function vitalsRouter(): Router {
     authorize(PERMISSIONS.EMR_READ),
     validate(patientIdParamSchema, "params"),
     validate(listPatientVitalsQuerySchema, "query"),
+    responds(assessedVitals.array()),
     asyncHandler(controller.listForPatient),
   );
 

@@ -23,7 +23,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./pharmacy.controller.js";
+import { dispense, dispenseResult } from "./pharmacy.contract.js";
 import { dispenseSchema, idParamSchema } from "./pharmacy.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.PHARMACY_DISPENSING } as const;
@@ -37,6 +39,7 @@ export function pharmacyRouter(): Router {
     authorize(PERMISSIONS.PHARMACY_DISPENSE, FEATURE),
     validate(idParamSchema, "params"),
     validate(dispenseSchema),
+    responds(dispenseResult, { status: [200, 201] }),
     asyncHandler(controller.dispense),
   );
 
@@ -49,6 +52,7 @@ export function pharmacyRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(dispense.array()),
     asyncHandler(controller.listDispenses),
   );
 

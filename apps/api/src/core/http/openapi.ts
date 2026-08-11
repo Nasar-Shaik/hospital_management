@@ -17,9 +17,13 @@
 import type { Application } from "express";
 import type { ZodTypeAny } from "@medicore/validation";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { routeInventory, type RouteInfo } from "./routeInventory.js";
+import { routeInventory, type ResponseTag, type RouteInfo } from "./routeInventory.js";
+import { contractRegistry } from "./contract.js";
 
 type JsonSchema = Record<string, unknown>;
+
+/** Where named response contracts live in the document. */
+const COMPONENTS = "components/schemas";
 
 /**
  * A Zod schema as OpenAPI-flavoured JSON Schema.
@@ -61,6 +65,124 @@ function queryParameters(schema: ZodTypeAny): object[] {
     required: required.has(name),
     schema: propSchema,
   }));
+}
+
+/* ── response schemas ───────────────────────────────────────────────────────── */
+
+/**
+ * A response schema as JSON Schema, with every REGISTERED contract left as a `$ref`.
+ *
+ * This is the opposite choice from request bodies, and the difference is that responses have
+ * names. A request body is an anonymous Zod object defined at the route, so inlining it is the
+ * only honest option; a response contract is registered as `Patient`, so `$ref: Patient` is both
+ * shorter and more useful — thirty operations reference one definition instead of repeating it,
+ * and a client generator gets a type name rather than thirty structurally identical anonymous
+ * shapes.
+ */
+function toResponseSchema(schema: ZodTypeAny): JsonSchema {
+  const out = zodToJsonSchema(schema, {
+    definitions: contractRegistry(),
+    target: "openApi3",
+    basePath: ["#"],
+    definitionPath: COMPONENTS as never,
+  }) as JsonSchema;
+  delete out.$schema;
+  // The definitions come back attached to every conversion; they are emitted once, centrally.
+  delete out[COMPONENTS];
+  return normalise(out);
+}
+
+/**
+ * Two corrections applied to everything the converter produces for a response.
+ *
+ * ── 3.1, NOT 3.0 ────────────────────────────────────────────────────────────
+ * The `openApi3` target writes `nullable: true`, which is not a keyword in OpenAPI 3.1 — this
+ * document declares 3.1, so a strict reader would ignore it and reject the `null` the API really
+ * sends for, say, an encounter with no consultation note yet. 3.1 spells it as a union.
+ *
+ * ── RESPONSES ARE OPEN, REQUESTS ARE CLOSED ─────────────────────────────────
+ * Zod's default object mode is `strip`, which the converter reports as `additionalProperties:
+ * false` — correct about what the server sends today, wrong about what a client should assume.
+ * This contract evolves additively, so adding a response field is expected and allowed; a closed
+ * response schema turns every one of those into a validation failure inside any client strict
+ * enough to check, including a mobile build that cannot be patched. Requests keep their
+ * closedness, where `.strict()` means the server genuinely does reject unknown keys.
+ */
+function normalise(schema: JsonSchema): JsonSchema {
+  if (schema.additionalProperties === false) delete schema.additionalProperties;
+
+  if (schema.nullable === true) {
+    const { nullable: _n, allOf, ...rest } = schema;
+    const inner = Array.isArray(allOf) && allOf.length === 1 ? (allOf[0] as JsonSchema) : rest;
+    for (const key of Object.keys(schema)) delete schema[key];
+    schema.oneOf = [inner, { type: "null" }];
+  }
+
+  for (const value of Object.values(schema)) {
+    if (Array.isArray(value)) {
+      for (const item of value) if (isObject(item)) normalise(item);
+    } else if (isObject(value)) {
+      normalise(value);
+    }
+  }
+  return schema;
+}
+
+const isObject = (v: unknown): v is JsonSchema => typeof v === "object" && v !== null;
+
+/** The registered contracts, converted once, for `components/schemas`. */
+function namedContracts(): Record<string, JsonSchema> {
+  const registry = contractRegistry();
+  const first = Object.values(registry)[0];
+  if (!first) return {};
+  // One conversion with all of them as definitions, so contracts that reference each other
+  // (`Invoice` → `InvoiceLine`) come out cross-referenced rather than duplicated inline.
+  const converted = zodToJsonSchema(first, {
+    definitions: registry,
+    target: "openApi3",
+    basePath: ["#"],
+    definitionPath: COMPONENTS as never,
+  }) as JsonSchema;
+  const defs = (converted[COMPONENTS] ?? {}) as Record<string, JsonSchema>;
+  return Object.fromEntries(
+    Object.keys(defs)
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => [name, normalise(defs[name] as JsonSchema)]),
+  );
+}
+
+/**
+ * The success response: the envelope, with the route's own data shape inside it.
+ *
+ * The envelope is written out per operation rather than lifted into a shared `ApiEnvelope`
+ * component, because OpenAPI has no generics — a single shared envelope could only say
+ * `data: object`, which is the exact non-answer this milestone exists to avoid. Repeating six
+ * lines of wrapper per operation is the price of `data` being a real type.
+ */
+function successResponse(tag: ResponseTag): JsonSchema {
+  const properties: JsonSchema = {
+    success: { type: "boolean", const: true },
+    data: toResponseSchema(tag.schema),
+    ...(tag.meta ? { meta: { $ref: `#/${COMPONENTS}/PageMeta` } } : {}),
+  };
+  /**
+   * An OPTIONAL contract means `data` can be absent from the envelope entirely — `undefined` does
+   * not survive `JSON.stringify`, so the key simply is not there. One route genuinely behaves
+   * this way, and declaring `data` required would document a body it does not always send.
+   */
+  const dataGuaranteed = !tag.schema.isOptional();
+  return {
+    description: tag.description ?? "Success.",
+    content: {
+      "application/json": {
+        schema: {
+          type: "object",
+          properties,
+          required: ["success", ...(dataGuaranteed ? ["data"] : []), ...(tag.meta ? ["meta"] : [])],
+        },
+      },
+    },
+  };
 }
 
 interface OpenApiOptions {
@@ -125,6 +247,7 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
      * exists, so `{id}` documents the 24-hex ObjectId rule instead of a bare string.
      */
     const validation = route.validation ?? {};
+    const response = route.response;
     const paramProps = validation.params ? jsonSchemaProperties(validation.params) : {};
     const enrichedParams = params.map((p) => {
       const s = paramProps[(p as { name: string }).name];
@@ -147,19 +270,19 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
           }
         : {}),
       /**
-       * ── WHY THE 200 STILL CARRIES NO SCHEMA ─────────────────────────────────
-       * Every success is `{ success: true, data }`, but `data` has no schema to give: the
-       * repository DTOs are TypeScript interfaces, and there is not one response Zod schema in
-       * the codebase (checked: zero). Emitting `{ success, data: object }` would describe the
-       * envelope and say nothing about the payload — a schema that looks like a contract,
-       * generates a useless `unknown`, and quietly claims coverage the API does not have.
-       *
-       * So the envelope is documented in prose and the payload is left undescribed until real
-       * response DTOs exist. The contract must describe reality, including the parts of it that
-       * are missing.
+       * ── THE SUCCESS RESPONSE ────────────────────────────────────────────────
+       * Read off the `responds()` middleware this route actually runs, exactly as the request
+       * shape is read off `validate()`. A route that declares nothing still documents its
+       * envelope in prose — those are the binary downloads and the spec document itself, which
+       * have no JSON payload to describe, and they are listed as exceptions rather than given a
+       * fabricated schema.
        */
       responses: {
-        "200": { description: "Success — `{ success: true, data }`." },
+        ...(response
+          ? Object.fromEntries(
+              response.statuses.map((code) => [String(code), successResponse(response)]),
+            )
+          : { "200": { description: "Success — `{ success: true, data }`." } }),
         ...(Object.keys(validation).length > 0
           ? {
               "400": {
@@ -211,6 +334,23 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
         },
       },
       schemas: {
+        /**
+         * Every named response contract, emitted once and referenced by `$ref` from the
+         * operations that send it. Name-sorted, because a spec whose key order depends on module
+         * import order produces a diff every time an import moves.
+         */
+        ...namedContracts(),
+        PageMeta: {
+          type: "object",
+          description: "Present on paginated list responses, alongside `data`.",
+          properties: {
+            page: { type: "integer", example: 1 },
+            limit: { type: "integer", example: 20 },
+            total: { type: "integer" },
+            hasMore: { type: "boolean" },
+          },
+          required: ["page", "limit"],
+        },
         ApiError: {
           type: "object",
           properties: {

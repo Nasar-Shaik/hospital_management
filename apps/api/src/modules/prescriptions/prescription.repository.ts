@@ -57,7 +57,29 @@ function toPrescription(doc: PrescriptionDoc): Prescription {
     // `dispensedQty` is defaulted in the schema, but a document written before this
     // field existed would arrive without it. Normalising here means no consumer has to
     // guess whether `undefined` means "none yet" or "unknown".
-    lines: (doc.lines ?? []).map((l) => ({ ...l, dispensedQty: l.dispensedQty ?? 0 })),
+    //
+    // ── FIELDS LISTED, NEVER SPREAD ─────────────────────────────────────────
+    // This used to be `{ ...l, dispensedQty: … }`, which is correct only when `doc` came from
+    // `.lean()`. Every READ here does, so it looked right — but `create()` returns a HYDRATED
+    // document, where each line is a Mongoose subdocument and spreading it copies the internals
+    // instead of the fields. `POST /prescriptions` was answering with
+    // `{ __parentArray, __index, $__parent: { …the entire raw document… } }`: the drug code and
+    // dose a client needs were absent, and `$__parent` carried `tenantId` and every other
+    // internal field back to the caller.
+    //
+    // Found by the response contract, which is the point of it — the shape was wrong on one path
+    // out of eight, and no test looked at that path's line contents.
+    lines: (doc.lines ?? []).map((l) => ({
+      drugCode: l.drugCode,
+      drugName: l.drugName,
+      dose: l.dose,
+      route: l.route,
+      frequency: l.frequency,
+      quantity: l.quantity,
+      dispensedQty: l.dispensedQty ?? 0,
+      ...(l.durationDays === undefined ? {} : { durationDays: l.durationDays }),
+      ...(l.instructions === undefined ? {} : { instructions: l.instructions }),
+    })),
     prescribedBy: doc.prescribedBy,
     prescribedAt: doc.prescribedAt,
     version: doc.version,
