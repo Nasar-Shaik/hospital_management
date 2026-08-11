@@ -382,6 +382,14 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
       operationId: opId,
       tags: [tag],
       summary: `${route.method} ${oapiPath}`,
+      ...(route.deprecation
+        ? {
+            description:
+              `**Deprecated ${route.deprecation.since}; stops answering ${route.deprecation.sunset}.** ` +
+              (route.deprecation.replacedBy ? `Use \`${route.deprecation.replacedBy}\`. ` : "") +
+              (route.deprecation.note ?? ""),
+          }
+        : {}),
       ...(allParams.length ? { parameters: allParams } : {}),
       ...(validation.body
         ? {
@@ -439,6 +447,26 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
           content: { "application/json": { schema: { $ref: "#/components/schemas/ApiError" } } },
         },
       },
+      /**
+       * ── RETIREMENT, READ OFF THE SAME DECLARATION AS THE HEADERS ────────────
+       * `deprecated: true` is what a code generator and a documentation reader see; the
+       * `Deprecation`/`Sunset` response headers are what a shipped mobile build sees. Both come
+       * from the one `deprecate()` call, so the document cannot say an endpoint is healthy while
+       * the wire says it is going away.
+       *
+       * `x-sunset` carries the date because OpenAPI 3.1 has a boolean and nothing else — and
+       * "deprecated" without "until when" is not actionable by anyone holding a release plan.
+       */
+      ...(route.deprecation
+        ? {
+            deprecated: true,
+            "x-deprecated-since": route.deprecation.since,
+            "x-sunset": route.deprecation.sunset,
+            ...(route.deprecation.replacedBy
+              ? { "x-replaced-by": route.deprecation.replacedBy }
+              : {}),
+          }
+        : {}),
       // Both a session access token and an API key travel as `Authorization: Bearer <token>`.
       security: secured ? [{ bearerAuth: [] }] : [],
       ...(route.permission ? { "x-permission": route.permission } : {}),

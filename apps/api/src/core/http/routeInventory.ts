@@ -53,6 +53,7 @@ const TAG = Symbol.for("medicore.authTag");
 const VALIDATION_TAG = Symbol.for("medicore.validationTag");
 const RESPONSE_TAG = Symbol.for("medicore.responseTag");
 const IDEMPOTENCY_TAG = Symbol.for("medicore.idempotencyTag");
+const DEPRECATION_TAG = Symbol.for("medicore.deprecationTag");
 
 /** Stamps a middleware with what it enforces. Called by the middleware factories. */
 export function tagMiddleware<T extends RequestHandler>(handler: T, tag: AuthTag): T {
@@ -145,6 +146,33 @@ function readIdempotency(handler: unknown): IdempotencyTag | undefined {
   return (handler as Record<symbol, IdempotencyTag> | undefined)?.[IDEMPOTENCY_TAG];
 }
 
+/**
+ * The retirement notice an operation carries (`deprecate()` stamps this).
+ *
+ * A fifth symbol, for the question a client asks that none of the other four answer: "will this
+ * still be here next year?" Read back by the OpenAPI builder so `deprecated: true` in the document
+ * and the `Sunset` header on the wire come from the SAME declaration — a spec that says an
+ * endpoint is fine while the response says it is going away is worse than either alone.
+ */
+export interface DeprecationTag {
+  /** `YYYY-MM-DD` — deprecated from. */
+  since: string;
+  /** `YYYY-MM-DD` — stops answering on. */
+  sunset: string;
+  /** What to call instead. */
+  replacedBy?: string;
+  note?: string;
+}
+
+export function tagDeprecation<T extends RequestHandler>(handler: T, tag: DeprecationTag): T {
+  (handler as unknown as Record<symbol, DeprecationTag>)[DEPRECATION_TAG] = tag;
+  return handler;
+}
+
+function readDeprecation(handler: unknown): DeprecationTag | undefined {
+  return (handler as Record<symbol, DeprecationTag> | undefined)?.[DEPRECATION_TAG];
+}
+
 export interface RouteInfo {
   method: string;
   /** The full mounted path, e.g. `/api/v1/patients/:id`. */
@@ -160,6 +188,8 @@ export interface RouteInfo {
   response?: ResponseTag;
   /** Set when this route honours `Idempotency-Key`. Feeds the OpenAPI header parameter. */
   idempotency?: IdempotencyTag;
+  /** Set when this route is on its way out. Feeds `deprecated: true` and `x-sunset`. */
+  deprecation?: DeprecationTag;
 }
 
 /**
@@ -207,6 +237,7 @@ export function routeInventory(app: Application): RouteInfo[] {
         const validation: Partial<Record<ValidationTag["target"], ZodTypeAny>> = {};
         let response: ResponseTag | undefined;
         let idempotency: IdempotencyTag | undefined;
+        let deprecation: DeprecationTag | undefined;
         for (const entry of layer.route.stack) {
           Object.assign(tag, readTag(entry.handle) ?? {});
           const v = readValidation(entry.handle);
@@ -215,6 +246,7 @@ export function routeInventory(app: Application): RouteInfo[] {
           if (v) validation[v.target] = v.schema;
           response ??= readResponse(entry.handle);
           idempotency ??= readIdempotency(entry.handle);
+          deprecation ??= readDeprecation(entry.handle);
         }
         const hasValidation = Object.keys(validation).length > 0;
 
@@ -230,6 +262,7 @@ export function routeInventory(app: Application): RouteInfo[] {
             ...(hasValidation ? { validation } : {}),
             ...(response ? { response } : {}),
             ...(idempotency ? { idempotency } : {}),
+            ...(deprecation ? { deprecation } : {}),
           });
         }
       } else if (layer.handle?.stack) {
