@@ -15,7 +15,53 @@
  * needs first; the bodies are the enriching 20% that follows.
  */
 import type { Application } from "express";
+import type { ZodTypeAny } from "@medicore/validation";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { routeInventory, type RouteInfo } from "./routeInventory.js";
+
+type JsonSchema = Record<string, unknown>;
+
+/**
+ * A Zod schema as OpenAPI-flavoured JSON Schema.
+ *
+ * `target: "openApi3"` because OpenAPI 3.1's dialect differs from raw JSON Schema in ways that
+ * break generators (`nullable` vs `type: [x, "null"]`, and `$ref` siblings). Schemas are INLINED
+ * rather than lifted into `components`: a Zod schema is an anonymous object by the time it reaches
+ * this middleware, so any component name would have to be invented from the operation id — which
+ * reads like a real DTO name while being nothing of the sort, and would make two structurally
+ * identical bodies look like two different types. Inline is less pretty and does not lie.
+ */
+function toJsonSchema(schema: ZodTypeAny): JsonSchema {
+  const out = zodToJsonSchema(schema, {
+    target: "openApi3",
+    $refStrategy: "none",
+  }) as JsonSchema;
+  // `$schema` is meaningless inside an OpenAPI document and makes the file noisier to diff.
+  delete out.$schema;
+  return out;
+}
+
+/** The top-level properties of an object schema — used to type path params individually. */
+function jsonSchemaProperties(schema: ZodTypeAny): Record<string, JsonSchema> {
+  const converted = toJsonSchema(schema);
+  return (converted.properties as Record<string, JsonSchema> | undefined) ?? {};
+}
+
+/**
+ * A query schema becomes one `in: query` parameter per property, which is what OpenAPI expects —
+ * a single object schema would document `?filter={"page":1}` rather than `?page=1`.
+ */
+function queryParameters(schema: ZodTypeAny): object[] {
+  const converted = toJsonSchema(schema);
+  const props = (converted.properties as Record<string, JsonSchema> | undefined) ?? {};
+  const required = new Set((converted.required as string[] | undefined) ?? []);
+  return Object.entries(props).map(([name, propSchema]) => ({
+    name,
+    in: "query",
+    required: required.has(name),
+    schema: propSchema,
+  }));
+}
 
 interface OpenApiOptions {
   title?: string;
@@ -71,15 +117,59 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
     tags.add(tag);
 
     const secured = route.authenticates || route.platformAuth === true;
+    const opId = operationId(route.method, oapiPath);
+
+    /**
+     * The REQUEST shape, read off the `validate()` middleware this route actually runs. Path
+     * parameters recovered from the URL are enriched with their validated schema where one
+     * exists, so `{id}` documents the 24-hex ObjectId rule instead of a bare string.
+     */
+    const validation = route.validation ?? {};
+    const paramProps = validation.params ? jsonSchemaProperties(validation.params) : {};
+    const enrichedParams = params.map((p) => {
+      const s = paramProps[(p as { name: string }).name];
+      return s ? { ...p, schema: s } : p;
+    });
+    const queryParams = validation.query ? queryParameters(validation.query) : [];
+    const allParams = [...enrichedParams, ...queryParams];
 
     const operation: Record<string, unknown> = {
-      operationId: operationId(route.method, oapiPath),
+      operationId: opId,
       tags: [tag],
       summary: `${route.method} ${oapiPath}`,
-      ...(params.length ? { parameters: params } : {}),
-      // The `{ success, data }` / `{ error }` envelope is universal; bodies come in a later pass.
+      ...(allParams.length ? { parameters: allParams } : {}),
+      ...(validation.body
+        ? {
+            requestBody: {
+              required: true,
+              content: { "application/json": { schema: toJsonSchema(validation.body) } },
+            },
+          }
+        : {}),
+      /**
+       * ── WHY THE 200 STILL CARRIES NO SCHEMA ─────────────────────────────────
+       * Every success is `{ success: true, data }`, but `data` has no schema to give: the
+       * repository DTOs are TypeScript interfaces, and there is not one response Zod schema in
+       * the codebase (checked: zero). Emitting `{ success, data: object }` would describe the
+       * envelope and say nothing about the payload — a schema that looks like a contract,
+       * generates a useless `unknown`, and quietly claims coverage the API does not have.
+       *
+       * So the envelope is documented in prose and the payload is left undescribed until real
+       * response DTOs exist. The contract must describe reality, including the parts of it that
+       * are missing.
+       */
       responses: {
         "200": { description: "Success — `{ success: true, data }`." },
+        ...(Object.keys(validation).length > 0
+          ? {
+              "400": {
+                description: "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+                content: {
+                  "application/json": { schema: { $ref: "#/components/schemas/ApiError" } },
+                },
+              },
+            }
+          : {}),
         default: {
           description: "Error — `{ error: { code, message, details?, traceId } }`.",
           content: { "application/json": { schema: { $ref: "#/components/schemas/ApiError" } } },

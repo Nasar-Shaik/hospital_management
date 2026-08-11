@@ -37,10 +37,10 @@
     "jose": "^5.10.0",
     "mongoose": "^8.13.0",
     "nodemailer": "^9.0.3",
-    "otpauth": "^9.5.1"
+    "otpauth": "^9.5.1",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
-    "prettier": "^3.5.0",
     "@medicore/config": "workspace:*",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
@@ -49,6 +49,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/supertest": "^6.0.3",
     "eslint": "^9.24.0",
+    "prettier": "^3.5.0",
     "supertest": "^7.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",

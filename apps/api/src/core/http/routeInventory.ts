@@ -25,6 +25,7 @@
  * authorization we *remembered to test*. It is why the suite is release-gating.
  */
 import type { Application, RequestHandler } from "express";
+import type { ZodTypeAny } from "@medicore/validation";
 
 /** The tag the auth middleware factories stamp onto themselves. */
 export interface AuthTag {
@@ -49,6 +50,7 @@ export interface AuthTag {
 }
 
 const TAG = Symbol.for("medicore.authTag");
+const VALIDATION_TAG = Symbol.for("medicore.validationTag");
 
 /** Stamps a middleware with what it enforces. Called by the middleware factories. */
 export function tagMiddleware<T extends RequestHandler>(handler: T, tag: AuthTag): T {
@@ -60,6 +62,27 @@ function readTag(handler: unknown): AuthTag | undefined {
   return (handler as Record<symbol, AuthTag> | undefined)?.[TAG];
 }
 
+/**
+ * The request shape a route actually validates (`validate()` stamps this).
+ *
+ * Deliberately a SEPARATE symbol from the auth tag: they answer different questions and are
+ * merged differently. A route carries at most one auth tag, but up to three validations (body,
+ * params, query), so merging them into one bag would silently drop two of the three.
+ */
+export interface ValidationTag {
+  schema: ZodTypeAny;
+  target: "body" | "query" | "params";
+}
+
+export function tagValidation<T extends RequestHandler>(handler: T, tag: ValidationTag): T {
+  (handler as unknown as Record<symbol, ValidationTag>)[VALIDATION_TAG] = tag;
+  return handler;
+}
+
+function readValidation(handler: unknown): ValidationTag | undefined {
+  return (handler as Record<symbol, ValidationTag> | undefined)?.[VALIDATION_TAG];
+}
+
 export interface RouteInfo {
   method: string;
   /** The full mounted path, e.g. `/api/v1/patients/:id`. */
@@ -69,6 +92,8 @@ export interface RouteInfo {
   feature?: string;
   platformAuth?: boolean;
   platformRoles?: string[];
+  /** The Zod schemas this route validates against, by target. Feeds the OpenAPI request shapes. */
+  validation?: Partial<Record<ValidationTag["target"], ZodTypeAny>>;
 }
 
 /**
@@ -113,9 +138,15 @@ export function routeInventory(app: Application): RouteInfo[] {
     for (const layer of stack) {
       if (layer.route) {
         const tag: AuthTag = {};
+        const validation: Partial<Record<ValidationTag["target"], ZodTypeAny>> = {};
         for (const entry of layer.route.stack) {
           Object.assign(tag, readTag(entry.handle) ?? {});
+          const v = readValidation(entry.handle);
+          // Last one wins per target, matching Express: the final middleware to parse a
+          // target is the one whose shape the handler actually receives.
+          if (v) validation[v.target] = v.schema;
         }
+        const hasValidation = Object.keys(validation).length > 0;
 
         for (const method of Object.keys(layer.route.methods)) {
           routes.push({
@@ -126,6 +157,7 @@ export function routeInventory(app: Application): RouteInfo[] {
             ...(tag.feature ? { feature: tag.feature } : {}),
             ...(tag.platformAuth ? { platformAuth: true } : {}),
             ...(tag.platformRoles ? { platformRoles: tag.platformRoles } : {}),
+            ...(hasValidation ? { validation } : {}),
           });
         }
       } else if (layer.handle?.stack) {
