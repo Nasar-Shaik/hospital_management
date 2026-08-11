@@ -969,10 +969,69 @@ DEEP LINKS
 | **M4** | Alerts: device registration · push sender · inbox · deep links                                                                                                                                                                                                                                                      | The hospital reaches staff in real time      | **A + B** (§21) — **deployed before this build is submitted** (§17) |
 | **M5** | Reception + Pharmacy: register · check-in · **take payment** · dispense queue                                                                                                                                                                                                                                       | The counters work on a phone                 | none                                                                |
 | **M6** | Lab + Admin: worklist · result entry · approvals · at-a-glance                                                                                                                                                                                                                                                      | The remaining roles                          | none                                                                |
-| **M7** | Hardening: accessibility pass · offline read polish · performance · pilot rollout                                                                                                                                                                                                                                   | Production-ready                             | none                                                                |
-| **M8** | Patient app _(separate binary, separate decision)_                                                                                                                                                                                                                                                                  | Appointments · reports · bills · wallet      | TBD                                                                 |
+| **M7** | Hardening: accessibility pass · offline read polish · performance · pilot rollout                                                                                                                                                                                                                                   | Production-ready · **staff app released**    | none                                                                |
+| **M8** | **Patient Mobile App — deferred to the final major phase, lowest priority.** A separate binary with an architecture milestone of its own. See §20.1.                                                                                                                                                                | _(not scheduled)_                            | **none now**                                                        |
 
 Each phase keeps the repo cadence: one unit per turn, full gate, one Conventional Commit.
+
+**M1–M7 are the Staff Mobile App, and they run to completion first.** Where the programme ordering
+names phases by theme (Foundation → Core → Clinical → Notifications → Advanced → Testing/Hardening →
+Production Release), this table names the same seven by **audience** — the organising idea the plan
+is built on: one role per phase, each shippable. M4 is Notifications in both readings and M7 is the
+final staff phase in both.
+
+### 20.1 Patient Mobile App — FINAL PHASE, LOWEST PRIORITY
+
+```
+Backend / HMS
+     ↓
+Web / Admin
+     ↓
+Staff Mobile App
+     ├── M0  Architecture & Foundation   ← this document
+     ├── M1  Foundation
+     ├── M2  Core clinical workflows (Doctor)
+     ├── M3  Clinical workflows (Nurse)
+     ├── M4  Notifications
+     ├── M5  Advanced workflows (Reception · Pharmacy)
+     ├── M6  Remaining roles (Lab · Admin)
+     └── M7  Testing, hardening, production release
+              ↓
+     ┄┄┄ FINAL / LOWEST PRIORITY ┄┄┄
+              ↓
+     Patient Mobile App  (M8)
+```
+
+**Status: Deferred — Final Phase.** No implementation started. No backend work required now. No
+patient-specific API work required now. No patient authentication work required now.
+
+**The Patient Mobile App is intentionally deferred to the final major development phase, and is not
+part of Staff Mobile App development.** It is a different audience, a different threat model and a
+different binary. Treating it as "one more staff phase" is how a staff app grows a patient login and
+a hospital ends up with one application that serves neither well.
+
+**Expected scope, recorded so it is not re-derived later — not a commitment to build any of it:**
+patient authentication · appointments · treatment history · prescriptions · laboratory and
+diagnostic reports · billing and payment information · patient notifications · patient profile.
+Family and guardian access is a real requirement in this market and a real consent problem; it stays
+**deferred to the Patient App's own architecture phase**, along with every other question about how
+this application is actually built. Nothing here commits to a detailed implementation.
+
+**Architectural boundary — worth recording now, because it costs nothing today and prevents a great
+deal later:**
+
+| The Patient App **will**                                                                                            | The Patient App **will not**                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reuse shared packages where they genuinely fit — `@medicore/api-client`, `@medicore/types`, `@medicore/validation`. | Reuse the Staff Mobile **navigation model** (§19). A patient has no queue, no worklist, and no shell assembled from staff permissions.                     |
+| Ship as its **own binary**, with its own store listing, release train and review cycle.                             | Reuse the Staff **RBAC / navigation structure** (§8). A staff permission describes a job; a patient's access describes a relationship to their own record. |
+| Have its **own patient-specific authentication and authorization model**, designed in its own phase.                | Expose staff or admin workflows — no ordering, no dispensing, no approvals, no configuration, at any point.                                                |
+| Use **patient-safe response DTOs**, purpose-built for what a patient may see.                                       | Become a second HMS administration application by accretion.                                                                                               |
+| Be sequenced after the staff app is released and stable in production.                                              | Reuse a staff endpoint merely because it returns the right row — a staff DTO carries internal fields, and a patient response has to be designed as one.    |
+
+**This roadmap item creates no dependency on anything.** Not on Staff Mobile M0–M7, not on current
+backend work. Nothing in the staff programme may be shaped, delayed or widened to accommodate it,
+and the staff roadmap continues independently. If a patient-app need appears to require backend work
+now, that is a sign the deferral is being eroded: record it here and carry on.
 
 ---
 

@@ -226,12 +226,16 @@ the wanted staff-chat module.
 - Device-token register _(new)_ · `GET /notifications` · push sender _(new)_
 - **Ships:** the hospital reaches staff in real time.
 
-### Phase 4 — Patient-facing _(likely a separate binary)_
+### Phase 4 — Patient-facing — **DEFERRED TO THE FINAL PHASE**
 
-Appointments · reports · bills · wallet — a different audience, sequenced last.
+**Status: Deferred — Final Phase. No implementation started.** Superseded by
+[MOBILE_M0_ARCHITECTURE.md §20.1](MOBILE_M0_ARCHITECTURE.md), which is the authoritative roadmap
+entry (M8) and carries the scope and the architectural boundary. Recorded here only so this older
+roadmap does not read as though the patient app were next.
 
-- `GET /appointments`, `/reports`, `/invoices`, wallet endpoints
-- **Ships:** patients self-serve their own record.
+The two decisions that have since been settled: it is a **separate binary**, and it is the **lowest
+priority** — it starts after the staff app is released and stable, and it creates no dependency on
+any staff phase.
 
 ---
 
@@ -254,5 +258,6 @@ Mirrors the HMS gate cadence (Doc 09):
 - **First audience:** Doctor — **decided**.
 - Expo Router vs React Navigation: Expo Router (M6) — revisit only if a routing need it can't meet
   appears.
-- Patient app as a separate binary vs a mode of the staff app: lean **separate**; confirm at Phase 4.
+- ~~Patient app as a separate binary vs a mode of the staff app~~ — **decided (2026-08-12): a
+  separate binary, deferred to the final major phase.** See MOBILE_M0_ARCHITECTURE.md §20.1.
 - Cert pinning + biometric enablement: defer to a hardening pass after Phase 1.

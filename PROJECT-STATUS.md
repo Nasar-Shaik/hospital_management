@@ -1606,6 +1606,13 @@ customer.
 online booking** (C6/G1) — it monetises the public website already built, needs no new backend
 primitives, and is the natural predecessor to the mobile apps.
 
+> **Mobile sequencing (2026-08-12).** The authoritative mobile roadmap is
+> [AI_Workflow/docs/MOBILE_M0_ARCHITECTURE.md](AI_Workflow/docs/MOBILE_M0_ARCHITECTURE.md) §20 —
+> **Staff Mobile App M0–M7 first**, then the **Patient Mobile App (M8) as the final, lowest-priority
+> major phase** (§20.1: deferred, no implementation started, no backend work required now).
+> Note that the patient _portal_ above is the **web** feature on the public site; it is a different
+> deliverable from the patient _mobile app_, and neither blocks the other.
+
 ---
 
 ## 10. Final verdict
