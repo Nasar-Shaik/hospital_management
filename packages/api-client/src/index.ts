@@ -132,10 +132,16 @@ export function isMfaChallenge(result: LoginResult): result is MfaChallenge {
 
 export interface Session {
   id: string;
+  userId: string;
+  /** The rotation family — every refresh of one login shares it. Revoking one revokes the line. */
+  family: string;
   device?: string;
   ip?: string;
   userAgent?: string;
   lastSeenAt: string;
+  expiresAt: string;
+  /** Set once the session has been ended — by logout, by revocation, or by a reuse detection. */
+  revokedAt?: string;
   createdAt: string;
 }
 
@@ -188,6 +194,10 @@ export interface StaffMember {
   branchIds: string[];
   mfaEnabled: boolean;
   lastLoginAt?: string;
+  /** Set when this login belongs to a PATIENT rather than a member of staff. */
+  patientId?: string;
+  /** Set while a run of failed sign-ins has the account locked out. */
+  lockedUntil?: string;
 }
 
 /** A doctor, as a dropdown needs them. Names only — see `listDoctors`. */
@@ -320,6 +330,16 @@ export interface Role {
   isSystem: boolean;
 }
 
+/**
+ * One role WITH its permission codes — what `getRole` answers.
+ *
+ * Separate from `Role` because the list endpoint does not carry the codes, and typing both as
+ * `Role` is how the role editor came to be unable to read the permissions it exists to edit.
+ */
+export interface RoleDetail extends Role {
+  permissions: string[];
+}
+
 /* ── contract types added to close the coverage gap (API Contract Stabilization) ──────────── */
 
 /** One entry of the permission catalogue (`GET /permissions`). */
@@ -349,6 +369,10 @@ export interface UsageLine {
   used: number;
   limit: number | null;
   ratio: number | null;
+  /** True from 80% — the nudge, not the wall. */
+  warning: boolean;
+  /** True at 100% — the next creation will be refused. */
+  exceeded: boolean;
 }
 
 export interface SubscriptionView {
@@ -411,6 +435,14 @@ export interface Charge {
   amount: number;
   source: string;
   sourceId?: string;
+  /** Consultation charges: whose consultation it was. Drives the free-follow-up lookup. */
+  doctorId?: string;
+  postedBy?: string;
+  postedAt: string;
+  /** Set once the charge has been put on a bill. */
+  invoiceId?: string;
+  voided?: boolean;
+  voidReason?: string;
   /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
   branchId?: string;
 }
@@ -422,6 +454,9 @@ export interface PlatformOperator {
   name: string;
   roles: string[];
   status: string;
+  mfaEnabled: boolean;
+  mustChangePassword: boolean;
+  lastLoginAt?: string;
 }
 
 /** The TOTP enrolment secret. Shown once, then never again. */
@@ -1285,9 +1320,53 @@ export interface Appointment {
   /** Set on the retired appointment when it was rescheduled. */
   rescheduledTo?: string;
   createdAt: string;
+  departmentId?: string;
+  /** Every transition, with who made it and why — the desk's record of what happened. */
+  statusHistory: AppointmentStatusChange[];
 }
 
-/** A bookable slot. Computed per day from the doctor's weekly template — never stored. */
+/** A bookable slot. Computed per day from the doctor's weekly template — never stored. */ /* ── Status histories ───────────────────────────────────────────────────────
+ * Every long-lived record carries the trail of how it got to its current state. The API has always
+ * sent these; the client simply never declared them, so a screen that wanted to show "who
+ * cancelled this, and why" had no typed way to read it.
+ */
+
+/** One transition of an appointment. */
+export interface AppointmentStatusChange {
+  from: AppointmentStatus;
+  to: AppointmentStatus;
+  at: string;
+  by?: string;
+  reason?: string;
+}
+
+/** One transition of an encounter. */
+export interface EncounterHistoryEntry {
+  from: EncounterStatus;
+  to: EncounterStatus;
+  at: string;
+  by?: string;
+  reason?: string;
+}
+
+/** One transition of an order. */
+export interface OrderHistoryEntry {
+  from: OrderStatus;
+  to: OrderStatus;
+  at: string;
+  by?: string;
+  reason?: string;
+}
+
+/** One transition of a prescription. */
+export interface PrescriptionHistoryEntry {
+  from: PrescriptionStatus;
+  to: PrescriptionStatus;
+  at: string;
+  by?: string;
+  reason?: string;
+}
+
 export interface Slot {
   startAt: string;
   endAt: string;
@@ -1381,6 +1460,9 @@ export interface Encounter {
   /** Still-live orders (tests) on this visit. "Send for tests" needs at least one. */
   activeOrderCount: number;
   closedAt?: string;
+  /** Every state transition, with who made it and why. */
+  history: EncounterHistoryEntry[];
+  createdAt: string;
   /** Present when `class` is `IP`. The bed is RECORDED, not reserved — there is no
    * bed inventory, so nothing stops two patients being recorded in the same bed. */
   bed?: Bed;
@@ -1436,12 +1518,20 @@ export interface Order {
   orderedBy: string;
   orderedAt: string;
   performedBy?: string;
+  departmentId?: string;
+  completedAt?: string;
   verifiedBy?: string;
+  verifiedAt?: string;
   releasedAt?: string;
   result?: { summary?: string; values?: OrderResultValue[]; critical?: boolean };
   cancelReason?: string;
   /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
   branchId?: string;
+  /** The client's idempotency key — a repeat of it returns this same order. */
+  requestId?: string;
+  /** Every state transition, with who made it and why. */
+  history: OrderHistoryEntry[];
+  createdAt: string;
 }
 
 export interface PlaceOrderResult {
@@ -1519,6 +1609,7 @@ export interface Invoice {
   id: string;
   encounterId: string;
   patientId: string;
+  episodeId: string;
   number?: string;
   status: InvoiceStatus;
   lines: InvoiceLine[];
@@ -1538,6 +1629,9 @@ export interface Invoice {
   refunds: { amount: number; method: string; reason: string; at: string }[];
   refunded: number;
   finalizedAt?: string;
+  createdAt: string;
+  /** Optimistic-concurrency counter — a discount is applied against the version it read. */
+  version: number;
 }
 
 /**
@@ -1570,6 +1664,8 @@ export interface ServiceItem {
   /** Paise. */
   price: number;
   active: boolean;
+  /** Consultation only: days this fee buys free revisits to the same doctor. */
+  followUpDays?: number;
 }
 
 /* ── Patient wallet (advance balance) ──────────────────────────────────────── */
@@ -1893,6 +1989,9 @@ export interface Prescription {
   supersedesId?: string;
   supersededById?: string;
   cancelReason?: string;
+  /** Every state transition, with who made it and why. */
+  history: PrescriptionHistoryEntry[];
+  createdAt: string;
   notes?: string;
   /** Present only when the prescriber signed THROUGH a blocking safety alert. */
   safetyOverride?: {
@@ -1953,6 +2052,11 @@ export interface Dispense {
   lines: DispenseLine[];
   dispensedBy: string;
   dispensedAt: string;
+  /** The client's idempotency key — a repeat of it returns this same handover, never a second. */
+  requestId?: string;
+  /** Set when the handover was authorised on credit against an admitted patient's advance. */
+  creditOverride?: { by: string; reason: string; shortfall: number; at: string };
+  createdAt: string;
   /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
   branchId?: string;
 }
@@ -4508,8 +4612,8 @@ export class ApiClient {
     return this.request<Permission[]>("GET", "/api/v1/permissions");
   }
 
-  getRole(id: string): Promise<Role> {
-    return this.request<Role>("GET", `/api/v1/roles/${id}`);
+  getRole(id: string): Promise<RoleDetail> {
+    return this.request<RoleDetail>("GET", `/api/v1/roles/${id}`);
   }
 
   createRole(input: {

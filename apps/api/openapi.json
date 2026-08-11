@@ -3548,6 +3548,9 @@
           "eventId": {
             "type": "string"
           },
+          "branchId": {
+            "type": "string"
+          },
           "createdAt": {
             "type": "string"
           }

@@ -31,6 +31,8 @@ export const notification = contract(
     sentAt: z.string().optional(),
     error: z.string().optional(),
     eventId: z.string().optional(),
+    /** The site the message was raised at (ADR-0015). */
+    branchId: z.string().optional(),
     createdAt: z.string(),
   }),
 );

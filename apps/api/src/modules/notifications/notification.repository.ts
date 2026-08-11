@@ -31,6 +31,12 @@ export interface Notification {
   sentAt?: Date;
   error?: string;
   eventId?: string;
+  /**
+   * The site the message was raised at (ADR-0015). Stored since Phase 1 and, until now, never
+   * returned — the write stamped it and the read dropped it, so the record knew which hospital it
+   * belonged to and no caller could find out.
+   */
+  branchId?: string;
   createdAt: Date;
 }
 
@@ -64,6 +70,7 @@ function toNotification(doc: NotificationDoc): Notification {
     ...(doc.sentAt ? { sentAt: doc.sentAt } : {}),
     ...(doc.error ? { error: doc.error } : {}),
     ...(doc.eventId ? { eventId: doc.eventId } : {}),
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
   };
 }
 
