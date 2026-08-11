@@ -143,7 +143,12 @@ const otherApi = new ApiClient({
 let branchA = "";
 let branchB = "";
 let patientId = "";
+let patientBId = "";
 let doctorId = "";
+
+/** Kept from provisioning so the isolation suite can seed a confined user once branchA is known. */
+let tenantId = "";
+let tenantConnection: Awaited<ReturnType<typeof getTenantConnection>>;
 
 async function provision(slug: string): Promise<Awaited<ReturnType<typeof getTenantConnection>>> {
   const t = await provisionTenant({
@@ -173,6 +178,7 @@ async function provision(slug: string): Promise<Awaited<ReturnType<typeof getTen
       await transitionStatus(admin.id, "active");
 
       if (slug === SLUG) {
+        tenantId = t.tenant.id;
         const second = await createBranch({ name: "Chennai", code: "CHN" });
         branchB = second.id;
 
@@ -196,7 +202,7 @@ beforeAll(async () => {
   await dropDatabases(["test_mobile_master", `hms_${SLUG}`, `hms_${OTHER}`]);
   await flushTestCache("mobile");
 
-  await provision(SLUG);
+  tenantConnection = await provision(SLUG);
   await provision(OTHER);
 }, 180_000);
 
@@ -313,6 +319,7 @@ describe("a phone can choose which site it is working at", () => {
       gender: "male",
       contact: { phone: "9200000002" },
     });
+    patientBId = atChennai.patient.id;
     expect(atChennai.patient.branchId).toBe(branchB);
   });
 
@@ -329,6 +336,122 @@ describe("a phone can choose which site it is working at", () => {
     session.activeBranch = branchA;
     const encounter = await api.startEncounter({ patientId, departmentId: doctorId });
     expect(encounter.encounter.branchId).toBe(branchA);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 2b. BRANCH ISOLATION FROM A PHONE
+ *
+ * `branchIsolation.int.test.ts` already proves the boundary at the HTTP layer, thoroughly. This
+ * block exists because mobile introduces two vectors a browser does not have, and both of them
+ * arrive through `getActiveBranch()` — the callback the whole mobile branch design rests on:
+ *
+ *   1. A RECORD ID FROM OUTSIDE THE SESSION. A push payload or a deep link hands the app an id
+ *      it did not fetch, and the app navigates straight to it. If a by-id read ignored the
+ *      active branch, one notification would show a nurse a patient from a site she is not
+ *      working at — and the app would have done nothing wrong.
+ *   2. A PERSISTED SELECTION THAT OUTLIVED ITS TRUTH. The phone stores the active branch across
+ *      cold starts (M0 §7). The stored id can be stale in a way a tab open for ten minutes
+ *      never is.
+ *
+ * The mobile architecture states that the app validates NOTHING about branches. That is only
+ * safe if the server refuses on its own, through the real client, with the real header. That is
+ * what is asserted here.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a phone cannot reach across a branch, whatever it sends", () => {
+  const confined: Session = {};
+  const confinedApi = new ApiClient({
+    baseUrl: BASE,
+    tenantHost: `${SLUG}.medicore.test`,
+    fetchImpl: fetchViaApp(app),
+    getAccessToken: () => confined.accessToken,
+    getActiveBranch: () => confined.activeBranch,
+  });
+
+  beforeAll(async () => {
+    // Seeded here rather than in `provision` because the confinement needs branchA's id, which is
+    // only discovered by the switcher test above.
+    await runWithContext(
+      { traceId: "setup-confined", tenantId, tenantSlug: SLUG, connection: tenantConnection },
+      async () => {
+        const ward = await createUser({
+          email: `ward@${SLUG}.test`,
+          name: "Sister Iyer",
+          status: "invited",
+        });
+        await setPassword(ward.id, PASSWORD, { mustChangePassword: false });
+        // The third argument is the confinement: this binding reaches branchA and nothing else.
+        await assignRoleByCode(ward.id, "DOCTOR", [branchA]);
+        await transitionStatus(ward.id, "active");
+      },
+    );
+
+    const result = await confinedApi.login(`ward@${SLUG}.test`, PASSWORD, "iPhone 15 / iOS 18");
+    if (isMfaChallenge(result)) throw new Error("unexpected MFA challenge for the seeded user");
+    confined.accessToken = result.accessToken;
+  }, 60_000);
+
+  it("refuses a deep link into another branch — an id is not a key", async () => {
+    /**
+     * The same call, the same token, the same client. Only `getActiveBranch()` differs. A 404
+     * rather than a 403 is deliberate and correct: from branch B that patient does not exist, and
+     * saying "forbidden" would confirm the record to someone who may not know it is there.
+     */
+    session.activeBranch = branchA;
+    await expect(api.getPatient(patientId)).resolves.toMatchObject({ id: patientId });
+
+    session.activeBranch = branchB;
+    await expect(api.getPatient(patientId)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("ignores an X-Active-Branch the caller may not reach, rather than honouring it", async () => {
+    // The confined user's own site resolves normally.
+    confined.activeBranch = branchA;
+    const own = await confinedApi.listPatients({ limit: 50 });
+    expect(own.items.map((p) => p.name)).toContain("Branch A Patient");
+
+    /**
+     * Now the phone asks for a site this user does not hold. `resolveActiveBranch` treats it as
+     * "nothing selected" and falls back to her OWN scope — it never widens. The distinction
+     * matters on mobile specifically: an app that let a user pick a branch from a stale list, or
+     * a tampered build that sent an arbitrary id, must not be a way through.
+     */
+    confined.activeBranch = branchB;
+    const attempted = await confinedApi.listPatients({ limit: 50 });
+    const names = attempted.items.map((p) => p.name);
+    expect(names).toContain("Branch A Patient");
+    expect(names).not.toContain("Branch B Patient");
+
+    // And the by-id path, which is the one a deep link takes.
+    await expect(confinedApi.getPatient(patientBId)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("shows the confined user only her own site in the switcher, and offers her no All mode", async () => {
+    const mine = await confinedApi.listMyBranches();
+
+    expect(mine.branches.map((b) => b.id)).toEqual([branchA]);
+    // One reachable site is not a choice — the app must not render a switcher, and must not offer
+    // an "All branches" toggle that would mean the same thing as the one entry above it.
+    expect(mine.canAggregate).toBe(false);
+  });
+
+  it("drops a retired branch from the switcher — the list, not the phone's memory, is the truth", async () => {
+    session.activeBranch = branchA;
+    const retired = await api.createBranch({ name: "Old Wing", code: "OLD" });
+    expect((await api.listMyBranches()).branches.map((b) => b.id)).toContain(retired.id);
+
+    await api.updateBranch(retired.id, { status: "inactive" });
+
+    /**
+     * This is the assertion behind M0 §7's rule that a persisted selection is restored ONLY if it
+     * is still in `/me/branches`. `resolveActiveBranch` accepts any id a hospital-wide caller
+     * sends WITHOUT checking the branch is still active — so for that class of user the server
+     * will not catch a stale preference for a retired site. Re-reading this list on every launch
+     * is therefore load-bearing client behaviour, not a nicety. (The server-side hardening is
+     * itemised as backend item E in the M0 document.)
+     */
+    expect((await api.listMyBranches()).branches.map((b) => b.id)).not.toContain(retired.id);
   });
 });
 
