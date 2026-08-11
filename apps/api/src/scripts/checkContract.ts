@@ -178,6 +178,44 @@ function compare(baseline: Json, current: Json): Break[] {
         compareSchemas(`${op} ${key}`, asObj(param.schema), asObj(now.schema), "request", out);
       }
 
+      /**
+       * ── AUTHORIZATION IS PART OF THE CONTRACT ──────────────────────────────
+       * A change here breaks a caller as surely as a removed field, and more confusingly: the
+       * request is unchanged, the response is a 401 or a 403, and the client author has no reason
+       * to look at a schema diff. For a mobile build in the field it means a screen that worked
+       * yesterday now shows "insufficient permission" to a user whose role has not changed.
+       *
+       * Three moves are breaking, and all three are easy to make by accident while tidying:
+       *
+       *   public → authenticated   an anonymous caller (a booking widget, a status page) is cut off
+       *   permission added         every token issued before today lacks it
+       *   permission/feature swapped  the same, plus a hospital that bought the old feature
+       *
+       * The reverse of each is additive and passes: relaxing a rule never breaks a caller who was
+       * already satisfying the stricter one.
+       */
+      const wasSecured = ((b.security as unknown[] | undefined) ?? []).length > 0;
+      const nowSecured = ((a.security as unknown[] | undefined) ?? []).length > 0;
+      if (nowSecured && !wasSecured) {
+        out.push({ where: op, what: "a public operation now requires authentication" });
+      }
+
+      for (const key of ["x-permission", "x-feature"] as const) {
+        const before = b[key] as string | undefined;
+        const after = a[key] as string | undefined;
+        if (before === after) continue;
+        if (before === undefined) {
+          out.push({ where: op, what: `now requires ${key.slice(2)} "${String(after)}"` });
+        } else if (after !== undefined) {
+          out.push({
+            where: op,
+            what: `${key.slice(2)} changed: "${before}" → "${after}"`,
+          });
+        }
+        // `after === undefined` — the requirement was DROPPED. Additive; a caller who could
+        // already reach the operation still can.
+      }
+
       for (const code of Object.keys(asObj(b.responses) ?? {})) {
         if (!(code in (asObj(a.responses) ?? {}))) {
           out.push({ where: op, what: `documented response ${code} removed` });
