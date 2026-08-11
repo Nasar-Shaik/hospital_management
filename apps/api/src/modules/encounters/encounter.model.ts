@@ -288,7 +288,7 @@ export interface EncounterDoc {
 const encounterSchema = new Schema<EncounterDoc>(
   {
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String },
+    branchId: { type: String, required: true },
 
     patientId: { type: Schema.Types.ObjectId, required: true },
     episodeId: { type: Schema.Types.ObjectId, required: true },

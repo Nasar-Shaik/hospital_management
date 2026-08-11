@@ -124,7 +124,7 @@ export interface AppointmentDoc {
 
 const appointmentSchema = new Schema<AppointmentDoc>(
   {
-    branchId: { type: String },
+    branchId: { type: String, required: true },
     patientId: { type: String, required: true },
     doctorId: { type: String, required: true },
     departmentId: { type: String },
@@ -211,7 +211,7 @@ export interface DoctorScheduleDoc {
 
 const doctorScheduleSchema = new Schema<DoctorScheduleDoc>(
   {
-    branchId: { type: String },
+    branchId: { type: String, required: true },
     doctorId: { type: String, required: true },
     weekday: { type: Number, required: true, min: 0, max: 6 },
     startMinute: { type: Number, required: true, min: 0, max: 1439 },
@@ -320,7 +320,7 @@ export interface DoctorAvailabilityDoc {
 
 const doctorAvailabilitySchema = new Schema<DoctorAvailabilityDoc>(
   {
-    branchId: { type: String },
+    branchId: { type: String, required: true },
     doctorId: { type: String, required: true },
     weekday: { type: Number, required: true, min: 0, max: 6 },
     sessions: { type: [String], required: true, enum: DOCTOR_SESSIONS },

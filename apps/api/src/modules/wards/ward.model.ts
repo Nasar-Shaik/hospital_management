@@ -18,12 +18,18 @@
  * `status` records only what the ENCOUNTER cannot: whether a bed is out of service. Whether a
  * bed is free is DERIVED by the bed board (admissions module) from the open IP encounters.
  *
- * ── WHY WARD NAMES ARE UNIQUE PER TENANT, NOT PER BRANCH ─────────────────────
- * `one_open_stay_per_bed` keys occupancy on `{tenantId, bed.ward, bed.bedCode}` — no branch.
- * So the catalogue matches it: a ward name is unique across the whole hospital and a bed code
- * is unique within its ward, which makes `(ward name, bed code)` a tenant-wide key that lines
- * up exactly with how occupancy is already enforced. `branchId` is recorded so the board can
- * group beds by site, but it is descriptive — it does not widen the uniqueness.
+ * ── WARD NAMES ARE UNIQUE PER BRANCH (migration 0046) ────────────────────────
+ * A ward belongs to ONE SITE, so Hyderabad's ICU and Chennai's ICU are two different wards with
+ * the same name — `one_ward_name_per_branch` on `{tenantId, branchId, name}`.
+ *
+ * Occupancy is keyed the same way and had to move in the same migration. An admission records
+ * its bed as TEXT (`bed.ward`, `bed.bedCode` on the encounter), so once two sites may both own an
+ * "ICU", a tenant-wide occupancy key would refuse Chennai's ICU/A-12 because Hyderabad's is full.
+ * `one_open_stay_per_bed_per_branch` therefore leads with `branchId` too. The two indexes are a
+ * pair: change one and the other must follow, or a real patient is turned away by a stale rule.
+ *
+ * A bed code stays unique within its WARD (`one_bed_code_per_ward` on `wardId`) and needs no
+ * branch of its own — a ward already belongs to exactly one.
  */
 import { Schema, type Connection, type Model, type Types } from "mongoose";
 import { tenantScopePlugin } from "../../core/db/plugins/tenantScope.js";
@@ -82,7 +88,7 @@ export interface WardDoc {
   tenantId: string;
   branchId?: string;
 
-  /** `General Ward`, `ICU`. Unique per tenant — see the header. */
+  /** `General Ward`, `ICU`. Unique per BRANCH — see the header. */
   name: string;
   kind: WardKind;
   /**
@@ -156,7 +162,7 @@ export interface BedDoc {
 const wardSchema = new Schema<WardDoc>(
   {
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String },
+    branchId: { type: String, required: true },
 
     name: { type: String, required: true, trim: true, maxlength: 100 },
     kind: { type: String, enum: WARD_KINDS, required: true, default: "general" },
@@ -170,7 +176,7 @@ const wardSchema = new Schema<WardDoc>(
 const roomSchema = new Schema<RoomDoc>(
   {
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String },
+    branchId: { type: String, required: true },
 
     wardId: { type: Schema.Types.ObjectId, required: true },
     name: { type: String, required: true, trim: true, maxlength: 100 },
@@ -184,7 +190,7 @@ const roomSchema = new Schema<RoomDoc>(
 const bedSchema = new Schema<BedDoc>(
   {
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String },
+    branchId: { type: String, required: true },
 
     wardId: { type: Schema.Types.ObjectId, required: true },
     roomId: { type: Schema.Types.ObjectId },
