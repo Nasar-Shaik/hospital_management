@@ -33,7 +33,7 @@
 import { Worker, type ConnectionOptions } from "bullmq";
 import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
-import { runWithContext } from "../context/requestContext.js";
+import { getContext, runWithContext } from "../context/requestContext.js";
 import { getTenantConnection } from "../db/connectionManager.js";
 import { getById } from "../../modules/tenants/index.js";
 import { appointmentConsumers } from "../../modules/appointments/index.js";
@@ -136,8 +136,29 @@ function redisConnection(url: string): ConnectionOptions {
  * `userId` is deliberately absent. Nobody clicked anything — this is the system
  * acting on its own, and the audit trail should say so rather than blame the clerk
  * whose booking happened to trigger it.
+ *
+ * ── THE BRANCH TRAVELS WITH THE EVENT (ADR-0015) ────────────────────────────
+ * `activeBranchId` is bound from the envelope, so a handler reacting to something that
+ * happened in Chennai writes its charge, its stock movement and its SMS record in Chennai —
+ * through `writeBranchId()`, the same choke point a request uses, with no per-consumer
+ * plumbing. Before this, the context carried no branch at all and each consumer had to
+ * remember `event.branchId` for itself: billing, medicines, patients and prescriptions did;
+ * `order.result.released` did not, and neither did anything reached through `notify()` that
+ * had not thought to look it up. Per-consumer plumbing always ends with that split.
+ *
+ * It also makes the branch survive a RETRY, which per-handler plumbing could not guarantee:
+ * the value is re-read from the persisted outbox row on every redelivery, so attempt five
+ * binds exactly what attempt one did.
+ *
+ * `scope` stays absent. There is no user to constrain here, and `writeBranchId` already reads
+ * an absent scope as "internal caller, trust the branch" — the same way `scopeFilter` does.
  */
-async function withTenant<T>(tenantId: string, traceId: string, fn: () => Promise<T>): Promise<T> {
+async function withTenant<T>(
+  tenantId: string,
+  traceId: string,
+  fn: () => Promise<T>,
+  branchId?: string,
+): Promise<T> {
   const tenant = await getById(tenantId);
   if (!tenant) {
     // A tenant that no longer exists (or was terminated) is not a retryable
@@ -153,7 +174,16 @@ async function withTenant<T>(tenantId: string, traceId: string, fn: () => Promis
     ...(tenant.dbUri ? { dbUri: tenant.dbUri } : {}),
   });
 
-  return runWithContext({ traceId, tenantId: tenant.id, tenantSlug: tenant.slug, connection }, fn);
+  return runWithContext(
+    {
+      traceId,
+      tenantId: tenant.id,
+      tenantSlug: tenant.slug,
+      connection,
+      ...(branchId ? { activeBranchId: branchId } : {}),
+    },
+    fn,
+  );
 }
 
 /**
@@ -213,8 +243,11 @@ export function startEventConsumer(): void {
         return;
       }
 
-      await withTenant(event.tenantId, event.traceId ?? `event-${event.eventId}`, () =>
-        dispatchEvent(handlers, event),
+      await withTenant(
+        event.tenantId,
+        event.traceId ?? `event-${event.eventId}`,
+        () => dispatchEvent(handlers, event),
+        event.branchId,
       );
     },
     {
@@ -264,7 +297,20 @@ export async function stopEventConsumer(): Promise<void> {
 export async function dispatchEventInline(event: DomainEvent): Promise<void> {
   const { events } = mergeHandlers();
   const handlers = events.get(event.name) ?? [];
-  await dispatchEvent(handlers, event);
+
+  /**
+   * The branch is bound here for the same reason `withTenant` binds it, and the duplication is
+   * the point: a seam that skipped it would let a test prove a propagation production does not
+   * perform. The caller has already bound the tenant (that is what this seam exists to avoid
+   * re-doing), so only the branch is layered on.
+   */
+  if (!event.branchId) {
+    await dispatchEvent(handlers, event);
+    return;
+  }
+  await runWithContext({ ...getContext(), activeBranchId: event.branchId }, () =>
+    dispatchEvent(handlers, event),
+  );
 }
 
 export async function dispatchTaskInline(

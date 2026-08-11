@@ -19,6 +19,7 @@
  */
 import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { getChannel } from "./channels/channel.js";
 import { renderTemplate } from "./notification.model.js";
 import * as repo from "./notification.repository.js";
@@ -74,6 +75,33 @@ export interface NotifyInput {
 export type NotifyOutcome = "sent" | "duplicate" | "unreachable" | "suppressed" | "failed";
 
 /**
+ * Which site's ledger this message belongs to (ADR-0015).
+ *
+ * `NotifyInput.branchId` was left to each caller, and the callers disagreed: the three appointment
+ * messages and the patient welcome passed one, `order.result.released` and `password.reset` did
+ * not. Per-caller plumbing always ends this way — the gap is invisible until someone reads a
+ * report and finds a message that cannot say which site sent it.
+ *
+ * It is now DERIVED, and an explicit argument still wins for a caller that knows better. For a
+ * queue handler the derived value is the branch of the EVENT that triggered it (bound in
+ * `eventConsumer.withTenant`); for a direct call it is the branch the clerk is working at.
+ *
+ * ── WHY THIS ONE FAILS SOFT WHERE A CHARGE FAILS CLOSED ─────────────────────
+ * `writeBranchId()` refuses (HMS-BRANCH-001) when a caller could mean several branches and has
+ * named none. That is right for a record OF something — an admission must know its site. It is
+ * wrong here: this is the record of a MESSAGE, and a critical-result alert must never fail to
+ * send because nobody picked a branch in a dropdown. So an ambiguous branch downgrades to "not
+ * recorded" and the message goes out, which is the lesser of the two harms.
+ */
+async function deliveryBranchId(explicit?: string): Promise<string | undefined> {
+  try {
+    return await writeBranchId(explicit);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Sends one message, exactly once, and records what happened either way.
  *
  * Throws ONLY when the provider fails — that is the signal the caller (a queue
@@ -83,6 +111,7 @@ export type NotifyOutcome = "sent" | "duplicate" | "unreachable" | "suppressed" 
  * them forever is a queue nobody reads.
  */
 export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
+  const branchId = await deliveryBranchId(input.branchId);
   const template = await repo.findTemplate(input.templateKey);
   if (!template) {
     // A missing template is a BUG (a caller named one that was never seeded), and
@@ -121,7 +150,7 @@ export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
     ...(input.recipient.name ? { recipientName: input.recipient.name } : {}),
     ...(input.recipient.type ? { recipientType: input.recipient.type } : {}),
     ...(input.recipient.id ? { recipientId: input.recipient.id } : {}),
-    ...(input.branchId ? { branchId: input.branchId } : {}),
+    ...(branchId ? { branchId } : {}),
     ...(input.eventId ? { eventId: input.eventId } : {}),
   });
 
