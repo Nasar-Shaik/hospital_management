@@ -219,9 +219,33 @@ function toSchedule(doc: DoctorScheduleDoc): DoctorSchedule {
   };
 }
 
-export async function findSchedules(doctorId: string, weekday?: number): Promise<DoctorSchedule[]> {
+/**
+ * The key a weekday template is upserted on — `{doctor, weekday}` AT A SITE (ADR-0015).
+ *
+ * `$exists: false` rather than `null` for the branchless case, and the difference matters at the
+ * upsert: Mongo copies equality fields from the filter into an inserted document, so `null` would
+ * WRITE `branchId: null` and quietly break every `{$exists: false}` audit and backfill that looks
+ * for unstamped rows. `$exists` is not an equality, so the insert simply omits the field — which
+ * is the state a single-site hospital is supposed to be in until its Main Branch is seeded.
+ */
+function branchKey(branchId?: string): Record<string, unknown> {
+  return branchId ? { branchId } : { branchId: { $exists: false } };
+}
+
+/**
+ * A doctor's active weekly templates. `branchId` narrows to ONE SITE's clinic — pass the branch
+ * the slots are being computed for, so "Monday" means Monday *here* and a Chennai session never
+ * offers slots to a Hyderabad booking. Omitted, it returns the doctor's templates everywhere,
+ * which is what a single-site hospital (and the roster screen) wants.
+ */
+export async function findSchedules(
+  doctorId: string,
+  weekday?: number,
+  branchId?: string,
+): Promise<DoctorSchedule[]> {
   const query: Record<string, unknown> = { doctorId, active: true };
   if (weekday !== undefined) query.weekday = weekday;
+  if (branchId) query.branchId = branchId;
 
   const docs = await getDoctorScheduleModel(getTenantDb()).find(query);
   return docs.map(toSchedule);
@@ -236,7 +260,7 @@ export async function upsertSchedule(input: {
   slotMinutes: number;
 }): Promise<DoctorSchedule> {
   const doc = await getDoctorScheduleModel(getTenantDb()).findOneAndUpdate(
-    { doctorId: input.doctorId, weekday: input.weekday },
+    { doctorId: input.doctorId, weekday: input.weekday, ...branchKey(input.branchId) },
     { ...input, active: true },
     { new: true, upsert: true },
   );
@@ -372,12 +396,18 @@ export async function setAvailability(input: {
   const model = getDoctorAvailabilityModel(getTenantDb());
 
   if (input.sessions.length === 0) {
-    await model.deleteOne({ doctorId: input.doctorId, weekday: input.weekday, ...scopeFilter() });
+    // Clearing a day clears it AT ONE SITE — the roster row is per branch, like the template.
+    await model.deleteOne({
+      doctorId: input.doctorId,
+      weekday: input.weekday,
+      ...branchKey(input.branchId),
+      ...scopeFilter(),
+    });
     return undefined;
   }
 
   const doc = await model.findOneAndUpdate(
-    { doctorId: input.doctorId, weekday: input.weekday },
+    { doctorId: input.doctorId, weekday: input.weekday, ...branchKey(input.branchId) },
     {
       $set: {
         sessions: input.sessions,

@@ -394,7 +394,8 @@ export const tenantMigrations: Migration[] = [
         .collection("appointments")
         .createIndex({ tenantId: 1, branchId: 1, startAt: 1 }, { background: true });
 
-      // One active template per doctor per weekday — the upsert key.
+      // One active template per doctor per weekday — the upsert key. Widened to include
+      // `branchId` by migration 0046: a doctor may hold a Monday clinic at more than one site.
       await db
         .collection("doctorSchedules")
         .createIndex({ tenantId: 1, doctorId: 1, weekday: 1 }, { unique: true, background: true });
@@ -941,6 +942,9 @@ export const tenantMigrations: Migration[] = [
        * and `General / A-12` are two different beds. If this index cannot be built because two open
        * stays already share a bed, that is the very defect it exists to prevent: move one patient
        * to a free bed, then re-run.
+       *
+       * SUPERSEDED by migration 0046: once two branches may each own an "ICU", the site is part of
+       * the bed's identity too, and this key is replaced by `one_open_stay_per_bed_per_branch`.
        */
       await db.collection("encounters").createIndex(
         { tenantId: 1, "bed.ward": 1, "bed.bedCode": 1 },
@@ -1126,10 +1130,10 @@ export const tenantMigrations: Migration[] = [
       await db.createCollection("beds").catch(() => undefined);
 
       /**
-       * A ward name is unique PER TENANT, not per branch — deliberately. Occupancy is enforced by
-       * `one_open_stay_per_bed` on `{tenantId, bed.ward, bed.bedCode}` (migration 0020, no branch),
-       * so the catalogue lines up with it: `(ward name, bed code)` is a tenant-wide key. If this
-       * cannot build because two wards already share a name, fold one into the other and re-run.
+       * A ward name is unique per tenant. SUPERSEDED by migration 0046, which widens this to
+       * `{tenantId, branchId, name}` so two sites can each have an ICU — left as written because
+       * a migration records what it did on the day, and 0046 is the one that undoes it.
+       * If this cannot build because two wards already share a name, fold one into the other.
        */
       await db
         .collection("wards")
@@ -1432,7 +1436,10 @@ export const tenantMigrations: Migration[] = [
       await db.createCollection("doctorAvailability").catch(() => undefined);
       await db.createCollection("doctorLeave").catch(() => undefined);
 
-      /** One roster row per doctor per weekday — the sessions they are in that day. */
+      /**
+       * One roster row per doctor per weekday — the sessions they are in that day. Widened to
+       * include `branchId` by migration 0046, for the same reason as the slot template.
+       */
       await db
         .collection("doctorAvailability")
         .createIndex(
@@ -1764,5 +1771,220 @@ export const tenantMigrations: Migration[] = [
         .drop()
         .catch(() => undefined);
     },
+  },
+  {
+    id: "0046-branch-aware-uniqueness",
+    description:
+      "Multi-branch (ADR-0015): four tenant-wide unique keys become branch-aware, so a hospital " +
+      "with two sites can have an ICU at each and a doctor can hold Monday clinics at both.",
+    /**
+     * ── WHY THESE FOUR MOVE TOGETHER, AND WHY THIS IS SAFE ──────────────────────
+     * A ward name was unique per TENANT (`one_ward_name_per_tenant`, 0027), which is a rule that
+     * reads as sensible right up to the day the hospital opens a second site: Hyderabad has an
+     * ICU, Chennai wants one, and the database says no. The same is true of a doctor's weekday
+     * template (0010) and roster row (0035) — one Monday per doctor, hospital-wide, so a second
+     * site's Monday silently OVERWROTE the first through the upsert.
+     *
+     * Ward names and bed occupancy cannot move separately. `one_open_stay_per_bed` (0020) keys
+     * occupancy on `{tenantId, bed.ward, bed.bedCode}` — the ward NAME, not its id, because an
+     * admission records the bed as text. The instant two branches may both own an "ICU", that key
+     * would refuse to admit Chennai's ICU/A-12 patient because Hyderabad's ICU/A-12 is occupied:
+     * a real patient turned away by a stale invariant. So occupancy becomes branch-aware in the
+     * SAME migration, and 0027's header note (which explains why they were coupled) is superseded.
+     *
+     * Every change here WIDENS a unique key by prepending a field. A widened unique key cannot be
+     * violated by data that satisfied the narrower one, so none of these creations can fail on
+     * existing data — which is why no pre-flight conflict scan is needed. Rows with no `branchId`
+     * index as `null` and keep colliding with each other exactly as they do today.
+     *
+     * Created BEFORE the old one is dropped, so an interrupted run leaves the STRICTER key in
+     * place rather than no key at all. Both indexes may coexist mid-run; that is a temporary
+     * over-constraint, never a gap.
+     */
+    up: async (db) => {
+      /* Wards: `ICU` at Hyderabad and `ICU` at Chennai are two different wards. */
+      await db
+        .collection("wards")
+        .createIndex(
+          { tenantId: 1, branchId: 1, name: 1 },
+          { unique: true, name: "one_ward_name_per_branch", background: true },
+        );
+      await db
+        .collection("wards")
+        .dropIndex("one_ward_name_per_tenant")
+        .catch(() => undefined);
+
+      /* Occupancy: a bed is identified by its site as well as its ward and code. */
+      await db.collection("encounters").createIndex(
+        { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+          background: true,
+          name: "one_open_stay_per_bed_per_branch",
+        },
+      );
+      await db
+        .collection("encounters")
+        .dropIndex("one_open_stay_per_bed")
+        .catch(() => undefined);
+
+      /* The slot template: one Monday clinic per doctor PER SITE. */
+      await db
+        .collection("doctorSchedules")
+        .createIndex(
+          { tenantId: 1, branchId: 1, doctorId: 1, weekday: 1 },
+          { unique: true, name: "one_schedule_per_doctor_weekday_branch", background: true },
+        );
+      // Created unnamed in 0010, so it carries Mongo's derived name.
+      await db
+        .collection("doctorSchedules")
+        .dropIndex("tenantId_1_doctorId_1_weekday_1")
+        .catch(() => undefined);
+
+      /* The session roster: same key, same reason. */
+      await db
+        .collection("doctorAvailability")
+        .createIndex(
+          { tenantId: 1, branchId: 1, doctorId: 1, weekday: 1 },
+          { unique: true, name: "one_roster_row_per_doctor_weekday_branch", background: true },
+        );
+      await db
+        .collection("doctorAvailability")
+        .dropIndex("one_roster_row_per_doctor_weekday")
+        .catch(() => undefined);
+    },
+    /**
+     * Best-effort, and it says so. Restoring a NARROWER unique key fails if the data has since
+     * used the freedom this migration granted — two branches with an ICU, one doctor with two
+     * Monday clinics. That is not a fault to be swallowed: the `catch` keeps the rollback moving
+     * for the collections that can be narrowed, and the ones that cannot are exactly the ones a
+     * human must look at before going back.
+     */
+    down: async (db) => {
+      await db
+        .collection("wards")
+        .createIndex(
+          { tenantId: 1, name: 1 },
+          { unique: true, name: "one_ward_name_per_tenant", background: true },
+        )
+        .catch(() => undefined);
+      await db
+        .collection("wards")
+        .dropIndex("one_ward_name_per_branch")
+        .catch(() => undefined);
+
+      await db
+        .collection("encounters")
+        .createIndex(
+          { tenantId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+          {
+            unique: true,
+            partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+            background: true,
+            name: "one_open_stay_per_bed",
+          },
+        )
+        .catch(() => undefined);
+      await db
+        .collection("encounters")
+        .dropIndex("one_open_stay_per_bed_per_branch")
+        .catch(() => undefined);
+
+      await db
+        .collection("doctorSchedules")
+        .createIndex({ tenantId: 1, doctorId: 1, weekday: 1 }, { unique: true, background: true })
+        .catch(() => undefined);
+      await db
+        .collection("doctorSchedules")
+        .dropIndex("one_schedule_per_doctor_weekday_branch")
+        .catch(() => undefined);
+
+      await db
+        .collection("doctorAvailability")
+        .createIndex(
+          { tenantId: 1, doctorId: 1, weekday: 1 },
+          { unique: true, name: "one_roster_row_per_doctor_weekday", background: true },
+        )
+        .catch(() => undefined);
+      await db
+        .collection("doctorAvailability")
+        .dropIndex("one_roster_row_per_doctor_weekday_branch")
+        .catch(() => undefined);
+    },
+  },
+  {
+    id: "0047-ledger-branch-from-parent",
+    description:
+      "Multi-branch (ADR-0015): give a branchless ledger row the branch of the record it answers " +
+      "to — a wallet movement its encounter or invoice, a stock movement its dispense.",
+    /**
+     * ── DERIVED, NEVER GUESSED ──────────────────────────────────────────────────
+     * `seedMainBranch` adopts unstamped rows into the Main Branch, and that adoption rests on
+     * "there was only one site, so it happened there". It therefore refuses outright once a
+     * hospital has two branches — which leaves exactly the rows this migration is for.
+     *
+     * A ledger row is not orphaned in the same way. A wallet DEBIT settles an invoice, and that
+     * invoice was raised somewhere; a stock DISPENSE answers a dispense, and that dispense
+     * crossed a counter somewhere. The parent already knows, so this is a lookup, not an
+     * inference, and it is correct no matter how many branches the hospital has.
+     *
+     * What it deliberately does NOT touch: a wallet DEPOSIT or REFUND with no invoice and no
+     * encounter (cash at a desk, and which desk is genuinely unrecorded), a stock RECEIPT or
+     * ADJUSTMENT (the defect that produced them never captured a branch — see
+     * `medicine.service.ts`), and a doctor's pre-branch schedule. Those rows stay branchless and
+     * are reported by the audit. Inventing a site for them would put a number in a financial
+     * ledger that nobody can defend, which is worse than a gap that is visible.
+     *
+     * Row-at-a-time on purpose: these sets are tens of rows, not millions (an `$lookup`-and-merge
+     * pipeline would be faster and much harder to read), and each update is independent, so an
+     * interrupted run simply resumes — the filter only ever matches what is still unstamped.
+     */
+    up: async (db) => {
+      /* A wallet movement belongs where the visit or the bill it settles belongs. */
+      const entries = await db
+        .collection("walletEntries")
+        .find({
+          branchId: { $exists: false },
+          $or: [{ encounterId: { $exists: true } }, { invoiceId: { $exists: true } }],
+        })
+        .toArray();
+      for (const entry of entries) {
+        const parent = entry.encounterId
+          ? await db
+              .collection("encounters")
+              .findOne({ _id: entry.encounterId }, { projection: { branchId: 1 } })
+          : await db
+              .collection("invoices")
+              .findOne({ _id: entry.invoiceId }, { projection: { branchId: 1 } });
+        if (parent?.branchId) {
+          await db
+            .collection("walletEntries")
+            .updateOne({ _id: entry._id }, { $set: { branchId: parent.branchId } });
+        }
+      }
+
+      /* A stock movement caused by a dispense belongs to the pharmacy that dispensed. */
+      const movements = await db
+        .collection("stockMovements")
+        .find({ branchId: { $exists: false }, dispenseId: { $exists: true } })
+        .toArray();
+      for (const movement of movements) {
+        const dispense = await db
+          .collection("dispenses")
+          .findOne({ _id: movement.dispenseId }, { projection: { branchId: 1 } });
+        if (dispense?.branchId) {
+          await db
+            .collection("stockMovements")
+            .updateOne({ _id: movement._id }, { $set: { branchId: dispense.branchId } });
+        }
+      }
+    },
+    /**
+     * Intentionally a no-op. The rows this set are indistinguishable from rows that were always
+     * stamped, so an inverse would have to `$unset` branches that are CORRECT — turning a
+     * rollback into data loss. Re-running `up` is harmless, which is the property that matters.
+     */
+    down: async () => undefined,
   },
 ];
