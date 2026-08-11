@@ -14,6 +14,70 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## API lifecycle + mobile readiness (2026-08-12) · CLOSED — **MOBILE API READY**
+
+The last backend contract milestone before React Native. Three things it set out to do, and one
+it found on the way.
+
+### v1 compatibility, now enforceable
+
+[API_LIFECYCLE.md](AI_Workflow/docs/API_LIFECYCLE.md) states the promise — inside a version the API
+only ever gains — and lists the fourteen changes that require a v2. Eleven were already caught by
+`contract:check`. **Three were not**, and they are the ones a schema diff cannot show: a public
+operation becoming authenticated, a required permission being added or changed, and a required
+feature flag being added or changed. The request is unchanged, the response is a 401 or a 403, and
+nothing in a diff explains it. All three are now checks, and all three were falsified.
+
+### Deprecation / Sunset — machinery only
+
+`deprecate()` emits RFC 9745 `Deprecation`, RFC 8594 `Sunset` and the `Link` relations, and the
+same declaration produces `deprecated: true` + `x-sunset` in the spec. The **12-month window is
+enforced at startup**, not promised in prose: a shorter one throws while the router is built.
+
+**Nothing is deprecated, and two tests fail if that changes by accident** — one reads the live
+router, one reads the committed spec. `Sunset` only means something while it is rare; spending it
+on a demonstration teaches every client to ignore it.
+
+### The web app moved to `Idempotency-Key` — and two keys were not keys
+
+All six call sites now send the header; where the endpoint also has a `requestId` field the same
+string goes in both (the header is the mechanism, the body field is the second lock). No API
+behaviour changed.
+
+Two of those sites had **no idempotency at all**. Both built their key as `` `…-${Date.now()}` ``,
+so every click produced a new key and the double-click each was written to prevent went straight
+through — a second lab order, a second drug handover. A key derived from the clock protects nothing
+and looks exactly like a key that does.
+
+One user-facing change, deliberate and stated: a duplicate payment submit now replays the original
+receipt (201) instead of showing a red "Payment already captured". `HMS-REQ-002`/`HMS-REQ-004` are
+surfaced as sentences a cashier can act on.
+
+### The blocker it found
+
+`auditExportUrl()` returned a bare URL that `apps/web` hung on an `<a href>`. `/audit/export` is
+behind `authenticate()`, which reads `Authorization: Bearer` and nothing else — so that navigation
+arrived with no credential. It looked correct in review because a URL builder cannot fail; only the
+far end can. React Native has no "open an authenticated URL in a tab" at all, so it was a hard
+mobile blocker as well as a live web bug. Replaced by `fetchAuditCsv()`, which also surfaces the
+truncation flag a downloaded file cannot show you.
+
+### Mobile readiness
+
+`mobileContract.int.test.ts` — **21 tests driven through the shipped `@medicore/api-client`**, not
+through supertest. The mobile app will hold that object, not the Express app, and a defect in the
+wiring between them is invisible to every other suite here. Fetch injection carries it, which is
+the seam React Native itself needs.
+
+Portability, verified by sweep: **zero node builtins, zero browser globals in executable code.**
+The whole surface is `fetch`, `Headers`, `Response`, `Blob`, `URLSearchParams` (`.set`/`.toString`)
+and `globalThis` — all present in RN. `Blob` rather than `arrayBuffer()` throughout, deliberately:
+RN's fetch is XHR-backed and does not implement `arrayBuffer()` everywhere.
+
+**1458/1458 integration · 69 unit · gate green.**
+
+---
+
 ## Idempotency-Key — the documented contract becomes real (2026-08-11) · CLOSED
 
 Migration 0004 created `idempotencyKeys` in week one. Forty-four migrations later **nothing had
@@ -311,8 +375,10 @@ match are comments) — React Native ready as `MOBILE_APP_DEVELOPMENT.md` assume
 ### Remaining API risks
 
 - **No success response schemas** — the blocker for generating the client and for typing `data`.
-- **Versioning is a mount path, not a contract.** No version constants, no `Deprecation`/`Sunset`
-  headers, no API-key version pinning. Deferred deliberately: `/v1` had to become stable first.
+- ~~**Versioning is a mount path, not a contract.**~~ Closed 2026-08-12 — policy in
+  `docs/API_LIFECYCLE.md`, `Deprecation`/`Sunset` machinery in place (pointed at nothing), and
+  `contract:check` now enforces the authorization half of it. API-key version pinning remains
+  unbuilt and unneeded while there is exactly one version.
 - ~~**`Idempotency-Key` is unimplemented.**~~ Closed 2026-08-11 — see the section below.
 - **Request-shape conformance is name-based** — it catches a field disappearing from the client
   entirely, not a field on the wrong method. Response DTOs would make it exact.
