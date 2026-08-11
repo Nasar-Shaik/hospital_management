@@ -53,7 +53,7 @@ function verifyContract(res: Response, data: unknown, status: number): void {
   if (!VERIFY) return;
   const tag = (res.locals as Record<string, unknown>)["responseContract"] as
     ResponseTag | undefined;
-  if (!tag) return;
+  if (!tag?.schema) return;
 
   if (!tag.statuses.includes(status)) {
     throw new Error(

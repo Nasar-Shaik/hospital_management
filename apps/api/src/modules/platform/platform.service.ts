@@ -52,6 +52,7 @@ import {
   type LicenseRuntimeState,
 } from "../tenants/index.js";
 import { changePlan, getSubscription, listPlans } from "../subscriptions/index.js";
+import type { SubscriptionView, UsageLine } from "../subscriptions/index.js";
 import * as repo from "./platform.repository.js";
 import type { PlatformRole } from "./platform.model.js";
 
@@ -229,7 +230,9 @@ function toSummary(tenant: TenantRegistryEntry, baseDomain: string): HospitalSum
 export async function getHospital(
   tenantId: string,
   baseDomain: string,
-): Promise<HospitalSummary & { usage: unknown; features: string[] }> {
+  // `usage` was `unknown`; it is a `UsageLine[]` and always has been — the detail screen's
+  // seat-count bars are drawn from it.
+): Promise<HospitalSummary & { usage: UsageLine[]; features: string[] }> {
   const tenant = await getTenantById(tenantId);
   if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
 
@@ -492,7 +495,10 @@ export async function setHospitalPlan(
   planCode: string,
   actor: { id: string; email: string },
   context: { ip?: string; traceId?: string },
-): Promise<unknown> {
+  // Was `Promise<unknown>`, which is what `changePlan` happens to be assignable to and not what
+  // it returns. An `unknown` here is not merely imprecise: it makes the operation's response
+  // impossible to state, so the console had to guess the shape of the plan it had just changed.
+): Promise<SubscriptionView> {
   const tenant = await getTenantById(tenantId);
   if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
 

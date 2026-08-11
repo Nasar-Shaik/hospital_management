@@ -17,21 +17,31 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds, respondsFile } from "../../middleware/responds.js";
 import * as controller from "./site.controller.js";
+import { editableSite, logoDeletedAck, logoUploadedAck, publicSite } from "./site.contract.js";
 import { updateSiteSchema, uploadLogoSchema } from "./site.schema.js";
 
 export function siteRouter(): Router {
   const router = Router();
 
   // Public — no authenticate. Tenant is resolved from the host.
-  router.get("/site", asyncHandler(controller.publicSite));
+  router.get("/site", responds(publicSite), asyncHandler(controller.publicSite));
   // Public — the logo is shown on the logged-out login page and the public site.
-  router.get("/site/logo", asyncHandler(controller.publicLogo));
+  router.get(
+    "/site/logo",
+    respondsFile(
+      ["image/*"],
+      "The hospital logo. 404 when none has been uploaded — check `hasLogo` on `GET /site` first.",
+    ),
+    asyncHandler(controller.publicLogo),
+  );
 
   router.get(
     "/site/settings",
     authenticate(),
     authorize(PERMISSIONS.BRANDING_MANAGE),
+    responds(editableSite),
     asyncHandler(controller.getSettings),
   );
 
@@ -40,6 +50,7 @@ export function siteRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BRANDING_MANAGE),
     validate(updateSiteSchema),
+    responds(editableSite),
     asyncHandler(controller.updateSettings),
   );
 
@@ -50,6 +61,7 @@ export function siteRouter(): Router {
     // A base64 logo exceeds the app-wide 1 MB JSON limit only slightly; this route accepts more.
     json({ limit: "2mb" }),
     validate(uploadLogoSchema),
+    responds(logoUploadedAck),
     asyncHandler(controller.uploadLogo),
   );
 
@@ -57,6 +69,7 @@ export function siteRouter(): Router {
     "/site/logo",
     authenticate(),
     authorize(PERMISSIONS.BRANDING_MANAGE),
+    responds(logoDeletedAck),
     asyncHandler(controller.deleteLogo),
   );
 

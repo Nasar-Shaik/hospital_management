@@ -16,7 +16,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./mortuary.controller.js";
+import { mortuaryEntry } from "./mortuary.contract.js";
 import {
   receiveBodySchema,
   releaseBodySchema,
@@ -35,6 +37,7 @@ export function mortuaryRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MORTUARY_MANAGE, FEATURE),
     validate(listQuerySchema, "query"),
+    responds(mortuaryEntry.array()),
     asyncHandler(controller.listRegister),
   );
 
@@ -43,6 +46,7 @@ export function mortuaryRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MORTUARY_MANAGE, FEATURE),
     validate(encounterParamSchema, "params"),
+    responds(mortuaryEntry.nullable()),
     asyncHandler(controller.getForEncounter),
   );
 
@@ -51,6 +55,7 @@ export function mortuaryRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MORTUARY_MANAGE, FEATURE),
     validate(receiveBodySchema),
+    responds(mortuaryEntry, { status: 201 }),
     asyncHandler(controller.receiveBody),
   );
 
@@ -60,6 +65,7 @@ export function mortuaryRouter(): Router {
     authorize(PERMISSIONS.MORTUARY_RELEASE, FEATURE),
     validate(idParamSchema, "params"),
     validate(releaseBodySchema),
+    responds(mortuaryEntry),
     asyncHandler(controller.releaseBody),
   );
 

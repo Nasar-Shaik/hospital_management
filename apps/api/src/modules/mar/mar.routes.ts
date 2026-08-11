@@ -18,7 +18,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./mar.controller.js";
+import { medicationAdministration } from "./mar.contract.js";
 import { recordAdministrationSchema, encounterIdParamSchema } from "./mar.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.CLINICAL_NURSING } as const;
@@ -31,6 +33,7 @@ export function marRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(encounterIdParamSchema, "params"),
+    responds(medicationAdministration.array()),
     asyncHandler(controller.listAdministrations),
   );
 
@@ -40,6 +43,7 @@ export function marRouter(): Router {
     authorize(PERMISSIONS.MAR_ADMINISTER, FEATURE),
     validate(encounterIdParamSchema, "params"),
     validate(recordAdministrationSchema),
+    responds(medicationAdministration, { status: 201 }),
     asyncHandler(controller.recordAdministration),
   );
 

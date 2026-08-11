@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./theatre.controller.js";
+import { otBooking, theatre } from "./theatre.contract.js";
 import {
   createTheatreSchema,
   updateTheatreSchema,
@@ -40,6 +42,7 @@ export function theatreRouter(): Router {
     "/theatres",
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
+    responds(theatre.array()),
     asyncHandler(controller.listTheatres),
   );
 
@@ -48,6 +51,7 @@ export function theatreRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FACILITY_MANAGE, FEATURE),
     validate(createTheatreSchema),
+    responds(theatre, { status: 201 }),
     asyncHandler(controller.createTheatre),
   );
 
@@ -57,6 +61,7 @@ export function theatreRouter(): Router {
     authorize(PERMISSIONS.FACILITY_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateTheatreSchema),
+    responds(theatre),
     asyncHandler(controller.updateTheatre),
   );
 
@@ -66,6 +71,7 @@ export function theatreRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(listBookingsQuerySchema, "query"),
+    responds(otBooking.array()),
     asyncHandler(controller.listBookings),
   );
 
@@ -74,6 +80,7 @@ export function theatreRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.OT_SCHEDULE, FEATURE),
     validate(createBookingSchema),
+    responds(otBooking, { status: 201 }),
     asyncHandler(controller.createBooking),
   );
 
@@ -83,6 +90,7 @@ export function theatreRouter(): Router {
     authorize(PERMISSIONS.OT_SCHEDULE, FEATURE),
     validate(idParamSchema, "params"),
     validate(transitionBookingSchema),
+    responds(otBooking),
     asyncHandler(controller.transitionBooking),
   );
 

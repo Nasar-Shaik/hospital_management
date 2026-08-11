@@ -22,7 +22,22 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./billing.controller.js";
+import {
+  billPreview,
+  catalogueItem,
+  charge,
+  consultationPaymentStates,
+  encounterBilling,
+  invoice,
+  orderPaymentStates,
+  orderSettlementInfos,
+  orderSettlementResult,
+  packageEnrollment,
+  servicePackage,
+  serviceItem,
+} from "./billing.contract.js";
 import {
   idParamSchema,
   listInvoicesQuerySchema,
@@ -56,6 +71,7 @@ export function billingRouter(): Router {
     "/billing/order-payments",
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
+    responds(orderPaymentStates),
     asyncHandler(controller.orderPayments),
   );
 
@@ -68,6 +84,7 @@ export function billingRouter(): Router {
     "/billing/consultation-payments",
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
+    responds(consultationPaymentStates),
     asyncHandler(controller.consultationPayments),
   );
 
@@ -81,6 +98,7 @@ export function billingRouter(): Router {
     "/billing/order-settlement",
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
+    responds(orderSettlementInfos),
     asyncHandler(controller.orderSettlement),
   );
 
@@ -89,6 +107,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_PERFORM, FEATURE),
     validate(idParamSchema, "params"),
+    responds(orderSettlementResult),
     asyncHandler(controller.settleOrderFromAdvance),
   );
 
@@ -98,6 +117,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(listServicesQuerySchema, "query"),
+    responds(serviceItem.array()),
     asyncHandler(controller.listServices),
   );
 
@@ -113,6 +133,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_CREATE, FEATURE),
     validate(listServicesQuerySchema, "query"),
+    responds(catalogueItem.array()),
     asyncHandler(controller.listCatalogue),
   );
 
@@ -129,6 +150,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
     validate(listAllServicesQuerySchema, "query"),
+    responds(serviceItem.array()),
     asyncHandler(controller.listAllServices),
   );
 
@@ -137,6 +159,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
     validate(createServiceSchema),
+    responds(serviceItem, { status: 201 }),
     asyncHandler(controller.createService),
   );
 
@@ -146,6 +169,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateServiceSchema),
+    responds(serviceItem),
     asyncHandler(controller.updateService),
   );
 
@@ -160,6 +184,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(billPreview),
     asyncHandler(controller.getBill),
   );
 
@@ -173,6 +198,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounterBilling),
     asyncHandler(controller.getEncounterBilling),
   );
 
@@ -182,6 +208,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(charge.array()),
     asyncHandler(controller.encounterCharges),
   );
 
@@ -190,6 +217,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_CREATE, FEATURE),
     validate(postChargeSchema),
+    responds(charge.optional(), { status: 201 }),
     asyncHandler(controller.postCharge),
   );
 
@@ -200,6 +228,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.BILLING_CREATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(voidChargeSchema),
+    responds(charge),
     asyncHandler(controller.voidCharge),
   );
 
@@ -208,6 +237,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_FINALIZE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(invoice),
     asyncHandler(controller.finalizeBill),
   );
 
@@ -216,6 +246,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(listInvoicesQuerySchema, "query"),
+    responds(invoice.array(), { meta: true }),
     asyncHandler(controller.listInvoices),
   );
 
@@ -224,6 +255,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(invoice),
     asyncHandler(controller.getInvoice),
   );
 
@@ -233,6 +265,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.PAYMENT_COLLECT, FEATURE),
     validate(idParamSchema, "params"),
     validate(recordPaymentSchema),
+    responds(invoice, { status: 201 }),
     asyncHandler(controller.recordPayment),
   );
 
@@ -248,6 +281,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.BILLING_DISCOUNT, FEATURE),
     validate(idParamSchema, "params"),
     validate(applyDiscountSchema),
+    responds(invoice),
     asyncHandler(controller.applyDiscount),
   );
 
@@ -257,6 +291,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.BILLING_REFUND, FEATURE),
     validate(idParamSchema, "params"),
     validate(recordRefundSchema),
+    responds(invoice, { status: 201 }),
     asyncHandler(controller.recordRefund),
   );
 
@@ -271,6 +306,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.INSURANCE_LINK, FEATURE),
     validate(idParamSchema, "params"),
     validate(payerSplitSchema),
+    responds(invoice),
     asyncHandler(controller.setPayerSplit),
   );
 
@@ -283,6 +319,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(listPackagesQuerySchema, "query"),
+    responds(servicePackage.array()),
     asyncHandler(controller.listPackages),
   );
 
@@ -291,6 +328,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
     validate(createPackageSchema),
+    responds(servicePackage, { status: 201 }),
     asyncHandler(controller.createPackage),
   );
 
@@ -300,6 +338,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updatePackageSchema),
+    responds(servicePackage),
     asyncHandler(controller.updatePackage),
   );
 
@@ -308,6 +347,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.BILLING_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(packageEnrollment.array()),
     asyncHandler(controller.listPackageEnrollments),
   );
 
@@ -317,6 +357,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.PACKAGE_ENROLL, FEATURE),
     validate(idParamSchema, "params"),
     validate(enrollPackageSchema),
+    responds(packageEnrollment, { status: 201 }),
     asyncHandler(controller.enrollPackage),
   );
 
@@ -325,6 +366,7 @@ export function billingRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PACKAGE_ENROLL, FEATURE),
     validate(idParamSchema, "params"),
+    responds(packageEnrollment),
     asyncHandler(controller.cancelPackageEnrollment),
   );
 

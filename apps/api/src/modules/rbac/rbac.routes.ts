@@ -16,7 +16,16 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./rbac.controller.js";
+import {
+  permission,
+  role,
+  roleDeletedAck,
+  roleDetail,
+  rolePermissions,
+  userRoles,
+} from "./rbac.contract.js";
 import {
   assignRoleSchema,
   createRoleSchema,
@@ -33,6 +42,7 @@ export function rbacRouter(): Router {
     "/permissions",
     authenticate(),
     authorize(PERMISSIONS.PERMISSION_VIEW),
+    responds(permission.array()),
     asyncHandler(controller.listPermissions),
   );
 
@@ -40,6 +50,7 @@ export function rbacRouter(): Router {
     "/roles",
     authenticate(),
     authorize(PERMISSIONS.ROLE_MANAGE),
+    responds(role.array()),
     asyncHandler(controller.listRoles),
   );
 
@@ -48,6 +59,7 @@ export function rbacRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ROLE_MANAGE),
     validate(idParamSchema, "params"),
+    responds(roleDetail),
     asyncHandler(controller.getRole),
   );
 
@@ -56,6 +68,7 @@ export function rbacRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ROLE_MANAGE),
     validate(createRoleSchema),
+    responds(role, { status: 201 }),
     asyncHandler(controller.createRole),
   );
 
@@ -65,6 +78,7 @@ export function rbacRouter(): Router {
     authorize(PERMISSIONS.ROLE_MANAGE),
     validate(idParamSchema, "params"),
     validate(setRolePermissionsSchema),
+    responds(rolePermissions),
     asyncHandler(controller.setRolePermissions),
   );
 
@@ -73,6 +87,7 @@ export function rbacRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ROLE_MANAGE),
     validate(idParamSchema, "params"),
+    responds(roleDeletedAck),
     asyncHandler(controller.deleteRole),
   );
 
@@ -85,6 +100,7 @@ export function rbacRouter(): Router {
     authorize(PERMISSIONS.USER_ASSIGN_ROLE),
     validate(idParamSchema, "params"),
     validate(assignRoleSchema),
+    responds(userRoles),
     asyncHandler(controller.assignRole),
   );
 
@@ -93,6 +109,7 @@ export function rbacRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.USER_ASSIGN_ROLE),
     validate(userRoleParamSchema, "params"),
+    responds(userRoles),
     asyncHandler(controller.revokeRole),
   );
 

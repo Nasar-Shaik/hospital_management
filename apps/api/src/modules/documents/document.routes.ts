@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds, respondsFile } from "../../middleware/responds.js";
 import * as controller from "./document.controller.js";
+import { documentDeletedAck, documentMeta } from "./document.contract.js";
 import {
   uploadDocumentSchema,
   patientIdParamSchema,
@@ -38,6 +40,7 @@ export function documentRouter(): Router {
     json({ limit: "15mb" }),
     validate(patientIdParamSchema, "params"),
     validate(uploadDocumentSchema),
+    responds(documentMeta, { status: 201 }),
     asyncHandler(controller.uploadDocument),
   );
 
@@ -46,6 +49,7 @@ export function documentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FILE_READ),
     validate(patientIdParamSchema, "params"),
+    responds(documentMeta.array()),
     asyncHandler(controller.listPatientDocuments),
   );
 
@@ -54,6 +58,10 @@ export function documentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FILE_READ),
     validate(documentIdParamSchema, "params"),
+    respondsFile(
+      ["application/pdf", "image/*"],
+      "The uploaded document, inline, with its stored content type.",
+    ),
     asyncHandler(controller.downloadDocument),
   );
 
@@ -62,6 +70,7 @@ export function documentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FILE_DELETE),
     validate(documentIdParamSchema, "params"),
+    responds(documentDeletedAck),
     asyncHandler(controller.deleteDocument),
   );
 

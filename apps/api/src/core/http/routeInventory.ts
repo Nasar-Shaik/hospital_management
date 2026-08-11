@@ -92,12 +92,19 @@ function readValidation(handler: unknown): ValidationTag | undefined {
  * mean a route could only ever declare one of them.
  */
 export interface ResponseTag {
-  /** The shape of `data` inside the envelope — NOT the envelope itself. */
-  schema: ZodTypeAny;
+  /**
+   * The shape of `data` inside the envelope — NOT the envelope itself.
+   *
+   * Absent on the handful of routes that do not answer with the envelope at all: a file download
+   * and the spec document. Those carry `media` instead.
+   */
+  schema?: ZodTypeAny;
   /** Every success status this route can send. Two entries where a create can also resume. */
   statuses: number[];
   /** True when the route also sends `meta` (a paginated list). */
   meta: boolean;
+  /** Media types, for a response that is bytes rather than the JSON envelope. */
+  media?: string[];
   description?: string;
 }
 

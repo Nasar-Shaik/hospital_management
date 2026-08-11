@@ -60,3 +60,21 @@ export function responds(schema: ZodTypeAny, opts: RespondsOptions = {}) {
   };
   return tagResponse(handler, tag);
 }
+
+/**
+ * Declares a response that is NOT the JSON envelope — a file download, or the spec document.
+ *
+ * These are the five operations that cannot have a data schema, and saying so explicitly is the
+ * point. The alternative was to leave them undescribed, where they would be indistinguishable
+ * from an operation somebody simply forgot to document; a reader of the spec could not tell
+ * "returns a PDF" from "unknown". So each names its media type and what the bytes are.
+ *
+ * There is no runtime check here — there is no `data` to parse, and `ok()` is not involved.
+ */
+export function respondsFile(mediaTypes: string[], description: string) {
+  const tag: ResponseTag = { statuses: [200], meta: false, media: mediaTypes, description };
+  const handler = (_req: Request, _res: Response, next: NextFunction): void => {
+    next();
+  };
+  return tagResponse(handler, tag);
+}

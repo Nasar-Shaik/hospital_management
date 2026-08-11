@@ -160,6 +160,22 @@ function namedContracts(): Record<string, JsonSchema> {
  * lines of wrapper per operation is the price of `data` being a real type.
  */
 function successResponse(tag: ResponseTag): JsonSchema {
+  /**
+   * A non-envelope response: a download, or the spec itself. Documented by MEDIA TYPE, with no
+   * data schema — because there is no `data`, not because nobody got round to it.
+   */
+  if (!tag.schema) {
+    return {
+      description: tag.description ?? "Success.",
+      content: Object.fromEntries(
+        (tag.media ?? ["application/octet-stream"]).map((type) => [
+          type,
+          { schema: { type: "string", format: "binary" } },
+        ]),
+      ),
+    };
+  }
+
   const properties: JsonSchema = {
     success: { type: "boolean", const: true },
     data: toResponseSchema(tag.schema),

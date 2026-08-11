@@ -17,7 +17,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./mrd.controller.js";
+import { diseaseRegisterRow, encounterCoding, icdCode } from "./mrd.contract.js";
 import {
   createIcdSchema,
   updateIcdSchema,
@@ -39,6 +41,7 @@ export function mrdRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MRD_CODE, FEATURE),
     validate(listIcdQuerySchema, "query"),
+    responds(icdCode.array()),
     asyncHandler(controller.listIcd),
   );
 
@@ -47,6 +50,7 @@ export function mrdRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MRD_MANAGE, FEATURE),
     validate(createIcdSchema),
+    responds(icdCode, { status: 201 }),
     asyncHandler(controller.createIcd),
   );
 
@@ -56,6 +60,7 @@ export function mrdRouter(): Router {
     authorize(PERMISSIONS.MRD_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateIcdSchema),
+    responds(icdCode),
     asyncHandler(controller.updateIcd),
   );
 
@@ -64,6 +69,7 @@ export function mrdRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MRD_CODE, FEATURE),
     validate(encounterParamSchema, "params"),
+    responds(encounterCoding.nullable()),
     asyncHandler(controller.getCoding),
   );
 
@@ -73,6 +79,7 @@ export function mrdRouter(): Router {
     authorize(PERMISSIONS.MRD_CODE, FEATURE),
     validate(encounterParamSchema, "params"),
     validate(saveCodingSchema),
+    responds(encounterCoding),
     asyncHandler(controller.saveCoding),
   );
 
@@ -81,6 +88,7 @@ export function mrdRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.MRD_REGISTER_VIEW, FEATURE),
     validate(registerQuerySchema, "query"),
+    responds(diseaseRegisterRow.array()),
     asyncHandler(controller.diseaseRegister),
   );
 

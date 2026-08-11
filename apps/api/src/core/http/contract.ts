@@ -19,8 +19,8 @@
  * appears ON THE WIRE, and `Proves<>` makes tsc reject the pair if they ever disagree:
  *
  *     export const patient = contract("Patient", z.object({ … }));
- *     export type PatientProof = Proves<typeof patient, Patient>;
- *                                       └ the schema      └ the DTO the service returns
+ *     export type PatientProof = Proves<Matches<typeof patient, Patient>>;
+ *                                               └ the schema   └ the DTO the service returns
  *
  * Add a field to `Patient` and the build fails until the schema follows. That is the property that
  * makes this maintainable: the schema cannot drift, because drift is a compile error rather than a

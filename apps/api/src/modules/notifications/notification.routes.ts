@@ -23,7 +23,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./notification.controller.js";
+import { notification, notificationTemplate } from "./notification.contract.js";
 import {
   listNotificationsQuerySchema,
   templateKeyParamSchema,
@@ -44,6 +46,7 @@ export function notificationRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.NOTIFICATION_MANAGE),
     validate(listNotificationsQuerySchema, "query"),
+    responds(notification.array(), { meta: true }),
     asyncHandler(controller.listNotifications),
   );
 
@@ -51,6 +54,7 @@ export function notificationRouter(): Router {
     "/notifications/templates",
     authenticate(),
     authorize(PERMISSIONS.NOTIFICATION_MANAGE),
+    responds(notificationTemplate.array()),
     asyncHandler(controller.listTemplates),
   );
 
@@ -67,6 +71,7 @@ export function notificationRouter(): Router {
     authorize(PERMISSIONS.NOTIFICATION_MANAGE),
     validate(templateKeyParamSchema, "params"),
     validate(updateTemplateSchema),
+    responds(notificationTemplate),
     asyncHandler(controller.updateTemplate),
   );
 

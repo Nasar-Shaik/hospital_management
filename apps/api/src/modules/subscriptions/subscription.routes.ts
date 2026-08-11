@@ -23,7 +23,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./subscription.controller.js";
+import { plan, subscriptionView } from "./subscription.contract.js";
 import { changePlanSchema, featureOverrideSchema } from "./subscription.schema.js";
 
 export function subscriptionRouter(): Router {
@@ -33,6 +35,7 @@ export function subscriptionRouter(): Router {
     "/subscription",
     authenticate(),
     authorize(PERMISSIONS.SUBSCRIPTION_MANAGE),
+    responds(subscriptionView),
     asyncHandler(controller.getSubscription),
   );
 
@@ -40,6 +43,7 @@ export function subscriptionRouter(): Router {
     "/plans",
     authenticate(),
     authorize(PERMISSIONS.SUBSCRIPTION_MANAGE),
+    responds(plan.array()),
     asyncHandler(controller.listPlans),
   );
 
@@ -49,6 +53,7 @@ export function subscriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PLAN_MANAGE),
     validate(changePlanSchema),
+    responds(subscriptionView),
     asyncHandler(controller.changePlan),
   );
 
@@ -57,6 +62,7 @@ export function subscriptionRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FEATUREFLAG_MANAGE),
     validate(featureOverrideSchema),
+    responds(subscriptionView),
     asyncHandler(controller.setFeatureOverride),
   );
 

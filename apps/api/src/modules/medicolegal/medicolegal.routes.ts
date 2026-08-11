@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./medicolegal.controller.js";
+import { consent, deathRecord } from "./medicolegal.contract.js";
 import {
   recordConsentSchema,
   withdrawConsentSchema,
@@ -40,6 +42,7 @@ export function medicolegalRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(patientQuerySchema, "query"),
+    responds(consent.array()),
     asyncHandler(controller.listConsents),
   );
 
@@ -48,6 +51,7 @@ export function medicolegalRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.CONSENT_MANAGE),
     validate(recordConsentSchema),
+    responds(consent, { status: 201 }),
     asyncHandler(controller.recordConsent),
   );
 
@@ -57,6 +61,7 @@ export function medicolegalRouter(): Router {
     authorize(PERMISSIONS.CONSENT_MANAGE),
     validate(idParamSchema, "params"),
     validate(withdrawConsentSchema),
+    responds(consent),
     asyncHandler(controller.withdrawConsent),
   );
 
@@ -67,6 +72,7 @@ export function medicolegalRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(encounterQuerySchema, "query"),
+    responds(deathRecord.nullable()),
     asyncHandler(controller.getDeathRecord),
   );
 
@@ -75,6 +81,7 @@ export function medicolegalRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DEATH_CERTIFY),
     validate(recordDeathSchema),
+    responds(deathRecord, { status: 201 }),
     asyncHandler(controller.recordDeath),
   );
 

@@ -18,7 +18,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./asset.controller.js";
+import { asset, assetMaintenance } from "./asset.contract.js";
 import {
   createAssetSchema,
   updateAssetSchema,
@@ -37,6 +39,7 @@ export function assetRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ASSET_MANAGE, FEATURE),
     validate(listAssetsQuerySchema, "query"),
+    responds(asset.array()),
     asyncHandler(controller.listAssets),
   );
 
@@ -45,6 +48,7 @@ export function assetRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ASSET_MANAGE, FEATURE),
     validate(createAssetSchema),
+    responds(asset, { status: 201 }),
     asyncHandler(controller.createAsset),
   );
 
@@ -54,6 +58,7 @@ export function assetRouter(): Router {
     authorize(PERMISSIONS.ASSET_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateAssetSchema),
+    responds(asset),
     asyncHandler(controller.updateAsset),
   );
 
@@ -62,6 +67,7 @@ export function assetRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ASSET_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(assetMaintenance.array()),
     asyncHandler(controller.listMaintenance),
   );
 
@@ -71,6 +77,7 @@ export function assetRouter(): Router {
     authorize(PERMISSIONS.ASSET_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(addMaintenanceSchema),
+    responds(assetMaintenance, { status: 201 }),
     asyncHandler(controller.addMaintenance),
   );
 

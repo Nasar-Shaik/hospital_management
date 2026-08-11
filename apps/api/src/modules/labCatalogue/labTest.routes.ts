@@ -19,7 +19,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./labTest.controller.js";
+import { labTest } from "./labTest.contract.js";
 import {
   createLabTestSchema,
   updateLabTestSchema,
@@ -38,6 +40,7 @@ export function labCatalogueRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
     validate(listLabTestsQuerySchema, "query"),
+    responds(labTest.array()),
     asyncHandler(controller.listTests),
   );
 
@@ -46,6 +49,7 @@ export function labCatalogueRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
     validate(codeParamSchema, "params"),
+    responds(labTest),
     asyncHandler(controller.getTestByCode),
   );
 
@@ -54,6 +58,7 @@ export function labCatalogueRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.LAB_APPROVE, FEATURE),
     validate(createLabTestSchema),
+    responds(labTest, { status: 201 }),
     asyncHandler(controller.createTest),
   );
 
@@ -64,6 +69,7 @@ export function labCatalogueRouter(): Router {
     authorize(PERMISSIONS.LAB_APPROVE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateLabTestSchema),
+    responds(labTest),
     asyncHandler(controller.updateTest),
   );
 

@@ -21,7 +21,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./feedback.controller.js";
+import { feedbackTicket } from "./feedback.contract.js";
 import {
   createTicketSchema,
   listTicketsQuerySchema,
@@ -38,6 +40,7 @@ export function feedbackRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FEEDBACK_MANAGE),
     validate(listTicketsQuerySchema, "query"),
+    responds(feedbackTicket.array()),
     asyncHandler(controller.listTickets),
   );
 
@@ -46,6 +49,7 @@ export function feedbackRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FEEDBACK_MANAGE),
     validate(createTicketSchema),
+    responds(feedbackTicket, { status: 201 }),
     asyncHandler(controller.createTicket),
   );
 
@@ -54,6 +58,7 @@ export function feedbackRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.FEEDBACK_MANAGE),
     validate(idParamSchema, "params"),
+    responds(feedbackTicket),
     asyncHandler(controller.getTicket),
   );
 
@@ -63,6 +68,7 @@ export function feedbackRouter(): Router {
     authorize(PERMISSIONS.COMPLAINT_MANAGE),
     validate(idParamSchema, "params"),
     validate(assignTicketSchema),
+    responds(feedbackTicket),
     asyncHandler(controller.assignTicket),
   );
 
@@ -72,6 +78,7 @@ export function feedbackRouter(): Router {
     authorize(PERMISSIONS.COMPLAINT_MANAGE),
     validate(idParamSchema, "params"),
     validate(transitionTicketSchema),
+    responds(feedbackTicket),
     asyncHandler(controller.transitionTicket),
   );
 

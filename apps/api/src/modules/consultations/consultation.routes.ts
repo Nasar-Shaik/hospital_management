@@ -18,7 +18,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./consultation.controller.js";
+import { consultationNote } from "./consultation.contract.js";
 import { saveConsultationSchema, encounterIdParamSchema } from "./consultation.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.CLINICAL_EMR_BASIC } as const;
@@ -31,6 +33,7 @@ export function consultationRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     validate(encounterIdParamSchema, "params"),
+    responds(consultationNote.nullable()),
     asyncHandler(controller.getConsultation),
   );
 
@@ -40,6 +43,7 @@ export function consultationRouter(): Router {
     authorize(PERMISSIONS.EMR_WRITE, FEATURE),
     validate(encounterIdParamSchema, "params"),
     validate(saveConsultationSchema),
+    responds(consultationNote),
     asyncHandler(controller.saveConsultation),
   );
 

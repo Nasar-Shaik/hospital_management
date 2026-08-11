@@ -16,7 +16,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./apiKey.controller.js";
+import { apiKeyMeta, createdApiKey } from "./apiKey.contract.js";
 import { createApiKeySchema, idParamSchema } from "./apiKey.schema.js";
 
 export function apiKeyRouter(): Router {
@@ -26,6 +28,7 @@ export function apiKeyRouter(): Router {
     "/api-keys",
     authenticate(),
     authorize(PERMISSIONS.APIKEY_MANAGE),
+    responds(apiKeyMeta.array()),
     asyncHandler(controller.list),
   );
 
@@ -34,6 +37,7 @@ export function apiKeyRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APIKEY_MANAGE),
     validate(createApiKeySchema),
+    responds(createdApiKey, { status: 201 }),
     asyncHandler(controller.create),
   );
 
@@ -42,6 +46,7 @@ export function apiKeyRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APIKEY_MANAGE),
     validate(idParamSchema, "params"),
+    responds(apiKeyMeta),
     asyncHandler(controller.revoke),
   );
 

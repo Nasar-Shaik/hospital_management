@@ -23,7 +23,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./insurance.controller.js";
+import { insuranceClaim, insurancePolicy } from "./insurance.contract.js";
 import {
   createPolicySchema,
   updatePolicySchema,
@@ -45,6 +47,7 @@ export function insuranceRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.INSURANCE_LINK, FEATURE),
     validate(patientIdParamSchema, "params"),
+    responds(insurancePolicy.array()),
     asyncHandler(controller.listPolicies),
   );
 
@@ -54,6 +57,7 @@ export function insuranceRouter(): Router {
     authorize(PERMISSIONS.INSURANCE_LINK, FEATURE),
     validate(patientIdParamSchema, "params"),
     validate(createPolicySchema),
+    responds(insurancePolicy, { status: 201 }),
     asyncHandler(controller.linkPolicy),
   );
 
@@ -63,6 +67,7 @@ export function insuranceRouter(): Router {
     authorize(PERMISSIONS.INSURANCE_LINK, FEATURE),
     validate(idParamSchema, "params"),
     validate(updatePolicySchema),
+    responds(insurancePolicy),
     asyncHandler(controller.updatePolicy),
   );
 
@@ -72,6 +77,7 @@ export function insuranceRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.INSURANCE_LINK, FEATURE),
     validate(patientIdParamSchema, "params"),
+    responds(insuranceClaim.array()),
     asyncHandler(controller.listClaims),
   );
 
@@ -81,6 +87,7 @@ export function insuranceRouter(): Router {
     authorize(PERMISSIONS.INSURANCE_CLAIM, FEATURE),
     validate(patientIdParamSchema, "params"),
     validate(createClaimSchema),
+    responds(insuranceClaim, { status: 201 }),
     asyncHandler(controller.fileClaim),
   );
 
@@ -90,6 +97,7 @@ export function insuranceRouter(): Router {
     authorize(PERMISSIONS.INSURANCE_CLAIM, FEATURE),
     validate(idParamSchema, "params"),
     validate(transitionClaimSchema),
+    responds(insuranceClaim),
     asyncHandler(controller.transitionClaim),
   );
 
@@ -99,6 +107,7 @@ export function insuranceRouter(): Router {
     authorize(PERMISSIONS.INSURANCE_RECONCILE, FEATURE),
     validate(idParamSchema, "params"),
     validate(settleClaimSchema),
+    responds(insuranceClaim),
     asyncHandler(controller.settleClaim),
   );
 

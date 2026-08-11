@@ -17,7 +17,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds, respondsFile } from "../../middleware/responds.js";
 import * as controller from "./report.controller.js";
+import { reportMeta } from "./report.contract.js";
 import {
   orderIdParamSchema,
   patientIdParamSchema,
@@ -36,6 +38,7 @@ export function reportRouter(): Router {
     json({ limit: "15mb" }),
     validate(orderIdParamSchema, "params"),
     validate(uploadReportSchema),
+    responds(reportMeta, { status: 201 }),
     asyncHandler(controller.uploadReport),
   );
 
@@ -44,6 +47,7 @@ export function reportRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(patientIdParamSchema, "params"),
+    responds(reportMeta.array()),
     asyncHandler(controller.listPatientReports),
   );
 
@@ -52,6 +56,10 @@ export function reportRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(reportIdParamSchema, "params"),
+    respondsFile(
+      ["application/pdf", "image/*"],
+      "The uploaded report file, inline, with its stored content type.",
+    ),
     asyncHandler(controller.downloadReport),
   );
 

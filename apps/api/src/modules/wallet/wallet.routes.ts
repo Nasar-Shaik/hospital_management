@@ -12,7 +12,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./wallet.controller.js";
+import { walletEntry, walletView } from "./wallet.contract.js";
 import { depositSchema, refundSchema } from "./wallet.schema.js";
 
 export function walletRouter(): Router {
@@ -22,6 +24,7 @@ export function walletRouter(): Router {
     "/patients/:patientId/wallet",
     authenticate(),
     authorize(PERMISSIONS.WALLET_MANAGE),
+    responds(walletView),
     asyncHandler(controller.getWallet),
   );
 
@@ -31,6 +34,7 @@ export function walletRouter(): Router {
     "/wallet/entries/:id",
     authenticate(),
     authorize(PERMISSIONS.WALLET_MANAGE),
+    responds(walletEntry),
     asyncHandler(controller.getEntry),
   );
 
@@ -39,6 +43,7 @@ export function walletRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.WALLET_MANAGE),
     validate(depositSchema),
+    responds(walletView, { status: 201 }),
     asyncHandler(controller.deposit),
   );
 
@@ -47,6 +52,7 @@ export function walletRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.WALLET_MANAGE),
     validate(refundSchema),
+    responds(walletView, { status: 201 }),
     asyncHandler(controller.refund),
   );
 

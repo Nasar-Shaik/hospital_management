@@ -15,6 +15,7 @@ import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
 import { authenticate } from "./middleware/authenticate.js";
+import { respondsFile } from "./middleware/responds.js";
 import { asyncHandler } from "./core/http/asyncHandler.js";
 import { specFromApp } from "./core/http/openapi.js";
 import { auditRouter } from "./modules/audit/index.js";
@@ -215,6 +216,11 @@ export function createApp(logger: Logger): Express {
   v1Router.get(
     "/openapi.json",
     authenticate(),
+    respondsFile(
+      ["application/json"],
+      "This document — the OpenAPI 3.1 description of the API. Deliberately NOT enveloped: " +
+        "tooling expects a spec at the root of the response, not inside `data`.",
+    ),
     asyncHandler((req: Request, res: Response) => {
       openApiCache ??= specFromApp(req.app);
       res.json(openApiCache);

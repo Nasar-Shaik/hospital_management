@@ -21,7 +21,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./ambulance.controller.js";
+import { ambulance, ambulanceTrip } from "./ambulance.contract.js";
 import {
   createAmbulanceSchema,
   updateAmbulanceSchema,
@@ -41,6 +43,7 @@ export function ambulanceRouter(): Router {
     "/ambulances",
     authenticate(),
     authorize(PERMISSIONS.AMBULANCE_DISPATCH, FEATURE),
+    responds(ambulance.array()),
     asyncHandler(controller.listAmbulances),
   );
 
@@ -49,6 +52,7 @@ export function ambulanceRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.AMBULANCE_MANAGE, FEATURE),
     validate(createAmbulanceSchema),
+    responds(ambulance, { status: 201 }),
     asyncHandler(controller.createAmbulance),
   );
 
@@ -58,6 +62,7 @@ export function ambulanceRouter(): Router {
     authorize(PERMISSIONS.AMBULANCE_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
     validate(updateAmbulanceSchema),
+    responds(ambulance),
     asyncHandler(controller.updateAmbulance),
   );
 
@@ -67,6 +72,7 @@ export function ambulanceRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.AMBULANCE_DISPATCH, FEATURE),
     validate(listTripsQuerySchema, "query"),
+    responds(ambulanceTrip.array()),
     asyncHandler(controller.listTrips),
   );
 
@@ -75,6 +81,7 @@ export function ambulanceRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.AMBULANCE_DISPATCH, FEATURE),
     validate(createTripSchema),
+    responds(ambulanceTrip, { status: 201 }),
     asyncHandler(controller.createTrip),
   );
 
@@ -84,6 +91,7 @@ export function ambulanceRouter(): Router {
     authorize(PERMISSIONS.AMBULANCE_DISPATCH, FEATURE),
     validate(idParamSchema, "params"),
     validate(transitionTripSchema),
+    responds(ambulanceTrip),
     asyncHandler(controller.transitionTrip),
   );
 

@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./department.controller.js";
+import { department } from "./department.contract.js";
 import {
   createDepartmentSchema,
   updateDepartmentSchema,
@@ -34,6 +36,7 @@ export function departmentRouter(): Router {
     "/departments",
     authenticate(),
     authorize(PERMISSIONS.PATIENT_READ),
+    responds(department.array()),
     asyncHandler(controller.list),
   );
 
@@ -42,6 +45,7 @@ export function departmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DEPARTMENT_MANAGE),
     validate(createDepartmentSchema),
+    responds(department, { status: 201 }),
     asyncHandler(controller.create),
   );
 
@@ -51,6 +55,7 @@ export function departmentRouter(): Router {
     authorize(PERMISSIONS.DEPARTMENT_MANAGE),
     validate(idParamSchema, "params"),
     validate(updateDepartmentSchema),
+    responds(department),
     asyncHandler(controller.update),
   );
 
