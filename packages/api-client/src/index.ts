@@ -81,6 +81,13 @@ export interface ApiClientOptions {
    */
   onLicenseState?: (state: LicenseHeader | null) => void;
   /**
+   * Called with the operation's retirement notice when a response carries `Deprecation`/`Sunset`,
+   * plus the path that produced it. Nothing is deprecated today, so this never fires — it is here
+   * so a mobile build that ships BEFORE the first deprecation can still hear about it, which is
+   * the only ordering that helps a phone nobody will update.
+   */
+  onDeprecation?: (notice: DeprecationNotice, path: string) => void;
+  /**
    * Called when a request fails with an EXPIRED/INVALID session (HMS-AUTH-002/003) — the
    * mid-session case the proactive refresh timer can miss (a laptop asleep past the token's
    * life). Return `true` if a silent refresh succeeded and the one failed request should be
@@ -2476,6 +2483,81 @@ export interface OperatorAuditEntry {
   ip?: string;
 }
 
+/**
+ * The API version this client speaks. Every path it builds begins `/api/v1` or
+ * `/api/platform/v1`, and that is not incidental — it is the compatibility promise the server
+ * makes (Doc 04 §5.1, `docs/API_LIFECYCLE.md`): inside a version, changes are additive only.
+ *
+ * Exported so a mobile build can report what it speaks in a crash log, a support screen, or an
+ * `X-Client-Version`-style diagnostic. A phone in the field is the one caller that cannot be
+ * asked "which version are you on?" after the fact.
+ */
+export const API_VERSION = "v1" as const;
+
+/**
+ * A retirement notice read off a response (RFC 9745 `Deprecation`, RFC 8594 `Sunset`).
+ *
+ * ── WHY THE CLIENT SURFACES THIS AT ALL ────────────────────────────────────
+ * The caller that needs it most cannot read the OpenAPI document: an app build installed
+ * eighteen months ago, on a phone nobody will update, calling an endpoint that now has an end
+ * date. It only ever learns about that date if the response it is already receiving carries it.
+ *
+ * So the client hands every notice to `onDeprecation` and lets the app decide — log it, report it
+ * home, or show the "please update" banner while there is still a year to act. Nothing is
+ * deprecated today; this is the receiver being in place BEFORE the first sender.
+ */
+export interface DeprecationNotice {
+  /** ISO date the operation was deprecated, when the header carried a parseable value. */
+  deprecatedAt: string | null;
+  /** ISO date it stops answering. */
+  sunsetAt: string | null;
+  /** `rel` → URL, from the `Link` header: `deprecation` (docs), `successor-version`. */
+  links: Record<string, string>;
+}
+
+/**
+ * Reads the retirement headers, or null when the response carried none — which is the case for
+ * every response the API sends today.
+ */
+export function readDeprecationHeaders(res: { headers: Headers }): DeprecationNotice | null {
+  const deprecation = res.headers.get("deprecation");
+  const sunset = res.headers.get("sunset");
+  if (!deprecation && !sunset) return null;
+
+  // RFC 9745 is a structured-field Item: `@<unix seconds>`. RFC 8594's `Sunset` is an HTTP-date.
+  // Two adjacent headers in two formats is an inconsistency in the standards, not in us.
+  const epoch = deprecation?.startsWith("@") ? Number(deprecation.slice(1)) : Number.NaN;
+  const sunsetAt = sunset ? new Date(sunset) : null;
+
+  const links: Record<string, string> = {};
+  for (const entry of (res.headers.get("link") ?? "").split(/,(?=\s*<)/)) {
+    const match = /<([^>]+)>\s*;\s*rel\s*=\s*"?([^";]+)"?/.exec(entry);
+    if (match?.[1] && match[2]) links[match[2]] = match[1];
+  }
+
+  return {
+    deprecatedAt: Number.isFinite(epoch) ? new Date(epoch * 1000).toISOString() : null,
+    sunsetAt: sunsetAt && !Number.isNaN(sunsetAt.getTime()) ? sunsetAt.toISOString() : null,
+    links,
+  };
+}
+
+/**
+ * A CSV export: the bytes, plus what a downloaded file cannot tell you about itself.
+ *
+ * `Blob` rather than a string or an ArrayBuffer, deliberately — React Native's fetch is
+ * XHR-backed and implements `blob()` and `text()`, while `arrayBuffer()` is not available on
+ * every version. A client that reached for `arrayBuffer()` would pass every test here and throw
+ * on a phone.
+ */
+export interface CsvExport {
+  blob: Blob;
+  /** Rows written, from `x-audit-rows`. */
+  rows: number | null;
+  /** True when the export hit its cap — this file is NOT the whole trail. */
+  truncated: boolean;
+}
+
 /** Parse the licence headers off a response, or null when the response carried none. */
 function readLicenseHeader(res: { headers: Headers }): LicenseHeader | null {
   const state = res.headers.get("x-license-state");
@@ -2496,6 +2578,7 @@ export class ApiClient {
   private readonly fetchImpl: typeof fetch;
   private readonly onUnauthorized?: () => Promise<boolean>;
   private readonly onLicenseState?: (state: LicenseHeader | null) => void;
+  private readonly onDeprecation?: (notice: DeprecationNotice, path: string) => void;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -2505,6 +2588,7 @@ export class ApiClient {
     this.getActiveBranch = options.getActiveBranch;
     this.onUnauthorized = options.onUnauthorized;
     this.onLicenseState = options.onLicenseState;
+    this.onDeprecation = options.onDeprecation;
 
     /**
      * `.bind(globalThis)` is not defensive style — it is the difference between
@@ -2573,6 +2657,16 @@ export class ApiClient {
     // Licence state rides on EVERY tenant response (ADR-0016); surface it so the UI can
     // show a renewal banner without a dedicated poll. Absent ⇒ perpetual / non-tenant call.
     if (this.onLicenseState) this.onLicenseState(readLicenseHeader(res));
+
+    /**
+     * A retirement notice, if this operation carries one. Read on EVERY response rather than on
+     * errors only: an endpoint being retired still works — that is the entire point of a sunset
+     * window — so the only place the warning can appear is a successful response.
+     */
+    if (this.onDeprecation) {
+      const notice = readDeprecationHeaders(res);
+      if (notice) this.onDeprecation(notice, path);
+    }
 
     let envelope: ApiEnvelope<T>;
     try {
@@ -4777,6 +4871,16 @@ export class ApiClient {
    * whole point of a file the compliance officer can hand to an auditor.
    * The export itself is audited server-side (`audit.exported`).
    */
+  /**
+   * @deprecated Cannot carry the access token. `/audit/export` is behind `authenticate()`, which
+   * reads `Authorization: Bearer` and nothing else — so an `<a href>` navigation to this URL
+   * arrives with no credential and is refused with `HMS-AUTH-002`. It looks like it works because
+   * a URL builder cannot fail; the failure is at the far end.
+   *
+   * Use `fetchAuditCsv()`, which sends the token, returns the bytes, and additionally surfaces the
+   * truncation flag that a downloaded file cannot show you. React Native has no equivalent of
+   * "open an authenticated URL in a tab" at all, so the URL form is unusable there by construction.
+   */
   auditExportUrl(params: AuditQuery = {}): string {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -4786,6 +4890,43 @@ export class ApiClient {
     }
     const qs = query.toString();
     return `${this.baseUrl}/api/v1/audit/export${qs ? `?${qs}` : ""}`;
+  }
+
+  /**
+   * The audit trail as CSV, authenticated — the download that actually works.
+   *
+   * Returns the row count and the truncation flag alongside the bytes because the route caps its
+   * output and **a truncated export is byte-indistinguishable from a complete one**: same header
+   * row, same shape, fewer rows. A compliance officer handing an auditor a file that silently
+   * stops at the cap is the failure this exists to prevent, and it can only be surfaced from the
+   * `x-audit-rows` / `x-audit-truncated` headers, which a browser download drops.
+   */
+  async fetchAuditCsv(params: AuditQuery = {}): Promise<CsvExport> {
+    const token = this.getAccessToken?.();
+    const headers: Record<string, string> = {};
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (this.tenantHost) headers.host = this.tenantHost;
+
+    const res = await this.fetchImpl(this.auditExportUrl(params), {
+      method: "GET",
+      headers,
+      credentials: this.credentials,
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new ApiClientError(
+        res.status,
+        "HMS-GEN-500",
+        `Could not export the audit trail (HTTP ${String(res.status)}).`,
+      );
+    }
+
+    const rows = Number(res.headers.get("x-audit-rows"));
+    return {
+      blob: await res.blob(),
+      rows: Number.isFinite(rows) ? rows : null,
+      truncated: res.headers.get("x-audit-truncated") === "true",
+    };
   }
 
   /* ── contract coverage: operations that had no typed client method ──────── */

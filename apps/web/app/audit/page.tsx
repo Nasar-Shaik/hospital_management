@@ -106,6 +106,8 @@ function AuditTrail() {
     void load();
   }, [load]);
 
+  const [exporting, setExporting] = useState(false);
+
   async function verify() {
     setChecking(true);
     try {
@@ -114,6 +116,41 @@ function AuditTrail() {
       setError(err instanceof ApiClientError ? err.message : "Integrity check failed to run.");
     } finally {
       setChecking(false);
+    }
+  }
+
+  /**
+   * ── WHY THIS IS A BUTTON AND NOT A LINK ─────────────────────────────────────
+   * It was `<a href={api.auditExportUrl(filters)}>`, which cannot work: `/audit/export` is behind
+   * `authenticate()`, which reads `Authorization: Bearer` and nothing else, and a plain
+   * navigation carries no such header. The link produced a 401 page — and it LOOKED right in
+   * review, because a URL builder cannot fail; only the far end can.
+   *
+   * Fetching it authenticated also recovers something the file cannot say about itself: the
+   * export is capped, and a truncated CSV is byte-indistinguishable from a complete one. Handing
+   * an auditor a trail that silently stops is the failure worth spending a button on.
+   */
+  async function exportCsv() {
+    setExporting(true);
+    setError(null);
+    try {
+      const { blob, rows, truncated } = await api.fetchAuditCsv(filters);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (truncated) {
+        setError(
+          `Exported ${String(rows ?? 0)} entries — the trail was longer than one export allows. ` +
+            `Narrow the dates and export again; this file is not complete.`,
+        );
+      }
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not export the trail.");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -182,12 +219,9 @@ function AuditTrail() {
           </Button>
 
           <PermissionGate can={can} permission="audit:export">
-            <a
-              href={api.auditExportUrl(filters)}
-              className="inline-flex items-center rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-            >
-              Export CSV
-            </a>
+            <Button variant="secondary" onClick={() => void exportCsv()} disabled={exporting}>
+              {exporting ? "Exporting…" : "Export CSV"}
+            </Button>
           </PermissionGate>
         </div>
       </header>
