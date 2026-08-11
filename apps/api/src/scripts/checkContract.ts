@@ -216,7 +216,7 @@ try {
 }
 
 const breaks = compare(baseline, current);
-const opCount = Object.values(asObj(current.paths) ?? {}).reduce(
+const opCount = Object.values(asObj(current.paths) ?? {}).reduce<number>(
   (n, ops) => n + Object.keys(asObj(ops) ?? {}).filter((m) => METHODS.includes(m)).length,
   0,
 );

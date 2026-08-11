@@ -14,6 +14,102 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## API contract stabilization (2026-08-11) · CLOSED
+
+The Constitution §4 says "Zod schemas → types → OpenAPI: one source of truth." That pipeline did
+not exist. Three sources described the API and no arrow connected them: 200 Zod schemas validated
+at runtime and reached nothing; a 216-path spec was generated from routes alone; a 4,378-line
+client was typed by hand. **Full gate green, `PNPM_GATE_EXIT=0`, 1409/1409 integration, four new
+controls all falsified.**
+
+### The contract pipeline, before and after
+
+|                                    |         Before |                           After |
+| ---------------------------------- | -------------: | ------------------------------: |
+| Paths / operations                 |      216 / 265 |                       216 / 265 |
+| **Documented request bodies**      |          **0** |                         **125** |
+| Operations with typed query params |              0 |                              42 |
+| Operations with typed path params  |              0 |                             127 |
+| Documented 400 responses           |              0 |                             228 |
+| Success response schemas           |              0 | **0 — deliberately, see below** |
+| Error schemas                      | 1 (`ApiError`) |                  1 (`ApiError`) |
+| Spec size                          |         245 KB |                          509 KB |
+
+`validate()` now tags itself with its Zod schema, exactly as the auth factories tag the permission
+they enforce, and the spec reads it back off Express's own router stack. **There is no second list
+to forget** — the documented request shape is the shape that runs.
+
+### Why success responses are still undescribed
+
+There is not one response Zod schema in the codebase; the repository DTOs are TypeScript
+interfaces. Emitting `{ success, data: object }` would document the envelope, say nothing about the
+payload, generate a useless `unknown`, and claim coverage the API does not have. **The contract
+describes reality, including the part of it that is missing.** Response DTOs are the next
+increment, and the one that unlocks generating the client outright.
+
+### Four new gates, each falsified
+
+| Gate             | Proves                                        | Falsified by                                                                  |
+| ---------------- | --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `openapi:check`  | the spec matches the shipped routes           | renaming a route ✅ · adding a Zod field ✅                                   |
+| `contract:check` | evolution stays additive                      | new required field ✅ · removed field ✅ · narrowed enum ✅ · removed path ✅ |
+| `client:check`   | every operation is reachable and branch-aware | deleting a method ✅ · dropping `branchId` ✅                                 |
+| determinism      | generate → format → generate is a fixed point | verified over three runs, byte-identical                                      |
+
+Breaking changes are compared against `openapi.baseline.json` — the last _approved_ contract. A
+break is impossible by accident and one command on purpose (`contract:accept`), which is what Doc
+04 §5.1's additive-only policy needs to be real rather than aspirational.
+
+### Defects found and fixed
+
+- **The formatting oscillation.** The generator wrote `JSON.stringify`, Prettier reformatted it,
+  and `openapi.json` was not ignored — so every regeneration produced 829 lines of churn and
+  `format:check` failed on freshly generated output. That is why the spec sat un-regenerated for
+  two weeks, and why a real contract change would have hidden inside the noise. The documented
+  standard "OpenAPI regenerated on every merge (CI)" was _impossible_ until this was fixed.
+- **15 branchId contract mismatches.** The audit estimated seven from the models; comparing
+  response DTOs against client interfaces found **eight, and a different eight** — three of the
+  estimate were false and four were missed. Plus six request-side gaps. `setDoctorSchedule` is the
+  sharp one: Phase 1 made schedules branch-scoped and Phase 1.5 proved it, and **the web app could
+  not reach the feature through its own typed client**.
+- **39 `ok()` helpers had drifted into 4 signatures**, one taking `meta` where the others took an
+  HTTP status. Each copy was locally consistent, so the mismatch existed only _between_ files.
+- **26 unreachable operations** (not the ~40 estimated — the estimate miscounted `paged()` list
+  endpoints). All now typed; 260/265 reachable, 5 exempt by policy with stated reasons.
+- **Two more request gaps found by the checker itself**: `createHospital` accepted
+  `organizationType` and `adminPassword` server-side and offered neither.
+
+### Client surface
+
+|                      |              Before |                 After |
+| -------------------- | ------------------: | --------------------: |
+| Interfaces           |                 145 |                   155 |
+| Methods              |                 242 |                   266 |
+| Lines                |               4,378 |                 4,677 |
+| Operations reachable | ~223 (unverifiable) | **260/265, enforced** |
+| branchId mismatches  |                  15 |       **0, enforced** |
+
+The surface **grew**, and that is the honest outcome: generation is not yet possible without
+response schemas, so the duplication was _verified_ rather than eliminated. The risk was never
+"the types are hand-written" — it was "nothing checks them", which is how eight response types
+quietly lost a field. A verified hand-written type is as safe as a generated one.
+
+The runtime is untouched: auth, silent refresh, tenant host, `X-Active-Branch`, licence headers,
+`ApiClientError`, `fetchImpl`. **Zero node builtins, zero browser globals** (the two greps that
+match are comments) — React Native ready as `MOBILE_APP_DEVELOPMENT.md` assumes.
+
+### Remaining API risks
+
+- **No success response schemas** — the blocker for generating the client and for typing `data`.
+- **Versioning is a mount path, not a contract.** No version constants, no `Deprecation`/`Sunset`
+  headers, no API-key version pinning. Deferred deliberately: `/v1` had to become stable first.
+- **`Idempotency-Key` is unimplemented.** `idempotencyKeys` exists from migration 0004 and nothing
+  writes it; orders carry a one-off `requestId` instead. Deferred until after the contract.
+- **Request-shape conformance is name-based** — it catches a field disappearing from the client
+  entirely, not a field on the wrong method. Response DTOs would make it exact.
+
+---
+
 ## Multi-branch Phase 1.5 — the branch survives what is not a request (2026-08-11) · CLOSED
 
 Phase 1 left six collections `branchId`-optional because they are written by consumers off an
