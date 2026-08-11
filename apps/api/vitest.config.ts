@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -7,6 +8,24 @@ import { defineConfig } from "vitest/config";
  * must never be used anywhere else.
  */
 export default defineConfig({
+  /**
+   * ── THE MOBILE SUITE IMPORTS THE CLIENT'S SOURCE, NOT ITS dist ─────────────
+   * `mobileContract.int.test.ts` drives `@medicore/api-client` against the running app, and the
+   * package's `main` points at `dist/`. Without this alias the suite would silently test whatever
+   * was built LAST — and the release gate runs the tests before `pnpm build`, so a change to the
+   * client would be verified against the previous version of itself.
+   *
+   * A stale-artifact test that passes is worse than one that fails: it certifies a contract that
+   * is no longer the one being shipped. `pnpm build` and `typecheck` still compile the real
+   * package, so the artefact is covered — just not by this suite, whose subject is the contract.
+   */
+  resolve: {
+    alias: {
+      "@medicore/api-client": fileURLToPath(
+        new URL("../../packages/api-client/src/index.ts", import.meta.url),
+      ),
+    },
+  },
   test: {
     /**
      * ── SUITES RUN ONE AT A TIME, AND THE CONFIG DECIDES THAT — NOT THE CALLER ──

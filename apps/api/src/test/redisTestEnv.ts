@@ -65,6 +65,8 @@ const SUITE_DB = {
   branchIsolation: 15,
   /** Idempotency-Key (Doc 04 §5.1) — the first suite past the stock 16-database ceiling. */
   idempotency: 16,
+  /** The mobile contract suite — drives `@medicore/api-client` against the real app. */
+  mobile: 17,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

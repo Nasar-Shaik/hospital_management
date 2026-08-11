@@ -45,6 +45,7 @@
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
+    "@medicore/api-client": "workspace:*",
     "@medicore/config": "workspace:*",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
