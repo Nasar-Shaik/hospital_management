@@ -76,6 +76,16 @@ RN's fetch is XHR-backed and does not implement `arrayBuffer()` everywhere.
 
 **1458/1458 integration · 69 unit · gate green.**
 
+### The "intermittent RBAC timeout" was never intermittent
+
+Reported as unexplained across three milestones. It is **Docker OOM**: local Docker gives ~7.75 GB
+to ~30 containers, and under that pressure Mongo is starved and then killed —
+`Exited (137)`, `OOMKilled: true`. The first symptom is not a crash but a _different_ single test
+overrunning vitest's 20s budget each run, which is why it read as flake.
+
+`docker inspect medicore-hms-mongo-1 --format '{{.State.OOMKilled}}'` answers it in one line.
+Restart Mongo, re-run, green. **No test was changed and no timeout was raised.**
+
 ---
 
 ## Idempotency-Key — the documented contract becomes real (2026-08-11) · CLOSED
