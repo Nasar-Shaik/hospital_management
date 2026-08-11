@@ -83,7 +83,17 @@ export async function getAvailability(
   day: Date,
   now = new Date(),
 ): Promise<Slot[]> {
-  const schedules = await repo.findSchedules(doctorId, day.getDay());
+  /**
+   * Slots are offered for the site the user is WORKING AT. A doctor who runs Monday mornings in
+   * Hyderabad and Monday afternoons in Chennai has two templates; showing both to a Hyderabad
+   * booker would offer an afternoon the patient cannot attend.
+   *
+   * The ACTIVE branch, not `writeBranchId()`: this is a read, and a read must not refuse just
+   * because the user has picked no site yet (HMS-BRANCH-001 is a write-time rule). With nothing
+   * selected the doctor's whole week is offered, exactly as before branches existed.
+   */
+  const activeBranchId = getContext().activeBranchId;
+  const schedules = await repo.findSchedules(doctorId, day.getDay(), activeBranchId);
   if (schedules.length === 0) return [];
 
   // On leave that day → no slots, whatever the weekly schedule says. Leave is the exception that wins.
@@ -138,11 +148,21 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
   }
 
   /**
+   * The branch this appointment is booked AT (ADR-0015) — the site the patient will be seen. The
+   * encounter created from it later inherits this branch.
+   *
+   * Resolved BEFORE the schedule check, because it is an input to it: the slot has to exist in
+   * the doctor's clinic AT THIS SITE. Resolving it afterwards would validate a Hyderabad booking
+   * against a Chennai session and hand the patient a time nobody is there for.
+   */
+  const branchId = await writeBranchId(input.branchId);
+
+  /**
    * The slot must belong to the doctor's schedule. Without this, any instant is
    * bookable and the schedule becomes decorative — you get 03:47 appointments and
    * a doctor with no idea they were expected.
    */
-  const schedules = await repo.findSchedules(input.doctorId, input.startAt.getDay());
+  const schedules = await repo.findSchedules(input.doctorId, input.startAt.getDay(), branchId);
   const offered = schedules.flatMap((s) => slotsFor(input.startAt, s));
   const slot = offered.find((s) => s.startAt.getTime() === input.startAt.getTime());
 
@@ -164,10 +184,6 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
       startAt: ["the doctor is on leave that day"],
     });
   }
-
-  // The branch this appointment is booked AT (ADR-0015) — the site the patient will be seen. The
-  // encounter created from it later inherits this branch.
-  const branchId = await writeBranchId(input.branchId);
 
   try {
     return await withTransaction(async (session) => {
@@ -430,7 +446,17 @@ export async function setDoctorSchedule(input: {
       slotMinutes: ["the session is shorter than one slot"],
     });
   }
-  return repo.upsertSchedule(input);
+  /**
+   * A schedule belongs to the SITE the doctor holds it at (ADR-0015): "Dr Rao, Mondays, Hyderabad"
+   * and "Dr Rao, Mondays, Chennai" are two different clinics, and the unique key now says so.
+   *
+   * Through `writeBranchId` rather than straight from the body, for the reason the patient/
+   * appointment/encounter/order paths already learned the hard way: a `branchId` in a request
+   * body is a caller's instruction and must be checked against what that caller may reach, or a
+   * receptionist confined to one site can rewrite another site's clinic hours.
+   */
+  const branchId = await writeBranchId(input.branchId);
+  return repo.upsertSchedule({ ...input, ...(branchId ? { branchId } : {}) });
 }
 
 export const getDoctorSchedules = (doctorId: string): Promise<repo.DoctorSchedule[]> =>
@@ -459,7 +485,9 @@ export async function setDoctorAvailability(input: {
   const sessions = input.sessions.includes("full_day")
     ? (["full_day"] as repo.DoctorAvailability["sessions"])
     : [...new Set(input.sessions)];
-  return repo.setAvailability({ ...input, sessions });
+  // Same key, same site rule, same reason as `setDoctorSchedule` — the roster is per branch.
+  const branchId = await writeBranchId(input.branchId);
+  return repo.setAvailability({ ...input, sessions, ...(branchId ? { branchId } : {}) });
 }
 
 export const getDoctorLeave = (doctorId: string): Promise<repo.DoctorLeave[]> =>
@@ -477,7 +505,10 @@ export async function addDoctorLeave(input: {
       toDate: ["leave cannot end before it starts"],
     });
   }
-  return repo.addLeave(input);
+  // Leave is READ back through `scopeFilter`, so the branch it is stamped with decides who sees
+  // it — which makes an unchecked body value a way to hide a doctor's absence from another site.
+  const branchId = await writeBranchId(input.branchId);
+  return repo.addLeave({ ...input, ...(branchId ? { branchId } : {}) });
 }
 
 export async function removeDoctorLeave(id: string): Promise<void> {

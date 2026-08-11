@@ -16,6 +16,7 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import * as repo from "./medicine.repository.js";
 import type { Medicine, StockMovement } from "./medicine.repository.js";
@@ -73,6 +74,16 @@ export async function receiveStock(
       quantity: input.quantity,
     });
   }
+  /**
+   * ── WHY THIS IS RESOLVED HERE AND NOT TAKEN FROM THE CALLER ─────────────────
+   * `branchId` was an optional argument that the controller never passed, so EVERY receipt and
+   * adjustment made over HTTP was written branchless — the pharmacy audit of 2026-08-11 found 31
+   * such rows and no code path that could have produced anything else. A ledger that cannot say
+   * which pharmacy the stock arrived at is not a stock ledger, and the field's mere presence made
+   * it look solved. It now comes from the active branch, through the one choke point (ADR-0015),
+   * which also validates a caller-supplied value instead of trusting it.
+   */
+  const branchId = await writeBranchId(input.branchId);
   const result = await withTransaction((session) =>
     repo.move(
       id,
@@ -81,7 +92,7 @@ export async function receiveStock(
         delta: input.quantity,
         ...(input.batchNo ? { batchNo: input.batchNo } : {}),
         ...(input.expiry ? { expiry: input.expiry } : {}),
-        ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(branchId ? { branchId } : {}),
       },
       session,
     ),
@@ -107,6 +118,8 @@ export async function adjustStock(
       delta: input.delta,
     });
   }
+  // Same as `receiveStock`: the site the correction was made at, from the context, not the body.
+  const branchId = await writeBranchId(input.branchId);
   const result = await withTransaction((session) =>
     repo.move(
       id,
@@ -114,7 +127,7 @@ export async function adjustStock(
         kind: "adjustment",
         delta: input.delta,
         reason: input.reason,
-        ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(branchId ? { branchId } : {}),
       },
       session,
     ),
