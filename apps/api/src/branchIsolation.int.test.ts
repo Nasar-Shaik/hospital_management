@@ -29,6 +29,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { Types } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -48,9 +49,13 @@ const { runWithContext } = await import("./core/context/requestContext.js");
 const { createUser, transitionStatus } = await import("./modules/users/index.js");
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
+const { createHospital } = await import("./modules/platform/index.js");
+const { seedMainBranch } = await import("./seed/mainBranch.js");
 
 const SLUG = "test-branchiso-apollo";
 const DB = `hms_${SLUG}`;
+/** The second hospital, provisioned through the operator console — see group 10. */
+const NEWCO_DB = "hms_test-branchiso-newco";
 const HOST = `${SLUG}.medicore.test`;
 const PASSWORD = "V4lid!Password#2026";
 
@@ -71,6 +76,13 @@ let branchB = "";
 let tokenAdmin = "";
 let tokenRecepA = "";
 let tokenRecepB = "";
+/**
+ * A BRANCH MANAGER: every permission a tenant administrator has, but bound to Hyderabad alone.
+ * The account that matters most for Phase 1 — a receptionist is stopped by the permission layer
+ * long before the branch layer is consulted, so she cannot prove the branch layer works. This
+ * one is stopped by nothing except her branch, which is precisely what is under test.
+ */
+let tokenMgrA = "";
 
 /** A patient registered at each site, so "did the wrong one leak?" has a concrete answer. */
 let patientAId = "";
@@ -124,6 +136,22 @@ function post(path: string, token: string, activeBranch?: string): request.Test 
   return activeBranch ? req.set("X-Active-Branch", activeBranch) : req;
 }
 
+function put(path: string, token: string, activeBranch?: string): request.Test {
+  const req = request(app).put(path).set("Host", HOST).set("Authorization", `Bearer ${token}`);
+  return activeBranch ? req.set("X-Active-Branch", activeBranch) : req;
+}
+
+/**
+ * The next Monday strictly in the future, as `YYYY-MM-DD`. A FUTURE day because availability
+ * drops slots that have already passed, so "today, if today is Monday" would return an
+ * ever-shrinking list and a test that fails in the afternoon.
+ */
+function nextMonday(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 interface PatientRow {
   id: string;
   branchId?: string;
@@ -138,7 +166,7 @@ async function patientsSeenBy(token: string, activeBranch?: string): Promise<Pat
 beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
-  await dropDatabases(["test_branchiso_master", DB]);
+  await dropDatabases(["test_branchiso_master", DB, NEWCO_DB]);
   await flushTestCache("branchIsolation");
 
   // Enterprise so that layer 1 (entitlement) never answers first — a 403 in this suite
@@ -180,6 +208,9 @@ beforeAll(async () => {
   tokenRecepA = await login("recepa@branchiso.test");
   tokenRecepB = await login("recepb@branchiso.test");
 
+  await createUserWithRole("mgra@branchiso.test", "TENANT_ADMIN", [branchA]);
+  tokenMgrA = await login("mgra@branchiso.test");
+
   // One patient per site. Registered with NO explicit branchId, so the branch on the row is
   // whatever `writeBranchId()` stamped from the active branch — which is the thing under test.
   const pa = await post("/api/v1/patients", tokenAdmin, branchA)
@@ -196,7 +227,7 @@ afterAll(async () => {
   await closeAllTenantConnections();
   await closeMaster();
   await closeRedis();
-  await dropDatabases(["test_branchiso_master", DB]);
+  await dropDatabases(["test_branchiso_master", DB, NEWCO_DB]);
 }, 30_000);
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -415,5 +446,451 @@ describe("branch membership is live, not carried in the JWT", () => {
       "she still saw her OLD branch's patient after being moved — scope came from the token",
     ).toBe(false);
     expect(after.every((p) => p.branchId === branchB)).toBe(true);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * PHASE 1 — the hardening that followed. Everything above proves the boundary
+ * HOLDS; everything below proves the data can actually LIVE inside it: that two
+ * sites can each have an ICU, that a doctor can hold a Monday clinic at both,
+ * that a hospital is born with a branch at all, and that the three write paths
+ * the Phase 0 sweep missed are closed too.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 6. A WARD BELONGS TO A SITE — `one_ward_name_per_branch` (migration 0046)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("two sites can each have a ward of the same name", () => {
+  it("accepts ICU at Hyderabad AND ICU at Chennai", async () => {
+    // The tenant-wide key this replaces rejected the second one outright, which is a hospital
+    // being told by its database that it may not have an intensive care unit.
+    const hyd = await post("/api/v1/wards", tokenAdmin, branchA)
+      .send({ name: "ICU", kind: "icu", tariffCode: "BED_ICU" })
+      .expect(201);
+    const chn = await post("/api/v1/wards", tokenAdmin, branchB)
+      .send({ name: "ICU", kind: "icu", tariffCode: "BED_ICU" })
+      .expect(201);
+
+    expect(hyd.body.data.branchId).toBe(branchA);
+    expect(chn.body.data.branchId).toBe(branchB);
+    expect(hyd.body.data.id).not.toBe(chn.body.data.id);
+  });
+
+  it("still refuses a duplicate name WITHIN one site", async () => {
+    // Widening the key must not have removed the rule — "ICU" twice at Hyderabad is still a typo.
+    // (The first ICU at Hyderabad was created by the test above.)
+    const res = await post("/api/v1/wards", tokenAdmin, branchA).send({
+      name: "ICU",
+      kind: "icu",
+      tariffCode: "BED_ICU",
+    });
+
+    expect(
+      res.status,
+      "a duplicate ward name at the SAME site was accepted",
+    ).toBeGreaterThanOrEqual(400);
+  });
+
+  it("a branch-confined user sees only her own site's ICU", async () => {
+    // The branch manager, not the receptionist: reading the bed catalogue needs `emr:read`, and
+    // a 403 from the permission layer would prove nothing about branches.
+    const res = await get("/api/v1/wards", tokenMgrA).expect(200);
+    const wards = res.body.data as { name: string; branchId?: string }[];
+    expect(wards.length).toBeGreaterThan(0);
+    expect(
+      wards.every((w) => w.branchId === branchA),
+      "a ward from another site appeared in a confined user's catalogue",
+    ).toBe(true);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 7. BED OCCUPANCY IS PER SITE — `one_open_stay_per_bed_per_branch`
+ *
+ * Asserted against the INDEX rather than through the admission flow, because the
+ * index IS the rule: `one_open_stay_per_bed` is the only thing that arbitrates
+ * two clerks admitting into the same bed at the same instant, and no service
+ * check can stand in for it. Testing it through four screens would prove the
+ * screens work, not that the invariant is branch-aware.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("bed occupancy is isolated per branch", () => {
+  /**
+   * An open inpatient stay, written raw so the unique partial index is the only judge.
+   *
+   * Each gets its OWN patientId: `one_open_encounter_per_patient` is a separate invariant on
+   * `{tenantId, patientId}`, and reusing one patient would trip that index instead of the bed
+   * one — the test would go red for a reason that has nothing to do with branches.
+   */
+  let patientSeq = 0;
+  function stay(branchId: string, ward: string, bedCode: string): Record<string, unknown> {
+    patientSeq += 1;
+    return {
+      tenantId: tenant.id,
+      branchId,
+      patientId: new Types.ObjectId(),
+      open: true,
+      type: "IP",
+      status: "admitted",
+      mrn: `BEDTEST-${String(patientSeq)}`,
+      bed: { ward, bedCode, tariffCode: "BED_ICU" },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  it("ICU/A-12 can be occupied at BOTH sites at once", async () => {
+    await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const encounters = conn.collection("encounters");
+
+      await encounters.insertOne(stay(branchA, "ICU", "A-12"));
+      // Before 0046 this threw E11000: Chennai's patient was refused a bed because a
+      // DIFFERENT hospital, in a different city, had someone in a bed with the same label.
+      await expect(encounters.insertOne(stay(branchB, "ICU", "A-12"))).resolves.toBeTruthy();
+    });
+  });
+
+  it("but the same bed at the SAME site is still refused", async () => {
+    await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const encounters = conn.collection("encounters");
+
+      await encounters.insertOne(stay(branchA, "ICU", "B-01"));
+      await expect(
+        encounters.insertOne(stay(branchA, "ICU", "B-01")),
+        "two patients were recorded in one bed — the occupancy invariant is gone",
+      ).rejects.toThrow(/E11000|duplicate key/i);
+    });
+  });
+
+  it("the old tenant-wide occupancy index is gone, not merely shadowed", async () => {
+    // Two unique indexes would mean the stricter one still decides, and the test above would
+    // be passing for the wrong reason on a database where 0046 only half-applied.
+    await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const names = (await conn.collection("encounters").indexes()).map((i) => i.name);
+      expect(names).toContain("one_open_stay_per_bed_per_branch");
+      expect(names).not.toContain("one_open_stay_per_bed");
+    });
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 8. A DOCTOR'S MONDAY IS A MONDAY *SOMEWHERE* (migration 0046)
+ *
+ * The old key `{tenantId, doctorId, weekday}` was described in 0010 as "the upsert
+ * key", and that is exactly what made it dangerous: setting Dr Rao's Chennai Monday
+ * did not FAIL, it silently overwrote his Hyderabad Monday, and the only symptom was
+ * a clinic that stopped offering slots.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** A 24-hex id; `doctorId` is stored as a string, so it needs no real user behind it. */
+const DOCTOR = "aaaaaaaaaaaaaaaaaaaaaa01";
+
+describe("a doctor can hold the same weekday at two sites", () => {
+  it("keeps both Mondays instead of overwriting the first", async () => {
+    // Monday mornings in Hyderabad, Monday afternoons in Chennai.
+    const hyd = await put("/api/v1/doctors/schedule", tokenAdmin, branchA)
+      .send({ doctorId: DOCTOR, weekday: 1, startMinute: 540, endMinute: 720, slotMinutes: 15 })
+      .expect(201);
+    const chn = await put("/api/v1/doctors/schedule", tokenAdmin, branchB)
+      .send({ doctorId: DOCTOR, weekday: 1, startMinute: 840, endMinute: 1020, slotMinutes: 15 })
+      .expect(201);
+
+    expect(hyd.body.data.branchId).toBe(branchA);
+    expect(chn.body.data.branchId).toBe(branchB);
+    expect(
+      hyd.body.data.id,
+      "the second site's Monday reused the first's row — one of the two clinics has been erased",
+    ).not.toBe(chn.body.data.id);
+
+    // And the first is untouched: still the morning session, not overwritten by the afternoon.
+    const all = await get(`/api/v1/doctors/${DOCTOR}/schedule`, tokenAdmin).expect(200);
+    const rows = all.body.data as { branchId?: string; startMinute: number }[];
+    const morning = rows.find((r) => r.branchId === branchA);
+    expect(morning?.startMinute, "Hyderabad's morning clinic was overwritten").toBe(540);
+  });
+
+  it("re-setting the same weekday at the same site UPDATES rather than duplicating", async () => {
+    // The upsert must still be an upsert — a wider key must not turn edits into inserts.
+    await put("/api/v1/doctors/schedule", tokenAdmin, branchA)
+      .send({ doctorId: DOCTOR, weekday: 1, startMinute: 600, endMinute: 720, slotMinutes: 15 })
+      .expect(201);
+
+    const all = await get(`/api/v1/doctors/${DOCTOR}/schedule`, tokenAdmin).expect(200);
+    const rows = all.body.data as { branchId?: string; startMinute: number }[];
+    const atA = rows.filter((r) => r.branchId === branchA);
+    expect(atA).toHaveLength(1);
+    expect(atA[0]?.startMinute).toBe(600);
+  });
+
+  it("offers the slots of the site being worked at, not the doctor's whole week", async () => {
+    // The effective schedule is doctor + BRANCH + weekday. Without the branch in the lookup,
+    // a Hyderabad receptionist would be offered Chennai's afternoon and book a patient into a
+    // clinic 600km away.
+    const monday = nextMonday();
+    const atHyd = await get(
+      `/api/v1/appointments/availability?doctorId=${DOCTOR}&date=${monday}`,
+      tokenAdmin,
+      branchA,
+    ).expect(200);
+    const atChn = await get(
+      `/api/v1/appointments/availability?doctorId=${DOCTOR}&date=${monday}`,
+      tokenAdmin,
+      branchB,
+    ).expect(200);
+
+    const minutesOf = (body: { data: { startAt: string }[] }): number[] =>
+      body.data.map((s) => {
+        const d = new Date(s.startAt);
+        return d.getHours() * 60 + d.getMinutes();
+      });
+
+    const hyd = minutesOf(atHyd.body);
+    const chn = minutesOf(atChn.body);
+    expect(hyd.length).toBeGreaterThan(0);
+    expect(chn.length).toBeGreaterThan(0);
+    // Hyderabad runs 10:00–12:00, Chennai 14:00–17:00. Neither may offer the other's hours.
+    expect(Math.max(...hyd), "a Chennai afternoon slot was offered at Hyderabad").toBeLessThan(840);
+    expect(
+      Math.min(...chn),
+      "a Hyderabad morning slot was offered at Chennai",
+    ).toBeGreaterThanOrEqual(840);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 9. THE THREE WRITE PATHS PHASE 0 MISSED
+ *
+ * Phase 0 swept for `input.branchId ?? (await writeBranchId())` and closed five
+ * sites. These three do not use that idiom — they pass the body value straight
+ * down — so the grep did not find them and they stayed open. Roster writes, not
+ * patient writes, which is why nothing clinical pointed at them.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("roster writes cannot name a branch the caller may not reach", () => {
+  it("refuses a schedule written into another site", async () => {
+    const res = await put("/api/v1/doctors/schedule", tokenMgrA).send({
+      doctorId: DOCTOR,
+      weekday: 3,
+      startMinute: 540,
+      endMinute: 720,
+      slotMinutes: 15,
+      branchId: branchB,
+    });
+
+    expect(res.status, "a Hyderabad manager set Chennai's clinic hours").toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("refuses a roster row written into another site", async () => {
+    const res = await put("/api/v1/doctors/availability", tokenMgrA).send({
+      doctorId: DOCTOR,
+      weekday: 3,
+      sessions: ["morning"],
+      branchId: branchB,
+    });
+
+    expect(res.status, "a Hyderabad manager set Chennai's roster").toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("refuses leave written into another site", async () => {
+    // Leave is read back through `scopeFilter`, so stamping it with a branch the author cannot
+    // reach HIDES it: Chennai would never learn the doctor is away and would keep booking.
+    const res = await post("/api/v1/doctors/leave", tokenMgrA).send({
+      doctorId: DOCTOR,
+      fromDate: "2026-12-01",
+      toDate: "2026-12-03",
+      branchId: branchB,
+    });
+
+    expect(res.status, "a Hyderabad manager filed leave against Chennai").toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  it("and still stamps her OWN branch when she names none", async () => {
+    // The refusal must not have cost the ordinary case: one reachable site is not a guess.
+    const res = await put("/api/v1/doctors/schedule", tokenMgrA)
+      .send({ doctorId: DOCTOR, weekday: 4, startMinute: 540, endMinute: 720, slotMinutes: 15 })
+      .expect(201);
+
+    expect(res.body.data.branchId).toBe(branchA);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 10. A HOSPITAL IS BORN WITH A BRANCH
+ *
+ * `createHospital` — the operator console's provisioning path — seeded the admin,
+ * the notification templates and the tariff, and did NOT seed the Main Branch. The
+ * CLI always had. So a hospital provisioned over HTTP had no branch at all,
+ * `writeBranchId()` found no candidate, and every record it ever wrote was
+ * branchless: invisible to a branch-confined user the day it opened a second site.
+ * Nothing failed; the data was simply born wrong.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("console provisioning gives the hospital its Main Branch", () => {
+  const NEW_SLUG = "test-branchiso-newco";
+  let newTenantId = "";
+  let newTenantDb = "";
+
+  interface BranchRow {
+    _id: { toString(): string };
+    name: string;
+    isMain?: boolean;
+  }
+
+  async function branchesOfNewTenant(): Promise<BranchRow[]> {
+    const conn = await getTenantConnection({ id: newTenantId, databaseName: newTenantDb });
+    return conn.collection<BranchRow>("branches").find({}).toArray();
+  }
+
+  beforeAll(async () => {
+    const created = await createHospital(
+      {
+        slug: NEW_SLUG,
+        hospitalName: "Newco Hospital",
+        planCode: "PLAN_ENTERPRISE",
+        adminEmail: "admin@newco.test",
+        adminPassword: PASSWORD,
+      },
+      { id: "operator-1", email: "operator@medicore.test" },
+      { traceId: "branchiso-provisioning" },
+      "medicore.test",
+    );
+    newTenantId = created.hospital.id;
+    newTenantDb = `hms_${NEW_SLUG}`;
+  }, 120_000);
+
+  it("creates exactly one branch, and it is the Main Branch", async () => {
+    const branches = await branchesOfNewTenant();
+    expect(branches, "a console-provisioned hospital had NO branch").toHaveLength(1);
+    expect(branches[0]?.isMain).toBe(true);
+    expect(branches[0]?.name).toBe("Main Branch");
+  });
+
+  it("is idempotent — a re-run makes no second Main Branch", async () => {
+    // The retry case: provisioning got this far and failed downstream, and an operator runs it
+    // again. Also the `migrate --all` case, which re-seeds every hospital on every release.
+    const conn = await getTenantConnection({ id: newTenantId, databaseName: newTenantDb });
+    const again = await seedMainBranch(newTenantId, NEW_SLUG, conn);
+
+    expect(again.created).toBe(false);
+    expect(await branchesOfNewTenant()).toHaveLength(1);
+  });
+
+  it("so a patient registered there is stamped with a real branch", async () => {
+    // The point of all of it: no active branch chosen, one candidate, therefore stamped.
+    const token = (
+      await request(app)
+        .post("/api/v1/auth/login")
+        .set("Host", `${NEW_SLUG}.medicore.test`)
+        .send({ email: "admin@newco.test", password: PASSWORD })
+        .expect(200)
+    ).body.data.accessToken as string;
+
+    const res = await request(app)
+      .post("/api/v1/patients")
+      .set("Host", `${NEW_SLUG}.medicore.test`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ name: "Newco Patient", gender: "female" })
+      .expect(201);
+
+    const branches = await branchesOfNewTenant();
+    expect(res.body.data.patient.branchId).toBe(branches[0]?._id.toString());
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 11. THE BACKFILL REFUSES TO GUESS
+ *
+ * Adopting a branchless row into the Main Branch is an INFERENCE — "there was only
+ * one site, so it happened there" — and it is true right up until the hospital has
+ * two. From then on the same code would be inventing a fact: writing Hyderabad onto
+ * a row that might be Chennai's, permanently and unprovably.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the Main Branch backfill declines on a multi-branch hospital", () => {
+  it("leaves a branchless row alone and reports it instead", async () => {
+    await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      // A pre-branch row, as a hospital provisioned before ADR-0015 would have.
+      await conn.collection("walletEntries").insertOne({
+        tenantId: tenant.id,
+        patientId: patientAId,
+        type: "deposit",
+        amount: 5000,
+        balanceAfter: 5000,
+        at: new Date(),
+      });
+
+      // This tenant has Hyderabad and Chennai, so which desk took the money is unknowable.
+      const result = await seedMainBranch(tenant.id, tenant.slug, conn);
+
+      expect(result.skipped?.reason).toBe("multiple branches");
+      expect(result.skipped?.branchless.walletEntries).toBeGreaterThanOrEqual(1);
+      expect(result.backfilled).toEqual({});
+
+      const stillBranchless = await conn
+        .collection("walletEntries")
+        .countDocuments({ branchId: { $exists: false } });
+      expect(
+        stillBranchless,
+        "the backfill invented a branch for a row it could not attribute",
+      ).toBeGreaterThanOrEqual(1);
+    });
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 12. THE STOCK LEDGER RECORDS WHICH PHARMACY
+ *
+ * `receiveStock`/`adjustStock` took an optional `branchId` that the controller
+ * never passed, so every receipt and adjustment made over HTTP was written
+ * branchless — and the field's presence made it look solved.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("stock movements record the site they happened at", () => {
+  it("stamps a receipt with the active branch", async () => {
+    const medicine = await post("/api/v1/medicines", tokenAdmin, branchA)
+      .send({ code: "PARA500", name: "Paracetamol 500mg", form: "tablet" })
+      .expect(201);
+    const id = medicine.body.data.id as string;
+
+    await post(`/api/v1/medicines/${id}/receive`, tokenAdmin, branchA)
+      .send({ quantity: 100 })
+      .expect(201);
+
+    await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const movements = await conn
+        .collection("stockMovements")
+        .find({ medicineCode: "PARA500" })
+        .toArray();
+
+      expect(movements.length).toBeGreaterThan(0);
+      expect(
+        movements.every((m) => m.branchId === branchA),
+        "a stock movement was written with no branch — the ledger cannot say which pharmacy",
+      ).toBe(true);
+    });
   });
 });
