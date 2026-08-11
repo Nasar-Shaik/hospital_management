@@ -47,6 +47,7 @@ import {
 import { VitalsPanel } from "../../components/Vitals";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -61,10 +62,6 @@ function time(iso: string): string {
  * before the connection dropped. The server arbitrates with a unique index; this is
  * what gives it something to arbitrate on.
  */
-function requestKey(encounterId: string, code: string): string {
-  return `ord-${encounterId}-${code}-${String(Date.now())}`;
-}
-
 const PRIORITIES: OrderPriority[] = ["routine", "urgent", "stat", "emergency"];
 
 function priorityTone(p: OrderPriority): "danger" | "brand" | "neutral" {
@@ -94,6 +91,15 @@ function OrderPad({
   const { api } = useAuth();
   const [priority, setPriority] = useState<OrderPriority>("routine");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /**
+   * One key per test in THIS submission — see the note in `lib/idempotency.ts`. It replaces
+   * `` `ord-${encounterId}-${code}-${Date.now()}` ``, which changed on every click and therefore
+   * stopped nothing: a double-click drew two tubes of blood.
+   *
+   * Held across a retry of the same basket and dropped when the basket changes, because a
+   * different set of tests under the same key is a conflict, not a retry.
+   */
+  const orderKeys = useIntentKeys();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -127,14 +133,21 @@ function OrderPad({
       // the whole batch never double-orders. A true batch endpoint would save round trips;
       // at a consultation's scale (a handful of tests) this is simpler and just as safe.
       for (const item of items) {
-        const result = await api.placeOrder({
-          encounterId: encounter.id,
-          category: item.category as "lab" | "radiology" | "procedure",
-          code: item.code,
-          name: item.name,
-          priority,
-          requestId: requestKey(encounter.id, item.code),
-        });
+        const key = orderKeys.keyFor(item.code);
+        const result = await api.placeOrder(
+          {
+            encounterId: encounter.id,
+            category: item.category as "lab" | "radiology" | "procedure",
+            code: item.code,
+            name: item.name,
+            priority,
+            requestId: key,
+          },
+          key,
+        );
+        // `duplicate` now only appears if the header was stripped in transit and the server
+        // answered from the order's own `requestId` guard. A header replay returns the original
+        // 201, so the ordinary retry path reports what the FIRST attempt did — which is true.
         if (result.duplicate) duplicates += 1;
         else placed += 1;
       }
@@ -143,9 +156,13 @@ function OrderPad({
         `${String(placed)} test${placed === 1 ? "" : "s"} ordered — on the department worklist now${duplicates > 0 ? `, ${String(duplicates)} already ordered` : ""}.`,
       );
       setSelected(new Set());
+      orderKeys.reset();
       onOrdered();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not place the orders.");
+      setError(
+        idempotencyMessage(err) ??
+          (err instanceof ApiClientError ? err.message : "Could not place the orders."),
+      );
     } finally {
       setBusy(false);
     }

@@ -46,7 +46,7 @@ import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
 import { rupees, toPaise } from "../../../lib/money";
-import { newIdempotencyKey } from "../../../lib/idempotency";
+import { idempotencyMessage, newIdempotencyKey } from "../../../lib/idempotency";
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -710,14 +710,16 @@ function Bills({
      */
     settleKeys.current[invoiceId] ??= newIdempotencyKey();
     try {
-      await api.payFromWallet(invoiceId, amount, settleKeys.current[invoiceId]);
+      const key = settleKeys.current[invoiceId];
+      await api.payFromWallet(invoiceId, amount, key, key);
       delete settleKeys.current[invoiceId];
       await reload();
     } catch (err) {
       setError(
-        err instanceof ApiClientError
-          ? err.message
-          : "Could not settle this bill from the advance.",
+        idempotencyMessage(err) ??
+          (err instanceof ApiClientError
+            ? err.message
+            : "Could not settle this bill from the advance."),
       );
     } finally {
       setBusy(null);

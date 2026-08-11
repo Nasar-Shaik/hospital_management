@@ -32,7 +32,7 @@ import {
   type Patient,
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
-import { useIdempotencyKey } from "../../lib/idempotency";
+import { idempotencyMessage, useIdempotencyKey } from "../../lib/idempotency";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
 
@@ -240,12 +240,16 @@ function InvoiceRow({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void 
     setBusy(true);
     setError(null);
     try {
-      await api.recordPayment(invoice.id, { amount: paise, method, requestId });
+      // Header + body, same string — see the note in `lib/idempotency.ts`.
+      await api.recordPayment(invoice.id, { amount: paise, method, requestId }, requestId);
       // A part-payment leaves the form open for the rest, which is a NEW intent.
       renewRequestId();
       onPaid();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not record the payment.");
+      setError(
+        idempotencyMessage(err) ??
+          (err instanceof ApiClientError ? err.message : "Could not record the payment."),
+      );
     } finally {
       setBusy(false);
     }

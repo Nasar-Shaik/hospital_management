@@ -32,21 +32,10 @@ import {
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
+import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-/**
- * A stable idempotency key for one handover.
- *
- * A pharmacist double-clicking "Dispense" must not hand over — and bill for — two lots of
- * the same drug, and a retry after a timeout is exactly the case a disabled button cannot
- * save you from: the first request may well have succeeded before the connection dropped.
- * With a controlled substance a double handover is not a billing error, it is a diversion.
- */
-function requestKey(prescriptionId: string): string {
-  return `dsp-${prescriptionId}-${String(Date.now())}`;
 }
 
 /** One prescription at the counter: what is owed, what is given, and the button. */
@@ -59,6 +48,18 @@ function Counter({
 }) {
   const { api, can } = useAuth();
   const [qty, setQty] = useState<Record<number, number>>({});
+  /**
+   * ── THE KEY THAT USED TO BE A CLOCK ─────────────────────────────────────
+   * This was `` `dsp-${id}-${Date.now()}` ``, which reads as an idempotency key and is not one:
+   * every click produced a different key, so the double-click it was written to stop went
+   * straight through as a second handover. With a controlled substance that is not a billing
+   * error, it is a diversion.
+   *
+   * Now it is minted once per handover intent and held across retries. Changing the quantities
+   * is a DIFFERENT handover, so `reset()` drops it — otherwise the server would (correctly)
+   * refuse the new amounts under the old key as `HMS-REQ-002`.
+   */
+  const dispenseKeys = useIntentKeys();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ledger, setLedger] = useState<Dispense[]>([]);
@@ -103,11 +104,15 @@ function Counter({
     setBusy(true);
     setError(null);
     try {
-      await api.dispense(prescription.id, {
-        items,
-        requestId: requestKey(prescription.id),
-        ...(override ? { creditOverride: override } : {}),
-      });
+      const key = dispenseKeys.keyFor(prescription.id);
+      // Header + body, same string: the header replays the original handover, the `requestId`
+      // column and its unique index are the second lock. See `lib/idempotency.ts`.
+      await api.dispense(
+        prescription.id,
+        { items, requestId: key, ...(override ? { creditOverride: override } : {}) },
+        key,
+      );
+      dispenseKeys.clear(prescription.id);
       setOverBudget(null);
       setCreditReason("");
       onDispensed();
@@ -118,7 +123,10 @@ function Counter({
         const d = (err.details ?? {}) as { cost?: number; balance?: number; shortfall?: number };
         setOverBudget({ cost: d.cost ?? 0, balance: d.balance ?? 0, shortfall: d.shortfall ?? 0 });
       } else {
-        setError(err instanceof ApiClientError ? err.message : "Could not dispense.");
+        setError(
+          idempotencyMessage(err) ??
+            (err instanceof ApiClientError ? err.message : "Could not dispense."),
+        );
       }
     } finally {
       setBusy(false);
