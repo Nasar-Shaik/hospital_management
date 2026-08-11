@@ -292,6 +292,9 @@ async function transition(
       await publish(
         {
           name: EVENTS.APPOINTMENT_CANCELLED,
+          // From the RECORD, not the request: a cancellation is about the appointment's own
+          // site, and the clerk cancelling it may be working at another one (ADR-0015).
+          ...(updated.branchId ? { branchId: updated.branchId } : {}),
           payload: {
             appointmentId: updated.id,
             patientId: updated.patientId,

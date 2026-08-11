@@ -284,6 +284,9 @@ async function transition(
       await publish(
         {
           name: EVENTS.ENCOUNTER_CLOSED,
+          // The visit's own branch. Billing closes the bill off this event, so a missing branch
+          // here is an invoice that cannot say which site raised it (ADR-0015).
+          ...(updated.branchId ? { branchId: updated.branchId } : {}),
           payload: {
             encounterId: updated.id,
             episodeId: updated.episodeId,
