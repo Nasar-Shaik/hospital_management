@@ -6,9 +6,17 @@ were designed for a native client before any screen existed, so the mobile app i
 that reuses the existing backend verbatim. Architecture lives in Doc 04; engineering rules in Doc 09;
 this document is the mobile-specific layer over both.
 
-> **Status (2026-07-30):** planning complete, build not started. First audience after the
+> **Status (2026-08-12):** planning complete, build not started. First audience after the
 > foundation is **Doctor** (decided with the product owner). Same one-unit-per-turn, fully-gated,
 > Conventional-Commit cadence as every other module.
+>
+> **Read [MOBILE_M0_ARCHITECTURE.md](MOBILE_M0_ARCHITECTURE.md) alongside this.** It re-verifies
+> every decision below against the code as of 2026-08-12 — after response contracts,
+> `Idempotency-Key` and the v1 lifecycle policy landed — and supplies what this document predates:
+> the state/offline/security/timezone strategies, the navigation tree, the role map, the push
+> contract, and the four backend items. Where the two differ, M0 is current. In particular §8 below
+> says offline writes queue on `requestId`; **M0 §11 rules that out** for clinical and financial
+> mutations, and the central mechanism is now the `Idempotency-Key` header.
 
 ---
 
