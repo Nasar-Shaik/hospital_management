@@ -20,6 +20,7 @@
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
@@ -124,6 +125,15 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
 
   const priority: OrderPriority = input.priority ?? "routine";
 
+  /**
+   * The branch, by the same rule as `patientId` below: an order happens where its encounter
+   * is. A caller MAY name one explicitly, but only one they can actually reach —
+   * `writeBranchId` refuses anything outside their allowed set (HMS-AUTH-005). Before that
+   * check existed, `input.branchId ?? encounter.branchId` let a branch-confined user file an
+   * order into a site they cannot see.
+   */
+  const branchId = input.branchId ? await writeBranchId(input.branchId) : encounter.branchId;
+
   try {
     return await withTransaction(async (session) => {
       const order = await repo.create(
@@ -141,9 +151,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.orderedBy ? { orderedBy: input.orderedBy } : {}),
-          ...((input.branchId ?? encounter.branchId)
-            ? { branchId: (input.branchId ?? encounter.branchId) as string }
-            : {}),
+          ...(branchId ? { branchId } : {}),
         },
         session,
       );

@@ -41,8 +41,12 @@ interface BranchRow {
  * it simply writes no branch, exactly as it did before branches existed. Once the Main Branch is
  * seeded there is one candidate and every write is stamped.
  */
-export async function writeBranchId(): Promise<string | undefined> {
+export async function writeBranchId(requested?: string): Promise<string | undefined> {
   const ctx = getContext();
+
+  // 0. A branch named by the CALLER — a `branchId` in the request body. It must be checked
+  //    against the caller's allowed set before it is trusted; see `assertWritableBranch`.
+  if (requested !== undefined) return assertWritableBranch(requested);
 
   // 1. An explicit selection always wins — it was validated ⊆ the allowed set in `authorize`.
   if (ctx.activeBranchId) return ctx.activeBranchId;
@@ -66,6 +70,47 @@ export async function writeBranchId(): Promise<string | undefined> {
   // Several branches and none chosen — the one case we must not guess.
   throw new AppError("HMS-BRANCH-001", 400, "No active branch selected", {
     hint: "pick a branch in the switcher before creating records",
+  });
+}
+
+/**
+ * A branch the CALLER asked to write into, checked against what they may actually reach.
+ *
+ * ── THE HOLE THIS CLOSES ────────────────────────────────────────────────────
+ * ADR-0015's guarantee is that "`branchId` is written in exactly one way", so that "which
+ * branch created this row?" has one answer and one test surface. Five services quietly
+ * broke it by preferring a client value over this function:
+ *
+ *     const branchId = input.branchId ?? (await writeBranchId());
+ *
+ * `input.branchId` comes straight from the request body, and nothing checked it. A
+ * receptionist confined to Hyderabad could therefore `POST /patients` with Chennai's id in
+ * the payload and the row was created **in Chennai** — a branch she cannot read, write or
+ * even see in her switcher. The header route was validated (`resolveActiveBranch`), the
+ * query string is refused by a `.strict()` schema, and the body was wide open. Proven by
+ * the branch-isolation suite, which failed on exactly this before this function existed.
+ *
+ * ── REFUSE, WHERE THE HEADER ONLY IGNORES ───────────────────────────────────
+ * `resolveActiveBranch` treats an unreachable branch in `X-Active-Branch` as "not
+ * selected" and falls back to the caller's own scope, because a header is UI state that
+ * goes stale legitimately — a branch removed from your set while the tab is open. A
+ * `branchId` in a mutation body is not stale UI state; it is an explicit instruction to
+ * write somewhere. Silently redirecting it would make the API lie about what it did, so
+ * this refuses with HMS-AUTH-005: authenticated, holds the permission, not for that site.
+ *
+ * ── WHY "NO SCOPE" MEANS TRUST ──────────────────────────────────────────────
+ * `ctx.scope` is published by `authorize`, so it exists on every authorized HTTP request
+ * and is absent for internal callers — seeds, migrations, queue consumers — which supply a
+ * branch from trusted code and have no user to constrain. `scopeFilter` already reads an
+ * absent scope the same way (`if (!scope) return {}`).
+ */
+function assertWritableBranch(requested: string): string {
+  const scope = getContext().scope;
+  if (!scope) return requested;
+  if (scope.allBranches || scope.branchIds.includes(requested)) return requested;
+
+  throw new AppError("HMS-AUTH-005", 403, "Insufficient permission", {
+    branchId: ["you may not create records in that branch"],
   });
 }
 

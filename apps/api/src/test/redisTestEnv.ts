@@ -59,7 +59,8 @@ const SUITE_DB = {
   users: 12,
   patients: 13,
   lab: 14,
-  misc: 15,
+  /** Branch isolation (ADR-0015) — claimed from the spare pool, see the note above. */
+  branchIsolation: 15,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

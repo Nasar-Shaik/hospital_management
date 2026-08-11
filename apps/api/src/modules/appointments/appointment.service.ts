@@ -167,7 +167,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
 
   // The branch this appointment is booked AT (ADR-0015) — the site the patient will be seen. The
   // encounter created from it later inherits this branch.
-  const branchId = input.branchId ?? (await writeBranchId());
+  const branchId = await writeBranchId(input.branchId);
 
   try {
     return await withTransaction(async (session) => {

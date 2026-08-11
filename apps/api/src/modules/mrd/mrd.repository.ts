@@ -124,7 +124,7 @@ export interface UpsertCodingInput {
 /** One coding per encounter — upserted, so re-coding a visit revises the record rather than piling up. */
 export async function upsertCoding(input: UpsertCodingInput): Promise<EncounterCoding> {
   const ctx = getContext();
-  const branchId = input.branchId ?? (await writeBranchId());
+  const branchId = await writeBranchId(input.branchId);
   const doc = await getEncounterCodingModel(getTenantDb())
     .findOneAndUpdate(
       { encounterId: new Types.ObjectId(input.encounterId), tenantId: ctx.tenantId },

@@ -131,7 +131,7 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
    * ownership wall. Resolved once, before the transaction: a caller who can reach several branches
    * and has selected none is asked to pick one (HMS-BRANCH-001).
    */
-  const branchId = input.branchId ?? (await writeBranchId());
+  const branchId = await writeBranchId(input.branchId);
 
   return withTransaction(async (session) => {
     const uhid = await repo.nextUhid(session);

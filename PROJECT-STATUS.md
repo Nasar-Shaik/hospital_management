@@ -14,6 +14,92 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## Multi-branch Phase 0 — prove the isolation (2026-08-11) · CLOSED
+
+ADR-0015 shipped multi-branch complete and **untested**: 1363 integration tests, not one of which
+ever sent `X-Active-Branch`. Phase 0 was to prove the control rather than rebuild the architecture.
+New suite `branchIsolation.int.test.ts` — **17 tests, all green, all four controls falsified.**
+
+### 🔴 It found a real vulnerability, on the vector nobody had tried
+
+Five services took the branch straight from the request body:
+
+```ts
+const branchId = input.branchId ?? (await writeBranchId()); // patients, encounters,
+// appointments, orders, mrd
+```
+
+`input.branchId` is client-supplied and **nothing validated it**, so it bypassed the very choke
+point ADR-0015 names as the only way a branch is ever written. **A receptionist confined to
+Hyderabad could `POST /patients` with Chennai's id in the payload and the row was created in
+Chennai** — a site she cannot read, write, or see in her switcher.
+
+The other three vectors were already sound: the header is validated against the live allowed set,
+the query string is refused by a `.strict()` schema, and the URL carries no branch. The body was
+the one nobody had tried, which is exactly why it was open.
+
+**Fixed at the choke point**, not per-service: `writeBranchId(requested?)` now validates a
+caller-supplied branch via `assertWritableBranch` and refuses with **HMS-AUTH-005** when it is
+outside the caller's allowed set. It refuses where the header merely ignores, because a `branchId`
+in a mutation body is an explicit instruction, not stale UI state.
+
+### Falsification — all four controls broken on purpose, each went red for its own reason
+
+| Control broken                       | Result                                                    |
+| ------------------------------------ | --------------------------------------------------------- |
+| Header validation (trust the header) | **3 red** — "receptionist A reached the Chennai patient"  |
+| Branch read filter (drop the `$in`)  | **5 red** — including cross-branch read by id             |
+| Write stamping (never stamp)         | **4 red** — rows lose their site, All-mode lists go empty |
+| All-mode refusal (guess a branch)    | **2 red** — HMS-BRANCH-001 never raised                   |
+
+`authorize.ts` was verified byte-identical to HEAD afterwards.
+
+### Ward and doctor-schedule findings (your decisions 3 and 4)
+
+Both entities are branch-aware in the **document** and branch-blind in the **unique index**:
+
+- **`one_ward_name_per_tenant`** on `{tenantId, name}` — Branch A "ICU" and Branch B "ICU" cannot
+  coexist today; the second is rejected. It is deliberately coupled to `one_open_stay_per_bed` on
+  `{tenantId, bed.ward, bed.bedCode}` (migration 0020, no branch), so **both must move together**
+  or bed occupancy breaks. Live data: **0 wards**, so the migration is currently free.
+- **`doctorSchedules {tenantId, doctorId, weekday}` unique** — described in the migration as "the
+  upsert key", so a doctor can hold exactly **one template per weekday tenant-wide**. Monday
+  morning in Hyderabad and Monday afternoon in Chennai is impossible: the second upsert overwrites
+  the first. Live data: **2 schedules**, so this migration is free too.
+
+### Branchless-row audit (read-only, all four tenant databases)
+
+Operational collections are **fully stamped** — patients, encounters, appointments, orders,
+prescriptions, invoices, charges, dispenses all show `branchless=0`. Two exceptions:
+
+| Collection       | Branchless rows              | Reads branch-filtered? |
+| ---------------- | ---------------------------- | ---------------------- |
+| `stockMovements` | 15 (district) + 16 (sunrise) | No                     |
+| `walletEntries`  | 4 (sunrise)                  | No                     |
+
+Neither is currently invisible, because neither repository branch-filters — but both become
+invisible the moment they do, and both block making `branchId` required.
+
+### 🔴 The Main Branch is not seeded on the console path
+
+`seedMainBranch` is called by the **CLI** (`scripts/provisionTenant.ts`, `migrateTenants.ts`) and
+**never** by `platform.service.ts createHospital` — the admin-console path. A hospital provisioned
+through the console therefore has **no Main Branch at all**: `writeBranchId()` finds zero candidates
+and every operational write is branchless. That file's own comment warns about this exact trap
+("provision now, seed later, and the second step is forgotten") for notification templates and
+tariff; branches are the third instance. **One line, and it blocks migration readiness.**
+
+### Entity classification — `branchId` written but reads not branch-filtered
+
+| Module                                                                    | Verdict                                                                                             |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `allergies`                                                               | ✅ Correct and documented — an allergy must cross branches or the safety check sees an empty list   |
+| `branches`, `rbac`, `entitlements`                                        | ✅ Correct — the binding/config itself, not a scoped row                                            |
+| `vitals`, `wallet`                                                        | 🟡 Parent-keyed (encounter / patient), so probably correct — but **undocumented**, unlike allergies |
+| `medicines` / `stockMovements`, `pharmacy` / `dispenses`, `notifications` | ⬜ **Undecided** — needs a classification decision                                                  |
+
+---
+
 ## Phase 1A — hardening (2026-08-10) · CLOSED
 
 The audit below is preserved as written. This block records what has since changed, so the two are

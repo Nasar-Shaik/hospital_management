@@ -154,7 +154,7 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
    * the active one. Everything the visit spawns downstream — orders, charges, prescriptions, vitals —
    * inherits this branch through the events it publishes.
    */
-  const branchId = input.branchId ?? (await writeBranchId());
+  const branchId = await writeBranchId(input.branchId);
 
   try {
     return await withTransaction(async (session) => {
