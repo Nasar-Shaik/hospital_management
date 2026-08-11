@@ -26,6 +26,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./order.controller.js";
 import { order, placeOrderResult } from "./order.contract.js";
 import {
@@ -48,6 +49,7 @@ export function orderRouter(): Router {
     authorize(PERMISSIONS.ORDER_CREATE, FEATURE),
     validate(placeOrderSchema),
     responds(placeOrderResult, { status: [200, 201] }),
+    idempotent("Replays the order this key already placed."),
     asyncHandler(controller.placeOrder),
   );
 

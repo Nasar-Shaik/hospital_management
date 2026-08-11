@@ -21,8 +21,14 @@
 import type { Application } from "express";
 import type { ZodTypeAny } from "@medicore/validation";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { routeInventory, type ResponseTag, type RouteInfo } from "./routeInventory.js";
+import {
+  routeInventory,
+  type IdempotencyTag,
+  type ResponseTag,
+  type RouteInfo,
+} from "./routeInventory.js";
 import { contractRegistry } from "./contract.js";
+import { KEY_MAX_LENGTH, KEY_MIN_LENGTH } from "../idempotency/idempotencyStore.js";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -69,6 +75,36 @@ function queryParameters(schema: ZodTypeAny): object[] {
     required: required.has(name),
     schema: propSchema,
   }));
+}
+
+/**
+ * The `Idempotency-Key` header parameter.
+ *
+ * `required: false` states the v1 contract exactly: the key is HONOURED, not demanded. Marking it
+ * required would be a breaking change to an existing operation, which Doc 04 §5.1 rules out
+ * inside a version — and it would be a lie, since the server does execute without it.
+ *
+ * The length and character rules are the store's own constants rather than a copy, so a generated
+ * mobile client cannot be told a bound the server does not enforce.
+ */
+function idempotencyParameter(tag: IdempotencyTag): object {
+  return {
+    name: tag.header,
+    in: "header",
+    required: false,
+    schema: {
+      type: "string",
+      minLength: KEY_MIN_LENGTH,
+      maxLength: KEY_MAX_LENGTH,
+      pattern: "^[A-Za-z0-9_.:@+-]+$",
+    },
+    description:
+      `${tag.description} Send the same key to retry safely: the first request executes and ` +
+      "its response is stored for 24 hours, and every later request with that key returns that " +
+      "response verbatim with `Idempotency-Replayed: true`. The same key with a different " +
+      "request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one " +
+      "hospital and one user; a UUID per user intent is the intended shape.",
+  };
 }
 
 /* ── response schemas ───────────────────────────────────────────────────────── */
@@ -333,7 +369,14 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
       return s ? { ...p, schema: s } : p;
     });
     const queryParams = validation.query ? queryParameters(validation.query) : [];
-    const allParams = [...enrichedParams, ...queryParams];
+    /**
+     * The idempotency header, read off the `idempotent()` middleware this route actually runs —
+     * same principle as the body and the response. A header documented on an operation that does
+     * not honour it is worse than no documentation: a mobile client would build its offline retry
+     * queue on a guarantee the server never made.
+     */
+    const idempotencyParams = route.idempotency ? [idempotencyParameter(route.idempotency)] : [];
+    const allParams = [...enrichedParams, ...queryParams, ...idempotencyParams];
 
     const operation: Record<string, unknown> = {
       operationId: opId,
@@ -368,10 +411,23 @@ export function buildOpenApiSpec(routes: RouteInfo[], opts: OpenApiOptions = {})
               ]),
             ])
           : { "200": { description: "Success — `{ success: true, data }`." } }),
-        ...(Object.keys(validation).length > 0
+        ...(Object.keys(validation).length > 0 || route.idempotency
           ? {
               "400": {
                 description: "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+                content: {
+                  "application/json": { schema: { $ref: "#/components/schemas/ApiError" } },
+                },
+              },
+            }
+          : {}),
+        ...(route.idempotency
+          ? {
+              "409": {
+                description:
+                  "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; " +
+                  "`details.original` carries what it did the first time. Or `HMS-REQ-004` — " +
+                  "the same request is still in flight; retry shortly to receive its result.",
                 content: {
                   "application/json": { schema: { $ref: "#/components/schemas/ApiError" } },
                 },

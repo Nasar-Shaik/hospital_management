@@ -1987,4 +1987,58 @@ export const tenantMigrations: Migration[] = [
      */
     down: async () => undefined,
   },
+  {
+    id: "0048-idempotency-key-claims",
+    description:
+      "Idempotency-Key (Doc 04 §5.1): the unique claim key that makes two simultaneous " +
+      "identical money requests execute exactly once.",
+    /**
+     * ── WHAT 0004 LEFT UNFINISHED ───────────────────────────────────────────────
+     * Migration 0004 created `idempotencyKeys` and its TTL index in the very first week, and for
+     * forty-four migrations nothing ever wrote a row to it. A collection with a TTL and no
+     * uniqueness is not idempotency — it is a cache with an expiry policy, and it would have let
+     * two simultaneous payments both insert a "claim" and both proceed.
+     *
+     * This is the index that does the actual work. `(tenantId, userId, key)` is the identity of a
+     * claim, and it is unique, so of two identical requests in flight EXACTLY ONE insert survives
+     * — the database arbitrates the race rather than the application, which is the only place it
+     * can be arbitrated correctly (`if (!exists) create()` loses by construction).
+     *
+     * Each field earns its place:
+     *   tenantId — a hospital can never see, replay, or block another hospital's keys. The
+     *              collection already lives in the tenant's own database; this is the second lock
+     *              on the same door, in the house style.
+     *   userId   — two cashiers on two counters will both invent `"receipt-1"`. Without this they
+     *              would collide, and the second cashier would be handed the first one's receipt
+     *              while the second patient's money was never taken.
+     *   key      — the client's name for its intent.
+     *
+     * The ENDPOINT is deliberately NOT part of the key. It lives in the request fingerprint
+     * instead, so reusing one key across two endpoints is a loud 409 rather than two independent
+     * executions — a client that does that has a bug, and the useful answer is to say so.
+     *
+     * The TTL index from 0004 stays exactly as it is: `expiresAt` is re-stamped on completion, so
+     * a stored response lives 24 hours from the answer (Doc 03 §7), and nothing has to run a
+     * cleanup job.
+     */
+    up: async (db) => {
+      await db.createCollection("idempotencyKeys").catch(() => undefined);
+      await db
+        .collection("idempotencyKeys")
+        .createIndex(
+          { tenantId: 1, userId: 1, key: 1 },
+          { unique: true, background: true, name: "one_claim_per_idempotency_key" },
+        );
+    },
+    /**
+     * Drops only the index this migration added. The collection and its TTL belong to 0004 and
+     * dropping them here would roll back a migration this one did not perform.
+     */
+    down: async (db) => {
+      await db
+        .collection("idempotencyKeys")
+        .dropIndex("one_claim_per_idempotency_key")
+        .catch(() => undefined);
+    },
+  },
 ];

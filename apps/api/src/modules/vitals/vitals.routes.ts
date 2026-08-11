@@ -21,6 +21,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./vitals.controller.js";
 import { assessedVitals } from "./vitals.contract.js";
 import {
@@ -40,6 +41,7 @@ export function vitalsRouter(): Router {
     validate(encounterIdParamSchema, "params"),
     validate(recordVitalsSchema),
     responds(assessedVitals, { status: 201 }),
+    idempotent("Replays the observation this key already recorded."),
     asyncHandler(controller.record),
   );
 

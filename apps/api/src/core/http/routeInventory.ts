@@ -52,6 +52,7 @@ export interface AuthTag {
 const TAG = Symbol.for("medicore.authTag");
 const VALIDATION_TAG = Symbol.for("medicore.validationTag");
 const RESPONSE_TAG = Symbol.for("medicore.responseTag");
+const IDEMPOTENCY_TAG = Symbol.for("medicore.idempotencyTag");
 
 /** Stamps a middleware with what it enforces. Called by the middleware factories. */
 export function tagMiddleware<T extends RequestHandler>(handler: T, tag: AuthTag): T {
@@ -121,6 +122,29 @@ function readResponse(handler: unknown): ResponseTag | undefined {
   return (handler as Record<symbol, ResponseTag> | undefined)?.[RESPONSE_TAG];
 }
 
+/**
+ * The idempotency guarantee a route offers (`idempotent()` stamps this).
+ *
+ * A fourth symbol, for the fourth question a reviewer asks of a money route: "what happens if
+ * this arrives twice?" Kept out of the auth tag for the same reason as the other two — a route
+ * can need all four, and a shared bag would let it declare only one.
+ */
+export interface IdempotencyTag {
+  /** The header the key travels in. One constant, so the spec and the server cannot disagree. */
+  header: string;
+  /** What a replay of this operation means, in the spec's words. */
+  description: string;
+}
+
+export function tagIdempotency<T extends RequestHandler>(handler: T, tag: IdempotencyTag): T {
+  (handler as unknown as Record<symbol, IdempotencyTag>)[IDEMPOTENCY_TAG] = tag;
+  return handler;
+}
+
+function readIdempotency(handler: unknown): IdempotencyTag | undefined {
+  return (handler as Record<symbol, IdempotencyTag> | undefined)?.[IDEMPOTENCY_TAG];
+}
+
 export interface RouteInfo {
   method: string;
   /** The full mounted path, e.g. `/api/v1/patients/:id`. */
@@ -134,6 +158,8 @@ export interface RouteInfo {
   validation?: Partial<Record<ValidationTag["target"], ZodTypeAny>>;
   /** The success payload this route declares. Feeds the OpenAPI response schemas. */
   response?: ResponseTag;
+  /** Set when this route honours `Idempotency-Key`. Feeds the OpenAPI header parameter. */
+  idempotency?: IdempotencyTag;
 }
 
 /**
@@ -180,6 +206,7 @@ export function routeInventory(app: Application): RouteInfo[] {
         const tag: AuthTag = {};
         const validation: Partial<Record<ValidationTag["target"], ZodTypeAny>> = {};
         let response: ResponseTag | undefined;
+        let idempotency: IdempotencyTag | undefined;
         for (const entry of layer.route.stack) {
           Object.assign(tag, readTag(entry.handle) ?? {});
           const v = readValidation(entry.handle);
@@ -187,6 +214,7 @@ export function routeInventory(app: Application): RouteInfo[] {
           // target is the one whose shape the handler actually receives.
           if (v) validation[v.target] = v.schema;
           response ??= readResponse(entry.handle);
+          idempotency ??= readIdempotency(entry.handle);
         }
         const hasValidation = Object.keys(validation).length > 0;
 
@@ -201,6 +229,7 @@ export function routeInventory(app: Application): RouteInfo[] {
             ...(tag.platformRoles ? { platformRoles: tag.platformRoles } : {}),
             ...(hasValidation ? { validation } : {}),
             ...(response ? { response } : {}),
+            ...(idempotency ? { idempotency } : {}),
           });
         }
       } else if (layer.handle?.stack) {

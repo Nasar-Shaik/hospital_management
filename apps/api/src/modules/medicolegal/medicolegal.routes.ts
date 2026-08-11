@@ -21,6 +21,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./medicolegal.controller.js";
 import { consent, deathRecord } from "./medicolegal.contract.js";
 import {
@@ -82,6 +83,7 @@ export function medicolegalRouter(): Router {
     authorize(PERMISSIONS.DEATH_CERTIFY),
     validate(recordDeathSchema),
     responds(deathRecord, { status: 201 }),
+    idempotent("Replays the death record this key already certified."),
     asyncHandler(controller.recordDeath),
   );
 

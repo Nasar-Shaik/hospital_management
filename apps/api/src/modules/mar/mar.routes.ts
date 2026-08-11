@@ -19,6 +19,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./mar.controller.js";
 import { medicationAdministration } from "./mar.contract.js";
 import { recordAdministrationSchema, encounterIdParamSchema } from "./mar.schema.js";
@@ -44,6 +45,7 @@ export function marRouter(): Router {
     validate(encounterIdParamSchema, "params"),
     validate(recordAdministrationSchema),
     responds(medicationAdministration, { status: 201 }),
+    idempotent("Replays the dose this key already recorded as given."),
     asyncHandler(controller.recordAdministration),
   );
 

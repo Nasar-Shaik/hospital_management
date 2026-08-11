@@ -27,6 +27,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./appointment.controller.js";
 import {
   appointment,
@@ -94,6 +95,7 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_CREATE, FEATURE),
     validate(bookAppointmentSchema),
     responds(appointment, { status: 201 }),
+    idempotent("Replays the appointment this key already booked."),
     asyncHandler(controller.bookAppointment),
   );
 
@@ -142,6 +144,7 @@ export function appointmentRouter(): Router {
     validate(idParamSchema, "params"),
     validate(rescheduleAppointmentSchema),
     responds(rescheduleResult, { status: 201 }),
+    idempotent("Replays the rebooking this key already made."),
     asyncHandler(controller.rescheduleAppointment),
   );
 

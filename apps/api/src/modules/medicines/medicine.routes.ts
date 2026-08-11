@@ -20,6 +20,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./medicine.controller.js";
 import { medicine, stockChange, stockMovement, stockReportRow } from "./medicine.contract.js";
 import {
@@ -98,6 +99,7 @@ export function medicineRouter(): Router {
     validate(idParamSchema, "params"),
     validate(receiveStockSchema),
     responds(stockChange, { status: 201 }),
+    idempotent("Replays the stock receipt this key already booked in."),
     asyncHandler(controller.receive),
   );
 
@@ -108,6 +110,7 @@ export function medicineRouter(): Router {
     validate(idParamSchema, "params"),
     validate(adjustStockSchema),
     responds(stockChange, { status: 201 }),
+    idempotent("Replays the stock adjustment this key already made."),
     asyncHandler(controller.adjust),
   );
 

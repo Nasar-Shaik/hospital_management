@@ -29,6 +29,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./patient.controller.js";
 import {
   duplicateCandidate,
@@ -86,6 +87,7 @@ export function patientRouter(): Router {
     authorize(PERMISSIONS.PATIENT_REGISTER),
     validate(registerPatientSchema),
     responds(registerPatientResult, { status: 201 }),
+    idempotent("Replays the patient this key already registered."),
     asyncHandler(controller.registerPatient),
   );
 

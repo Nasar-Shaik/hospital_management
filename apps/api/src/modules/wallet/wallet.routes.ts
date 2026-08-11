@@ -13,6 +13,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./wallet.controller.js";
 import { walletEntry, walletView } from "./wallet.contract.js";
 import { depositSchema, refundSchema } from "./wallet.schema.js";
@@ -44,6 +45,7 @@ export function walletRouter(): Router {
     authorize(PERMISSIONS.WALLET_MANAGE),
     validate(depositSchema),
     responds(walletView, { status: 201 }),
+    idempotent("Replays the advance this key already collected."),
     asyncHandler(controller.deposit),
   );
 
@@ -53,6 +55,7 @@ export function walletRouter(): Router {
     authorize(PERMISSIONS.WALLET_MANAGE),
     validate(refundSchema),
     responds(walletView, { status: 201 }),
+    idempotent("Replays the advance refund this key already paid out."),
     asyncHandler(controller.refund),
   );
 

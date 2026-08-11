@@ -24,6 +24,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./insurance.controller.js";
 import { insuranceClaim, insurancePolicy } from "./insurance.contract.js";
 import {
@@ -88,6 +89,7 @@ export function insuranceRouter(): Router {
     validate(patientIdParamSchema, "params"),
     validate(createClaimSchema),
     responds(insuranceClaim, { status: 201 }),
+    idempotent("Replays the claim this key already filed."),
     asyncHandler(controller.fileClaim),
   );
 
@@ -108,6 +110,7 @@ export function insuranceRouter(): Router {
     validate(idParamSchema, "params"),
     validate(settleClaimSchema),
     responds(insuranceClaim),
+    idempotent("Replays the settlement this key already recorded."),
     asyncHandler(controller.settleClaim),
   );
 

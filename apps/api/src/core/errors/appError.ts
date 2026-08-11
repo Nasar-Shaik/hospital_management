@@ -114,6 +114,45 @@ export class TenantUnavailableError extends AppError {
   }
 }
 
+/* ── Request-level guards (ERROR_CODES: HMS-REQ-*) ───────────────────────── */
+
+/**
+ * HMS-REQ-002 — this `Idempotency-Key` was already used, for a DIFFERENT request.
+ *
+ * The one case where replaying would be dangerous rather than helpful: the caller asked for
+ * something else under a name it had already spent. Answering with the old result would report
+ * success for an operation that never ran — the ₹5,000 payment the client believes it made and
+ * the hospital never took. So it is refused, loudly, and `details` carries what that key DID do
+ * (ERROR_CODES: "Original response returned in `details`") so the caller can reconcile rather
+ * than guess.
+ *
+ * Safe to disclose: a key is scoped to one tenant AND one user, so the original response is
+ * always the caller's own.
+ */
+export class IdempotencyConflictError extends AppError {
+  constructor(details: unknown) {
+    super("HMS-REQ-002", 409, "Duplicate request (idempotency)", details);
+  }
+}
+
+/**
+ * HMS-REQ-004 — the SAME request is already in flight under this key.
+ *
+ * Distinct from HMS-REQ-002 on purpose, because the remedies are opposite. A conflict means
+ * "your client has a bug, fix the key"; this means "your first attempt is still running, wait
+ * and ask again" — and it is the answer a double-click gets, which is the most common thing
+ * that will ever produce it. Collapsing the two into one code would tell a cashier to
+ * investigate a defect that does not exist.
+ *
+ * This is what a claim looks like from the losing side of the unique index. Retryable: the
+ * winner will finish, and the retry will then replay its result.
+ */
+export class IdempotencyInProgressError extends AppError {
+  constructor(details: unknown) {
+    super("HMS-REQ-004", 409, "A request with this Idempotency-Key is still in progress", details);
+  }
+}
+
 /* ── Patients (Doc 02 C1, ERROR_CODES: HMS-PAT-*) ────────────────────────── */
 
 /** HMS-PAT-001 — no patient with that id or UHID *that this caller may see*. */

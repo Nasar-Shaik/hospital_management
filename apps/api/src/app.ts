@@ -149,7 +149,10 @@ export function createApp(logger: Logger): Express {
    * /auth/login and /auth/refresh must stay reachable without a token. Business
    * routers (Phase 2) mount the same way the RBAC router already does:
    *     authenticate() → authorize(PERMISSIONS.X, { feature }) → validate() → handler
-   * Remaining chain slot: idempotency (P2, for money-moving POSTs).
+   *
+   * The chain's last slot, `idempotent()`, is mounted PER ROUTE rather than globally — a key on a
+   * state transition costs a write and buys nothing, so the 24 operations that carry one are the
+   * ones where a repeat would create a second real thing (docs/IDEMPOTENCY.md).
    */
   /**
    * The CONTROL PLANE (Doc 02 A1) — mounted BEFORE the tenant router and outside

@@ -27,6 +27,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./encounter.controller.js";
 import { admitResult, encounter, startEncounterResult } from "./encounter.contract.js";
 import {
@@ -59,6 +60,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_CREATE, FEATURE),
     validate(startEncounterSchema),
     responds(startEncounterResult, { status: [200, 201] }),
+    idempotent("Replays the visit this key already opened."),
     asyncHandler(controller.startEncounter),
   );
 
@@ -131,6 +133,7 @@ export function encounterRouter(): Router {
     validate(idParamSchema, "params"),
     validate(admitSchema),
     responds(admitResult, { status: 201 }),
+    idempotent("Replays the admission this key already made."),
     asyncHandler(controller.admitPatient),
   );
 

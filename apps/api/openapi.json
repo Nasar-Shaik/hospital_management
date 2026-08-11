@@ -10251,6 +10251,20 @@
         "operationId": "post_v1_patients",
         "tags": ["patients"],
         "summary": "POST /api/v1/patients",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the patient this key already registered. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -10360,6 +10374,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10842,6 +10866,20 @@
         "operationId": "post_v1_encounters",
         "tags": ["encounters"],
         "summary": "POST /api/v1/encounters",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the visit this key already opened. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -10942,6 +10980,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11316,6 +11364,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the admission this key already made. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -11381,6 +11441,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12030,6 +12100,20 @@
         "operationId": "post_v1_orders",
         "tags": ["orders"],
         "summary": "POST /api/v1/orders",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the order this key already placed. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -12135,6 +12219,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13005,6 +13099,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the settlement this key already made from the patient's advance. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "responses": {
@@ -13030,6 +13136,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13703,6 +13819,20 @@
         "operationId": "post_v1_charges",
         "tags": ["charges"],
         "summary": "POST /api/v1/charges",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the charge this key already posted to the bill. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -13784,6 +13914,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13912,6 +14052,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the invoice this key already finalized, number and all. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "responses": {
@@ -13937,6 +14089,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14149,6 +14311,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the receipt for the payment this key already took. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -14214,6 +14388,16 @@
               }
             }
           },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
             "content": {
@@ -14248,6 +14432,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the bill as this key already discounted it. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -14305,6 +14501,16 @@
               }
             }
           },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
             "content": {
@@ -14339,6 +14545,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the refund this key already paid out. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -14397,6 +14615,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -14869,6 +15097,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the package enrolment this key already created. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -14913,6 +15153,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15013,6 +15263,20 @@
         "operationId": "post_v1_prescriptions",
         "tags": ["prescriptions"],
         "summary": "POST /api/v1/prescriptions",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the prescription this key already wrote. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -15137,6 +15401,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15905,6 +16179,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the handover this key already dispensed. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -16003,6 +16289,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -16678,6 +16974,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the stock receipt this key already booked in. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -16739,6 +17047,16 @@
               }
             }
           },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
             "content": {
@@ -16773,6 +17091,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the stock adjustment this key already made. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -16820,6 +17150,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -17615,6 +17955,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the observation this key already recorded. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -17710,6 +18062,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -21673,6 +22035,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the claim this key already filed. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -21741,6 +22115,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -21884,6 +22268,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the settlement this key already recorded. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -21932,6 +22328,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22239,6 +22645,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the dose this key already recorded as given. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -22303,6 +22721,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -23067,6 +23495,20 @@
         "operationId": "post_v1_death_records",
         "tags": ["death-records"],
         "summary": "POST /api/v1/death-records",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the death record this key already certified. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -23165,6 +23607,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -25137,6 +25589,20 @@
         "operationId": "post_v1_appointments",
         "tags": ["appointments"],
         "summary": "POST /api/v1/appointments",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the appointment this key already booked. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -25198,6 +25664,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -25575,6 +26051,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the rebooking this key already made. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -25623,6 +26111,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -28212,6 +28710,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the advance this key already collected. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -28283,6 +28793,16 @@
               }
             }
           },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error — `{ error: { code, message, details?, traceId } }`.",
             "content": {
@@ -28315,6 +28835,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the advance refund this key already paid out. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -28373,6 +28905,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {

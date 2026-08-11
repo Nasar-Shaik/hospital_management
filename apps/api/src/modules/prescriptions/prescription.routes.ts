@@ -28,6 +28,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./prescription.controller.js";
 import { prescription, prescriptionScreening } from "./prescription.contract.js";
 import {
@@ -50,6 +51,7 @@ export function prescriptionRouter(): Router {
     authorize(PERMISSIONS.PRESCRIPTION_CREATE, FEATURE),
     validate(createPrescriptionSchema),
     responds(prescription, { status: 201 }),
+    idempotent("Replays the prescription this key already wrote."),
     asyncHandler(controller.createPrescription),
   );
 

@@ -23,6 +23,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./billing.controller.js";
 import {
   billPreview,
@@ -108,6 +109,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.ORDER_PERFORM, FEATURE),
     validate(idParamSchema, "params"),
     responds(orderSettlementResult),
+    idempotent("Replays the settlement this key already made from the patient's advance."),
     asyncHandler(controller.settleOrderFromAdvance),
   );
 
@@ -218,6 +220,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.BILLING_CREATE, FEATURE),
     validate(postChargeSchema),
     responds(charge.optional(), { status: 201 }),
+    idempotent("Replays the charge this key already posted to the bill."),
     asyncHandler(controller.postCharge),
   );
 
@@ -238,6 +241,7 @@ export function billingRouter(): Router {
     authorize(PERMISSIONS.BILLING_FINALIZE, FEATURE),
     validate(idParamSchema, "params"),
     responds(invoice),
+    idempotent("Replays the invoice this key already finalized, number and all."),
     asyncHandler(controller.finalizeBill),
   );
 
@@ -266,6 +270,7 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(recordPaymentSchema),
     responds(invoice, { status: 201 }),
+    idempotent("Replays the receipt for the payment this key already took."),
     asyncHandler(controller.recordPayment),
   );
 
@@ -282,6 +287,7 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(applyDiscountSchema),
     responds(invoice),
+    idempotent("Replays the bill as this key already discounted it."),
     asyncHandler(controller.applyDiscount),
   );
 
@@ -292,6 +298,7 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(recordRefundSchema),
     responds(invoice, { status: 201 }),
+    idempotent("Replays the refund this key already paid out."),
     asyncHandler(controller.recordRefund),
   );
 
@@ -358,6 +365,7 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     validate(enrollPackageSchema),
     responds(packageEnrollment, { status: 201 }),
+    idempotent("Replays the package enrolment this key already created."),
     asyncHandler(controller.enrollPackage),
   );
 
