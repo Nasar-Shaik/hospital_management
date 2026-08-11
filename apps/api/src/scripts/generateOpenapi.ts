@@ -6,8 +6,14 @@
  * Built from the SHIPPED Express app (no database needed — `createApp` only mounts routes), so the
  * committed file is exactly what the running server serves at `GET /api/v1/openapi.json`. Run it
  * after adding routes; a stale diff here is the review signal that the contract changed.
+ *
+ *     pnpm --filter @medicore/api openapi:check
+ *
+ * `--check` regenerates and compares instead of writing — the release gate's drift guard. It is
+ * the SAME code path as the write, deliberately: a separate checker would be a second generator,
+ * and two generators disagreeing is the failure it exists to prevent.
  */
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { format, resolveConfig } from "prettier";
@@ -46,7 +52,23 @@ const json = await format(JSON.stringify(spec, null, 2), {
   filepath: out,
   parser: "json",
 });
-writeFileSync(out, json);
-
 const pathCount = Object.keys((spec as { paths: object }).paths).length;
-process.stdout.write(`wrote ${out} — ${String(pathCount)} paths\n`);
+
+if (process.argv.includes("--check")) {
+  const committed = readFileSync(out, "utf8");
+  if (committed !== json) {
+    process.stderr.write(
+      "\n  OpenAPI DRIFT — apps/api/openapi.json does not match the shipped routes.\n\n" +
+        "  The API's contract changed and the committed spec was not regenerated, so every\n" +
+        "  consumer of it — the web app, the admin console, a mobile build in the field — is\n" +
+        "  reading a description of an API that no longer exists.\n\n" +
+        "    pnpm --filter @medicore/api openapi\n\n" +
+        "  Then review the diff: it is the contract change, and it is worth reading.\n",
+    );
+    process.exit(1);
+  }
+  process.stdout.write(`openapi.json is current — ${String(pathCount)} paths\n`);
+} else {
+  writeFileSync(out, json);
+  process.stdout.write(`wrote ${out} — ${String(pathCount)} paths\n`);
+}

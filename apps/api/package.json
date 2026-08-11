@@ -20,7 +20,8 @@
     "operator": "tsx --env-file-if-exists=.env src/scripts/createOperator.ts",
     "operator:ensure": "tsx --env-file-if-exists=.env src/scripts/ensureOperator.ts",
     "routes": "tsx --env-file-if-exists=.env src/scripts/routeAudit.ts",
-    "openapi": "tsx --env-file-if-exists=.env src/scripts/generateOpenapi.ts"
+    "openapi": "tsx --env-file-if-exists=.env src/scripts/generateOpenapi.ts",
+    "openapi:check": "tsx --env-file-if-exists=.env src/scripts/generateOpenapi.ts --check"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",
