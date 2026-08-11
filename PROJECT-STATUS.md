@@ -14,6 +14,96 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## Multi-branch Phase 1.5 — the branch survives what is not a request (2026-08-11) · CLOSED
+
+Phase 1 left six collections `branchId`-optional because they are written by consumers off an
+event payload, and enforcing before the chain was proven would wedge the outbox rather than
+surface a bug. Phase 1.5 proved the chain. **46 tests in the branch suite, six controls falsified,
+1409/1409 integration.**
+
+### Event branch propagation — audited end to end
+
+`operation → publish → outboxEvents → envelope → handler → target write`
+
+The channel was already sound: the outbox row carries `branchId`, `outboxRelay.dispatch` copies it
+into the envelope, and `markRetryOrFail` only `$set`s status/availableAt/lastError — so a retry
+cannot erase it. **The gaps were at the two ends.**
+
+| Gap                                                                     | Effect                                                                                                                                             | Fix                                                                 |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| The consumer bound tenant, trace and connection — **but no branch**     | inside a handler `writeBranchId()` had nothing to resolve; for a multi-branch hospital it would throw HMS-BRANCH-001 and wedge the outbox on retry | `eventConsumer.withTenant` binds `activeBranchId` from the envelope |
+| `notify()` left `branchId` to each caller, and callers disagreed        | `order.result.released` and `password.reset` recorded no site                                                                                      | derived once in `notify`, explicit argument still wins              |
+| `appointment.cancelled` and `encounter.closed` published with no branch | billing closes the bill off `encounter.closed` — an invoice that cannot say which site raised it                                                   | publish from the record's own branch                                |
+
+Binding the branch in the consumer is the point: it fixes `order.result.released` **and every
+handler nobody has written yet**, at the same choke point a request uses, with no per-consumer
+plumbing. Per-consumer plumbing is what produced the split in the first place — billing, medicines,
+patients and prescriptions each remembered `event.branchId`; the rest did not.
+
+`patients.merged`, the three identity events and the two subscription events are branchless **on
+purpose**: they are tenant-level facts, and a branch on them would be a fiction.
+
+### Doctor leave — what the model can and cannot say
+
+|                                            | Representable?             |                                                                                                                                                                                    |
+| ------------------------------------------ | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A. Branch-specific** — away at this site | **Yes**, and correct today | proven by test, both directions                                                                                                                                                    |
+| **B. Hospital-wide** — away everywhere     | **No**                     | `scopeFilter` matches `branchId` exactly, so a row left branchless to mean "everywhere" is invisible to everyone who has selected a site. It would suppress **nothing**, silently. |
+
+**Not implemented**, per instruction — nothing in the product asks for it, and a wrong guess books
+patients with a doctor who is not in the building. Today two branch-specific rows express it.
+
+**The smallest change, when it is wanted:** an explicit `scope: "branch" | "hospital"` field on
+`doctorLeave`, plus a leave-specific filter (`branchId ∈ allowed OR scope === "hospital"`) in
+`findLeave`/`isOnLeave` instead of the generic `scopeFilter`. It must be a stored intent, not an
+absent `branchId` — the P2 lesson: when emptiness is load-bearing, store the intent.
+
+### Final branchless audit — attribution exhausted
+
+| Tenant                      | Branches | Branchless | Attributable | Preserved |
+| --------------------------- | -------- | ---------- | ------------ | --------- |
+| apollo · district · harmony | 1 each   | **0**      | —            | —         |
+| sunrise                     | 2        | 38         | **0**        | 38        |
+
+Every remaining row was chased to its parent and the parent could not answer:
+
+| Collection      | n   | Why it cannot be attributed                                                                                        |
+| --------------- | --- | ------------------------------------------------------------------------------------------------------------------ |
+| notifications   | 18  | 17 carry an `eventId` and all 17 outbox rows still exist — **none has a branch**; they predate the propagation fix |
+| stockMovements  | 15  | all `receipt`, written through the HTTP path that never captured a branch; no `dispenseId`, no parent              |
+| walletEntries   | 3   | deposit/refund/deposit, no invoice and no encounter — cash at a desk, and which desk was never recorded            |
+| doctorSchedules | 2   | pre-branch templates; nothing distinguishes the sites                                                              |
+
+Not fabricated. Reported on every `migrate --all`.
+
+### Schema regression guard
+
+`tenantScopePlugin` eating a model's `branchId` is now a test, asserted on the **real compiled
+models** through their accessors — a plugin unit test would pass against a plugin that is right in
+isolation and a model that applies it in the wrong order. Both halves are pinned: required stays
+required on the branch-scoped six, and optional stays optional on Patient and Allergy.
+
+### Falsification — six controls, all red
+
+consumer branch binding **1** · `publish` drops the branch **2** · retry erases it **1** · plugin
+overwrites `branchId` again **1** · schedules not narrowed by branch **1** · leave lookup ignores
+branch scope **1**
+
+### Remaining risks
+
+- **Six collections stay `branchId`-optional** — charges, invoices, notifications, dispenses,
+  walletEntries, stockMovements. The propagation is now proven, so this is no longer blocked on
+  evidence; it is blocked on the 38 historical rows above, which would fail validation on any
+  update. Enforcing is a data decision now, not an engineering one.
+- **Hospital-wide leave does not exist** (above).
+- **Stock levels remain tenant-wide** — the formulary carries one balance, so per-branch stock is
+  not modelled. Movements record the site; the balance does not.
+- The intermittent RBAC infrastructure timeout recurred once during the gate (1 of 1409, a 20 s
+  timeout on a matrix row, passes standalone at 1.7 s). Container memory pressure. **Unchanged and
+  not worked around.**
+
+---
+
 ## Multi-branch Phase 1 — make the data fit the boundary (2026-08-11) · CLOSED
 
 Phase 0 proved a Branch-A user cannot reach Branch B. Phase 1 is the other half: that a hospital's

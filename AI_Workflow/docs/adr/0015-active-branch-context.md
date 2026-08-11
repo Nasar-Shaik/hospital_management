@@ -121,6 +121,46 @@ therefore **refused once a tenant has more than one branch**, and the rows are r
 Where a parent knows the answer — a wallet debit's invoice, a stock movement's dispense — migration
 0047 derives it. Nothing else is assigned.
 
+## Addendum — Phase 1.5 (2026-08-11): the branch outside the request
+
+Decision 4 says `branchId` is written in exactly one way, `writeBranchId()`. That held for
+requests. It did not hold for the half of the system that runs without one.
+
+### The active branch is part of the event, and of the context a handler runs in
+
+The outbox row and the envelope always carried `branchId`; nothing bound it into the **context**,
+so inside a consumer `writeBranchId()` had nothing to resolve — it would have thrown
+`HMS-BRANCH-001` for a multi-branch hospital and wedged the outbox on retry. Each consumer that
+cared read `event.branchId` for itself, and the ones that did not (`order.result.released`,
+everything reached through `notify()`) recorded no site.
+
+`eventConsumer.withTenant` now binds `activeBranchId` from the envelope. A handler reacting to
+something that happened in Chennai writes in Chennai, through the same choke point a request uses.
+This is the ADR's own rule applied to the background: **one way to resolve the branch, not one per
+consumer.** It also makes the branch survive a retry by construction — the value is re-read from
+the persisted outbox row on every redelivery, so attempt five binds what attempt one did.
+
+Two publishers were emitting branchless events for branch-scoped facts (`appointment.cancelled`,
+`encounter.closed`) and now publish the record's own branch — the record's, not the request's,
+because the clerk cancelling an appointment may be working at another site. Identity, subscription
+and patient-merge events stay branchless deliberately: they are tenant-level facts.
+
+### Doctor leave is branch-specific, and the model cannot say otherwise
+
+`scopeFilter` matches `branchId` exactly, so a leave row left branchless to mean "away everywhere"
+is invisible to every caller who has selected a site — it would suppress nothing, silently. The
+model therefore supports branch-specific leave only, and that is what it does correctly.
+
+Hospital-wide leave is **not** built. When it is wanted, the smallest change is an explicit
+`scope: "branch" | "hospital"` on the row plus a leave-specific filter, never an absent `branchId`:
+when emptiness is load-bearing, store the intent.
+
+### `branchId` optionality is now a data question, not an evidence question
+
+The six event-written collections stay optional, but the reason has changed. The propagation is
+proven; what remains is 38 historical rows in one hospital whose site cannot be recovered — their
+parents were checked and do not know either. Enforcing is a decision about that data.
+
 ## Alternatives considered
 
 - **Database-per-branch.** Rejected: breaks cross-branch aggregation, a single UHID, and shared staff;
