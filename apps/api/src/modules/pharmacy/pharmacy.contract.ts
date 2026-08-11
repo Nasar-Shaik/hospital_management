@@ -3,7 +3,7 @@
  */
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
-import { prescription } from "../prescriptions/prescription.contract.js";
+import { prescription } from "../prescriptions/index.js";
 import type { Dispense } from "./dispense.repository.js";
 import type { DispenseResult } from "./pharmacy.service.js";
 

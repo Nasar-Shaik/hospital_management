@@ -54,3 +54,6 @@ export {
   type DrugRoute,
   type DrugFrequency,
 } from "./prescription.model.js";
+
+/** For the pharmacy response contract — a dispense result carries the prescription. */
+export { prescription } from "./prescription.contract.js";

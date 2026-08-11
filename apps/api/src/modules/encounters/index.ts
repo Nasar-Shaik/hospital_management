@@ -62,3 +62,6 @@ export {
 
 /** Re-points encounters + episodes onto the survivor on merge. Registered by eventConsumer.ts. */
 export { encounterConsumers } from "./encounter.consumers.js";
+
+/** For the reporting response contract. */
+export type { DischargeRegister as DischargeRegisterReport } from "./encounter.repository.js";

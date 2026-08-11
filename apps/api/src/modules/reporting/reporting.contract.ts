@@ -6,11 +6,14 @@
  */
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
-import { DUES_BUCKETS } from "../billing/billing.repository.js";
-import type { CollectionsReport, DuesAgeingReport } from "../billing/billing.repository.js";
-import type { DischargeRegister, VisitReport } from "../encounters/encounter.repository.js";
-import type { StockRegisterRow } from "../medicines/medicine.repository.js";
-import type { WalletRegister } from "../wallet/wallet.repository.js";
+import { DUES_BUCKETS } from "../billing/index.js";
+import type { CollectionsReport } from "../billing/index.js";
+import type {
+  DischargeRegisterReport as DischargeRegister,
+  VisitReport,
+} from "../encounters/index.js";
+import type { StockRegisterRow } from "../medicines/index.js";
+import type { WalletRegister } from "../wallet/index.js";
 import type {
   DiagnosticsReportNamed,
   DoctorLoadNamedRow,

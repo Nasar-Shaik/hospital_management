@@ -9,8 +9,8 @@
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
 import { PLATFORM_ROLES, PLATFORM_USER_STATUSES } from "./platform.model.js";
-import { TENANT_STATUSES } from "../tenants/tenant.model.js";
-import { usageLine } from "../subscriptions/subscription.contract.js";
+import { TENANT_STATUSES } from "../tenants/index.js";
+import { usageLine } from "../subscriptions/index.js";
 import type {
   CreateHospitalResult,
   HospitalSummary,

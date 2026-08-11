@@ -30,3 +30,6 @@ export {
 } from "./subscription.service.js";
 
 export type { Plan } from "./subscription.repository.js";
+
+/** For the platform response contracts — a hospital detail embeds its plan and usage. */
+export { plan, subscriptionView, usageLine } from "./subscription.contract.js";

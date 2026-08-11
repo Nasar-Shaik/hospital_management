@@ -71,3 +71,6 @@ export {
   type InvoiceLine,
   type RefundEntry,
 } from "./billing.model.js";
+
+/** For the reporting response contract — the ageing buckets it publishes. */
+export { DUES_BUCKETS } from "./billing.repository.js";

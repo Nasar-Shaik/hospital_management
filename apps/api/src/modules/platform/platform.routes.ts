@@ -43,7 +43,7 @@ import {
   platformAuditEntry,
   platformUser,
 } from "./platform.contract.js";
-import { plan, subscriptionView } from "../subscriptions/subscription.contract.js";
+import { plan, subscriptionView } from "../subscriptions/index.js";
 import {
   createHospitalSchema,
   createOperatorSchema,

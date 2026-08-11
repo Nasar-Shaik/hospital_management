@@ -3,11 +3,11 @@
  */
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
-import { ALLERGENS } from "../drugSafety/drugSafety.js";
+import { ALLERGENS } from "../drugSafety/index.js";
 import { DRUG_FREQUENCIES, DRUG_ROUTES, PRESCRIPTION_STATUSES } from "./prescription.model.js";
 import type { Prescription } from "./prescription.repository.js";
 import type { PrescriptionScreening } from "./prescription.service.js";
-import type { Allergen, SafetyAlert } from "../drugSafety/drugSafety.js";
+import type { Allergen, SafetyAlert } from "../drugSafety/index.js";
 
 const prescriptionStatus = z.enum(PRESCRIPTION_STATUSES);
 /** The literal key union, not a bare string — an allergen a machine cannot match is a

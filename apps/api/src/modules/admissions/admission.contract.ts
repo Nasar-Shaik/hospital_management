@@ -3,7 +3,7 @@
  */
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves, type Returns } from "../../core/http/contract.js";
-import { ROOM_KINDS, WARD_KINDS, WARD_STATUSES } from "../wards/ward.model.js";
+import { ROOM_KINDS, WARD_KINDS, WARD_STATUSES } from "../wards/index.js";
 import { WARD_NOTE_TYPES } from "./wardNote.model.js";
 import type { WardNote } from "./wardNote.repository.js";
 import type { BedBoard } from "./bedBoard.js";

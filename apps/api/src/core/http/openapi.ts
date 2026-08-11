@@ -7,12 +7,16 @@
  * OpenAPI file drifts the moment someone adds a route and forgets the doc; this one cannot, because
  * there is no second list to forget.
  *
- * ── WHAT THIS BASELINE COVERS, AND WHAT IT DOES NOT ─────────────────────────
- * It documents every path, method, path parameter, security requirement, and — as `x-permission` /
- * `x-feature` extensions — the authorization each route enforces. It deliberately does NOT yet
- * describe request/response BODIES: those live as Zod DTOs per module, and wiring each into the
- * spec is the next increment. A route map with accurate security is the useful 80% an integrator
- * needs first; the bodies are the enriching 20% that follows.
+ * ── WHAT THE DOCUMENT COVERS ────────────────────────────────────────────────
+ * Every path, method, path and query parameter, security requirement, and — as `x-permission` /
+ * `x-feature` extensions — the authorization each route enforces. Request bodies come from the
+ * `validate()` middleware a route actually runs; success responses from the `responds()` middleware
+ * it actually declares. Both are read off the shipped router stack, so neither can describe a
+ * shape the server does not use.
+ *
+ * Five operations carry no data schema, and say so by media type instead: four downloads and this
+ * document itself. That is the whole of the exception list — there is no operation here whose
+ * response is simply undescribed.
  */
 import type { Application } from "express";
 import type { ZodTypeAny } from "@medicore/validation";

@@ -9,7 +9,7 @@
  */
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
-import { STAFF_GENDERS, USER_STATUSES } from "../users/user.model.js";
+import { STAFF_GENDERS, USER_STATUSES } from "../users/index.js";
 import type { CreateStaffResult, DoctorCard, DoctorRef, StaffMember } from "./staff.service.js";
 
 export const staffProfile = contract(

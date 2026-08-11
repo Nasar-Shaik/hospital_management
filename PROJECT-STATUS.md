@@ -14,6 +14,90 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## API contract Phase 2 — response contracts (2026-08-11) · CLOSED
+
+The remaining half of the contract. 265 operations described what a client could SEND and nothing
+described what it would RECEIVE, which is how the api-client's hand-written types had drifted from
+the server on 37 fields without anyone noticing. **Full gate green, 1,409/1,409 integration,
+23 new contract tests, every control falsified.**
+
+|                                 | Before | After                                |
+| ------------------------------- | -----: | ------------------------------------ |
+| Operations                      |    265 | 265                                  |
+| **JSON success responses**      |  **0** | **260**                              |
+| Non-JSON responses documented   |      0 | 5 (four downloads + the spec itself) |
+| Undocumented responses          |    265 | **0**                                |
+| Named response components       |      0 | 165                                  |
+| Client response types verified  |      0 | 126, field by field                  |
+| Client/server response mismatch |     37 | **0**                                |
+
+### The mechanism: the application is the source of truth, and tsc enforces it
+
+A contract is a Zod schema of the WIRE shape, tied to the DTO its service returns by
+`Proves<Matches<schema, Dto>>` — mutual assignability over normalised shapes. Add a field to
+`Patient` and the build fails until the schema follows. `Wire<T>` applies the one transformation
+the envelope performs (`Date` → ISO string), so the DTOs keep the types the server works with;
+changing them to strings would have been a wide behavioural refactor of date handling for a
+cosmetic gain.
+
+**Plain mutual assignability was not enough, and falsifying the first contract is what showed it.**
+Inventing a field failed the build; removing an OPTIONAL one did not — an absent optional property
+is assignable to a present one in both directions. `branchId?` is exactly that class of field. Both
+sides are now normalised with `-?` plus a tuple wrapper, so a missing property is a hard mismatch.
+
+`responds()` declares the payload in the route chain beside `validate()`, and outside production it
+also VERIFIES: `ok()` parses the JSON it is about to send. The existing integration suite became a
+contract conformance suite at no cost — 1,409 tests already exercise these endpoints with real
+data, and every one now also asserts the response is the shape the spec promises.
+
+### Defects found — three of them live, none by inspection
+
+- **Prescription lines were serialized as Mongoose internals.** `toPrescription` spread the line
+  subdocument, which is correct for a `.lean()` read and wrong for the hydrated document `create()`
+  returns. `POST /prescriptions` answered with `{ __parentArray, __index, $__parent: {…} }`: the
+  drug code and dose were absent, and **`$__parent` carried the entire raw document, `tenantId`
+  included, back to the caller**. One path out of eight, and no test looked at that path's lines.
+- **Every dispense shipped `creditOverride: {}`.** Declared as a nested path group rather than a
+  subdocument, so Mongoose materializes it on every hydrated read — an empty object where the type
+  promises a complete authorisation record or nothing. A `.lean()` read of the same dispense
+  omitted the key, so the two paths disagreed about the shape as well.
+- **`getRole` was typed `Role`**, which has no permission codes — the role editor could not read
+  the permissions it exists to edit. Now `RoleDetail`.
+- **`NotificationRecord.branchId` was a field the client promised and the server never sent.**
+  Notifications have stored a branchId since Phase 1; the read DTO dropped it. The server now
+  projects it.
+- **Two `Promise<unknown>` annotations** in the platform service (`setHospitalPlan`, `getHospital`).
+  An `unknown` return is not imprecision — it makes the operation's response impossible to state.
+- **36 fields the client never declared**: `Encounter.history`, `Order.createdAt`/`requestId`,
+  `Invoice.episodeId`/`version`, `Dispense.creditOverride`, `Session.expiresAt`,
+  `StaffMember.lockedUntil`, `UsageLine.warning`/`exceeded`, `Appointment.statusHistory` …
+
+### The baseline moved, deliberately
+
+51 operations lost their documented `200`. The old spec claimed 200 on every operation as a
+placeholder; those 51 are creates that have always answered 201. **No server behaviour changed and
+no working client can be affected** — a client trusting that 200 was already wrong. The runtime
+status check, green across all 1,409 tests, is what establishes these routes never send 200.
+
+### Falsification
+
+| Control              | Broken by                                                           | Result  |
+| -------------------- | ------------------------------------------------------------------- | ------- |
+| `Proves<Matches<>>`  | removed optional field · required→optional · wrong type · extra     | 🔴 all  |
+| runtime `ok()` check | a repository silently stops populating `Branch.code`                | 🔴      |
+| `client:check`       | dropped a response field · required→optional · invented a field     | 🔴 all  |
+| contract tests       | removed `branchId` from a contract · client loses `Invoice.version` | 🔴 both |
+
+### Deliberately not done
+
+- **The client is not generated.** The spec could now support it, but the risk being managed was
+  never "hand-written", it was "unchecked" — and the client carries real runtime behaviour (silent
+  refresh, tenant host, active branch, licence headers, injected fetch) a generator would have to
+  reproduce rather than replace. Generation is now a decision on its own merits, not a rescue.
+- 36 small contracts (acknowledgements like `{ removed: true }`, and nested pieces) have no named
+  client type; the client models them inline at the method, which is the right shape for them. The
+  gate enforces a named type only for top-level responses of four fields or more.
+
 ## API contract stabilization (2026-08-11) · CLOSED
 
 The Constitution §4 says "Zod schemas → types → OpenAPI: one source of truth." That pipeline did
@@ -24,28 +108,27 @@ controls all falsified.**
 
 ### The contract pipeline, before and after
 
-|                                    |         Before |                           After |
-| ---------------------------------- | -------------: | ------------------------------: |
-| Paths / operations                 |      216 / 265 |                       216 / 265 |
-| **Documented request bodies**      |          **0** |                         **125** |
-| Operations with typed query params |              0 |                              42 |
-| Operations with typed path params  |              0 |                             127 |
-| Documented 400 responses           |              0 |                             228 |
-| Success response schemas           |              0 | **0 — deliberately, see below** |
-| Error schemas                      | 1 (`ApiError`) |                  1 (`ApiError`) |
-| Spec size                          |         245 KB |                          509 KB |
+|                                    |         Before |                       After |
+| ---------------------------------- | -------------: | --------------------------: |
+| Paths / operations                 |      216 / 265 |                   216 / 265 |
+| **Documented request bodies**      |          **0** |                     **125** |
+| Operations with typed query params |              0 |                          42 |
+| Operations with typed path params  |              0 |                         127 |
+| Documented 400 responses           |              0 |                         228 |
+| Success response schemas           |              0 | **260** (see Phase 2 below) |
+| Error schemas                      | 1 (`ApiError`) |              1 (`ApiError`) |
+| Spec size                          |         245 KB |                      509 KB |
 
 `validate()` now tags itself with its Zod schema, exactly as the auth factories tag the permission
 they enforce, and the spec reads it back off Express's own router stack. **There is no second list
 to forget** — the documented request shape is the shape that runs.
 
-### Why success responses are still undescribed
+### Why success responses were left undescribed here
 
-There is not one response Zod schema in the codebase; the repository DTOs are TypeScript
-interfaces. Emitting `{ success, data: object }` would document the envelope, say nothing about the
-payload, generate a useless `unknown`, and claim coverage the API does not have. **The contract
-describes reality, including the part of it that is missing.** Response DTOs are the next
-increment, and the one that unlocks generating the client outright.
+There was not one response Zod schema in the codebase; the repository DTOs were TypeScript
+interfaces. Emitting `{ success, data: object }` would have documented the envelope, said nothing
+about the payload, generated a useless `unknown`, and claimed coverage the API did not have. **The
+contract describes reality, including the part of it that is missing.** Closed by Phase 2 below.
 
 ### Four new gates, each falsified
 
