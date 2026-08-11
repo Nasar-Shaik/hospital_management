@@ -29,7 +29,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import { Types } from "mongoose";
+import { Types, type Connection } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -51,6 +51,15 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { createHospital } = await import("./modules/platform/index.js");
 const { seedMainBranch } = await import("./seed/mainBranch.js");
+const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
+const { markRetryOrFail } = await import("./core/events/outbox.js");
+const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
+const { getEncounterModel } = await import("./modules/encounters/encounter.model.js");
+const { getAppointmentModel, getDoctorScheduleModel } =
+  await import("./modules/appointments/appointment.model.js");
+const { getWardModel, getRoomModel, getBedModel } = await import("./modules/wards/ward.model.js");
+const { getPatientModel } = await import("./modules/patients/patient.model.js");
+const { getAllergyModel } = await import("./modules/allergies/allergy.model.js");
 
 const SLUG = "test-branchiso-apollo";
 const DB = `hms_${SLUG}`;
@@ -187,6 +196,17 @@ beforeAll(async () => {
   await inTenant(async () => {
     await seedRbac();
   });
+
+  // `provisionTenant` does not seed these — the CLI and `createHospital` do. Without them
+  // `notify()` logs "no such template" and writes NO record, so the event-propagation group
+  // would be asserting on an empty collection and passing for the wrong reason.
+  {
+    const connection = await getTenantConnection({
+      id: tenant.id,
+      databaseName: tenant.databaseName,
+    });
+    await seedNotificationTemplates(tenant.id, tenant.slug, connection);
+  }
 
   // The admin is hospital-wide: an EMPTY branchIds list with `branchScope: "all"`, which is
   // the case the P2 bug got wrong in both directions.
@@ -892,5 +912,368 @@ describe("stock movements record the site they happened at", () => {
         "a stock movement was written with no branch — the ledger cannot say which pharmacy",
       ).toBe(true);
     });
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * PHASE 1.5 — the branch has to survive the parts that are not a request.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 13. THE BRANCH TRAVELS WITH THE EVENT
+ *
+ * Six collections were left `branchId`-optional in Phase 1 because they are
+ * written by consumers, off an event payload, and failing them closed before the
+ * chain was proven would wedge the outbox rather than surface a bug. This is that
+ * proof, walked end to end:
+ *
+ *     operation → publish → outboxEvents row → envelope → handler → target write
+ *
+ * Deliberately NOT a hand-built envelope. The existing suites construct one by
+ * hand, which tests the handler but assumes the two steps before it; here the row
+ * is read back out of `outboxEvents` and the envelope is assembled from it exactly
+ * as `outboxRelay.dispatch` does, so persistence is part of what is under test.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** The instant `minutes` past local midnight on `dateStr` — how a slot start is expressed. */
+function slotAt(dateStr: string, minutes: number): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setMinutes(minutes);
+  return d.toISOString();
+}
+
+interface OutboxRow {
+  eventId: string;
+  name: string;
+  version: number;
+  tenantId: string;
+  branchId?: string;
+  occurredAt: Date;
+  traceId?: string;
+  payload: Record<string, unknown>;
+}
+
+describe("a domain event carries its branch all the way to the target record", () => {
+  /** Books at one site and returns the appointment plus the outbox row it committed with. */
+  async function bookAt(
+    branch: string,
+    patientId: string,
+    minutes: number,
+  ): Promise<{ appointmentId: string; row: OutboxRow }> {
+    const res = await post("/api/v1/appointments", tokenAdmin, branch)
+      .send({ patientId, doctorId: DOCTOR, startAt: slotAt(nextMonday(), minutes) })
+      .expect(201);
+    const appointmentId = res.body.data.id as string;
+
+    const row = await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      return conn.collection<OutboxRow>("outboxEvents").findOne({
+        name: "appointment.appointment.booked",
+        "payload.appointmentId": appointmentId,
+      });
+    });
+    if (!row) throw new Error(`no outbox row for appointment ${appointmentId}`);
+    return { appointmentId, row };
+  }
+
+  /** The envelope `outboxRelay.dispatch` builds from a row — copied, not approximated. */
+  function envelopeOf(row: OutboxRow): Record<string, unknown> {
+    return {
+      eventId: row.eventId,
+      name: row.name,
+      version: row.version,
+      tenantId: row.tenantId,
+      branchId: row.branchId,
+      occurredAt: row.occurredAt,
+      traceId: row.traceId,
+      payload: row.payload,
+    };
+  }
+
+  async function notificationFor(appointmentId: string): Promise<{ branchId?: string }[]> {
+    return inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      return conn
+        .collection<{ branchId?: string }>("notifications")
+        .find({ dedupeKey: `appointment.confirmation:${appointmentId}` })
+        .toArray();
+    });
+  }
+
+  let hyd: { appointmentId: string; row: OutboxRow };
+  let chn: { appointmentId: string; row: OutboxRow };
+
+  beforeAll(async () => {
+    // Hyderabad's Monday clinic runs 10:00–12:00, Chennai's 14:00–17:00 (group 8).
+    hyd = await bookAt(branchA, patientAId, 600);
+    chn = await bookAt(branchB, patientBId, 840);
+  }, 60_000);
+
+  it("stamps the outbox row with the branch the operation happened at", () => {
+    expect(hyd.row.branchId, "the Hyderabad booking committed a branchless event").toBe(branchA);
+    expect(chn.row.branchId, "the Chennai booking committed a branchless event").toBe(branchB);
+  });
+
+  it("delivers Branch A's event to a Branch A record", async () => {
+    await inTenant(() => dispatchEventInline(envelopeOf(hyd.row) as never));
+
+    const rows = await notificationFor(hyd.appointmentId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.branchId, "the confirmation lost its branch on the way through").toBe(branchA);
+  });
+
+  it("delivers Branch B's event to a Branch B record", async () => {
+    await inTenant(() => dispatchEventInline(envelopeOf(chn.row) as never));
+
+    const rows = await notificationFor(chn.appointmentId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.branchId).toBe(branchB);
+    // The pair is the point: two events, two sites, and neither picked up the other's.
+    expect(rows[0]?.branchId).not.toBe(branchA);
+  });
+
+  it("keeps the branch across a REDELIVERY — no second row, no drift", async () => {
+    // Delivery is at-least-once by design, so the branch has to be idempotent too: a replay
+    // must not create a second record, and must not create one in a different place.
+    await inTenant(() => dispatchEventInline(envelopeOf(hyd.row) as never));
+    await inTenant(() => dispatchEventInline(envelopeOf(hyd.row) as never));
+
+    const rows = await notificationFor(hyd.appointmentId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.branchId).toBe(branchA);
+  });
+
+  it("gives the branch to a handler that never asks for one", async () => {
+    /**
+     * ── WHAT THE TEST ABOVE DOES NOT PROVE ──────────────────────────────────
+     * `onAppointmentBooked` reads the branch off the APPOINTMENT and passes it to `notify`
+     * explicitly, so the confirmation lands in the right place even when the envelope is
+     * branchless — falsifying `publish` leaves those assertions green. That second source is
+     * a good thing and it is also why they cannot pin the propagation.
+     *
+     * The handlers that have no second source are the ones that matter: `order.result.released`
+     * passes no branch, and neither will the next consumer somebody writes. For those the ONLY
+     * source is the context `withTenant` binds from the envelope. That is what this pins —
+     * `notify` with no `branchId`, in the context a consumer runs in, must record the event's
+     * site.
+     */
+    // A real Chennai order, and the real `order.result.released` handler — which calls
+    // `notify` with no branch of its own, so the only possible source is the envelope.
+    const encounter = await post("/api/v1/encounters", tokenAdmin, branchB)
+      .send({ patientId: patientBId, departmentId: DOCTOR })
+      .expect(201);
+    const encounterId = encounter.body.data.encounter.id as string;
+
+    const order = await post("/api/v1/orders", tokenAdmin, branchB)
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    const orderId = order.body.data.order.id as string;
+
+    await inTenant(() =>
+      dispatchEventInline({
+        eventId: `evt-branchiso-${orderId}`,
+        name: "order.result.released",
+        version: 1,
+        tenantId: tenant.id,
+        branchId: branchB,
+        occurredAt: new Date().toISOString(),
+        payload: { orderId },
+      } as never),
+    );
+
+    const rows = await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      return conn
+        .collection<{ branchId?: string }>("notifications")
+        .find({ dedupeKey: `order.result.released:${orderId}` })
+        .toArray();
+    });
+
+    expect(rows, "the result-released handler wrote no notification").toHaveLength(1);
+    expect(
+      rows[0]?.branchId,
+      "a handler that passes no branch got no branch — the event's site is not reaching notify()",
+    ).toBe(branchB);
+  });
+
+  it("keeps the branch across a RETRY — the failure path does not touch it", async () => {
+    // `markRetryOrFail` is what a failed dispatch calls before the event is picked up again.
+    // If it rewrote the row rather than `$set`ting the three retry fields, attempt two would
+    // dispatch a branchless envelope and the record would land nowhere in particular.
+    const after = await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const live = await conn
+        .collection<OutboxRow & { _id: Types.ObjectId; attempts: number }>("outboxEvents")
+        .findOne({ eventId: hyd.row.eventId });
+      if (!live) throw new Error("outbox row vanished");
+
+      await markRetryOrFail(conn, live as never, "simulated dispatch failure", 5, 1_000);
+      return conn.collection<OutboxRow>("outboxEvents").findOne({ eventId: hyd.row.eventId });
+    });
+
+    expect(after?.branchId, "a retry erased the event's branch").toBe(branchA);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 14. DOCTOR LEAVE IS BRANCH-SPECIFIC — AND THAT IS ALL IT CAN BE
+ *
+ * The model represents ONE of the two things a hospital might mean by "leave":
+ *
+ *   A. Branch-specific — the doctor is not at this site today. Representable, and
+ *      proven here: leave at Hyderabad must not close Chennai's clinic.
+ *   B. Hospital-wide — the doctor is away, everywhere. NOT representable, because
+ *      `scopeFilter` matches `branchId` exactly; a row left branchless to mean
+ *      "everywhere" is invisible to every caller who has selected a site, so it
+ *      would suppress nothing at all. Silently. See PROJECT-STATUS for the
+ *      smallest change that would add it — it needs an explicit `scope` field, not
+ *      an absent `branchId`, for the reason the P2 bug taught: when emptiness is
+ *      load-bearing, store the intent rather than the absence.
+ *
+ * Not implemented, because nothing in the product asks for it yet and a wrong
+ * guess here books patients with a doctor who is not in the building.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("leave at one site does not close the clinic at another", () => {
+  /** A weekday nothing else in this file uses, so the two sites start symmetrical. */
+  const LEAVE_DOCTOR = "aaaaaaaaaaaaaaaaaaaaaa02";
+
+  beforeAll(async () => {
+    // The same doctor holds a Tuesday clinic at both sites.
+    for (const branch of [branchA, branchB]) {
+      await put("/api/v1/doctors/schedule", tokenAdmin, branch)
+        .send({
+          doctorId: LEAVE_DOCTOR,
+          weekday: 2,
+          startMinute: 600,
+          endMinute: 720,
+          slotMinutes: 30,
+        })
+        .expect(201);
+    }
+  }, 60_000);
+
+  function nextTuesday(): string {
+    const d = new Date();
+    d.setDate(d.getDate() + ((9 - d.getDay()) % 7 || 7));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  async function slotCount(branch: string, date: string): Promise<number> {
+    const res = await get(
+      `/api/v1/appointments/availability?doctorId=${LEAVE_DOCTOR}&date=${date}`,
+      tokenAdmin,
+      branch,
+    ).expect(200);
+    return (res.body.data as unknown[]).length;
+  }
+
+  it("suppresses slots at the site the leave was filed against", async () => {
+    const tuesday = nextTuesday();
+    expect(await slotCount(branchA, tuesday)).toBeGreaterThan(0);
+    expect(await slotCount(branchB, tuesday)).toBeGreaterThan(0);
+
+    await post("/api/v1/doctors/leave", tokenAdmin, branchA)
+      .send({ doctorId: LEAVE_DOCTOR, fromDate: tuesday, toDate: tuesday, reason: "conference" })
+      .expect(201);
+
+    expect(await slotCount(branchA, tuesday), "Hyderabad kept offering a doctor on leave").toBe(0);
+  });
+
+  it("and leaves the OTHER site's clinic running", async () => {
+    // The inverse of the bug: branch-specific leave must not reach across sites. A doctor who
+    // is off in Hyderabad on Tuesday may still be seeing patients in Chennai that afternoon.
+    const tuesday = nextTuesday();
+    expect(
+      await slotCount(branchB, tuesday),
+      "Hyderabad's leave closed Chennai's clinic — leave is leaking across branches",
+    ).toBeGreaterThan(0);
+  });
+
+  it("and the same holds with the sites reversed", async () => {
+    const tuesday = nextTuesday();
+    await post("/api/v1/doctors/leave", tokenAdmin, branchB)
+      .send({ doctorId: LEAVE_DOCTOR, fromDate: tuesday, toDate: tuesday, reason: "conference" })
+      .expect(201);
+
+    // Now both are closed — which is what TWO branch-specific leaves mean, and is the only
+    // way to express "away everywhere" in the current model.
+    expect(await slotCount(branchB, tuesday)).toBe(0);
+    expect(await slotCount(branchA, tuesday)).toBe(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 15. THE PLUGIN MUST NOT EAT A MODEL'S branchId AGAIN
+ *
+ * `applyCommonFields` used to declare `branchId` in the same `schema.add` as
+ * `tenantId`, and `schema.add` REPLACES a path — so all 29 models' own
+ * declarations were dead, and `required: true` on a branch-scoped collection
+ * enforced nothing while looking exactly like it did.
+ *
+ * A unit test on the plugin would be the obvious guard and it is not enough: it
+ * would pass against a plugin that got it right in isolation and a model that
+ * applies it in the wrong order. This asserts the property on the REAL compiled
+ * models, which is where the bug actually lived.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("branchId enforcement survives the tenant plugin", () => {
+  /**
+   * Through the model ACCESSORS, not `conn.models[name]`: a model is compiled lazily on first
+   * use, so reading the registry would find `undefined` for anything this suite happens not to
+   * touch and the assertion would pass by not running. The accessor compiles the schema the same
+   * way production does, which is the thing under test.
+   */
+  async function branchPath(
+    accessor: (conn: Connection) => { schema: { path(p: string): { isRequired?: boolean } } },
+  ): Promise<{ isRequired?: boolean }> {
+    const conn = await getTenantConnection({
+      id: tenant.id,
+      databaseName: tenant.databaseName,
+    });
+    return accessor(conn).schema.path("branchId");
+  }
+
+  it("keeps `required` on the models that declared it", async () => {
+    const required: [string, Parameters<typeof branchPath>[0]][] = [
+      ["Encounter", getEncounterModel],
+      ["Appointment", getAppointmentModel],
+      ["DoctorSchedule", getDoctorScheduleModel],
+      ["Ward", getWardModel],
+      ["Room", getRoomModel],
+      ["Bed", getBedModel],
+    ];
+    for (const [name, accessor] of required) {
+      const path = await branchPath(accessor);
+      expect(path, `${name} has no branchId path at all`).toBeDefined();
+      expect(
+        path.isRequired,
+        `${name}.branchId lost its \`required\` — the plugin is overwriting it again`,
+      ).toBe(true);
+    }
+  });
+
+  it("leaves it OPTIONAL where the entity is tenant-wide", async () => {
+    // The other half of the guard: a fix that made `branchId` required everywhere would pass the
+    // test above and quietly break patient identity and the allergy safety exception.
+    for (const [name, accessor] of [
+      ["Patient", getPatientModel],
+      ["Allergy", getAllergyModel],
+    ] as [string, Parameters<typeof branchPath>[0]][]) {
+      const path = await branchPath(accessor);
+      expect(path?.isRequired ?? false, `${name}.branchId must stay optional`).toBe(false);
+    }
   });
 });
