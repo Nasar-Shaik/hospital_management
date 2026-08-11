@@ -69,6 +69,58 @@ the existing scope machinery — not replacing it.**
 - **No new authorization model.** `branch` scope, `branchScope`, and `scopeFilter` are the ones ADR-0010
   already defined; this ADR only adds the _active_ selection within the allowed set.
 
+## Addendum — Phase 1 (2026-08-11): what shipping it actually took
+
+The decision above stood. Five things it left implicit had to be made explicit, each because the
+implementation had quietly diverged from it.
+
+### The entity classification, settled
+
+| Scope                                                  | Entities                                                                                                                                                                                                  | Why                                                                                                                                                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tenant-wide**                                        | departments, medicines (the formulary), serviceItems, notificationTemplates, roles, featureFlags, walletAccounts                                                                                          | Configuration and master data. A hospital stocks a drug and defines a department; a site does not.                                                                                                         |
+| **Tenant-wide, deliberately**                          | patients (hybrid — see §5 above), allergies                                                                                                                                                               | Identity and safety. An allergy that does not follow the patient to another site can kill them.                                                                                                            |
+| **Branch-scoped**                                      | encounters, appointments, orders, prescriptions, dispenses, invoices, charges, wards, rooms, beds, doctorSchedules, doctorAvailability, theatres, ambulances, assets, and the rest of the operational set | The record of something that happened, or a thing that physically sits, at one site.                                                                                                                       |
+| **Branch-stamped, tenant-read** (the _ledger pattern_) | walletEntries, stockMovements                                                                                                                                                                             | The row records WHERE the money or the stock moved; the running balance it belongs to is tenant-wide. Filtering these reads by branch would produce a ledger that does not reconcile with its own balance. |
+| **Split**                                              | notifications (branch-stamped delivery records) vs notificationTemplates (tenant-wide configuration)                                                                                                      | The message that went out happened somewhere; the template it was rendered from did not.                                                                                                                   |
+| **Tenant-wide, fail-safe**                             | doctorLeave                                                                                                                                                                                               | A doctor who is away is away from the whole hospital. Suppressing slots everywhere is the safe reading of an absence.                                                                                      |
+
+### Uniqueness is branch-aware where identity is per-site (migration 0046)
+
+`{tenantId, name}` on wards, and `{tenantId, doctorId, weekday}` on schedules and rosters, both
+encoded "one hospital, one site". Widened to lead with `branchId`. Ward names and **bed occupancy
+had to move together**: an admission records its bed as text (`bed.ward`), so the moment two sites
+may each own an "ICU", a tenant-wide `one_open_stay_per_bed` refuses a real patient a real bed.
+
+The effective schedule is therefore **doctor + branch + weekday**, and availability is computed for
+the site being worked at.
+
+### `branchId` is required where it can be (Phase 1)
+
+Enforced on: encounters, appointments, orders, prescriptions, wards, rooms, beds, doctorSchedules,
+doctorAvailability. Still optional, each for a stated reason: patients and allergies (above), the
+tenant-wide set (nothing to require), and the **event-driven writers** — charges, invoices,
+notifications, dispenses, walletEntries, stockMovements — which take their branch off an event
+payload. Failing those closed before every publisher is proven to propagate `branchId` would wedge
+the outbox on a retry loop rather than surface a bug.
+
+This was only possible after a latent defect was fixed: `tenantScopePlugin` re-declared `branchId`
+via `schema.add`, silently overwriting all 29 models' own declarations, so `required: true` on a
+model compiled, read correctly, and enforced **nothing**.
+
+### A hospital is not provisioned until it has a site
+
+`seedMainBranch` moved into `provisionTenant`. It had been called by the CLI and not by the operator
+console, so a console-provisioned hospital had no branch at all and wrote branchless rows for ever
+after — silently, since `writeBranchId()` simply returns `undefined` when there is no candidate.
+
+### The backfill may not guess
+
+Adopting an unstamped row into the Main Branch is the inference "there was only one site". It is
+therefore **refused once a tenant has more than one branch**, and the rows are reported instead.
+Where a parent knows the answer — a wallet debit's invoice, a stock movement's dispense — migration
+0047 derives it. Nothing else is assigned.
+
 ## Alternatives considered
 
 - **Database-per-branch.** Rejected: breaks cross-branch aggregation, a single UHID, and shared staff;

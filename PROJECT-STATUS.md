@@ -14,6 +14,82 @@ session · **Method:** full doc read (59 files) → code read → gates executed
 
 ---
 
+## Multi-branch Phase 1 — make the data fit the boundary (2026-08-11) · CLOSED
+
+Phase 0 proved a Branch-A user cannot reach Branch B. Phase 1 is the other half: that a hospital's
+data can actually **live** inside that boundary. **18 new tests (35 in the suite), full gate green,
+six controls falsified.**
+
+### What it found
+
+| Finding                                                                                                               | Severity     | Status                      |
+| --------------------------------------------------------------------------------------------------------------------- | ------------ | --------------------------- |
+| Three more request-body branch bypasses — `PUT /doctors/schedule`, `PUT /doctors/availability`, `POST /doctors/leave` | 🔴 security  | Fixed — HMS-AUTH-005        |
+| `tenantScopePlugin` silently overwrote all 29 models' `branchId`, so `required: true` enforced **nothing**            | 🔴 latent    | Fixed                       |
+| Console-provisioned hospitals had **no branch at all** → every row branchless, silently                               | 🔴 data      | Fixed at `provisionTenant`  |
+| Every HTTP stock receipt/adjustment written branchless (the `branchId` argument no caller passed)                     | 🟠 data      | Fixed                       |
+| A doctor's second-site Monday **overwrote** the first through the upsert key                                          | 🟠 data loss | Fixed — migration 0046      |
+| Two branches could not both have an ICU                                                                               | 🟠 blocker   | Fixed — migration 0046      |
+| The Main-Branch backfill would adopt unattributable rows on a multi-branch tenant                                     | 🟠 integrity | Fixed — refuses and reports |
+
+The three roster bypasses are the **same class** Phase 0 closed and the grep missed them: they do
+not use the `input.branchId ?? (await writeBranchId())` idiom, they pass the body value straight
+down. Roster writes, not patient writes, which is why nothing clinical pointed at them.
+
+### Falsification — six controls broken on purpose, all went red
+
+| Control broken                            | Red |
+| ----------------------------------------- | --- |
+| Roster branch validation (trust the body) | 7   |
+| Ward index left tenant-wide               | 1   |
+| Occupancy index left tenant-wide          | 2   |
+| Console provisioning seeds no Main Branch | 2   |
+| Backfill guard removed                    | 1   |
+| Stock movement branch stamping removed    | 1   |
+
+### Migrations
+
+- **0046** — `one_ward_name_per_branch`, `one_open_stay_per_bed_per_branch`, and branch-aware
+  schedule/roster keys. Every change **widens** a unique key, so it cannot fail on existing data.
+  Created before the old index is dropped, so an interruption leaves the stricter key, never a gap.
+- **0047** — derives a branchless ledger row's branch **from its parent** (wallet entry → invoice or
+  encounter; stock movement → dispense). A lookup, not a guess.
+
+Applied to all four local tenants; re-run is a clean no-op.
+
+### Branchless audit, after remediation
+
+| Tenant                    | Branches | Result                           |
+| ------------------------- | -------- | -------------------------------- |
+| apollo, district, harmony | 1 each   | **zero branchless rows**         |
+| sunrise                   | 2        | 38 rows left alone, deliberately |
+
+Sunrise's remainder is 3 wallet deposits/refunds with no invoice, 15 stock receipts/adjustments
+written before the stamping fix, 2 pre-branch doctor schedules, and 18 notifications. **None can be
+attributed without inventing a site**, so none was. They are reported on every `migrate --all`.
+
+### `branchId` now required on
+
+encounters · appointments · orders · prescriptions · wards · rooms · beds · doctorSchedules ·
+doctorAvailability
+
+Still optional, each for a reason: patients and allergies (hybrid identity / safety exception), the
+tenant-wide set, and the event-driven writers — charges, invoices, notifications, dispenses,
+walletEntries, stockMovements — which take their branch off an event payload. Failing those closed
+before every publisher is proven to propagate `branchId` would wedge the outbox on a retry loop
+rather than surface a bug. **That is the next piece of work.**
+
+### Remaining risks
+
+- **Doctor leave is branch-filtered on read** (`scopeFilter`), so leave recorded at one site does not
+  suppress slots at another. Fail-open on an absence. Pre-existing; not changed here.
+- **Stock levels are tenant-wide.** The formulary carries one balance, so per-branch stock is not
+  modelled. Movements now record the site; the balance does not. A real feature, not a defect.
+- The intermittent RBAC timeout persists under local container memory pressure (1 of 1398, passes
+  standalone). Unrelated to branches — see the Docker OOM note.
+
+---
+
 ## Multi-branch Phase 0 — prove the isolation (2026-08-11) · CLOSED
 
 ADR-0015 shipped multi-branch complete and **untested**: 1363 integration tests, not one of which
