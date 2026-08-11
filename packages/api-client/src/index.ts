@@ -320,6 +320,121 @@ export interface Role {
   isSystem: boolean;
 }
 
+/* ── contract types added to close the coverage gap (API Contract Stabilization) ──────────── */
+
+/** One entry of the permission catalogue (`GET /permissions`). */
+export interface Permission {
+  id: string;
+  code: string;
+  resource: string;
+  action: string;
+  scope: string;
+  description: string;
+}
+
+/** An edition a hospital can be on. */
+export interface Plan {
+  code: string;
+  name: string;
+  entitlements: string[];
+  limits: Record<string, number | null>;
+  priceMinor?: number;
+  currency?: string;
+}
+
+/** One metered limit and how close the hospital is to it. `null` limit = unlimited. */
+export interface UsageLine {
+  metric: string;
+  label: string;
+  used: number;
+  limit: number | null;
+  ratio: number | null;
+}
+
+export interface SubscriptionView {
+  planCode: string | null;
+  planName: string | null;
+  features: string[];
+  limits: Record<string, number | null>;
+  usage: UsageLine[];
+}
+
+/**
+ * One outbound message, as the delivery ledger recorded it. Named `NotificationRecord` rather
+ * than `Notification` because the DOM already owns that name, and a web or mobile consumer
+ * importing both would silently get whichever won.
+ */
+export interface NotificationRecord {
+  id: string;
+  templateKey: string;
+  channel: string;
+  to?: string;
+  recipientName?: string;
+  recipientType?: string;
+  recipientId?: string;
+  subject?: string;
+  body: string;
+  dedupeKey: string;
+  status: "pending" | "sent" | "failed" | "unreachable" | "suppressed";
+  attempts: number;
+  sentAt?: string;
+  error?: string;
+  eventId?: string;
+  createdAt: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
+}
+
+export interface NotificationTemplate {
+  id: string;
+  key: string;
+  channel: string;
+  description?: string;
+  subject?: string;
+  body: string;
+  enabled: boolean;
+  isDefault: boolean;
+  updatedAt: string;
+}
+
+/** A line on the encounter's bill. Money is an integer number of paise, never a float. */
+export interface Charge {
+  id: string;
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  code: string;
+  description: string;
+  category: string;
+  quantity: number;
+  listPrice: number;
+  amount: number;
+  source: string;
+  sourceId?: string;
+  /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
+  branchId?: string;
+}
+
+/** A platform OPERATOR — our staff, not a hospital's. A different population entirely. */
+export interface PlatformOperator {
+  id: string;
+  email: string;
+  name: string;
+  roles: string[];
+  status: string;
+}
+
+/** The TOTP enrolment secret. Shown once, then never again. */
+export interface MfaSetupResult {
+  otpauthUrl: string;
+  secret: string;
+}
+
+/** Recovery codes, returned once when MFA is activated. */
+export interface MfaActivationResult {
+  recoveryCodes: string[];
+}
+
 export interface Paged<T> {
   items: T[];
   meta: PageMeta;
@@ -4294,6 +4409,10 @@ export class ApiClient {
     planCode: string;
     adminEmail: string;
     adminName?: string;
+    /** Sets the first administrator's password instead of generating one. */
+    adminPassword?: string;
+    /** Drives the edition preset — clinic, government hospital, diagnostic centre… */
+    organizationType?: string;
     trial?: boolean;
     /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
     maxBranches?: number;
@@ -4380,6 +4499,158 @@ export class ApiClient {
     }
     const qs = query.toString();
     return `${this.baseUrl}/api/v1/audit/export${qs ? `?${qs}` : ""}`;
+  }
+
+  /* ── contract coverage: operations that had no typed client method ──────── */
+
+  /** The permission catalogue — what a role may be granted. */
+  listPermissions(): Promise<Permission[]> {
+    return this.request<Permission[]>("GET", "/api/v1/permissions");
+  }
+
+  getRole(id: string): Promise<Role> {
+    return this.request<Role>("GET", `/api/v1/roles/${id}`);
+  }
+
+  createRole(input: {
+    code: string;
+    name: string;
+    description?: string;
+    permissions?: string[];
+  }): Promise<Role> {
+    return this.request<Role>("POST", "/api/v1/roles", input);
+  }
+
+  deleteRole(id: string): Promise<void> {
+    return this.request<void>("DELETE", `/api/v1/roles/${id}`);
+  }
+
+  setRolePermissions(id: string, permissions: string[]): Promise<Role> {
+    return this.request<Role>("PUT", `/api/v1/roles/${id}/permissions`, { permissions });
+  }
+
+  revokeUserRole(userId: string, roleCode: string): Promise<void> {
+    return this.request<void>("DELETE", `/api/v1/users/${userId}/roles/${roleCode}`);
+  }
+
+  /* ── multi-factor authentication ── */
+
+  /** Begins TOTP enrolment. The secret is shown once — render the QR, do not store it. */
+  setupMfa(): Promise<MfaSetupResult> {
+    return this.request<MfaSetupResult>("POST", "/api/v1/auth/mfa/setup", {});
+  }
+
+  activateMfa(code: string): Promise<MfaActivationResult> {
+    return this.request<MfaActivationResult>("POST", "/api/v1/auth/mfa/activate", { code });
+  }
+
+  disableMfa(password: string): Promise<void> {
+    return this.request<void>("POST", "/api/v1/auth/mfa/disable", { password });
+  }
+
+  /* ── subscription & entitlements ── */
+
+  getSubscription(): Promise<SubscriptionView> {
+    return this.request<SubscriptionView>("GET", "/api/v1/subscription");
+  }
+
+  listPlans(): Promise<Plan[]> {
+    return this.request<Plan[]>("GET", "/api/v1/plans");
+  }
+
+  changePlan(planCode: string): Promise<SubscriptionView> {
+    return this.request<SubscriptionView>("POST", "/api/v1/subscription/plan", { planCode });
+  }
+
+  /** A per-hospital flag override. `reason` is required — an override with no why is noise. */
+  setFeatureFlag(input: {
+    flag: string;
+    enabled: boolean;
+    reason: string;
+    expiresAt?: string;
+  }): Promise<void> {
+    return this.request<void>("POST", "/api/v1/feature-flags", input);
+  }
+
+  /* ── patients, appointments, billing ── */
+
+  /** Lookup by UHID is tenant-wide by design — a patient registered at one site is found at another. */
+  getPatientByUhid(uhid: string): Promise<Patient> {
+    return this.request<Patient>("GET", `/api/v1/patients/by-uhid/${uhid}`);
+  }
+
+  getAppointment(id: string): Promise<Appointment> {
+    return this.request<Appointment>("GET", `/api/v1/appointments/${id}`);
+  }
+
+  rescheduleAppointment(id: string, startAt: string, reason: string): Promise<Appointment> {
+    return this.request<Appointment>("POST", `/api/v1/appointments/${id}/reschedule`, {
+      startAt,
+      reason,
+    });
+  }
+
+  /** Voids a posted charge. Never deleted — a reversal is a record, an absence is not. */
+  voidCharge(id: string, reason: string): Promise<Charge> {
+    return this.request<Charge>("POST", `/api/v1/charges/${id}/void`, { reason });
+  }
+
+  /** Deactivated, not deleted: appointments were booked against it. */
+  removeDoctorSchedule(id: string): Promise<void> {
+    return this.request<void>("DELETE", `/api/v1/doctors/schedule/${id}`);
+  }
+
+  /* ── notifications ── */
+
+  listNotifications(params?: {
+    status?: string;
+    templateKey?: string;
+    recipientId?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<Paged<NotificationRecord>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value !== undefined) query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<NotificationRecord>(`/api/v1/notifications${qs ? `?${qs}` : ""}`);
+  }
+
+  listNotificationTemplates(): Promise<NotificationTemplate[]> {
+    return this.request<NotificationTemplate[]>("GET", "/api/v1/notifications/templates");
+  }
+
+  updateNotificationTemplate(
+    key: string,
+    input: { subject?: string; body?: string; enabled?: boolean },
+  ): Promise<NotificationTemplate> {
+    return this.request<NotificationTemplate>(
+      "PUT",
+      `/api/v1/notifications/templates/${key}`,
+      input,
+    );
+  }
+
+  /* ── platform (operator console) ── */
+
+  listOperators(): Promise<PlatformOperator[]> {
+    return this.request<PlatformOperator[]>("GET", "/api/platform/v1/operators");
+  }
+
+  createOperator(input: {
+    email: string;
+    name: string;
+    roles: string[];
+  }): Promise<PlatformOperator> {
+    return this.request<PlatformOperator>("POST", "/api/platform/v1/operators", input);
+  }
+
+  changeOperatorPassword(currentPassword: string, newPassword: string): Promise<void> {
+    return this.request<void>("POST", "/api/platform/v1/auth/change-password", {
+      currentPassword,
+      newPassword,
+    });
   }
 }
 
