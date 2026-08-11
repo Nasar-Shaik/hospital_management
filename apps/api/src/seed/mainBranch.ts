@@ -2,10 +2,12 @@
  * Ensures every tenant has its **Main Branch**, and that pre-branch operational records belong to it
  * (ADR-0015, backward compatibility STEP 8).
  *
- * Runs from provisioning (a new tenant is born with a Main Branch) AND from the fleet `migrate --all`
- * (an existing tenant, created before branches, gets one). Both are idempotent:
+ * Runs from provisioning — BOTH paths, the CLI and `createHospital` — and from the fleet
+ * `migrate --all` (an existing tenant, created before branches, gets one). All are idempotent:
  *   - the branch is upserted on `{ tenantId, isMain: true }`, so re-running never makes a second one;
- *   - the backfill only touches rows that have NO `branchId` yet, so it is a no-op the second time.
+ *   - the backfill only touches rows that have NO `branchId` yet, so it is a no-op the second time;
+ *   - and the backfill DECLINES entirely once the tenant has more than one branch, because from
+ *     then on "which site was this?" is a question, not an inference. See the guard below.
  *
  * Seeded here rather than in the migration because a migration has no tenant context (no `tenantId`),
  * and the Main Branch — like every other row — must carry one. This mirrors how `siteSettings`,
@@ -15,20 +17,50 @@
  * approval. It matters most the day a tenant adds a SECOND branch: without it, every historical
  * encounter would belong to no branch and a branch-confined user would not see the hospital's past.
  */
-import type { Connection } from "mongoose";
+import type { Connection, Types } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { runWithContext } from "../core/context/requestContext.js";
-import { getBranchModel } from "../modules/branches/index.js";
 
 const logger = createLogger({ service: "seed-main-branch" });
 
 /**
- * The operational collections whose rows belong to the branch they happened at. Each pre-branch row
- * is adopted by the Main Branch. Identity (allergies — person-level), configuration (serviceItems,
- * medicines, roles, featureFlags) and the wallet balance (patient-level) are deliberately absent:
- * they are not per-branch transactions.
+ * The `branches` collection by NAME, not through `getBranchModel`.
+ *
+ * This is what lets `provisionTenant` call this seed. The model route would import
+ * `modules/branches/index.js`, whose service imports `modules/tenants` (for the plan's branch
+ * cap) — so a tenant that seeded its own Main Branch would close a cycle:
+ * tenants → seed → branches → tenants, which `no-circular` rejects and which is, independently,
+ * the wrong shape. `core/context/activeBranch.ts` reads this same collection the same way and
+ * for the same reason.
+ *
+ * The cost is the model's conveniences, which are supplied here instead: timestamps by hand, and
+ * no audit row. The second is deliberate — a Main Branch is not created by a person, it is part
+ * of what provisioning MEANS, and provisioning is already audited on both sides
+ * (`platform.hospital.created` and `hospital.provisioned`).
+ */
+interface BranchRow {
+  _id: Types.ObjectId;
+  tenantId: string;
+  isMain: boolean;
+}
+
+/**
+ * The collections whose rows belong to the branch they happened at, or were catalogued at. Each
+ * pre-branch row is adopted by the Main Branch — but ONLY under the single-branch guard below.
+ *
+ * Deliberately ABSENT, and each for its own reason:
+ *   - `allergies`            — person-level safety data, tenant-wide by design (ADR-0015).
+ *   - `walletAccounts`       — the patient's BALANCE, tenant-wide; only the `walletEntries`
+ *                              ledger records which desk the money crossed.
+ *   - `medicines`            — the formulary is master data; the hospital stocks a drug, not a
+ *                              site. (Its stock LEVEL is tenant-wide too — see PROJECT-STATUS.)
+ *   - `notificationTemplates`, `serviceItems`, `roles`, `featureFlags`, `departments`
+ *                            — configuration, shared across sites.
+ *   - `doctorLeave`          — a doctor who is away is away from the whole hospital; leave
+ *                              suppresses slots at every site, which is the fail-safe reading.
  */
 const BACKFILL_COLLECTIONS = [
+  // Clinical & front-office flow
   "patients",
   "encounters",
   "appointments",
@@ -40,6 +72,33 @@ const BACKFILL_COLLECTIONS = [
   "vitals",
   "wardNotes",
   "reportFiles",
+  "consultationNotes",
+  "medicationAdministrations",
+  "documents",
+  "consents",
+  "deathRecords",
+  "mortuaryRegister",
+  "feedbackTickets",
+  // Ledgers: the row records WHERE the movement happened; the running balance stays tenant-wide.
+  "walletEntries",
+  "stockMovements",
+  // Per-site catalogue and rosters — a ward, a bed and a clinic session belong to one site.
+  "wards",
+  "rooms",
+  "beds",
+  "theatres",
+  "otBookings",
+  "ambulances",
+  "ambulanceTrips",
+  "assets",
+  "assetMaintenance",
+  "labTests",
+  "doctorSchedules",
+  "doctorAvailability",
+  // Operational records that happen to be site-flavoured
+  "notifications",
+  "insurancePolicies",
+  "insuranceClaims",
 ] as const;
 
 export interface SeedMainBranchResult {
@@ -48,6 +107,15 @@ export interface SeedMainBranchResult {
   created: boolean;
   /** How many pre-branch rows were adopted, per collection (only non-zero entries). */
   backfilled: Record<string, number>;
+  /**
+   * Set when the backfill was DECLINED because the tenant already has more than one branch, with
+   * the branchless rows found per collection. Nothing was written; these rows need a human.
+   */
+  skipped?: {
+    reason: "multiple branches";
+    branchCount: number;
+    branchless: Record<string, number>;
+  };
 }
 
 export async function seedMainBranch(
@@ -58,15 +126,14 @@ export async function seedMainBranch(
   return runWithContext(
     { traceId: `seed-branch-${tenantSlug}`, tenantId, tenantSlug, connection },
     async () => {
-      const Branch = getBranchModel(connection);
+      const branches = connection.collection<BranchRow>("branches");
 
       // Existence is checked BEFORE the upsert so "created" is a fact, not a guess.
-      const existing = await Branch.findOne({ tenantId, isMain: true }).lean<{
-        _id: { toString(): string };
-      }>();
+      const existing = await branches.findOne({ tenantId, isMain: true });
 
+      const now = new Date();
       // `$setOnInsert` so a re-run never rewrites a name an admin edited.
-      const result = await Branch.findOneAndUpdate(
+      const result = await branches.findOneAndUpdate(
         { tenantId, isMain: true },
         {
           $setOnInsert: {
@@ -75,14 +142,57 @@ export async function seedMainBranch(
             code: "MAIN",
             status: "active",
             isMain: true,
+            // Supplied by hand: the model's `timestamps` and plugin defaults are not in play
+            // on a raw write, and a row missing them reads as corrupt to everything downstream.
+            isDeleted: false,
+            version: 0,
+            schemaVersion: 1,
+            createdAt: now,
+            updatedAt: now,
           },
         },
-        { upsert: true, new: true },
-      ).lean<{ _id: { toString(): string } }>();
+        { upsert: true, returnDocument: "after" },
+      );
 
       if (!result?._id) throw new Error("main branch upsert returned nothing");
       const branchId = result._id.toString();
       const created = !existing;
+
+      /**
+       * ── THE BACKFILL MAY ONLY RUN ON A SINGLE-SITE HOSPITAL ──────────────────
+       * Adopting a branchless row into the Main Branch is an INFERENCE: "there was only one
+       * site, so it happened there". That is sound while the hospital has one branch and
+       * false the moment it has two — at which point this would be inventing a fact, writing
+       * Hyderabad onto a row that might be Chennai's, permanently and unprovably.
+       *
+       * So the guard is the branch COUNT, not the `created` flag: a tenant can acquire its
+       * second branch between two runs of `migrate --all`, and the second run must decline
+       * where the first was safe. Declined rows are counted and returned so the operator sees
+       * exactly what needs a human decision instead of finding out from a wrong report.
+       */
+      const branchCount = await branches.countDocuments({ tenantId });
+      if (branchCount > 1) {
+        const branchless: Record<string, number> = {};
+        for (const name of BACKFILL_COLLECTIONS) {
+          const n = await connection
+            .collection(name)
+            .countDocuments({ branchId: { $exists: false } });
+          if (n > 0) branchless[name] = n;
+        }
+        if (Object.keys(branchless).length > 0) {
+          logger.warn(
+            { tenantSlug, branchCount, branchless },
+            "branchless rows left alone — this hospital has several branches, so which one " +
+              "they belong to cannot be inferred. Assign them deliberately.",
+          );
+        }
+        return {
+          branchId,
+          created,
+          backfilled: {},
+          skipped: { reason: "multiple branches", branchCount, branchless },
+        };
+      }
 
       // Adopt pre-branch rows. Raw collection writes on purpose: this backfills historical data and
       // must not fire audit hooks or bump `version` on thousands of untouched-by-a-human records.

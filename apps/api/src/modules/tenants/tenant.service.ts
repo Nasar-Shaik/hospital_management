@@ -14,6 +14,7 @@ import { migrateTenantDb } from "../../core/db/migrations/runner.js";
 import { tenantMigrations } from "../../core/db/migrations/tenantMigrations.js";
 import { AppError } from "../../core/errors/appError.js";
 import { tenantDatabaseName } from "../../config/env.js";
+import { seedMainBranch } from "../../seed/mainBranch.js";
 import * as repo from "./tenant.repository.js";
 import type { TenantRegistryEntry } from "./tenant.repository.js";
 import type { TenantLicense, TenantStatus } from "./tenant.model.js";
@@ -158,6 +159,24 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
     ...(tenant.dbUri ? { dbUri: tenant.dbUri } : {}),
   });
   const migrationsApplied = await migrateTenantDb(db, tenantMigrations);
+
+  /**
+   * ── A HOSPITAL IS NOT PROVISIONED UNTIL IT HAS A SITE (ADR-0015) ────────────
+   * The Main Branch is seeded HERE rather than by each caller, because "provision now, seed the
+   * rest later" is the trap this codebase has fallen into three times already — notification
+   * templates, tariff, and branches — and each time the second step was forgotten on one path
+   * while the other kept working. The CLI seeded a Main Branch; the operator console did not;
+   * nothing seeded one for a test tenant. There is now one place, and it is the place that
+   * cannot be skipped.
+   *
+   * It matters more than the other two because nothing FAILS without it: `writeBranchId()` finds
+   * no branch, returns `undefined`, and every record the hospital writes is branchless — correct
+   * looking, and invisible to a branch-confined user the day a second site opens.
+   *
+   * Idempotent (upsert on `{tenantId, isMain: true}`), and the seed reaches the collection
+   * directly so this import does not close a cycle back through the branches module.
+   */
+  await seedMainBranch(tenant.id, tenant.slug, db);
 
   const activated = await transitionStatus(tenant.id, input.trial ? "trial" : "active");
 

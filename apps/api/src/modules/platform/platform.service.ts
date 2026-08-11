@@ -36,6 +36,7 @@ import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import { seedTenantAdmin } from "../../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../../seed/notificationTemplates.js";
 import { seedTariff } from "../../seed/tariff.js";
+import { seedMainBranch } from "../../seed/mainBranch.js";
 import {
   provisionTenant,
   transitionStatus,
@@ -380,6 +381,18 @@ export async function createHospital(
   // Same reason, same trap: a hospital with no tariff posts every charge at 0 and
   // looks like it works right up until someone reads a bill.
   await seedTariff(tenant.id, tenant.slug, connection);
+  /**
+   * Same trap, THIRD instance — and the one with teeth. The CLI has always seeded the Main
+   * Branch (ADR-0015); this path did not, so a hospital provisioned over HTTP had NO branch at
+   * all. `writeBranchId()` finds no candidate and returns `undefined`, so every encounter,
+   * appointment, order and invoice it ever wrote was BRANCHLESS — invisible the day that
+   * hospital opens a second site, because a branch-confined user would not see the first site's
+   * history. Nothing failed loudly; the data was simply born wrong.
+   *
+   * Idempotent (upsert on `{tenantId, isMain: true}`), so it is also safe on a provisioning
+   * retry that got this far and then failed downstream.
+   */
+  await seedMainBranch(tenant.id, tenant.slug, connection);
 
   // OUR trail.
   await repo.recordPlatformAudit({
