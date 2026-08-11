@@ -35,8 +35,10 @@ import { Redis } from "ioredis";
 const TEST_REDIS_BASE = process.env.REDIS_TEST_URL ?? "redis://127.0.0.1:6380";
 
 /**
- * One private database per suite. Redis ships with 16 (0–15); 0 belongs to the dev
- * server, which leaves 15 for tests and 5 spare.
+ * One private database per suite. Redis ships with 16 (0–15) and the compose file raises it to
+ * 32 (`--databases 32`) — 0 belongs to the dev server, and the original fifteen were all claimed
+ * by the time idempotency needed one. If a suite here fails with "DB index is out of range", the
+ * local Redis predates that change: `pnpm docker:dev:down && pnpm docker:dev`.
  *
  * Assigned explicitly rather than hashed from the filename: a hash collision would
  * silently reintroduce exactly the cross-talk this exists to prevent, and would do
@@ -61,6 +63,8 @@ const SUITE_DB = {
   lab: 14,
   /** Branch isolation (ADR-0015) — claimed from the spare pool, see the note above. */
   branchIsolation: 15,
+  /** Idempotency-Key (Doc 04 §5.1) — the first suite past the stock 16-database ceiling. */
+  idempotency: 16,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;
