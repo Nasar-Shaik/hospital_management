@@ -1,15 +1,10 @@
 /**
  * Site controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as site from "./site.service.js";
 import type { UpdateSiteBody, UploadLogoBody } from "./site.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /** PUBLIC — the hospital's website content. No auth; safe to show a stranger. */
 export const publicSite: RequestHandler = async (_req, res) => {

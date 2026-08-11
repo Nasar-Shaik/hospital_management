@@ -1,8 +1,7 @@
 /**
  * Admission controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as admissions from "./admission.service.js";
 import { bedBoard } from "./bedBoard.js";
 import type {
@@ -12,11 +11,7 @@ import type {
   ListNotesQuery,
   TransferBedBody,
 } from "./admission.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /** The free-and-occupied bed board — the inventory joined to who is actually admitted. */
 export const getBedBoard: RequestHandler = async (_req, res) => {

@@ -1,15 +1,10 @@
 /**
  * Branch controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as branches from "./branch.service.js";
 import type { CreateBranchBody, UpdateBranchBody } from "./branch.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /** The switcher's data — the caller's own branches + whether they may aggregate. Self-service. */
 export const listMine: RequestHandler = async (_req, res) => {

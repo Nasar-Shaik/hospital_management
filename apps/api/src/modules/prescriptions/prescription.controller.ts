@@ -1,8 +1,7 @@
 /**
  * Prescription controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope, PageMeta } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as prescriptions from "./prescription.service.js";
 import type {
@@ -10,11 +9,7 @@ import type {
   ListPrescriptionsQuery,
   UpdatePrescriptionBody,
 } from "./prescription.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const createPrescription: RequestHandler = async (req, res) => {
   const body = req.body as CreatePrescriptionBody;

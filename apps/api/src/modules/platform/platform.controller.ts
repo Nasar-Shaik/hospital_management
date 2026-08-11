@@ -1,18 +1,13 @@
 /**
  * Platform controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { env } from "../../config/env.js";
 import { requireOperator } from "../../middleware/authenticatePlatform.js";
 import type { TenantStatus } from "../tenants/index.js";
 import type { PlatformRole } from "./platform.model.js";
 import * as service from "./platform.service.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /** Everything an audited platform action needs to know about the caller. */
 function actorOf(req: Parameters<RequestHandler>[0]) {

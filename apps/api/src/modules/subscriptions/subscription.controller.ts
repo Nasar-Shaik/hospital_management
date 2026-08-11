@@ -1,17 +1,12 @@
 /**
  * Subscription controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import type { FeatureFlag } from "@medicore/permissions";
 import { getContext } from "../../core/context/requestContext.js";
 import { setFeatureOverride as setOverride } from "../entitlements/index.js";
 import * as service from "./subscription.service.js";
-
-function ok<T>(res: Response, data: T): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(200).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const getSubscription: RequestHandler = async (_req, res) => {
   ok(res, await service.getSubscription(getContext().tenantId));

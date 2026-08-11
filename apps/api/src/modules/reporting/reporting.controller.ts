@@ -7,15 +7,10 @@
  * one grid, and the breakdowns a screen shows around it are still one query away.
  */
 import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
 import { requireAuth } from "../../middleware/authenticate.js";
 import * as reporting from "./reporting.service.js";
 import type { ReportRangeQuery } from "./reporting.schema.js";
-
-function ok<T>(res: Response, data: T): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(200).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 function rangeOf(req: { query: unknown }): { range: reporting.DateRange; csv: boolean } {
   const q = req.query as ReportRangeQuery;

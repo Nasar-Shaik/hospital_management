@@ -1,21 +1,16 @@
 /**
  * Audit controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as service from "./audit.service.js";
 import type { AuditFilter } from "./audit.repository.js";
-
-function ok<T>(res: Response, data: T, meta?: ApiEnvelope<T>["meta"]): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(200).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const listAudit: RequestHandler = async (req, res) => {
   const filter = req.query as unknown as AuditFilter;
   const { entries, total } = await service.listAudit(filter);
 
-  ok(res, entries, {
+  ok(res, entries, 200, {
     page: filter.page,
     limit: filter.limit,
     total,

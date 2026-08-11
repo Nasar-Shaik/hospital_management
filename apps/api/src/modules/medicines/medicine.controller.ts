@@ -6,8 +6,7 @@
  * medicine master is tenant-wide — one shelf per hospital, like the tariff — so no branch id
  * is threaded through these writes.
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as medicines from "./medicine.service.js";
 import type {
   CreateMedicineBody,
@@ -16,11 +15,7 @@ import type {
   AdjustStockBody,
   ListQuery,
 } from "./medicine.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const list: RequestHandler = async (req, res) => {
   const q = req.query as unknown as ListQuery;

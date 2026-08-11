@@ -1,16 +1,11 @@
 /**
  * Order controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope, PageMeta } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as orders from "./order.service.js";
 import type { CompleteOrderBody, ListOrdersQuery, PlaceOrderBody } from "./order.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /**
  * Places an order.

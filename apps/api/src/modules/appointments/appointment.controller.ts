@@ -1,8 +1,7 @@
 /**
  * Appointment controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope, PageMeta } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as appointments from "./appointment.service.js";
 import type {
   AvailabilityQuery,
@@ -12,11 +11,7 @@ import type {
   SetAvailabilityBody,
   AddLeaveBody,
 } from "./appointment.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const bookAppointment: RequestHandler = async (req, res) => {
   ok(res, await appointments.bookAppointment(req.body as BookAppointmentBody), 201);

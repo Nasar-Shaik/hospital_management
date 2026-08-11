@@ -1,8 +1,7 @@
 /**
  * Feedback & complaint controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as feedback from "./feedback.service.js";
 import type {
   CreateTicketBody,
@@ -10,11 +9,7 @@ import type {
   AssignTicketBody,
   TransitionTicketBody,
 } from "./feedback.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const listTickets: RequestHandler = async (req, res) => {
   ok(res, await feedback.listTickets(req.query as ListTicketsQuery));

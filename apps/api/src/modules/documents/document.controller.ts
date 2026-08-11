@@ -1,16 +1,11 @@
 /**
  * Document controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as documents from "./document.service.js";
 import type { UploadDocumentBody } from "./document.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const uploadDocument: RequestHandler = async (req, res) => {
   const { patientId } = req.params as { patientId: string };

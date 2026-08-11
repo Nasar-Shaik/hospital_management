@@ -1,8 +1,7 @@
 /**
  * Medico-legal controller — HTTP only (Doc 09 §11). Coerced dates default at the edge.
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as medicolegal from "./medicolegal.service.js";
 import type {
   RecordConsentBody,
@@ -11,11 +10,7 @@ import type {
   PatientQuery,
   EncounterQuery,
 } from "./medicolegal.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /* ── consent ─────────────────────────────────────────────────────────────── */
 

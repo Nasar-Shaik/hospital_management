@@ -1,8 +1,7 @@
 /**
  * Ambulance + trip controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as ambulance from "./ambulance.service.js";
 import type {
   CreateAmbulanceBody,
@@ -11,11 +10,7 @@ import type {
   TransitionTripBody,
   ListTripsQuery,
 } from "./ambulance.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /** The local day, in server time, for a board query with no explicit window. */
 function dayWindow(query: ListTripsQuery): { from: Date; to: Date } {

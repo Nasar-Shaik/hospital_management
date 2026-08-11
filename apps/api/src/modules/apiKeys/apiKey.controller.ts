@@ -1,15 +1,10 @@
 /**
  * API-key controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as apiKeys from "./apiKey.service.js";
 import type { CreateApiKeyBody } from "./apiKey.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const list: RequestHandler = async (_req, res) => {
   ok(res, await apiKeys.listApiKeys());
