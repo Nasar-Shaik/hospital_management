@@ -14,6 +14,7 @@
     "provision": "tsx --env-file-if-exists=.env src/scripts/provisionTenant.ts",
     "migrate": "tsx --env-file-if-exists=.env src/scripts/migrateTenants.ts",
     "seed:demo": "tsx --env-file-if-exists=.env src/scripts/seedDemo.ts",
+    "dev:device-domains": "tsx --env-file-if-exists=.env src/scripts/devDeviceDomains.ts",
     "seed:clinical": "tsx --env-file-if-exists=.env src/scripts/seedClinical.ts",
     "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts",
     "audit:chain": "tsx --env-file-if-exists=.env src/scripts/auditChain.ts",
