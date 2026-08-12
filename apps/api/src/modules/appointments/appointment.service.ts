@@ -518,3 +518,14 @@ export async function removeDoctorLeave(id: string): Promise<void> {
   const removed = await repo.removeLeave(id);
   if (!removed) throw new AppError("HMS-GEN-404", 404, "Leave not found", { id });
 }
+
+/**
+ * A doctor cancelling their OWN leave.
+ *
+ * Identical to the administrator's version except that the doctor is part of the query, and the
+ * failure is deliberately indistinguishable from "no such row" — see `repo.removeOwnLeave`.
+ */
+export async function removeOwnDoctorLeave(id: string, doctorId: string): Promise<void> {
+  const removed = await repo.removeOwnLeave(id, doctorId);
+  if (!removed) throw new AppError("HMS-GEN-404", 404, "Leave not found", { id });
+}

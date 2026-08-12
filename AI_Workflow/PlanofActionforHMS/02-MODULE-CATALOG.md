@@ -409,7 +409,12 @@ Modules are grouped by domain. APIs are under `/api/v1`, tenant- and branch-scop
 **Pages:** Doctor Directory, Doctor Profile, Specialization Master, Availability Editor, Consultation Schedule, Slot Configuration, Doctor Dashboard, Performance & Revenue, Leave, Attendance.
 **Collections:** `doctors`, `specializations`, `doctorSchedules`, `doctorAvailability`, `appointmentSlots`, `doctorPerformance`, `doctorLeaves`, `doctorAttendance`.
 **REST APIs:** `CRUD /doctors|/specializations|/doctor-schedules`, `GET /doctors/:id/availability|performance`, `CRUD /doctor-leaves|/doctor-attendance`.
-**Permissions:** `doctor:manage`, `schedule:manage`, `doctor:performance:view`.
+**Permissions:** `doctor:manage`, `doctor:self-manage`, `schedule:manage`, `doctor:performance:view`.
+**Permission split:** `doctor:manage` is roster administration over everybody, and it alone sets
+clinic HOURS (the clock pattern slots are generated from) — a contractual matter. `doctor:self-manage`
+is a doctor's own sessions and leave, via `/doctors/me/*`, where the doctor id is read from the token
+and is absent from the request body. Marking yourself away must not require finding an administrator
+at 07:00, or it does not happen and patients travel to an empty clinic.
 **Dependencies:** A3 (users), B (departments).
 **Reports:** Doctor productivity, revenue per doctor, utilization, leave.
 **Mobile:** Doctor app (schedule, availability toggle, dashboard).

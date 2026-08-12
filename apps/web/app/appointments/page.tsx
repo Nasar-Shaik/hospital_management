@@ -452,10 +452,21 @@ function Appointments() {
           {loading ? (
             <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
           ) : slots.length === 0 ? (
+            /**
+             * ── SAY WHO CAN FIX IT, NOT "FIX IT BELOW" ─────────────────────
+             * This used to end "Set their hours below" for everybody. The editor below is gated on
+             * `doctor:manage`, which the front desk does not hold — so the person who most often
+             * hits this screen was handed an instruction and no control, with nothing on the page
+             * to suggest the control existed for someone else. Telling them who to ask is the
+             * whole difference between a dead end and a next step.
+             */
             <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
               No open slots — this doctor has no clinic session on{" "}
               {new Date(`${day}T00:00:00`).toLocaleDateString([], { weekday: "long" })}s, or the day
-              is fully booked. Set their hours below.
+              is fully booked.{" "}
+              {can("doctor:manage")
+                ? "Set their hours below."
+                : "An administrator sets clinic hours; the doctor can mark themselves away. For a walk-in, start a visit from Reception instead."}
             </p>
           ) : (
             <div className="flex flex-wrap gap-2">

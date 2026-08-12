@@ -50,6 +50,8 @@ import {
   setScheduleSchema,
   setAvailabilitySchema,
   addLeaveSchema,
+  setOwnAvailabilitySchema,
+  addOwnLeaveSchema,
 } from "./appointment.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_APPOINTMENTS } as const;
@@ -196,6 +198,50 @@ export function appointmentRouter(): Router {
     validate(idParamSchema, "params"),
     responds(removedAck),
     asyncHandler(controller.removeDoctorSchedule),
+  );
+
+  /* ── a doctor's OWN roster (Doc 02 D2) — `doctor:self-manage` ── */
+
+  /**
+   * Declared BEFORE `/doctors/:doctorId/…` so `me` is not captured as an id — the same ordering
+   * rule as `/appointments/availability` above, and the same consequence if it is broken: the
+   * self route would silently become a lookup for a doctor whose id is the string "me", which
+   * fails validation rather than doing anything dangerous, but fails confusingly.
+   *
+   * ── SEPARATE ROUTES RATHER THAN A SECOND PERMISSION ON THE ADMIN ONES ─────
+   * `authorize()` takes ONE permission by design — the RBAC matrix reads those tags back off the
+   * shipped app and fails CI on any route it cannot account for, which only works while the
+   * mapping is one-to-one. Overloading the administrator's routes with "either permission" would
+   * also mean the handler had to decide, per request, whether the `doctorId` in the body was
+   * allowed — precisely the check that is easy to write once and forget to keep.
+   *
+   * A separate path with no `doctorId` in it removes the question instead of answering it.
+   */
+  router.put(
+    "/doctors/me/availability",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_SELF_MANAGE, FEATURE),
+    validate(setOwnAvailabilitySchema),
+    responds(doctorAvailability.optional()),
+    asyncHandler(controller.setOwnAvailability),
+  );
+
+  router.post(
+    "/doctors/me/leave",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_SELF_MANAGE, FEATURE),
+    validate(addOwnLeaveSchema),
+    responds(doctorLeave, { status: 201 }),
+    asyncHandler(controller.addOwnLeave),
+  );
+
+  router.delete(
+    "/doctors/me/leave/:id",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_SELF_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    responds(removedAck),
+    asyncHandler(controller.removeOwnLeave),
   );
 
   /* ── doctor availability (session roster) & leave (Doc 02 D2) ── */

@@ -95,6 +95,30 @@ export const addLeaveSchema = z
   })
   .strict();
 
+/**
+ * ── THE SELF-SERVICE BODIES CARRY NO `doctorId`, AND THAT IS THE CONTROL ────
+ * These back `/doctors/me/…`, where the doctor is taken from the authenticated token. Omitting the
+ * field is stronger than validating it: `.strict()` means a body that tries to name a doctor is
+ * REJECTED rather than quietly ignored, so there is no id to tamper with and no branch of code
+ * that has to remember to check one.
+ */
+export const setOwnAvailabilitySchema = z
+  .object({
+    weekday: z.number().int().min(0).max(6),
+    sessions: z.array(z.enum(DOCTOR_SESSIONS)).max(4),
+    branchId: objectId.optional(),
+  })
+  .strict();
+
+export const addOwnLeaveSchema = z
+  .object({
+    fromDate: isoDate,
+    toDate: isoDate,
+    reason: z.string().trim().max(200).optional(),
+    branchId: objectId.optional(),
+  })
+  .strict();
+
 export const idParamSchema = z.object({ id: objectId }).strict();
 export const doctorIdParamSchema = z.object({ doctorId: objectId }).strict();
 
@@ -104,3 +128,5 @@ export type ListAppointmentsQuery = z.infer<typeof listAppointmentsQuerySchema>;
 export type SetScheduleBody = z.infer<typeof setScheduleSchema>;
 export type SetAvailabilityBody = z.infer<typeof setAvailabilitySchema>;
 export type AddLeaveBody = z.infer<typeof addLeaveSchema>;
+export type SetOwnAvailabilityBody = z.infer<typeof setOwnAvailabilitySchema>;
+export type AddOwnLeaveBody = z.infer<typeof addOwnLeaveSchema>;

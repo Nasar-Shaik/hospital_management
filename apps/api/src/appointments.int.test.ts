@@ -45,6 +45,10 @@ let tenant: { id: string; slug: string; databaseName: string };
 let token = "";
 let doctorId = "";
 let patientId = "";
+/** Dr Rao's own token, and a SECOND doctor — the roster is only safe if it is safe from a peer. */
+let doctorToken = "";
+let otherDoctorId = "";
+let otherDoctorToken = "";
 /** The Monday after today — always in the future, always a scheduled weekday. */
 let clinicDay: Date;
 
@@ -96,9 +100,20 @@ beforeAll(async () => {
         name: "Dr Rao",
         status: "invited",
       });
+      await setPassword(doctor.id, PASSWORD, { mustChangePassword: false });
       await assignRoleByCode(doctor.id, "DOCTOR", []);
       await transitionStatus(doctor.id, "active");
       doctorId = doctor.id;
+
+      const other = await createUser({
+        email: "doc2@appt.test",
+        name: "Dr Iyer",
+        status: "invited",
+      });
+      await setPassword(other.id, PASSWORD, { mustChangePassword: false });
+      await assignRoleByCode(other.id, "DOCTOR", []);
+      await transitionStatus(other.id, "active");
+      otherDoctorId = other.id;
     },
   );
 
@@ -107,6 +122,16 @@ beforeAll(async () => {
     .set("Host", HOST)
     .send({ email: "admin@appt.test", password: PASSWORD });
   token = login.body.data.accessToken as string;
+
+  const signIn = async (email: string): Promise<string> => {
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .set("Host", HOST)
+      .send({ email, password: PASSWORD });
+    return res.body.data.accessToken as string;
+  };
+  doctorToken = await signIn("doc@appt.test");
+  otherDoctorToken = await signIn("doc2@appt.test");
 
   // Next Monday, so the clinic day is always in the future and always a weekday
   // the schedule covers. A test that books "today at 09:00" fails every afternoon.
@@ -359,5 +384,162 @@ describe("a merged patient cannot be booked", () => {
       .expect(422);
 
     expect(res.body.error.code).toBe("HMS-STATE-001");
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * A DOCTOR'S OWN ROSTER (`doctor:self-manage`)
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * ── THE FAILURE THIS CLOSES ─────────────────────────────────────────────────
+ * The roster was administrable ONLY by `doctor:manage`, which TENANT_ADMIN alone holds. So a
+ * doctor could read the appointment book and had no way to say they would not be there: marking
+ * yourself off sick meant finding an administrator, at 07:00, before a clinic you are not going to
+ * attend. What happens instead is nothing — reception books into sessions nobody will sit, and the
+ * patients travel.
+ *
+ * ── AND THE THING IT MUST NOT OPEN ──────────────────────────────────────────
+ * A permission held by every doctor is a permission held by anyone who compromises one doctor. So
+ * the tests that matter here are the negative ones: not "can a doctor manage their roster", but
+ * "can a doctor reach a COLLEAGUE's roster, or the clinic HOURS, by any route in the API". Both
+ * answers must stay no, and neither is guaranteed by the happy path passing.
+ */
+function asDoctor(req: request.Test): request.Test {
+  return req.set("Host", HOST).set("Authorization", `Bearer ${doctorToken}`);
+}
+
+function asOtherDoctor(req: request.Test): request.Test {
+  return req.set("Host", HOST).set("Authorization", `Bearer ${otherDoctorToken}`);
+}
+
+/** `YYYY-MM-DD` in the server's own local calendar — the shape leave is stored in. */
+function dayKey(d: Date): string {
+  return `${String(d.getFullYear())}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+describe("a doctor manages their own sessions and leave", () => {
+  it("sets their own weekday sessions, stamped with THEIR id and not the body's", async () => {
+    const res = await asDoctor(request(app).put("/api/v1/doctors/me/availability"))
+      .send({ weekday: 3, sessions: ["morning", "evening"] })
+      .expect(200);
+
+    expect(res.body.data.doctorId).toBe(doctorId);
+    expect(res.body.data.sessions).toEqual(["morning", "evening"]);
+  });
+
+  it("refuses a body that tries to name a doctor at all", async () => {
+    /**
+     * The control is the SCHEMA, not a check in the handler. `.strict()` means an id sent here is
+     * rejected outright rather than silently dropped — so a client written against the admin
+     * endpoint fails loudly instead of appearing to work while writing to its own roster.
+     */
+    const res = await asDoctor(request(app).put("/api/v1/doctors/me/availability"))
+      .send({ doctorId: otherDoctorId, weekday: 3, sessions: ["morning"] })
+      .expect(400);
+
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+  });
+
+  it("books its own leave, and the leave actually removes the slots reception can see", async () => {
+    // The whole point of the feature: an absence a doctor records must reach the booking screen.
+    const before = await auth(request(app).get("/api/v1/appointments/availability"))
+      .query({ doctorId, date: dayKey(clinicDay) })
+      .expect(200);
+    expect(before.body.data.length).toBeGreaterThan(0);
+
+    const leave = await asDoctor(request(app).post("/api/v1/doctors/me/leave"))
+      .send({ fromDate: dayKey(clinicDay), toDate: dayKey(clinicDay), reason: "unwell" })
+      .expect(201);
+    expect(leave.body.data.doctorId).toBe(doctorId);
+
+    const after = await auth(request(app).get("/api/v1/appointments/availability"))
+      .query({ doctorId, date: dayKey(clinicDay) })
+      .expect(200);
+    expect(after.body.data).toEqual([]);
+
+    // …and cancelling it puts the clinic back, so a doctor who recovers is not stuck.
+    await asDoctor(request(app).delete(`/api/v1/doctors/me/leave/${leave.body.data.id}`)).expect(
+      200,
+    );
+
+    const restored = await auth(request(app).get("/api/v1/appointments/availability"))
+      .query({ doctorId, date: dayKey(clinicDay) })
+      .expect(200);
+    expect(restored.body.data.length).toBe(before.body.data.length);
+  });
+});
+
+describe("a doctor cannot reach a colleague's roster, or anyone's clinic hours", () => {
+  it("cannot cancel another doctor's leave — and it is still there afterwards", async () => {
+    const theirs = await asOtherDoctor(request(app).post("/api/v1/doctors/me/leave"))
+      .send({ fromDate: "2027-03-01", toDate: "2027-03-03", reason: "conference" })
+      .expect(201);
+    const leaveId = theirs.body.data.id as string;
+
+    /**
+     * 404, not 403, and deliberately: a 403 would confirm that this id names a real leave row
+     * belonging to a colleague, which is roster information `doctor:self-manage` does not grant.
+     * The refusal is indistinguishable from "no such row".
+     */
+    const res = await asDoctor(request(app).delete(`/api/v1/doctors/me/leave/${leaveId}`)).expect(
+      404,
+    );
+    expect(res.body.error.code).toBe("HMS-GEN-404");
+
+    // The important half: the refusal did not merely answer 404, it left the row alone.
+    const still = await asOtherDoctor(
+      request(app).get(`/api/v1/doctors/${otherDoctorId}/leave`),
+    ).expect(200);
+    expect((still.body.data as { id: string }[]).some((l) => l.id === leaveId)).toBe(true);
+  });
+
+  it("ignores a doctorId smuggled into the DELETE body", async () => {
+    /**
+     * ── WHY THIS TEST EXISTS: A FALSIFICATION THAT REDDENED NOTHING ──────────
+     * Rewriting the handler to prefer `req.body.doctorId` over the token broke NO test. The route
+     * validates `params` only — a DELETE carries no schema for its body — so the one place an
+     * attacker would put a colleague's id was the one place nothing looked.
+     *
+     * The handler is correct (it reads `requireAuth(req).userId`), but "correct and untested" is
+     * how it stops being correct six months from now. This asserts the body is inert.
+     */
+    const theirs = await asOtherDoctor(request(app).post("/api/v1/doctors/me/leave"))
+      .send({ fromDate: "2027-05-01", toDate: "2027-05-02", reason: "study leave" })
+      .expect(201);
+    const leaveId = theirs.body.data.id as string;
+
+    await asDoctor(request(app).delete(`/api/v1/doctors/me/leave/${leaveId}`))
+      .send({ doctorId: otherDoctorId })
+      .expect(404);
+
+    const still = await asOtherDoctor(
+      request(app).get(`/api/v1/doctors/${otherDoctorId}/leave`),
+    ).expect(200);
+    expect((still.body.data as { id: string }[]).some((l) => l.id === leaveId)).toBe(true);
+  });
+
+  it("cannot write a colleague's roster through the administrator's route", async () => {
+    // The self-service permission must not be a back door to the one it is NOT.
+    await asDoctor(request(app).put("/api/v1/doctors/availability"))
+      .send({ doctorId: otherDoctorId, weekday: 2, sessions: ["morning"] })
+      .expect(403);
+
+    await asDoctor(request(app).post("/api/v1/doctors/leave"))
+      .send({ doctorId: otherDoctorId, fromDate: "2027-04-01", toDate: "2027-04-02" })
+      .expect(403);
+  });
+
+  it("cannot set clinic HOURS, which stay an administrator's decision", async () => {
+    /**
+     * The deliberate line. Sessions and leave are a doctor's own business; the clock hours that
+     * generate bookable slots are contractual — how long the clinic runs and at what interval
+     * patients are booked is not something the person being booked should set unilaterally.
+     */
+    await asDoctor(request(app).put("/api/v1/doctors/schedule"))
+      .send({ doctorId, weekday: 1, startMinute: 540, endMinute: 1200, slotMinutes: 5 })
+      .expect(403);
   });
 });

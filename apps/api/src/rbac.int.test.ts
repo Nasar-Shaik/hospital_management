@@ -1213,6 +1213,26 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/doctors/leave/64b7f0000000000000000001",
   },
 
+  /**
+   * The doctor's OWN roster — `doctor:self-manage`. Note there is no `doctorId` in any of these
+   * bodies: the server takes it from the token, which is what makes the permission safe to grant
+   * to every doctor.
+   */
+  "PUT /api/v1/doctors/me/availability": {
+    method: "put",
+    url: "/api/v1/doctors/me/availability",
+    body: { weekday: 1, sessions: ["morning"] },
+  },
+  "POST /api/v1/doctors/me/leave": {
+    method: "post",
+    url: "/api/v1/doctors/me/leave",
+    body: { fromDate: "2026-01-01", toDate: "2026-01-02" },
+  },
+  "DELETE /api/v1/doctors/me/leave/:id": {
+    method: "delete",
+    url: "/api/v1/doctors/me/leave/64b7f0000000000000000001",
+  },
+
   // ── the two financial registers (I1) — hospital-wide money, `report:view` ──
   "GET /api/v1/reports/revenue-leakage": {
     method: "get",

@@ -3718,6 +3718,47 @@ export class ApiClient {
     return this.request<{ removed: boolean }>("DELETE", `/api/v1/doctors/leave/${id}`);
   }
 
+  /* ── a doctor's OWN roster (`doctor:self-manage`) ──────────────────────────
+   *
+   * The same three writes as above with the `doctorId` REMOVED, because the server takes it from
+   * the token. That is the whole difference and it is the point: these need only the permission a
+   * doctor actually holds, and there is no id a caller could put in the body to reach a colleague's
+   * roster — the request schemas reject one outright.
+   *
+   * Reading stays on `getDoctorAvailability(id)` / `getDoctorLeave(id)`: a doctor may already read
+   * any roster with `appointment:read`, so a `me` variant would be a second way to ask an existing
+   * question.
+   */
+
+  /** Sets one weekday's sessions for the SIGNED-IN doctor. Empty `sessions` clears the day. */
+  setOwnAvailability(input: {
+    weekday: number;
+    sessions: DoctorSession[];
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
+  }): Promise<DoctorAvailability | null> {
+    return this.request<DoctorAvailability | null>("PUT", "/api/v1/doctors/me/availability", input);
+  }
+
+  /** Books leave for the SIGNED-IN doctor — inclusive `fromDate`..`toDate`. */
+  addOwnLeave(input: {
+    fromDate: string;
+    toDate: string;
+    reason?: string;
+    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+    branchId?: string;
+  }): Promise<DoctorLeave> {
+    return this.request<DoctorLeave>("POST", "/api/v1/doctors/me/leave", input);
+  }
+
+  /**
+   * Cancels the signed-in doctor's own leave. Somebody else's row answers 404, not 403 — see the
+   * repository: confirming that a given id belongs to a colleague would leak their roster.
+   */
+  removeOwnLeave(id: string): Promise<{ removed: boolean }> {
+    return this.request<{ removed: boolean }>("DELETE", `/api/v1/doctors/me/leave/${id}`);
+  }
+
   /* ── encounters (ADR-0013) — the front door of the whole product ────────────
    *
    * `startEncounter` is what a walk-in IS. It needs no appointment, and in five of

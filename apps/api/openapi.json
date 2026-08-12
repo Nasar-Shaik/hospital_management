@@ -26612,6 +26612,253 @@
         "x-feature": "module.ops.appointments"
       }
     },
+    "/api/v1/doctors/me/availability": {
+      "put": {
+        "operationId": "put_v1_doctors_me_availability",
+        "tags": ["doctors"],
+        "summary": "PUT /api/v1/doctors/me/availability",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "weekday": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 6
+                  },
+                  "sessions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["morning", "afternoon", "evening", "full_day"]
+                    },
+                    "maxItems": 4
+                  },
+                  "branchId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  }
+                },
+                "required": ["weekday", "sessions"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "anyOf": [
+                        {
+                          "not": {}
+                        },
+                        {
+                          "$ref": "#/components/schemas/DoctorAvailability"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["success"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:self-manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/me/leave": {
+      "post": {
+        "operationId": "post_v1_doctors_me_leave",
+        "tags": ["doctors"],
+        "summary": "POST /api/v1/doctors/me/leave",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fromDate": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "toDate": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "branchId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  }
+                },
+                "required": ["fromDate", "toDate"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/DoctorLeave"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:self-manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
+    "/api/v1/doctors/me/leave/{id}": {
+      "delete": {
+        "operationId": "delete_v1_doctors_me_leave_id",
+        "tags": ["doctors"],
+        "summary": "DELETE /api/v1/doctors/me/leave/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/RemovedAck"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "doctor:self-manage",
+        "x-feature": "module.ops.appointments"
+      }
+    },
     "/api/v1/doctors/{doctorId}/availability": {
       "get": {
         "operationId": "get_v1_doctors_doctorId_availability",

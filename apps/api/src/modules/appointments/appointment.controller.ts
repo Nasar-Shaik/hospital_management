@@ -10,7 +10,10 @@ import type {
   SetScheduleBody,
   SetAvailabilityBody,
   AddLeaveBody,
+  SetOwnAvailabilityBody,
+  AddOwnLeaveBody,
 } from "./appointment.schema.js";
+import { requireAuth } from "../../middleware/authenticate.js";
 import { ok } from "../../core/http/respond.js";
 
 export const bookAppointment: RequestHandler = async (req, res) => {
@@ -115,5 +118,31 @@ export const addDoctorLeave: RequestHandler = async (req, res) => {
 export const removeDoctorLeave: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   await appointments.removeDoctorLeave(id);
+  ok(res, { removed: true });
+};
+
+/* ── a doctor's own roster (`doctor:self-manage`) ──────────────────────────── */
+
+/**
+ * ── THE DOCTOR COMES FROM THE TOKEN, IN ALL THREE ──────────────────────────
+ * `requireAuth(req).userId`, never `req.body`. A doctor IS a user holding the DOCTOR role — the
+ * directory returns `{ id: user.id }` (`staff.service.listDoctors`) — so the authenticated subject
+ * is the roster's owner with no lookup and nothing to spoof. The request bodies do not even have a
+ * `doctorId` field to send (`appointment.schema.ts`), so a client that tries is rejected at
+ * validation rather than silently ignored.
+ */
+export const setOwnAvailability: RequestHandler = async (req, res) => {
+  const body = req.body as SetOwnAvailabilityBody;
+  ok(res, await appointments.setDoctorAvailability({ ...body, doctorId: requireAuth(req).userId }));
+};
+
+export const addOwnLeave: RequestHandler = async (req, res) => {
+  const body = req.body as AddOwnLeaveBody;
+  ok(res, await appointments.addDoctorLeave({ ...body, doctorId: requireAuth(req).userId }), 201);
+};
+
+export const removeOwnLeave: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  await appointments.removeOwnDoctorLeave(id, requireAuth(req).userId);
   ok(res, { removed: true });
 };

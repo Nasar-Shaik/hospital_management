@@ -50,11 +50,14 @@ function WeeklyRoster({
   availability,
   onChange,
   canManage,
+  self,
 }: {
   doctorId: string;
   availability: DoctorAvailability[];
   onChange: () => void;
   canManage: boolean;
+  /** True when the viewer is editing their OWN roster with `doctor:self-manage`. */
+  self: boolean;
 }) {
   const { api } = useAuth();
   const [saving, setSaving] = useState<number | null>(null);
@@ -78,7 +81,13 @@ function WeeklyRoster({
     setSaving(weekday);
     setError(null);
     try {
-      await api.setDoctorAvailability({ doctorId, weekday, sessions: next });
+      /**
+       * Two endpoints, one screen. The administrator's takes a `doctorId`; the doctor's own does
+       * not have the field at all, because the server reads it off the token — so which method is
+       * called is decided HERE, once, rather than by hoping the right id was passed down.
+       */
+      if (self) await api.setOwnAvailability({ weekday, sessions: next });
+      else await api.setDoctorAvailability({ doctorId, weekday, sessions: next });
       onChange();
     } catch (e) {
       setError(e);
@@ -155,11 +164,14 @@ function LeavePanel({
   leave,
   onChange,
   canManage,
+  self,
 }: {
   doctorId: string;
   leave: DoctorLeave[];
   onChange: () => void;
   canManage: boolean;
+  /** True when the viewer is editing their OWN leave with `doctor:self-manage`. */
+  self: boolean;
 }) {
   const { api } = useAuth();
   const [from, setFrom] = useState("");
@@ -174,12 +186,13 @@ function LeavePanel({
     setSaving(true);
     setError(null);
     try {
-      await api.addDoctorLeave({
-        doctorId,
+      const body = {
         fromDate: from,
         toDate: to,
         ...(reason.trim() ? { reason: reason.trim() } : {}),
-      });
+      };
+      if (self) await api.addOwnLeave(body);
+      else await api.addDoctorLeave({ doctorId, ...body });
       setFrom("");
       setTo("");
       setReason("");
@@ -194,7 +207,8 @@ function LeavePanel({
   async function remove(id: string) {
     setError(null);
     try {
-      await api.removeDoctorLeave(id);
+      if (self) await api.removeOwnLeave(id);
+      else await api.removeDoctorLeave(id);
       onChange();
     } catch (e2) {
       setError(e2);
@@ -287,8 +301,21 @@ function LeavePanel({
 /* ── page ──────────────────────────────────────────────────────────────────── */
 
 function DoctorsPage() {
-  const { api, can } = useAuth();
+  const { api, can, user } = useAuth();
   const canManage = can("doctor:manage");
+
+  /**
+   * ── ONE SCREEN, TWO AUDIENCES ─────────────────────────────────────────────
+   * An administrator holding `doctor:manage` picks any doctor and edits their roster. A doctor
+   * holding only `doctor:self-manage` edits exactly one roster — their own — and never sees the
+   * picker, because there is nothing for them to pick.
+   *
+   * `self` is derived from what they DO NOT hold, not from their role: a user who happens to hold
+   * both is an administrator here, which is the safer way round. And it is display logic only —
+   * the server refuses a doctor who reaches the administrator's endpoint whatever this renders.
+   */
+  const self = !canManage && can("doctor:self-manage");
+
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
   const [doctorId, setDoctorId] = useState("");
   const [availability, setAvailability] = useState<DoctorAvailability[]>([]);
@@ -297,6 +324,21 @@ function DoctorsPage() {
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
+    /**
+     * A doctor editing their own roster needs no directory — they are the only entry, and their
+     * id is the one already in the session. Skipping the call is not an optimisation: it is the
+     * difference between the page working and showing "could not load doctors" at a hospital that
+     * has not granted them the directory read.
+     */
+    if (self) {
+      if (user) {
+        setDoctors([{ id: user.id, name: user.name }]);
+        setDoctorId(user.id);
+      }
+      setLoading(false);
+      return;
+    }
+
     api
       .listDoctors()
       .then((d) => {
@@ -306,7 +348,7 @@ function DoctorsPage() {
       })
       .catch((e: unknown) => setError(e))
       .finally(() => setLoading(false));
-  }, [api]);
+  }, [api, self, user]);
 
   const loadRoster = useCallback(() => {
     if (!doctorId) return;
@@ -326,9 +368,13 @@ function DoctorsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
       <div>
-        <h1 className="text-xl font-semibold text-[var(--color-fg)]">Doctors</h1>
+        <h1 className="text-xl font-semibold text-[var(--color-fg)]">
+          {self ? "My availability" : "Doctors"}
+        </h1>
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          Set each doctor&apos;s weekly sessions and leave — the roster reception books against.
+          {self
+            ? "The sessions you sit and the days you are away. Reception books against this — clinic hours themselves are set by an administrator."
+            : "Set each doctor's weekly sessions and leave — the roster reception books against."}
         </p>
       </div>
 
@@ -345,22 +391,31 @@ function DoctorsPage() {
       ) : (
         <>
           <Card className="p-5">
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">
-                Doctor
+            {self ? (
+              // No picker: there is exactly one roster this person may edit, and offering a
+              // dropdown of one is a control that only ever raises the question "can I choose
+              // somebody else?" — to which the server's answer is no.
+              <span className="block text-sm font-medium text-[var(--color-fg)]">
+                {selected?.name ?? "You"}
               </span>
-              <select
-                value={doctorId}
-                onChange={(e) => setDoctorId(e.target.value)}
-                className="w-full max-w-sm rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm outline-none transition-colors focus:border-[var(--color-brand-500)] focus:ring-2 focus:ring-[var(--color-brand-500)]/30"
-              >
-                {doctors.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            ) : (
+              <label className="block">
+                <span className="mb-1.5 block text-sm font-medium text-[var(--color-fg)]">
+                  Doctor
+                </span>
+                <select
+                  value={doctorId}
+                  onChange={(e) => setDoctorId(e.target.value)}
+                  className="w-full max-w-sm rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm outline-none transition-colors focus:border-[var(--color-brand-500)] focus:ring-2 focus:ring-[var(--color-brand-500)]/30"
+                >
+                  {doctors.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             {selected && (
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                 <Badge tone={activeDays > 0 ? "success" : "neutral"}>
@@ -387,13 +442,15 @@ function DoctorsPage() {
                 doctorId={doctorId}
                 availability={availability}
                 onChange={loadRoster}
-                canManage={canManage}
+                canManage={canManage || self}
+                self={self}
               />
               <LeavePanel
                 doctorId={doctorId}
                 leave={leave}
                 onChange={loadRoster}
-                canManage={canManage}
+                canManage={canManage || self}
+                self={self}
               />
             </>
           )}

@@ -355,6 +355,25 @@ export async function removeLeave(id: string): Promise<boolean> {
   return Boolean(doc);
 }
 
+/**
+ * The same delete, restricted to ONE doctor's rows — what `/doctors/me/leave/:id` uses.
+ *
+ * ── ONE QUERY, NOT A READ THEN A CHECK THEN A DELETE ────────────────────────
+ * `doctorId` is part of the FILTER rather than something verified beforehand, so there is no
+ * window between the check and the delete for the row to change under it, and no code path where
+ * a future edit forgets the check. A row belonging to somebody else simply does not match.
+ *
+ * The caller turns "no match" into a 404 rather than a 403, deliberately: distinguishing "that
+ * leave row is not yours" from "no such row" would confirm to any doctor that a colleague has
+ * leave booked with that id, which is roster information they were not granted.
+ */
+export async function removeOwnLeave(id: string, doctorId: string): Promise<boolean> {
+  const doc = await getDoctorLeaveModel(getTenantDb())
+    .findOneAndDelete({ _id: id, doctorId, ...scopeFilter() })
+    .lean<DoctorLeaveDoc>();
+  return Boolean(doc);
+}
+
 /* ── doctor availability (session roster) ─────────────────────────────────── */
 
 export interface DoctorAvailability {

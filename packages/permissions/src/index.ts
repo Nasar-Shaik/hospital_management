@@ -200,6 +200,28 @@ const CLINICAL = {
   ALLERGY_MANAGE: p("allergy:manage", "Maintain the allergy list", "branch"),
 
   DOCTOR_MANAGE: p("doctor:manage", "Manage doctors"),
+  /**
+   * A doctor's own roster: which sessions they sit, and when they are away.
+   *
+   * ── WHY THIS IS A SECOND PERMISSION AND NOT A WIDER GRANT OF `doctor:manage` ─
+   * `doctor:manage` is roster ADMINISTRATION over everybody — it also sets clinic HOURS, which
+   * are a contractual matter and stay with an administrator. But "I am off sick tomorrow" is not
+   * an administrative act, and routing it through one at 07:00 means it does not happen: the
+   * doctor simply does not turn up, reception books into slots nobody will sit, and patients
+   * travel to an empty clinic. That failure is the reason this exists.
+   *
+   * ── AND WHY THE SCOPE IS `branch`, NOT `own` ────────────────────────────────
+   * `own` looks like the obvious fit and is a trap this codebase has already been bitten by (see
+   * the prescription note below): row scope is published ONCE per request and every repository
+   * read in that request obeys it, so `own` would rewrite unrelated lookups to `createdBy = me` —
+   * including the upsert that finds an existing availability row, which would then miss and write
+   * a duplicate.
+   *
+   * Ownership here is not a filter, it is an INPUT: the routes take the doctor id from the token
+   * and never from the body, so there is no id to tamper with. `branch` then means the same thing
+   * it means for every appointment permission — the roster is per site.
+   */
+  DOCTOR_SELF_MANAGE: p("doctor:self-manage", "Manage own availability and leave", "branch"),
   SCHEDULE_MANAGE: p("schedule:manage", "Manage doctor schedules", "branch"),
   DOCTOR_PERFORMANCE_VIEW: p("doctor:performance:view", "Doctor performance and revenue"),
 
@@ -707,6 +729,16 @@ export const DEFAULT_ROLES = [
       CLINICAL.RADIOLOGY_ORDER,
       CLINICAL.OT_RECORD,
       OPERATIONS.APPOINTMENT_READ,
+      /**
+       * Their OWN sessions and leave — never anybody else's, and never the clinic HOURS that
+       * generate bookable slots. The routes it opens live under `/doctors/me/…` and take the
+       * doctor id from the token, so this grants no reach over a colleague's roster.
+       *
+       * Without it, a doctor could see the appointment book and had no way to say they were not
+       * going to be there — the roster was administrable only by someone holding `doctor:manage`,
+       * which is TENANT_ADMIN alone.
+       */
+      CLINICAL.DOCTOR_SELF_MANAGE,
       PLATFORM.FILE_READ,
       PLATFORM.FILE_UPLOAD,
     ),

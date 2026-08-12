@@ -35,6 +35,15 @@ interface NavItem {
   icon: IconName;
   /** Permission required to see it. Omit for items everyone may use. */
   permission?: string;
+  /**
+   * Hide this entry from anyone who ALSO holds this permission.
+   *
+   * For the one case where a route has two audiences and the more privileged one has its own
+   * entry: an administrator and a doctor both reach `/doctors`, but they reach different screens
+   * and want different words on the link. Without this, a TENANT_ADMIN — who holds every
+   * permission — would see both entries pointing at the same page.
+   */
+  unless?: string;
   /** Not built yet — shown disabled rather than pretended into existence. */
   soon?: boolean;
 }
@@ -137,6 +146,20 @@ const NAVIGATION: NavSection[] = [
       // The doctor ROSTER — weekly sessions + leave (D2). `doctor:manage`: roster administration,
       // not front-desk work; the same permission that guards setting a doctor's hours.
       { label: "Doctors", href: "/doctors", icon: "staff", permission: "doctor:manage" },
+      /**
+       * The same route, seen by the doctor whose roster it is (`doctor:self-manage`).
+       *
+       * Named for what they can actually do there. Calling it "Doctors" would promise a directory
+       * and deliver a single locked record; "My availability" is the thing they came to change —
+       * and until this existed, a doctor had no way in the product to say they were away.
+       */
+      {
+        label: "My availability",
+        href: "/doctors",
+        icon: "staff",
+        permission: "doctor:self-manage",
+        unless: "doctor:manage",
+      },
       // The BED BOARD (which beds are free) and the inventory behind it (B4). `/ward` shows who is
       // admitted; this shows where there is space.
       { label: "Bed board", href: "/beds", icon: "beds", permission: "bed:allocate" },
@@ -370,7 +393,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const sections = NAVIGATION.map((section) => ({
     ...section,
-    items: section.items.filter((item) => !item.permission || can(item.permission)),
+    items: section.items.filter(
+      (item) => (!item.permission || can(item.permission)) && !(item.unless && can(item.unless)),
+    ),
   })).filter((section) => section.items.length > 0);
 
   const crumb = crumbFor(pathname);
