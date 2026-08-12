@@ -25,6 +25,7 @@
  * Nothing is lost by the omission: EAS Update does not serve development builds, so the field has
  * no meaning there. `preview` and `production` — the two profiles that DO receive updates — set it.
  */
+import { networkInterfaces } from "node:os";
 import type { ConfigContext, ExpoConfig } from "expo/config";
 
 /** Which API estate this binary is allowed to talk to. Set per EAS profile. */
@@ -42,18 +43,63 @@ const ENVIRONMENT = (process.env.EXPO_PUBLIC_ENV ?? "development") as Environmen
  * host's loopback and does not have this problem, which is exactly why it goes unnoticed.
  *
  * The fix cannot be an IP, because the slug has to be a SUBDOMAIN for the server to read a tenant
- * out of it — `apollo.192.168.1.7` is not a resolvable name. A wildcard DNS service is, so device
- * work sets this to something like `192.168.1.7.sslip.io:4000` (see the README) and the URL stays
- * the host, exactly as M0 §6 requires.
+ * out of it — `apollo.192.168.1.7` is not a resolvable name. `sslip.io` answers any
+ * `<anything>.<ip>.sslip.io` with that IP, so `apollo.192.168.1.7.sslip.io` reaches this Mac while
+ * the URL stays the host, exactly as M0 §6 requires.
  *
- * Staging and production are NOT overridable. Which estate a signed build may reach is the trust
- * decision in the header above, and an environment variable is not allowed to move it.
+ * It is DERIVED, not typed. Asking a developer to paste their current IP into an environment
+ * variable on every `pnpm start` is a step that will be forgotten — it was, twice, and the symptom
+ * is an unexplained "No connection" on the phone with a healthy API sitting right there. The
+ * address is discoverable, so it is discovered.
+ *
+ * Staging and production are NOT derived and NOT overridable. Which estate a signed build may
+ * reach is the trust decision in the header above, and neither an env var nor a network interface
+ * is allowed to move it.
  */
+
+/** This machine's LAN address — what a phone on the same wifi can actually route to. */
+function lanAddress(): string | undefined {
+  const interfaces = networkInterfaces();
+  // en0 is Wi-Fi on macOS. Checked first so a VPN tunnel or a virtual adapter cannot win the race
+  // and hand out an address the phone has no route to.
+  const ordered = [
+    ...(interfaces.en0 ?? []),
+    ...Object.entries(interfaces)
+      .filter(([name]) => name !== "en0")
+      .flatMap(([, addresses]) => addresses ?? []),
+  ];
+  return ordered.find((a) => a.family === "IPv4" && !a.internal)?.address;
+}
+
+function developmentDomain(): string {
+  // The escape hatch: force `localhost:4000` on a machine with no internet (sslip.io is DNS, so it
+  // needs a resolver), or point at a colleague's API.
+  const override = process.env.MEDICORE_DEV_TENANT_DOMAIN;
+  if (override) return override;
+
+  const lan = lanAddress();
+  return lan ? `${lan}.sslip.io:4000` : "localhost:4000";
+}
+
 const TENANT_DOMAIN: Record<Environment, string> = {
-  development: process.env.MEDICORE_DEV_TENANT_DOMAIN ?? "localhost:4000",
+  development: developmentDomain(),
   staging: "staging.paperlesstech.in",
   production: "paperlesstech.in",
 };
+
+/**
+ * Both halves have to agree — the server matches the Host header against its OWN base domain, and
+ * a mismatch surfaces as `HMS-TEN-001 Organization not found`, which reads like a bad hospital code
+ * rather than a configuration error. Printing the required value costs one line and removes the
+ * guesswork the other direction.
+ */
+if (ENVIRONMENT === "development") {
+  const domain = TENANT_DOMAIN.development;
+  console.log(
+    `\n  📱 mobile will call  http://<hospital>.${domain}` +
+      `\n     the API needs     TENANT_BASE_DOMAIN=${domain.replace(/:\d+$/, "")}  (apps/api/.env)\n`,
+  );
+}
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,

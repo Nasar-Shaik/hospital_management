@@ -104,17 +104,20 @@ An IP does not fix it either: the server reads the tenant out of the **subdomain
 What is needed is a real hostname that happens to point at your Mac, which is what the wildcard DNS
 services provide — `192.168.1.7.sslip.io` resolves to `192.168.1.7`, and so does anything under it.
 
-Both sides have to agree on the domain, because the server matches the Host header against its own:
+**The mobile side is automatic.** `app.config.ts` finds this machine's LAN address and builds
+`<ip>.sslip.io:4000` — asking anyone to paste their current IP into an environment variable on
+every `pnpm start` is a step that gets forgotten, and the symptom is an unexplained "No connection"
+on the phone with a healthy API sitting right next to it.
 
-```bash
-# apps/api/.env — while doing device work
-TENANT_BASE_DOMAIN=192.168.1.7.sslip.io     # was: localhost
+**The API side is one line, and it must match**, because the server compares the Host header
+against its own base domain. `pnpm start` prints the exact value:
 
-# then, in apps/mobile
-MEDICORE_DEV_TENANT_DOMAIN=192.168.1.7.sslip.io:4000 pnpm start -c
+```
+📱 mobile will call  http://<hospital>.192.168.1.7.sslip.io:4000
+   the API needs     TENANT_BASE_DOMAIN=192.168.1.7.sslip.io  (apps/api/.env)
 ```
 
-`apollo` now becomes `http://apollo.192.168.1.7.sslip.io:4000`, the phone resolves it to your Mac,
+`apollo` then becomes `http://apollo.192.168.1.7.sslip.io:4000`, the phone resolves it to your Mac,
 and the server reads `apollo` out of the subdomain exactly as it does in production. Confirm before
 reaching for the phone — a tenant-resolution failure and a wifi failure look identical from a
 handset:
@@ -126,17 +129,22 @@ curl -s -H 'Host: apollo.192.168.1.7.sslip.io' http://192.168.1.7:4000/api/v1/au
 # HMS-TEN-001 → the host did not match a tenant. The two domains disagree.
 ```
 
-Two things to know before flipping it:
+Three things to know:
 
-- **Substitute your own address.** `ipconfig getifaddr en0`. It changes with the network, and both
-  values have to change together.
+- **`app.config.ts` is read when Metro STARTS.** Editing it, or moving to a network with a
+  different IP, changes nothing until `pnpm start -c`. Reloading the app in Expo Go is not enough —
+  the hospital screen keeps showing the old domain in its hint, which is the quickest way to tell
+  the config is stale.
 - **It moves the web app too.** `TENANT_BASE_DOMAIN` also drives the dev CORS allowlist
   (`*.<domain>`), so while it is switched, browse to `apollo.192.168.1.7.sslip.io:3000` rather than
   `apollo.localhost:3000`. React Native does not enforce CORS, so the phone is indifferent. Set it
   back to `localhost` when you are done with the device.
+- **`sslip.io` is DNS, so it needs a resolver.** On a machine with no internet, force the old
+  behaviour with `MEDICORE_DEV_TENANT_DOMAIN=localhost:4000` and use a simulator.
 
-Nothing about this reaches a real build: `MEDICORE_DEV_TENANT_DOMAIN` is read only for the
-`development` profile, and staging and production remain fixed in `app.config.ts`.
+Nothing about this reaches a real build. The LAN address and `MEDICORE_DEV_TENANT_DOMAIN` are read
+only for the `development` profile; staging and production are fixed in `app.config.ts`, where
+neither an env var nor a network interface can move them.
 
 ## Running it on a real phone
 
