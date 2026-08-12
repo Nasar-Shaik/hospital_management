@@ -44,15 +44,15 @@ const RUNTIME_HOOKS = [
   "useAppLifecycle",
 ];
 
-function sourceFiles(dir: string): string[] {
+function sourceFiles(dir: string, extensions = [".tsx"]): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) return sourceFiles(full);
-    return entry.name.endsWith(".tsx") ? [full] : [];
+    if (entry.isDirectory()) return sourceFiles(full, extensions);
+    return extensions.some((e) => entry.name.endsWith(e)) ? [full] : [];
   });
 }
 
-const routeFiles = sourceFiles;
+const routeFiles = (dir: string): string[] => sourceFiles(dir);
 
 const read = (file: string): string => readFileSync(file, "utf8");
 
@@ -166,6 +166,67 @@ describe("every route a screen navigates to is a route that exists", () => {
           );
         }
       }
+    },
+  );
+});
+
+/**
+ * ── THE SELECTOR THAT SPINS THE APP ─────────────────────────────────────────
+ * `useStore` is `useSyncExternalStore`: it compares snapshots with `Object.is` and re-renders when
+ * they differ. A selector that CONSTRUCTS its result — `s.user?.roles ?? []` — returns a fresh
+ * array every call, so it never equals the previous one. React re-renders, re-reads, gets another
+ * new array, and spins until "Maximum update depth exceeded".
+ *
+ * It is invisible in review (the line reads as ordinary defaulting), it typechecks, it bundles, and
+ * it only fires once a real screen mounts — which is why it survived to a device. A selector must
+ * return something already IN the store, or a primitive. Defaults belong at the call site.
+ *
+ * Limitation, stated plainly: this reads the selector written at the call site. A named selector
+ * passed by reference (`useBranch(activeBranchLabel)`) is not followed, so a helper that allocates
+ * would slip through.
+ */
+describe("a store selector never returns a value it just built", () => {
+  const ALLOCATES: [RegExp, string][] = [
+    [/\?\?\s*\[\]/, "?? [] mints a new array"],
+    [/\?\?\s*\{\}/, "?? {} mints a new object"],
+    [/\.(?:map|filter|slice|concat|flatMap|sort)\(/, "array methods return new arrays"],
+    [/new\s+(?:Set|Map|Array|Object)\(/, "constructs a new collection"],
+    [/=>\s*\[[^\]]/, "returns an array literal"],
+    [/=>\s*\{\s*\w+\s*:/, "returns an object literal"],
+    [/\[\s*\.\.\./, "spreads into a new array"],
+  ];
+
+  const HOOK = /\buse(?:Session|Branch|Connectivity|Store)\s*\(/;
+
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  it("scans the files that actually contain selectors", () => {
+    const withHooks = scanned.filter((f) => HOOK.test(read(f)));
+    expect(withHooks.length).toBeGreaterThan(4);
+  });
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      const lines = read(file).split("\n");
+      lines.forEach((line, index) => {
+        if (!HOOK.test(line)) return;
+        // The selector is everything after the arrow; the store argument before it is irrelevant.
+        const body = line.slice(line.indexOf("=>") + 2);
+        if (!line.includes("=>")) return;
+
+        for (const [pattern, why] of ALLOCATES) {
+          expect(
+            pattern.test(body),
+            `${name}:${String(index + 1)} — ${why}, so the snapshot never compares equal and the ` +
+              `screen re-renders forever. Select the stored value and default at the call site.\n` +
+              `    ${line.trim()}`,
+          ).toBe(false);
+        }
+      });
     },
   );
 });

@@ -5,6 +5,7 @@
  * Node. `useStore` is the adapter that makes them reactive here — the only place React and the
  * state layer meet.
  */
+import { useMemo } from "react";
 import { useStore } from "zustand";
 import { useRuntime } from "../providers/RuntimeProvider";
 import { can, type SessionState } from "../state/session";
@@ -23,14 +24,24 @@ export function useConnectivity<T>(selector: (state: ConnectivityState) => T): T
   return useStore(useRuntime().connectivity, selector);
 }
 
-/** The permission set, and the one question a screen may ask of it. */
+/**
+ * The permission set, and the one question a screen may ask of it.
+ *
+ * Memoised because it returns an OBJECT. Nothing today puts it in a dependency array — every caller
+ * destructures a primitive off it — but an un-memoised object is a new value on every render, and
+ * the first `useEffect(..., [capabilities])` would loop. The two selectors above it are safe (a
+ * `Set` from the store and a string), so the memo has real inputs to key on.
+ */
 export function useCapabilities(): { can: (permission: string) => boolean; ready: boolean } {
   const permissions = useSession((s) => s.permissions);
   const status = useSession((s) => s.status);
-  return {
-    can: (permission: string) => can({ permissions } as SessionState, permission),
-    ready: status === "signedIn",
-  };
+  return useMemo(
+    () => ({
+      can: (permission: string) => can({ permissions } as SessionState, permission),
+      ready: status === "signedIn",
+    }),
+    [permissions, status],
+  );
 }
 
 export function useActiveBranchLabel(): string {

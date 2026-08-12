@@ -15,7 +15,16 @@ import { homeFor } from "../../src/navigation/tabsFor";
 export default function Home(): React.JSX.Element {
   const theme = useTheme();
   const status = useSession((s) => s.status);
-  const roles = useSession((s) => s.user?.roles ?? []);
+  /**
+   * The `?? []` belongs HERE, not in the selector.
+   *
+   * `useStore` is `useSyncExternalStore`, which compares snapshots with `Object.is` and re-renders
+   * when they differ. A selector ending `?? []` mints a fresh array on every call, so it never
+   * equals the last one: React re-renders, re-reads, gets another new array, and spins until it
+   * gives up with "Maximum update depth exceeded". A selector must return something already in the
+   * store, or a primitive — never a value it constructs.
+   */
+  const roles = useSession((s) => s.user?.roles);
   const permissions = useSession((s) => s.permissions);
 
   if (status === "signedOut") return <Redirect href="/login" />;
@@ -30,7 +39,7 @@ export default function Home(): React.JSX.Element {
     );
   }
 
-  const home = homeFor(roles, permissions);
+  const home = homeFor(roles ?? [], permissions);
   return <Redirect href={`/${home ?? "alerts"}`} />;
 }
 
