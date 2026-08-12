@@ -63,35 +63,55 @@ pnpm --filter @medicore/mobile bundle:check # bundles both platforms headlessly 
 code Metro cannot bundle**, because TypeScript and Vite resolve `./foo.js` to `foo.tsx` and Metro
 does not. Run it before claiming the app starts.
 
-### Why the dev server runs on 8082, not 8081
+`java.io.IOException: Failed to download remote update` on Android (a bare "Something went wrong"
+on iOS) is Expo Go's message for **both** of the causes below. It names neither, and both look
+exactly like a wifi problem. They were hit in that order during M1; the first fix alone did not
+help, which is worth knowing before chasing the network a second time.
 
-**Deliberate, and it is not arbitrary.** 8081 is the React Native default, so every Expo project on
-a machine wants it — and this team runs a second one (the School ERP) alongside this app. When two
-processes contend for it the failure is genuinely nasty rather than obvious:
+#### 1. `runtimeVersion` must be absent in development
 
-- The first process takes IPv4 `*:8081`. Metro starts anyway and binds **IPv6** `*:8081`, printing
-  no warning that it did not get the port it wanted.
-- The QR code encodes `exp://<your-ipv4>:8081`, so the phone connects to the **other project's**
-  server, asks it for an Expo manifest, and gets whatever that service returns.
-- Expo Go reports `java.io.IOException: Failed to download remote update` — which names neither
-  the port, the other process, nor the fact that the two apps collided.
+Expo Go runs one native runtime — its own — and identifies it as `exposdk:<version>`. A project
+that advertises any **other** `runtimeVersion` is telling every client "you need a matching
+development build", and Expo Go refuses the manifest.
 
-It cost an afternoon once. Two projects, two ports; HMS mobile owns 8082. (HMS API is 4000, web is
-3000.) If you ever need to check by hand:
+`app.config.ts` therefore sets `runtimeVersion` only for `preview` and `production`, the two
+profiles that actually receive EAS Updates (M0 §17). Nothing is lost: updates are never served to
+a development build, so the field has no meaning there. **Do not "tidy up" that conditional.**
+
+Verify by asking the dev server what Expo Go asks it:
 
 ```bash
-lsof -nP -iTCP:8081 -sTCP:LISTEN     # who else is here
-curl http://<your-ip>:8082/          # should be Expo, not another app's JSON
+curl -s -H "expo-platform: android" -H "accept: multipart/mixed,application/expo+json,application/json" \
+  http://<your-ip>:19000/ | grep -o '"runtimeVersion":"[^"]*"'
+# exposdk:57.0.0  → Expo Go can load it
+# 0.1.0           → Expo Go will refuse it
 ```
 
-### Other reasons Expo Go fails to connect
+#### 2. Why the dev server runs on 19000
 
-1. **Phone and Mac are not on the same network**, or the wifi has client isolation. Test by opening
-   `http://<your-ip>:8082` in the phone's browser. `pnpm start:tunnel` works around it.
-2. **A stale Metro cache** after changing `app.config.ts`, `metro.config.js` or import paths — the
-   terminal shows the real error, and `start -c` clears it.
-3. **Expo Go's SDK is older than the project's.** This app is on SDK 57; update Expo Go from the
-   store, or use a development build.
+8081 is the React Native default, so every Expo project on a machine wants it — and this team runs
+a second one (the School ERP) alongside this app. Its service fleet holds 8080–8090, which is why
+8082 was no better than 8081.
+
+The collision does not fail loudly. The first process takes IPv4; Metro starts anyway and binds
+**IPv6**, warning nobody that it did not get the port it asked for. The QR still advertises the
+IPv4 address, so the phone reaches the _other_ project's server and asks a camera service for an
+Expo manifest.
+
+19000 is Expo's own historic port and is clear of that range. If it is ever occupied:
+
+```bash
+lsof -nP -iTCP:19000 -sTCP:LISTEN   # who else is here
+curl http://<your-ip>:19000/        # must be an Expo manifest, not another app's JSON
+```
+
+#### 3. Everything else
+
+- **Phone and Mac not on the same network**, or wifi client isolation. Open
+  `http://<your-ip>:19000` in the phone's browser. `pnpm start:tunnel` works around it.
+- **A stale Metro cache** after changing `app.config.ts`, `metro.config.js` or import paths. The
+  terminal has the real error; `start -c` clears it.
+- **Expo Go older than the project's SDK.** This app is on SDK 57.
 
 ## Things that will bite
 

@@ -4,10 +4,10 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start --port 8082",
-    "android": "expo start --port 8082 --android",
-    "ios": "expo start --port 8082 --ios",
-    "start:tunnel": "expo start --port 8082 --tunnel",
+    "start": "expo start --port 19000",
+    "android": "expo start --port 19000 --android",
+    "ios": "expo start --port 19000 --ios",
+    "start:tunnel": "expo start --port 19000 --tunnel",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint app src",
     "test": "vitest run",
@@ -34,6 +34,7 @@
     "react-native": "0.86.2",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.2",
+    "react-native-web": "^0.21.2",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

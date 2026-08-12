@@ -7,12 +7,23 @@
  * the app may reach — staging or production — because that is a build-time trust decision, not a
  * user preference: a production build must not be pointable at a staging API by anyone holding it.
  *
- * ── runtimeVersion ──────────────────────────────────────────────────────────
- * `appVersion` policy, deliberately (M0 §17). An EAS Update only reaches binaries with a matching
- * runtimeVersion, so tying it to the app version means a JS update can never land on a binary whose
- * native runtime does not have what the JS expects. Changing this to a fixed string would make OTA
- * delivery wider and the failure mode "crashes on the one device path that exercises the missing
- * native module" — which is exactly the class of bug OTA is supposed to avoid.
+ * ── runtimeVersion, AND WHY DEVELOPMENT DOES NOT SET IT ─────────────────────
+ * `appVersion` policy for anything that can receive an EAS Update, deliberately (M0 §17). An
+ * update only reaches binaries with a matching runtimeVersion, so tying it to the app version
+ * means a JS update can never land on a binary whose native runtime lacks what the JS expects.
+ * A fixed string would widen delivery and the failure mode is "crashes on the one device path
+ * that exercises the missing native module" — the class of bug OTA is meant to avoid.
+ *
+ * **It is omitted in development, because setting it at all makes the project unloadable in
+ * Expo Go.** Expo Go runs one native runtime — its own — and identifies it as `exposdk:<version>`.
+ * A project advertising any other runtimeVersion is telling every client "you need a matching
+ * development build", so Expo Go refuses the manifest. On Android it does so as
+ * `java.io.IOException: Failed to download remote update`, which names neither runtimeVersion nor
+ * Expo Go, and looks for all the world like a network failure. It cost an afternoon of chasing
+ * ports and wifi.
+ *
+ * Nothing is lost by the omission: EAS Update does not serve development builds, so the field has
+ * no meaning there. `preview` and `production` — the two profiles that DO receive updates — set it.
  */
 import type { ConfigContext, ExpoConfig } from "expo/config";
 
@@ -39,7 +50,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   version: "0.1.0",
   orientation: "portrait",
   userInterfaceStyle: "automatic",
-  runtimeVersion: { policy: "appVersion" },
+  // See the header: set for the profiles that receive EAS Updates, omitted for Expo Go.
+  ...(ENVIRONMENT === "development" ? {} : { runtimeVersion: { policy: "appVersion" as const } }),
 
   ios: {
     supportsTablet: true,
