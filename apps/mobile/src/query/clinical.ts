@@ -22,16 +22,19 @@
 import type {
   Allergy,
   ApiClient,
+  BedBoard,
   CatalogueItem,
   ChargeCategory,
   ConsultationNote,
   Encounter,
   EncounterStatus,
+  MedicationAdministration,
   Order,
   Paged,
   Patient,
   Prescription,
   VitalsReading,
+  WardNote,
 } from "@medicore/api-client";
 import { queryKeys, type QueryScope } from "./keys";
 
@@ -169,9 +172,55 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
      * `HMS-PLAN-002`, which is how the app learns the hospital has no wards without an
      * entitlements endpoint it has no permission to read (`/subscription` needs
      * `subscription:manage`, which no clinician holds).
+     *
+     * ── NOT PAGED, AND NOT BY CHOICE ────────────────────────────────────────────
+     * The endpoint takes no parameters at all: the controller calls the repository with a hard
+     * `{ limit: 100, skip: 0 }` and returns a bare array, discarding the `total` the repository
+     * computed. There is nothing to page with, so `mayBeTruncated` reads the only signal that
+     * exists — exactly 100 rows — and the screen says so rather than implying completeness.
      */
     inpatients(): Read<Encounter[]> {
       return { queryKey: queryKeys.inpatients(scope), queryFn: () => api.listInpatients() };
+    },
+
+    /**
+     * The bed estate, joined to who is in it. `emr:read` + `module.ops.ipd`.
+     *
+     * Read alongside the inpatient list rather than instead of it: this one carries ward, room,
+     * bed and — for every occupied bed — the occupant's NAME and UHID resolved server-side in one
+     * query, which is what lets a twenty-bed round render identity without twenty `getPatient`
+     * calls. Occupancy comes from here and is never recomputed on the phone.
+     */
+    bedBoard(): Read<BedBoard> {
+      return { queryKey: queryKeys.bedBoard(scope), queryFn: () => api.bedBoard() };
+    },
+
+    /**
+     * The stay's running record — progress notes, the discharge summary, an outcome note.
+     *
+     * Unfiltered on purpose. `?type=` exists, but the chart wants the whole thread in one place:
+     * a stay whose last entry is a discharge summary reads completely differently from one whose
+     * last entry is a progress note, and asking for `progress` alone would hide the ending.
+     */
+    wardNotes(encounterId: string): Read<WardNote[]> {
+      return {
+        queryKey: queryKeys.wardNotes(scope, encounterId),
+        queryFn: () => api.listWardNotes(encounterId),
+      };
+    },
+
+    /**
+     * The MAR — every dose given, held or refused on this stay.
+     *
+     * `emr:read`, which the doctor holds, behind `module.clinical.nursing`. This is the question a
+     * ward round actually opens with ("did the morning dose go in?") and it is the only place the
+     * answer exists: a signed prescription says what SHOULD happen, and only the MAR says what did.
+     */
+    medications(encounterId: string): Read<MedicationAdministration[]> {
+      return {
+        queryKey: queryKeys.medications(scope, encounterId),
+        queryFn: () => api.listMedicationAdministrations(encounterId),
+      };
     },
 
     patient(id: string): Read<Patient> {

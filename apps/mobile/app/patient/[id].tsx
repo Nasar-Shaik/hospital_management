@@ -37,30 +37,65 @@ import {
 import { VitalsCard, VitalsHistoryRow } from "../../src/components/clinical/Vitals";
 import { OrderRow } from "../../src/components/clinical/Results";
 import { TimelineRow } from "../../src/components/clinical/Timeline";
+import { DoseRow, StayCard, WardNoteRow } from "../../src/components/clinical/Stay";
 import { requireRuntime } from "../../src/providers/RuntimeProvider";
 import { useCapabilities } from "../../src/hooks/useStores";
 import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
 import { useTheme } from "../../src/hooks/useTheme";
 import { formatDateTime, parseInstant } from "../../src/lib/time";
+import { isFeatureUnavailable } from "../../src/lib/net/errors";
 import {
   encounterClassLabel,
   encounterStatusLabel,
   encounterStatusTone,
   isLiveEncounter,
 } from "../../src/clinical/encounters";
+import {
+  isAdmission,
+  isStayOpen,
+  placementFor,
+  placementsByEncounter,
+  sortDoses,
+  summariseDoses,
+} from "../../src/clinical/ipd";
 import { latestReading } from "../../src/clinical/vitals";
 import { sortForReview } from "../../src/clinical/results";
 import { buildTimeline } from "../../src/clinical/timeline";
 import { radius, size, space, typography } from "../../src/theme/tokens";
 
-type Segment = "overview" | "vitals" | "results" | "timeline";
+type Segment = "overview" | "stay" | "vitals" | "results" | "timeline";
 
-const SEGMENTS: { key: Segment; label: string }[] = [
-  { key: "overview", label: "Overview" },
+interface SegmentOption {
+  key: Segment;
+  label: string;
+}
+
+const OVERVIEW: SegmentOption = { key: "overview", label: "Overview" };
+/** Only for an inpatient — see `segmentsFor`. */
+const STAY: SegmentOption = { key: "stay", label: "Stay" };
+const CLINICAL: SegmentOption[] = [
   { key: "vitals", label: "Vitals" },
   { key: "results", label: "Results" },
   { key: "timeline", label: "Timeline" },
 ];
+
+/**
+ * The admission's own segment — second, and ONLY for an inpatient (M2 J).
+ *
+ * ── IPD IS A CONTEXT OF THIS CHART, NOT A SECOND CHART ──────────────────────
+ * ADR-0013 §1: the IP encounter IS the admission. A ward patient therefore gets the same identity
+ * block, the same allergy banner, the same vitals, the same results and the same episode timeline;
+ * what an admission adds is a location, a length of stay, a running note and a medication record,
+ * and that is exactly one extra tab. A parallel "inpatient chart" would mean two places to fix
+ * every clinical bug and a doctor learning the app twice.
+ *
+ * It sits second because on a ward round the bed and the day of stay are the orienting facts — but
+ * after Overview, because the consultation note is still what the patient was admitted FOR.
+ */
+function segmentsFor(encounter: Encounter | undefined): SegmentOption[] {
+  const inpatient = encounter !== undefined && isAdmission(encounter);
+  return inpatient ? [OVERVIEW, STAY, ...CLINICAL] : [OVERVIEW, ...CLINICAL];
+}
 
 function PatientChart(): React.JSX.Element {
   const theme = useTheme();
@@ -104,6 +139,14 @@ function PatientChart(): React.JSX.Element {
 
   const visit = encounter.data;
   const zone = zoneFor(visit?.branchId);
+  const segments = segmentsFor(visit);
+
+  /**
+   * The Stay tab exists only while the chart is open on an admission. A doctor who selected it and
+   * then navigated to the same patient's OPD visit would otherwise be left on a segment that is no
+   * longer in the bar, rendering nothing — so the selection falls back rather than going blank.
+   */
+  const active = segments.some((option) => option.key === segment) ? segment : "overview";
 
   return (
     <Screen padded={false} edges={["bottom"]}>
@@ -135,11 +178,11 @@ function PatientChart(): React.JSX.Element {
         {visit ? <ClinicalActions encounter={visit} /> : null}
 
         <View style={styles.segments}>
-          {SEGMENTS.map((option) => (
+          {segments.map((option) => (
             <SegmentTab
               key={option.key}
               label={option.label}
-              selected={option.key === segment}
+              selected={option.key === active}
               onPress={() => setSegment(option.key)}
             />
           ))}
@@ -150,11 +193,13 @@ function PatientChart(): React.JSX.Element {
             title="You do not have access to the chart"
             body="Reading clinical records needs the emr:read permission. Ask an administrator if you need it."
           />
-        ) : segment === "overview" ? (
+        ) : active === "overview" ? (
           <Overview patientId={patientId} encounterId={encounterId} zone={zone} />
-        ) : segment === "vitals" ? (
+        ) : active === "stay" && visit ? (
+          <Stay encounter={visit} zone={zone} />
+        ) : active === "vitals" ? (
           <Vitals patientId={patientId} encounterId={encounterId} zoneFor={zoneFor} />
-        ) : segment === "results" ? (
+        ) : active === "results" ? (
           <Results
             patientId={patientId}
             allowed={canReadOrders}
@@ -165,6 +210,7 @@ function PatientChart(): React.JSX.Element {
           <Timeline
             patientId={patientId}
             episodeId={visit?.episodeId}
+            {...(visit && isAdmission(visit) ? { stayId: visit.id } : {})}
             allowedOrders={canReadOrders}
             zoneFor={zoneFor}
             onOpen={(orderId) => router.push({ pathname: "/order/[id]", params: { id: orderId } })}
@@ -257,6 +303,156 @@ function ClinicalActions({ encounter }: { encounter: Encounter }): React.JSX.Ele
       go: () =>
         router.push({
           pathname: "/prescribe/[encounterId]",
+          params: { encounterId: encounter.id },
+        }),
+    },
+  ].filter((action) => can(action.needs));
+
+  if (actions.length === 0) return null;
+
+  return (
+    <View style={styles.actions}>
+      {actions.map((action) => (
+        <View key={action.label} style={styles.action}>
+          <Button label={action.label} variant="secondary" onPress={action.go} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * The admission (M2 J) — where they are, what has been written, and what has actually been given.
+ *
+ * ── THREE READS, THREE INDEPENDENT FAILURES ─────────────────────────────────
+ * The bed board, the ward notes and the MAR each answer separately, and each is allowed to be
+ * missing without taking the others with it. That is not defensive habit — they sit behind
+ * DIFFERENT gates: the board and the notes behind `module.ops.ipd`, the MAR behind
+ * `module.clinical.nursing`. A hospital can genuinely have wards and no nursing module, and its
+ * doctors must still get the bed and the notes.
+ */
+function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): React.JSX.Element {
+  const theme = useTheme();
+  const { queries, ready } = useClinical();
+  const { can } = useCapabilities();
+
+  const board = useQuery({ ...queries.bedBoard(), enabled: ready });
+  const notes = useQuery({ ...queries.wardNotes(encounter.id), enabled: ready });
+  const doses = useQuery({ ...queries.medications(encounter.id), enabled: ready });
+
+  const placement = placementFor(encounter, placementsByEncounter(board.data));
+  // Newest first: on a round the question is what happened since yesterday, and the server returns
+  // these in its own order rather than a documented one.
+  const entries = [...(notes.data ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const given = sortDoses(doses.data ?? []);
+  const summary = summariseDoses(given);
+
+  return (
+    <View style={styles.section}>
+      <StayCard encounter={encounter} placement={placement} zone={zone} />
+
+      <IpdActions encounter={encounter} />
+
+      <SectionTitle title="Ward notes" trailing={String(entries.length)} />
+      <QueryGate
+        loading={notes.isPending && ready}
+        error={notes.error}
+        empty={entries.length === 0}
+        emptyTitle="Nothing written yet"
+        emptyBody="Progress notes from the ward round appear here, newest first."
+        onRetry={() => void notes.refetch()}
+      >
+        <Card>
+          {entries.map((note) => (
+            <WardNoteRow key={note.id} note={note} zone={zone} />
+          ))}
+        </Card>
+      </QueryGate>
+
+      {/**
+       * ── THE MAR IS HIDDEN WHEN THE HOSPITAL DOES NOT HAVE IT ──────────────────
+       * `HMS-PLAN-002` here means `module.clinical.nursing` was not bought — a product boundary, not
+       * a fault, and no role edit or retry will ever change it. An empty "Medication given" heading
+       * would read as "nothing has been given to this patient", which is a clinically dangerous
+       * thing to imply. Any OTHER error is reported normally, because that one is somebody's
+       * misconfiguration and somebody can fix it.
+       */}
+      {isFeatureUnavailable(doses.error) ? null : (
+        <>
+          <SectionTitle
+            title="Medication given"
+            trailing={
+              summary.missed > 0
+                ? `${String(summary.given)} given · ${String(summary.missed)} not`
+                : String(summary.given)
+            }
+          />
+          <QueryGate
+            loading={doses.isPending && ready}
+            error={doses.error}
+            empty={given.length === 0}
+            emptyTitle="No doses charted"
+            emptyBody="Doses recorded by nursing against a signed prescription appear here."
+            onRetry={() => void doses.refetch()}
+          >
+            <Card>
+              {given.map((dose) => (
+                <DoseRow key={dose.id} dose={dose} zone={zone} />
+              ))}
+            </Card>
+          </QueryGate>
+        </>
+      )}
+
+      {!can("emr:read") ? (
+        <Text style={[typography.caption, { color: theme.colors.fgSubtle }]}>
+          Some of this stay needs the emr:read permission.
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The two IPD writes a DOCTOR may actually make.
+ *
+ * ── WHAT IS NOT HERE, AND WHY ───────────────────────────────────────────────
+ * BED TRANSFER needs `bed:allocate`, which the DOCTOR role does not hold — it is the nurse's, and
+ * the permission's own description is "Allocate and transfer beds". Rendering it because the
+ * endpoint exists would put a button in front of somebody whose only possible outcome is a 403.
+ *
+ * OUTCOME (LAMA / absconded / a death) is permitted to a doctor — same grant as discharge — and is
+ * still deliberately absent. It is a statutory record written at a desk with the notes open, not a
+ * tap on a round; a mis-tap closes a stay with a false disposition and there is no way back. A
+ * death additionally runs through certification (`death:certify`) that this app does not implement.
+ *
+ * ADMIT is not round work either: it closes the OP encounter, opens the stay and starts the bed
+ * charge, and it needs a bed picked off the board.
+ */
+function IpdActions({ encounter }: { encounter: Encounter }): React.JSX.Element | null {
+  const router = useRouter();
+  const { can } = useCapabilities();
+
+  // A discharged stay is read-only. The server refuses both writes with HMS-STATE-001 ("this
+  // admission is already over"); this declines to invite the refusal.
+  if (!isStayOpen(encounter)) return null;
+
+  const actions: { label: string; needs: string; go: () => void }[] = [
+    {
+      label: "Ward note",
+      needs: "emr:write",
+      go: () =>
+        router.push({
+          pathname: "/ward-note/[encounterId]",
+          params: { encounterId: encounter.id },
+        }),
+    },
+    {
+      label: "Discharge",
+      needs: "admission:discharge",
+      go: () =>
+        router.push({
+          pathname: "/discharge/[encounterId]",
           params: { encounterId: encounter.id },
         }),
     },
@@ -486,12 +682,15 @@ function Results({
 function Timeline({
   patientId,
   episodeId,
+  stayId,
   allowedOrders,
   zoneFor,
   onOpen,
 }: {
   patientId: string;
   episodeId: string | undefined;
+  /** The IP encounter, when this chart is open on an admission — adds the ward's own entries. */
+  stayId?: string;
   allowedOrders: boolean;
   zoneFor: (branchId?: string) => string;
   onOpen: (orderId: string) => void;
@@ -515,11 +714,22 @@ function Timeline({
   const prescriptions = useQuery({ ...queries.prescriptions(patientId), enabled: ready });
   const vitals = useQuery({ ...queries.patientVitals(patientId), enabled: ready });
 
+  /**
+   * The ward's entries, only for an admission. This is what makes an inpatient timeline read as a
+   * sequence of days — each progress note lands at the moment it was written, interleaved with the
+   * orders and results of that day, rather than the whole stay collapsing into one "Admitted" row.
+   */
+  const wardNotes = useQuery({
+    ...queries.wardNotes(stayId ?? ""),
+    enabled: ready && Boolean(stayId),
+  });
+
   const events = buildTimeline({
     encounters: episodeId ? (episode.data ?? []) : (visits.data?.items ?? []),
     orders: orders.data?.items ?? [],
     prescriptions: prescriptions.data ?? [],
     vitals: vitals.data ?? [],
+    wardNotes: wardNotes.data ?? [],
   });
 
   const loading = (episodeId ? episode.isPending : visits.isPending) && ready;

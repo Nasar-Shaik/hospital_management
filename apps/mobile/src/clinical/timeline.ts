@@ -22,6 +22,7 @@ import type {
   Order,
   Prescription,
   VitalsReading,
+  WardNote,
 } from "@medicore/api-client";
 import { isCriticalResult, isResultReadable } from "./results";
 
@@ -52,6 +53,14 @@ export interface TimelineSources {
   vitals?: readonly VitalsReading[];
   /** Keyed by encounter — a note belongs to the visit it was written on. */
   notes?: readonly ConsultationNote[];
+  /**
+   * The ward's running record for an admission (M2 J).
+   *
+   * Unlike the consultation note there is one per ENTRY, each with its own `at`, so these land on
+   * the timeline at the moment they were written — which is what makes an admission read as a
+   * sequence of days rather than as a single "Admitted" event with everything else hanging off it.
+   */
+  wardNotes?: readonly WardNote[];
 }
 
 function visitEvent(encounter: Encounter): TimelineEvent {
@@ -163,6 +172,45 @@ function noteEvent(note: ConsultationNote): TimelineEvent | undefined {
 }
 
 /**
+ * A ward-round entry, a discharge summary, or the account of a non-routine ending.
+ *
+ * ── THE THREE TYPES GET THREE TITLES, DELIBERATELY ──────────────────────────
+ * They are the same shape of record and they mean completely different things. A discharge summary
+ * is the single most consequential document of a stay, and an outcome note records that something
+ * went wrong — a patient who left against advice, or died. Rendering either as "Ward note" would
+ * bury the two events a reader is most likely to be scanning for.
+ *
+ * The full text is NOT the detail line: a progress note runs to paragraphs and the timeline is a
+ * scannable index, not a reader. The Stay segment is where the text lives.
+ */
+function wardNoteEvent(note: WardNote): TimelineEvent {
+  const title =
+    note.type === "discharge_summary"
+      ? "Discharge summary"
+      : note.type === "outcome_note"
+        ? "Outcome recorded"
+        : "Ward note";
+  return {
+    id: `ward:${note.id}`,
+    kind: "note",
+    at: note.at,
+    title,
+    detail: note.diagnosis ?? firstLine(note.text),
+    ...(note.branchId ? { branchId: note.branchId } : {}),
+    encounterId: note.encounterId,
+  };
+}
+
+/** As much of a note as an index row can carry — two lines on a phone. */
+const NOTE_PREVIEW = 120;
+
+/** The opening of a note, for an index row. Never the whole paragraph. */
+function firstLine(text: string): string {
+  const line = text.trim().split("\n")[0] ?? "";
+  return line.length > NOTE_PREVIEW ? `${line.slice(0, NOTE_PREVIEW - 1)}…` : line;
+}
+
+/**
  * Newest first — the answer to "what has happened to this patient" starts with the most recent
  * thing, because that is the question actually being asked at a bedside.
  *
@@ -174,6 +222,7 @@ export function buildTimeline(sources: TimelineSources): TimelineEvent[] {
     ...(sources.encounters ?? []).map(visitEvent),
     ...(sources.orders ?? []).flatMap(orderEvents),
     ...(sources.vitals ?? []).map(vitalsEvent),
+    ...(sources.wardNotes ?? []).map(wardNoteEvent),
   ];
 
   for (const rx of sources.prescriptions ?? []) {

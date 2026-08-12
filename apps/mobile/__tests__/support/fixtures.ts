@@ -8,13 +8,16 @@
  */
 import type {
   Allergy,
+  BedBoard,
   ConsultationNote,
   Encounter,
+  MedicationAdministration,
   Order,
   Paged,
   Patient,
   Prescription,
   VitalsReading,
+  WardNote,
 } from "@medicore/api-client";
 
 export const PATIENT_ID = "patient-1";
@@ -184,5 +187,146 @@ export function page<T>(items: T[], meta: Partial<Paged<T>["meta"]> = {}): Paged
   return {
     items,
     meta: { page: 1, limit: 20, total: items.length, hasMore: false, ...meta },
+  };
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * IPD (M2 J)
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+export const IP_ENCOUNTER_ID = "encounter-ip-1";
+
+/**
+ * An admission. `class: "IP"`, `status: "in_progress"`, a bed and an `admittedAt` — exactly what
+ * `admitPatient` writes, because the IP encounter IS the admission (ADR-0013 §1) and there is no
+ * second object to fake.
+ */
+export function inpatient(overrides: Partial<Encounter> = {}): Encounter {
+  return encounter({
+    id: IP_ENCOUNTER_ID,
+    class: "IP",
+    status: "in_progress",
+    origin: "transfer",
+    bed: { ward: "General ward", bedCode: "G-14", tariffCode: "BED-GEN", bedId: "bed-14" },
+    admittedAt: "2026-08-10T18:30:00.000Z",
+    admittedFrom: ENCOUNTER_ID,
+    ...overrides,
+  });
+}
+
+export function wardNote(overrides: Partial<WardNote> = {}): WardNote {
+  return {
+    id: "note-1",
+    encounterId: IP_ENCOUNTER_ID,
+    patientId: PATIENT_ID,
+    episodeId: EPISODE_ID,
+    type: "progress",
+    text: "Reviewed. Afebrile overnight, chest clear. Continue same.",
+    authorId: "user-1",
+    at: "2026-08-12T03:40:00.000Z",
+    branchId: "branch-hyd",
+    ...overrides,
+  };
+}
+
+export function dose(overrides: Partial<MedicationAdministration> = {}): MedicationAdministration {
+  return {
+    id: "mar-1",
+    encounterId: IP_ENCOUNTER_ID,
+    patientId: PATIENT_ID,
+    prescriptionId: "rx-1",
+    drugCode: "AMOX500",
+    drugName: "Amoxicillin 500mg",
+    dose: "1 cap",
+    route: "oral",
+    status: "given",
+    administeredAt: "2026-08-12T03:00:00.000Z",
+    administeredBy: "user-nurse",
+    ...overrides,
+  };
+}
+
+/**
+ * The estate, with one occupied bed, one free, one blocked, and one legacy free-text stay.
+ *
+ * The counts are the SERVER's — deliberately stated here rather than derived from the beds array,
+ * because that is the contract the app must not second-guess. A test that computed them would be
+ * testing its own arithmetic and would keep passing if the app started computing them too.
+ */
+export function bedBoard(overrides: Partial<BedBoard> = {}): BedBoard {
+  return {
+    wards: [
+      {
+        wardId: "ward-gen",
+        name: "General ward",
+        kind: "general",
+        status: "active",
+        tariffCode: "BED-GEN",
+        counts: { total: 24, free: 21, occupied: 2, blocked: 1 },
+        beds: [
+          {
+            bedId: "bed-14",
+            code: "G-14",
+            roomId: "room-2",
+            roomName: "Room 2",
+            roomKind: "sharing",
+            tariffCode: "BED-GEN",
+            state: "occupied",
+            occupant: {
+              encounterId: IP_ENCOUNTER_ID,
+              patientId: PATIENT_ID,
+              patientName: "Meera Nair",
+              uhid: "APL000123",
+              admittedAt: "2026-08-10T18:30:00.000Z",
+              doctorId: "user-1",
+            },
+          },
+          { bedId: "bed-15", code: "G-15", tariffCode: "BED-GEN", state: "free" },
+          {
+            bedId: "bed-16",
+            code: "G-16",
+            tariffCode: "BED-GEN",
+            state: "blocked",
+            blockedReason: "Awaiting deep clean",
+          },
+        ],
+      },
+      {
+        wardId: "ward-icu",
+        name: "ICU",
+        kind: "icu",
+        status: "active",
+        tariffCode: "BED-ICU",
+        counts: { total: 6, free: 5, occupied: 1, blocked: 0 },
+        beds: [
+          {
+            bedId: "bed-icu-1",
+            code: "I-01",
+            tariffCode: "BED-ICU",
+            state: "occupied",
+            occupant: {
+              encounterId: "encounter-ip-2",
+              patientId: "patient-2",
+              patientName: "Rahul Verma",
+              uhid: "APL000456",
+              admittedAt: "2026-08-11T02:00:00.000Z",
+            },
+          },
+        ],
+      },
+    ],
+    totals: { total: 30, free: 26, occupied: 3, blocked: 1 },
+    unlisted: [
+      {
+        encounterId: "encounter-ip-3",
+        patientId: "patient-3",
+        patientName: "Anita Das",
+        uhid: "APL000789",
+        ward: "Maternity",
+        bedCode: "M-3",
+        admittedAt: "2026-08-12T01:00:00.000Z",
+      },
+    ],
+    ...overrides,
   };
 }

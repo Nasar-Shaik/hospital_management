@@ -29,11 +29,19 @@ import type {
   Prescription,
   PrescriptionLineInput,
   PrescriptionScreening,
+  WardNote,
 } from "@medicore/api-client";
 import type { QueryScope } from "./keys";
 import type { ConsultationPatch } from "../clinical/consultation";
 import type { OrderRequest } from "../clinical/prescribing";
 import { attemptSign, type SignDeps, type SignOutcome } from "../clinical/signing";
+import { attemptWardNote, type WardNoteDeps, type WardNoteOutcome } from "../clinical/wardNote";
+import {
+  attemptDischarge,
+  type DischargeDeps,
+  type DischargeInput,
+  type DischargeOutcome,
+} from "../clinical/discharge";
 
 /** A write: what to call, and what it makes stale. */
 export interface Write<TInput, TResult> {
@@ -121,6 +129,54 @@ export function clinicalMutations(api: ApiClient, scope: QueryScope) {
     discard(): Write<string, Prescription> {
       return {
         mutationFn: (prescriptionId) => api.discardPrescription(prescriptionId),
+        invalidates: branchPrefix,
+      };
+    },
+
+    /* ── J, the ward ────────────────────────────────────────────────────────── */
+
+    /**
+     * Today's entry on the round, through the reconciliation in `clinical/wardNote.ts`.
+     *
+     * Resolves with an outcome rather than rejecting, for the same reason `sign` does: "the request
+     * failed and the note is on the chart" is a SUCCESS, and a rejection cannot say that.
+     *
+     * `before` is the notes as the screen had them a moment ago. It is passed in rather than
+     * fetched here because the whole point is that it predates the attempt — a snapshot taken
+     * inside this function would already contain the note we are trying to detect.
+     */
+    addWardNote(
+      encounterId: string,
+      context: { before: readonly WardNote[] | undefined; authorId?: string },
+    ): Write<string, WardNoteOutcome> {
+      const deps: WardNoteDeps = {
+        add: (text) => api.addWardNote(encounterId, text),
+        reload: () => api.listWardNotes(encounterId),
+        before: context.before,
+        ...(context.authorId ? { authorId: context.authorId } : {}),
+      };
+      return {
+        mutationFn: (text) => attemptWardNote(deps, text),
+        invalidates: branchPrefix,
+      };
+    },
+
+    /**
+     * The end of the stay, through the reconciliation in `clinical/discharge.ts`.
+     *
+     * One call writes the summary AND closes the encounter, so the invalidation is doing real work
+     * here: the ward list, the bed board, the patient's visits and the episode timeline are all
+     * wrong the instant this succeeds. The branch prefix catches every one of them without anybody
+     * having to remember the list.
+     */
+    discharge(encounterId: string): Write<DischargeInput, DischargeOutcome> {
+      const deps: DischargeDeps = {
+        discharge: (input) => api.discharge(encounterId, input),
+        reload: () => api.getEncounter(encounterId),
+        notes: () => api.listWardNotes(encounterId),
+      };
+      return {
+        mutationFn: (input) => attemptDischarge(deps, input),
         invalidates: branchPrefix,
       };
     },

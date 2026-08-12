@@ -456,6 +456,90 @@ describe("a branch id is never taken from navigation", () => {
   );
 });
 
+describe("bed occupancy is never worked out on the phone", () => {
+  /**
+   * ── THE FAILURE THIS PREVENTS IS A WARD THAT LOOKS FULL ─────────────────────
+   * `/bed-board` derives every bed's state from the whole ward's inventory joined to every open
+   * stay, in one server-side query, and hands back `{ total, free, occupied, blocked }` per ward.
+   * The app's job is to render those numbers.
+   *
+   * The tempting alternative is to count them from what is on screen — `beds.filter(b => b.state
+   * === "free").length` — and it is wrong in the specific way that matters: the ward list is capped
+   * at 100 stays and shows one ward at a time, so a count taken from it describes the PAGE. A
+   * forty-bed ward would report as nearly empty, or a ward with one visible patient as full, and a
+   * bed board that disagrees with the ward clerk's is worse than having none.
+   *
+   * So no file compares a bed state at all. Nothing in the app needs to: `placementsByEncounter`
+   * reads `bed.occupant`, which is the fact, and `groupByWard` passes the server's `counts` through
+   * untouched.
+   */
+  const OCCUPANCY = /\bstate\s*===\s*["'](free|occupied|blocked)["']/;
+
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      expect(
+        OCCUPANCY.test(codeOnly(read(file))),
+        `${name} compares a bed's state, which is the first line of counting occupancy locally. ` +
+          `The server owns free/occupied/blocked — render \`ward.counts\` from /bed-board instead.`,
+      ).toBe(false);
+    },
+  );
+
+  it("proves the counts really are read from the board", () => {
+    // Guards the scan above: if nothing consumed the server's numbers, forbidding a local count
+    // would pass while the screen showed no occupancy at all.
+    expect(read(join(APP_DIR, "..", "src", "clinical", "ipd.ts"))).toMatch(/ward\.counts/);
+    expect(read(join(APP_DIR, "inpatients.tsx"))).toMatch(/occupancy\.free/);
+  });
+});
+
+describe("an IPD write always goes through its reconciliation", () => {
+  /**
+   * ── THE TWO WEAKEST ENDPOINTS IN THE APP ────────────────────────────────────
+   * `POST /encounters/:id/notes` has no idempotency key and no de-duplication, so a retry after a
+   * lost response leaves TWO permanent notes on a medico-legal chart. `POST /encounters/:id/
+   * discharge` has no key either; what it has is two state guards, which turn a retry into
+   * `HMS-STATE-001` — a false error for something that worked.
+   *
+   * Both are safe only because `clinical/wardNote.ts` and `clinical/discharge.ts` classify every
+   * ambiguous ending against the record. A screen that reached for the client method directly would
+   * skip that entirely and look completely ordinary doing it — `api.addWardNote(id, text)` is a
+   * perfectly reasonable-looking line. This is the check that stops it.
+   */
+  const RECONCILED = new Set(["addWardNote", "discharge"]);
+
+  it.each(routes.map((file) => [shortName(file), file]))("%s", (name, file) => {
+    const source = codeOnly(read(file));
+
+    for (const [, receiver, method] of source.matchAll(/\b(\w+)\.(addWardNote|discharge)\s*\(/g)) {
+      if (!RECONCILED.has(method ?? "")) continue;
+      expect(
+        receiver,
+        `app/${name} calls ${receiver ?? "?"}.${method ?? "?"}() directly. IPD writes go through ` +
+          `useClinicalMutations() — mutations.${method ?? "?"}(...) — which wraps the ` +
+          `reconciliation. Calling the client method skips it, and the failure is silent: a ` +
+          `duplicate ward note, or a successful discharge reported as an error.`,
+      ).toBe("mutations");
+    }
+  });
+
+  it("finds the IPD write screens, so the check is not vacuous", () => {
+    const writers = routes.filter((file) =>
+      /mutations\.(addWardNote|discharge)\s*\(/.test(codeOnly(read(file))),
+    );
+    expect(writers.map(shortName).sort()).toEqual([
+      "discharge/[encounterId].tsx",
+      "ward-note/[encounterId].tsx",
+    ]);
+  });
+});
+
 describe("the settings screen renders the tabs the bar cannot fit", () => {
   it("consumes splitTabs' overflow", () => {
     /**

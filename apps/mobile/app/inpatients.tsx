@@ -1,22 +1,33 @@
 /**
- * The ward list — everyone in a bed right now. READ ONLY in this slice.
+ * The ward round (M2 J) — everyone in a bed, in the order you walk past them.
  *
- * ── FEATURE-GATED BY THE SERVER, NOT BY A FLAG THE PHONE GUESSES ────────────
- * `GET /inpatients` sits behind `module.ops.ipd`. A clinic has no wards and its edition does not
- * carry the flag, so it answers `HMS-PLAN-002` — which the error mapper already turns into "Not
- * included in this edition". The home screen hides its entry point on that code; this screen is
- * still reachable by deep link, so it says the same thing plainly rather than showing an empty ward.
+ * ── TWO ENDPOINTS, JOINED, NEITHER INVENTED ─────────────────────────────────
+ * `GET /inpatients` says WHO is admitted. `GET /bed-board` says WHERE every bed is and, for the
+ * occupied ones, who is in it — name and UHID resolved server-side in a single query. Joining them
+ * on `encounterId` is what makes this list read as people rather than as patient ids, without the
+ * per-row `getPatient` the OPD list has to pay (`clinical/Identity.tsx` explains why that gap
+ * exists). The inpatient list stays the authority on who is admitted: a stay the board has not
+ * heard of still appears, under a heading that says its bed is not in the inventory.
  *
- * This is the honest gate available to a clinician's phone: `GET /subscription` needs
- * `subscription:manage`, an administrator's permission that no DOCTOR or NURSE holds, so the app
- * cannot read the feature list and must not pretend to know it.
+ * ── THE BOARD IS AN ENRICHMENT, SO ITS ABSENCE IS SURVIVABLE ────────────────
+ * `/bed-board` needs `emr:read` while `/inpatients` needs `encounter:read`, and a role could hold
+ * one without the other. When the board is missing for any reason — permission, error, a hospital
+ * with no inventory — the rows fall back to the per-patient name lookup and the wards fall back to
+ * the free-text `bed.ward` recorded at admission. Degraded, never blank.
+ *
+ * ── FEATURE-GATED BY THE SERVER'S OWN REFUSAL ───────────────────────────────
+ * Both endpoints sit behind `module.ops.ipd`. A clinic has no wards, so it answers `HMS-PLAN-002`
+ * and this screen says "not in this edition" rather than showing an empty ward — which would read
+ * as "everyone has gone home". No clinician may read `/subscription` to learn this in advance
+ * (`subscription:manage` is an administrator's), so the refusal IS the flag.
  *
  * ── WHAT IS DELIBERATELY ABSENT ─────────────────────────────────────────────
- * Ward notes, bed transfer, discharge. Those are IPD WRITES and belong to a later slice; a screen
- * that reads a ward is safe to ship first, and shipping it first is how the read path gets proven
- * before anything can change a bed.
+ * Bed transfer. `POST /encounters/:id/transfer-bed` needs `bed:allocate`, which the DOCTOR role
+ * does not hold — it belongs to the nurse who runs the board. The API existing is not a reason to
+ * put a button in front of somebody whose only possible outcome is a 403.
  */
-import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { useMemo, useState } from "react";
+import { RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { Screen } from "../src/components/Screen";
@@ -30,8 +41,21 @@ import { useCapabilities } from "../src/hooks/useStores";
 import { useClinical, useZoneFor } from "../src/hooks/useClinical";
 import { useTheme } from "../src/hooks/useTheme";
 import { formatDateTime, parseInstant } from "../src/lib/time";
+import { isFeatureUnavailable } from "../src/lib/net/errors";
 import { encounterStatusLabel, encounterStatusTone } from "../src/clinical/encounters";
-import { space, typography } from "../src/theme/tokens";
+import {
+  dayOfStay,
+  groupByWard,
+  mayBeTruncated,
+  placementLabel,
+  wardKindLabel,
+  type RoundPatient,
+  type WardGroup,
+} from "../src/clinical/ipd";
+import { radius, size, space, typography } from "../src/theme/tokens";
+
+/** Every ward, or one — a display filter over rows the SERVER already scoped. See below. */
+const ALL_WARDS = "__all__";
 
 function Inpatients(): React.JSX.Element {
   const theme = useTheme();
@@ -40,10 +64,29 @@ function Inpatients(): React.JSX.Element {
   const { queries, ready } = useClinical();
   const zoneFor = useZoneFor();
 
-  const canRead = can("encounter:read");
-  const list = useQuery({ ...queries.inpatients(), enabled: ready && canRead });
+  const [ward, setWard] = useState<string>(ALL_WARDS);
 
-  if (permissionsReady && !canRead) {
+  const canReadEncounters = can("encounter:read");
+  const canReadChart = can("emr:read");
+
+  const list = useQuery({ ...queries.inpatients(), enabled: ready && canReadEncounters });
+  const board = useQuery({ ...queries.bedBoard(), enabled: ready && canReadChart });
+
+  const inpatients = useMemo(() => list.data ?? [], [list.data]);
+  const groups = useMemo(() => groupByWard(inpatients, board.data), [inpatients, board.data]);
+
+  /**
+   * ── THIS FILTER IS A VIEW, NOT AN ACCESS CONTROL ────────────────────────────
+   * Every row here already passed `scopeFilter()` on the server; nothing on this phone decides who
+   * a doctor may see. Narrowing to one ward is the same act as scrolling to it — it exists because
+   * a consultant covering ICU should not scroll past forty general-ward patients to find four.
+   */
+  const sections = useMemo(
+    () => (ward === ALL_WARDS ? groups : groups.filter((group) => group.ward === ward)),
+    [groups, ward],
+  );
+
+  if (permissionsReady && !canReadEncounters) {
     return (
       <Screen>
         <EmptyState
@@ -54,12 +97,23 @@ function Inpatients(): React.JSX.Element {
     );
   }
 
-  const inpatients = list.data ?? [];
+  // "Your hospital did not buy wards" is a different sentence from "something went wrong", and the
+  // recovery is different too — there is none, so no retry is offered.
+  if (isFeatureUnavailable(list.error)) {
+    return (
+      <Screen>
+        <EmptyState
+          title="Inpatients are not included in this edition"
+          body="This hospital's plan does not include ward management. An administrator can change the plan."
+        />
+      </Screen>
+    );
+  }
 
   return (
     <Screen padded={false}>
       <QueryGate
-        loading={list.isPending && ready && canRead}
+        loading={list.isPending && ready && canReadEncounters}
         error={list.error}
         empty={inpatients.length === 0}
         emptyTitle="No patients in beds"
@@ -67,57 +121,216 @@ function Inpatients(): React.JSX.Element {
         loadingLabel="Loading the ward…"
         onRetry={() => void list.refetch()}
       >
-        <FlatList
-          data={inpatients}
-          keyExtractor={(encounter) => encounter.id}
+        <SectionList
+          sections={sections.map((group) => ({ group, data: group.patients }))}
+          keyExtractor={(item) => item.encounter.id}
           contentContainerStyle={styles.list}
+          stickySectionHeadersEnabled
           refreshControl={
             <RefreshControl
-              refreshing={list.isRefetching}
-              onRefresh={() => void list.refetch()}
+              refreshing={list.isRefetching || board.isRefetching}
+              onRefresh={() => {
+                void list.refetch();
+                void board.refetch();
+              }}
               tintColor={theme.colors.brand}
             />
           }
-          renderItem={({ item }) => {
-            const admittedAt = parseInstant(item.admittedAt ?? item.arrivedAt);
-            const zone = zoneFor(item.branchId);
-            return (
-              <Card
-                onPress={() =>
-                  router.push({
-                    pathname: "/patient/[id]",
-                    params: { id: item.patientId, encounterId: item.id },
-                  })
-                }
-                accessibilityLabel="Open the inpatient's chart"
-              >
-                <View style={styles.top}>
-                  <View style={styles.name}>
-                    <PatientName patientId={item.patientId} />
-                  </View>
-                  <Pill
-                    label={encounterStatusLabel(item.status)}
-                    tone={encounterStatusTone(item.status)}
-                  />
-                </View>
-
-                {/* The bed is RECORDED, not reserved — there is no bed inventory invariant behind
-                    it, so it is shown as what the chart says rather than as an allocation. */}
-                <Text style={[typography.body, { color: theme.colors.fg }]}>
-                  {item.bed ? `${item.bed.ward} · bed ${item.bed.bedCode}` : "Bed not recorded"}
-                </Text>
-
-                {admittedAt ? (
-                  <Text style={[typography.caption, { color: theme.colors.fgSubtle }]}>
-                    Admitted {formatDateTime(admittedAt, zone)}
-                  </Text>
-                ) : null}
-              </Card>
-            );
-          }}
+          ListHeaderComponent={
+            <WardFilter
+              groups={groups}
+              selected={ward}
+              onSelect={setWard}
+              total={inpatients.length}
+              truncated={mayBeTruncated(inpatients)}
+            />
+          }
+          renderSectionHeader={({ section }) => <WardHeader group={section.group} />}
+          renderItem={({ item }) => (
+            <RoundRow
+              patient={item}
+              zone={zoneFor(item.encounter.branchId)}
+              onPress={() =>
+                router.push({
+                  pathname: "/patient/[id]",
+                  params: { id: item.encounter.patientId, encounterId: item.encounter.id },
+                })
+              }
+            />
+          )}
         />
       </QueryGate>
     </Screen>
+  );
+}
+
+/**
+ * The ward chips, and the honest count above them.
+ *
+ * The count is of ROWS on this list, and it is labelled that way. Bed occupancy — how many beds are
+ * free — is the board's number and appears per ward below; conflating them would let a phone
+ * showing twenty rows imply a twenty-bed hospital.
+ */
+function WardFilter({
+  groups,
+  selected,
+  onSelect,
+  total,
+  truncated,
+}: {
+  groups: readonly WardGroup[];
+  selected: string;
+  onSelect: (ward: string) => void;
+  total: number;
+  truncated: boolean;
+}): React.JSX.Element {
+  const theme = useTheme();
+
+  return (
+    <View style={styles.header}>
+      <Text style={[typography.caption, { color: theme.colors.fgMuted }]}>
+        {total === 1 ? "1 patient in a bed" : `${String(total)} patients in beds`}
+      </Text>
+
+      {/* The endpoint has no paging and returns a bare array, so a full page is the only hint that
+          there is more. Saying "showing the first 100" beats implying this is everybody. */}
+      {truncated ? (
+        <Text style={[typography.caption, { color: theme.colors.warning }]}>
+          Showing the first {String(total)} — there may be more admitted patients.
+        </Text>
+      ) : null}
+
+      {groups.length > 1 ? (
+        <View style={styles.chips}>
+          <Chip
+            label="All wards"
+            selected={selected === ALL_WARDS}
+            onPress={() => onSelect(ALL_WARDS)}
+          />
+          {groups.map((group) => (
+            <Chip
+              key={group.ward}
+              label={group.ward}
+              selected={selected === group.ward}
+              onPress={() => onSelect(group.ward)}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * A ward heading, with the SERVER's occupancy beside it.
+ *
+ * `free` is the number a doctor about to admit actually needs, and it is never computed here — it
+ * comes from `/bed-board`, which derives it from the whole ward's beds and every open stay in one
+ * query. A count assembled from the rows on screen would describe the page, not the ward, and a bed
+ * board that disagrees with the ward clerk's is worse than none.
+ */
+function WardHeader({ group }: { group: WardGroup }): React.JSX.Element {
+  const theme = useTheme();
+  const kind = wardKindLabel(group.wardKind);
+
+  return (
+    <View style={[styles.wardHeader, { backgroundColor: theme.colors.bg }]}>
+      <Text style={[typography.label, styles.wardName, { color: theme.colors.fg }]}>
+        {group.ward}
+        {kind && kind !== group.ward ? (
+          <Text style={{ color: theme.colors.fgSubtle }}> · {kind}</Text>
+        ) : null}
+      </Text>
+      {group.occupancy ? (
+        <Text style={[typography.caption, { color: theme.colors.fgMuted }]}>
+          {String(group.occupancy.free)} free of {String(group.occupancy.total)}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * One patient on the round.
+ *
+ * Name, then bed, then how long they have been in it. The whole card is the touch target — a
+ * gloved thumb in a corridor does not aim, and every row leads to exactly one place.
+ */
+function RoundRow({
+  patient,
+  zone,
+  onPress,
+}: {
+  patient: RoundPatient;
+  zone: string;
+  onPress: () => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  const { encounter, placement } = patient;
+  const admitted = parseInstant(encounter.admittedAt ?? encounter.arrivedAt);
+
+  return (
+    <Card onPress={onPress} accessibilityLabel="Open the inpatient's chart">
+      <View style={styles.top}>
+        <View style={styles.name}>
+          {/* The board's name when it has one, otherwise the per-patient lookup — see the header. */}
+          {patient.patientName ? (
+            <Text style={[typography.heading, { color: theme.colors.fg }]} numberOfLines={1}>
+              {patient.patientName}
+            </Text>
+          ) : (
+            <PatientName patientId={encounter.patientId} />
+          )}
+          {patient.uhid ? (
+            <Text style={[typography.caption, styles.uhid, { color: theme.colors.fgMuted }]}>
+              UHID {patient.uhid}
+            </Text>
+          ) : null}
+        </View>
+        <Pill
+          label={encounterStatusLabel(encounter.status)}
+          tone={encounterStatusTone(encounter.status)}
+        />
+      </View>
+
+      <Text style={[typography.body, { color: theme.colors.fg }]}>{placementLabel(placement)}</Text>
+
+      {admitted ? (
+        <Text style={[typography.caption, { color: theme.colors.fgSubtle }]}>
+          Day {String(dayOfStay(admitted, new Date(), zone))} · admitted{" "}
+          {formatDateTime(admitted, zone)}
+        </Text>
+      ) : null}
+    </Card>
+  );
+}
+
+function Chip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <Text
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={[
+        styles.chip,
+        {
+          color: selected ? theme.colors.onAccent : theme.colors.fgMuted,
+          backgroundColor: selected ? theme.colors.brandStrong : theme.colors.bgSubtle,
+          borderColor: selected ? theme.colors.brandStrong : theme.colors.border,
+        },
+      ]}
+    >
+      {label}
+    </Text>
   );
 }
 
@@ -125,6 +338,26 @@ export default requireRuntime(Inpatients);
 
 const styles = StyleSheet.create({
   list: { gap: space[2], padding: space[4], paddingBottom: space[8] },
-  top: { flexDirection: "row", alignItems: "center", gap: space[2] },
-  name: { flex: 1 },
+  header: { gap: space[2], paddingBottom: space[2] },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: space[1] },
+  chip: {
+    ...typography.caption,
+    minHeight: size.touchTarget - 16,
+    paddingHorizontal: space[3],
+    paddingVertical: space[2],
+    borderWidth: 1,
+    borderRadius: radius.full,
+    overflow: "hidden",
+  },
+  wardHeader: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: space[2],
+    paddingVertical: space[2],
+  },
+  wardName: { textTransform: "uppercase", letterSpacing: 0.5 },
+  top: { flexDirection: "row", alignItems: "flex-start", gap: space[2] },
+  name: { flex: 1, gap: 2 },
+  uhid: { fontVariant: ["tabular-nums"] },
 });

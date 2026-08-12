@@ -111,4 +111,27 @@ export const queryKeys = {
   /** Every encounter in one care story (`GET /episodes/:id/timeline`). */
   episodeTimeline: (scope: QueryScope, episodeId: string) =>
     scoped(scope, "episode", episodeId, "timeline"),
+
+  /* ── M2 J, the inpatient surface ────────────────────────────────────────── */
+
+  /**
+   * The estate: wards, rooms, beds and who is in them (`GET /bed-board`).
+   *
+   * Branch-scoped like the ward list it enriches — and it must be, more than most: a bed code is
+   * only unique within a site, so `bed 14` at Hyderabad and `bed 14` at Chennai are two different
+   * beds with two different patients in them. A key without the branch would put one over the other.
+   */
+  bedBoard: (scope: QueryScope) => scoped(scope, "bed-board"),
+  /** One stay's running record (`GET /encounters/:id/notes`). */
+  wardNotes: (scope: QueryScope, encounterId: string) =>
+    scoped(scope, "encounter", encounterId, "notes"),
+  /**
+   * What was actually given (`GET /encounters/:id/medication-administrations`).
+   *
+   * Gated on `module.clinical.nursing`, which is a DIFFERENT flag from the ward's `module.ops.ipd`
+   * — hence its own key and its own query, so a hospital with beds and no nursing module loses the
+   * MAR section and keeps the rest of the chart.
+   */
+  medications: (scope: QueryScope, encounterId: string) =>
+    scoped(scope, "encounter", encounterId, "medications"),
 } as const;
