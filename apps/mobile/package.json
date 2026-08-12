@@ -1,0 +1,44 @@
+{
+  "name": "@medicore/mobile",
+  "version": "0.0.1",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint app src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
+    "@medicore/api-client": "workspace:*",
+    "@medicore/permissions": "workspace:*",
+    "@medicore/types": "workspace:*",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@tanstack/query-core": "^5.101.4",
+    "@tanstack/react-query": "^5.101.4",
+    "expo": "~57.0.12",
+    "expo-constants": "~57.0.10",
+    "expo-linking": "~57.0.5",
+    "expo-router": "~57.0.12",
+    "expo-secure-store": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.2",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.2",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@medicore/config": "workspace:*",
+    "@types/react": "^19.1.0",
+    "eslint": "^9.24.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}

@@ -7,3 +7,15 @@ onlyBuiltDependencies:
   - esbuild
   - sharp
   - msgpackr-extract
+
+# ONE copy of the React type definitions across the whole workspace.
+#
+# Not a preference. With pnpm's isolated layout, two resolutions of `@types/react` put a second
+# copy under `node_modules/.pnpm`, and every component in `apps/admin` and `apps/web` then fails
+# to compile with TS2742 — "the inferred type cannot be named without a reference to
+# .pnpm/@types+react@<other-version>". It appeared the moment `apps/mobile` was added and its
+# React Native dependencies resolved a different patch, and the error names a path rather than the
+# cause, so it is worth pinning rather than rediscovering.
+overrides:
+  "@types/react": 19.2.18
+  "@types/react-dom": 19.2.3
