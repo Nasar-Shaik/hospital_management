@@ -1,5 +1,7 @@
 import { StyleSheet, Text, View } from "react-native";
+import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import { useTheme } from "../hooks/useTheme";
+import { requireRuntime } from "../providers/RuntimeProvider";
 import { space, typography } from "../theme/tokens";
 
 /**
@@ -27,6 +29,21 @@ export function PrivacyOverlay(): React.JSX.Element {
     </View>
   );
 }
+
+function CoverWhenBackgrounded(): React.JSX.Element | null {
+  const { obscured } = useAppLifecycle();
+  return obscured ? <PrivacyOverlay /> : null;
+}
+
+/**
+ * The mounted form of the above: sits at the ROOT, above the navigator, so that no screen can
+ * forget it and no new screen in M2 has to remember it.
+ *
+ * `useAppLifecycle` reads the runtime, and the root renders before a hospital is chosen — hence
+ * the guard. It renders nothing rather than redirecting: there is no session and therefore no PHI
+ * to hide on the one screen reachable without a runtime.
+ */
+export const PrivacyCover = requireRuntime(CoverWhenBackgrounded, null);
 
 const styles = StyleSheet.create({
   cover: { alignItems: "center", justifyContent: "center", gap: space[2], zIndex: 1000 },

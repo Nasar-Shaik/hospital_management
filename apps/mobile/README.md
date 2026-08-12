@@ -43,6 +43,27 @@ by `.dependency-cruiser.cjs`, not by convention.
 The two edges a phone owns are the two things a test substitutes: `fetch` and the Keychain.
 Everything between them is the shipping code.
 
+## Every new route needs `requireRuntime`
+
+There is no runtime until a hospital is chosen, and `useRuntime`, `useSession`, `useBranch`,
+`useConnectivity` and `useCapabilities` all read it. A screen that calls any of them without a
+guard **throws on its own first render** — and on a fresh install that is the very first thing the
+user sees, because Expo Router resolves `/` to `(app)/index`.
+
+```tsx
+function MyScreen(): React.JSX.Element { … }
+export default requireRuntime(MyScreen);
+```
+
+Screens inside `app/(app)/` inherit the guard from the group layout and need nothing of their own.
+Everything beside it — a new `app/*.tsx` — needs its own.
+
+The check cannot live inside the screen: those hooks run before its first `return`, so by the time
+it could test for a runtime it has already thrown. It also cannot be an effect, for the same reason
+in slower motion. `__tests__/routes.test.ts` walks `app/` and fails with the file name if a route
+reads the runtime with nothing above it guarding — which is the only automated cover this class
+has, since the suite renders nothing.
+
 ## Commands
 
 ```bash
@@ -144,6 +165,11 @@ curl http://<your-ip>:19000/        # must be an Expo manifest, not another app'
   documented fix is `node-linker=hoisted` in the ROOT `.npmrc` — it is workspace-wide, not per-app.
 - **Peer warnings on install.** `@react-native/metro-config` and `react-native-worklets` report
   unmet peers against the SDK's pinned versions. Both are transitive, neither affects the gate.
+- **A green gate does not mean the app opens.** Typecheck, 97 tests and `bundle:check` all passed
+  on a build that crashed on the first screen of a fresh install. Nothing in CI renders React, so
+  the first launch on a device with no stored hospital is a manual check — clear the app's data
+  (Android: App info → Storage → Clear data; Expo Go: delete and re-scan) rather than testing only
+  the warm path your phone has been on all day.
 - **Never construct a second `ApiClient`.** `src/lib/apiClient.ts` is the only place, and a lint
   rule plus a boundary rule guard the storage equivalents. If the client is missing something, add
   it to `packages/api-client` where `client:check` can see it.

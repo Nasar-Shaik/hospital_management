@@ -15,13 +15,18 @@ import { TextField } from "../src/components/TextField";
 import { Button } from "../src/components/Button";
 import { ErrorState } from "../src/components/StateView";
 import { useProfile } from "../src/providers/ProfileProvider";
-import { useRuntime } from "../src/providers/RuntimeProvider";
+import { requireRuntime, useRuntime } from "../src/providers/RuntimeProvider";
 import { useTheme } from "../src/hooks/useTheme";
 import { toUserMessage, type UserFacingError } from "../src/lib/net/errors";
 import { deviceLabel } from "../src/platform/device";
 import { space, typography } from "../src/theme/tokens";
 
-export default function LoginScreen(): React.JSX.Element {
+/**
+ * Guarded because "Use a different hospital" below drops the profile while this screen is still
+ * mounted. Without the guard the runtime vanishes underneath it and the render throws before the
+ * navigation lands.
+ */
+function LoginScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const runtime = useRuntime();
@@ -110,6 +115,8 @@ export default function LoginScreen(): React.JSX.Element {
     </Screen>
   );
 }
+
+export default requireRuntime(LoginScreen);
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },

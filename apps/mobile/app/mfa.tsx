@@ -12,12 +12,12 @@ import { Screen } from "../src/components/Screen";
 import { TextField } from "../src/components/TextField";
 import { Button } from "../src/components/Button";
 import { ErrorState } from "../src/components/StateView";
-import { useRuntime } from "../src/providers/RuntimeProvider";
+import { requireRuntime, useRuntime } from "../src/providers/RuntimeProvider";
 import { useTheme } from "../src/hooks/useTheme";
 import { toUserMessage, type UserFacingError } from "../src/lib/net/errors";
 import { space, typography } from "../src/theme/tokens";
 
-export default function MfaScreen(): React.JSX.Element {
+function MfaScreen(): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const runtime = useRuntime();
@@ -76,6 +76,8 @@ export default function MfaScreen(): React.JSX.Element {
     </Screen>
   );
 }
+
+export default requireRuntime(MfaScreen);
 
 const styles = StyleSheet.create({
   header: { gap: space[1] },

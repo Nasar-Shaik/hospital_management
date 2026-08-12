@@ -11,12 +11,16 @@ import { useEffect } from "react";
 import { Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, Redirect, Tabs } from "expo-router";
-import { useRuntime } from "../../src/providers/RuntimeProvider";
+import { requireRuntime, useRuntime } from "../../src/providers/RuntimeProvider";
 import { useCapabilities, useSession } from "../../src/hooks/useStores";
 import { useTheme } from "../../src/hooks/useTheme";
 import { TABS, splitTabs } from "../../src/navigation/tabsFor";
 
-export default function AppLayout(): React.JSX.Element {
+/**
+ * `requireRuntime` covers every screen in the group, because a layout renders before its children.
+ * `/` resolves here on a fresh install, so this is the guard that has to hold first.
+ */
+function AppLayout(): React.JSX.Element {
   const theme = useTheme();
   const runtime = useRuntime();
   const status = useSession((s) => s.status);
@@ -86,3 +90,5 @@ export default function AppLayout(): React.JSX.Element {
     </Tabs>
   );
 }
+
+export default requireRuntime(AppLayout);

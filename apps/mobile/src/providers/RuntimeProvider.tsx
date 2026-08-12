@@ -14,7 +14,15 @@
  * offer. `useRuntime()` then throws a message that names the actual mistake, and the one screen
  * that legitimately renders early uses `useOptionalRuntime()`.
  */
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import { Redirect } from "expo-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRuntime, type MobileRuntime } from "../lib/runtime";
 import type { HospitalProfile } from "../lib/tenant";
@@ -73,4 +81,36 @@ export function useRuntime(): MobileRuntime {
 
 export function useOptionalRuntime(): MobileRuntime | undefined {
   return useContext(RuntimeContext);
+}
+
+/**
+ * Guards a route that cannot render without a hospital. **Every route module except `/hospital`
+ * and `+not-found` needs this**, including the `(app)` layout, which covers the group beneath it.
+ *
+ * ── WHY A WRAPPER AND NOT A CHECK INSIDE THE SCREEN ─────────────────────────
+ * `useRuntime`, `useSession`, `useBranch` and `useCapabilities` all read the runtime, they all run
+ * before the screen's first `return`, and hooks cannot be conditional. By the time a screen could
+ * test for the runtime it has already thrown. The redirect therefore has to happen in a PARENT
+ * component — one whose only hook is the optional read.
+ *
+ * ── AND WHY NOT AN EFFECT ───────────────────────────────────────────────────
+ * On a fresh install the first URL is `/`, which Expo Router resolves to `(app)/index`. The
+ * signed-in layout mounted and threw on the very first render — before the effect that was meant
+ * to send the user to `/hospital` ever ran. A gate that only closes after paint is not a gate.
+ *
+ * @param whenMissing what to render instead. A route wants the default redirect; something mounted
+ *   ALONGSIDE the navigator — the privacy cover — wants `null`, because redirecting from a sibling
+ *   of the router would move a user who was not going anywhere.
+ */
+export function requireRuntime<P extends object>(
+  Screen: ComponentType<P>,
+  whenMissing: ReactNode = <Redirect href="/hospital" />,
+): ComponentType<P> {
+  function Guarded(props: P): ReactNode {
+    const runtime = useOptionalRuntime();
+    if (!runtime) return whenMissing;
+    return <Screen {...props} />;
+  }
+  Guarded.displayName = `requireRuntime(${Screen.displayName ?? Screen.name ?? "Screen"})`;
+  return Guarded;
 }
