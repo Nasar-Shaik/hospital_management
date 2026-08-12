@@ -17,3 +17,12 @@
 # A generated file should not be in the argument. Prettier stops policing it;
 # pnpm owns its own format.
 pnpm-lock.yaml
+
+# ── Expo's generated typings ────────────────────────────────────────────────
+# Both are rewritten by `expo start`, neither is committed, and neither is
+# written in Prettier's style — `expo-env.d.ts` ships without a trailing
+# newline. Prettier 3 honours only the ROOT .gitignore, so being ignored by
+# `apps/mobile/.gitignore` is not enough to keep them out of `format:check`;
+# without these two lines the gate fails for anyone who has run the dev server.
+apps/mobile/.expo/
+apps/mobile/expo-env.d.ts
