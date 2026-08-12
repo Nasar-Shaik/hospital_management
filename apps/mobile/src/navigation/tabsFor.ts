@@ -33,9 +33,11 @@ export interface TabDefinition {
  * needs nothing: every signed-in person has an inbox.
  */
 export const TABS: readonly TabDefinition[] = [
-  { name: "queue", title: "Queue", icon: "list-outline", needs: ["encounter:read"] },
-  { name: "patients", title: "Patients", icon: "people-outline", needs: ["patient:read"] },
-  { name: "orders", title: "Orders", icon: "flask-outline", needs: ["order:read"] },
+  // `queue` is the route name from M1 and stays one: renaming a route breaks every deep link and
+  // every saved shortcut. Only the LABEL changed, once the screen became the clinical home.
+  { name: "queue", title: "Today", icon: "today-outline", needs: ["encounter:read"] },
+  { name: "patients", title: "My patients", icon: "people-outline", needs: ["patient:read"] },
+  { name: "orders", title: "Results", icon: "flask-outline", needs: ["order:read"] },
   { name: "pharmacy", title: "Pharmacy", icon: "medkit-outline", needs: ["pharmacy:dispense"] },
   { name: "billing", title: "Billing", icon: "cash-outline", needs: ["billing:read"] },
   { name: "alerts", title: "Alerts", icon: "notifications-outline", needs: [] },

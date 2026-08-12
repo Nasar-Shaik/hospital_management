@@ -7,12 +7,17 @@
  * every reader, and a phone crossing a timezone on a train would appear to change a schedule that
  * nobody edited.
  *
- * ── `Branch.timezone` IS NOT VALIDATED SERVER-SIDE ──────────────────────────
- * The field is documented as IANA and accepted as any 64-character string (backend item E), so
- * `IST`, `+05:30` and `Asia/Kolkatta` are all storable today. `Intl.DateTimeFormat` throws
- * `RangeError` on any of them. Formatting a date must not be able to crash a ward list because of
- * something a hospital typed into a settings field two years ago — hence `isValidZone`, which is
- * the client-side half of that finding.
+ * ── THE SERVER NOW VALIDATES `Branch.timezone` — AND THIS STILL MATTERS ─────
+ * When this module was written the field was accepted as any 64-character string, so `IST`,
+ * `+05:30` and `Asia/Kolkatta` were all storable and every one of them makes
+ * `Intl.DateTimeFormat` throw `RangeError`. The API closed that at the edge (`core/time/zone.ts`,
+ * the same two-part rule as below).
+ *
+ * Validation at the edge stops NEW bad data; it cannot fix a branch row written before the rule
+ * existed, and this app talks to whatever version a hospital is running. Formatting a date must
+ * not be able to crash a ward list because of something typed into a settings field two years
+ * ago — so `isValidZone` stays, and stays deliberately a separate copy: the mobile core imports
+ * nothing from the server, and a shared package would be the only thing it did import.
  */
 
 /**
@@ -98,6 +103,41 @@ export function formatDate(at: Date, zone: string): string {
 /** `12 Aug 2026, 09:00 IST` — the full stamp used on a record. */
 export function formatDateTime(at: Date, zone: string): string {
   return `${formatDate(at, zone)}, ${formatTime(at, { zone })}`;
+}
+
+/**
+ * `2026-08-12` — the calendar day an instant falls on IN THE BRANCH'S ZONE.
+ *
+ * This is what `?date=` on the encounter list takes, and it is the reason the parameter cannot be
+ * built from the device clock: a doctor in London asking for "today" at 21:00 would otherwise ask
+ * the Hyderabad server for yesterday's register and be told, accurately, that nobody is waiting.
+ *
+ * `en-CA` because its short date format IS `YYYY-MM-DD`; assembling the parts by hand is the same
+ * answer with three more places to get the padding wrong.
+ */
+export function formatDayKey(at: Date, zone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
+
+/**
+ * `Today` / `Yesterday` / `12 Aug 2026` — a date heading a clinician can scan.
+ *
+ * Both instants are reduced to a day key in the SAME zone before they are compared, so "today"
+ * means today at the hospital. Comparing a formatted date against `Date.now()` in the device zone
+ * is the bug this exists to avoid: at 01:00 IST on a phone left in UTC, every event from the
+ * current shift would be labelled "Yesterday".
+ */
+export function formatRelativeDay(at: Date, zone: string, now: Date = new Date()): string {
+  const day = formatDayKey(at, zone);
+  if (day === formatDayKey(now, zone)) return "Today";
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  if (day === formatDayKey(yesterday, zone)) return "Yesterday";
+  return formatDate(at, zone);
 }
 
 function zoneAbbreviation(at: Date, zone: string): string {

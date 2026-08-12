@@ -91,7 +91,14 @@ export function ErrorState({
 
 const styles = StyleSheet.create({
   centre: {
+    /**
+     * `flex: 1` fills a screen-height parent. `minHeight` is what rescues the OTHER case: inside a
+     * `ScrollView`'s content container the height is content-driven, so a lone `flex: 1` child
+     * collapses to zero and the empty state renders as nothing at all — which is indistinguishable
+     * from the blank page it exists to prevent.
+     */
     flex: 1,
+    minHeight: 160,
     alignItems: "center",
     justifyContent: "center",
     gap: space[2],

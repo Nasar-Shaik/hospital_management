@@ -19,6 +19,14 @@
 export interface RecordedCall {
   method: string;
   path: string;
+  /**
+   * The query string, `?` included, exactly as the client built it.
+   *
+   * Recorded separately from `path` so routes stay registerable by path alone, and asserted on
+   * directly: for a read, the filters ARE the request. A test that only checked the path would
+   * pass while the app asked for every doctor's patients instead of this one's.
+   */
+  search: string;
   headers: Record<string, string>;
   body?: unknown;
 }
@@ -41,6 +49,25 @@ export interface FakeApi {
 
 export function ok(data: unknown, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify({ success: true, data }), {
+    status: 200,
+    headers: { "content-type": "application/json", ...extraHeaders },
+  });
+}
+
+/**
+ * A LIST response, in the envelope the API actually sends.
+ *
+ * `{ success, data: items[], meta }` — the page metadata is a SIBLING of `data`, not nested inside
+ * it (`ok(res, items, 200, { page, limit, total, hasMore })` on the server; `paged()` on the
+ * client reads `{ data, meta }` off the envelope). Wrapping `{ items, meta }` in `data` instead
+ * produces a response the client parses as a one-element array of an object, which is exactly the
+ * kind of near-miss a fake transport exists to catch.
+ */
+export function okPaged<T>(
+  paged: { items: T[]; meta: unknown },
+  extraHeaders: Record<string, string> = {},
+): Response {
+  return new Response(JSON.stringify({ success: true, data: paged.items, meta: paged.meta }), {
     status: 200,
     headers: { "content-type": "application/json", ...extraHeaders },
   });
@@ -90,6 +117,7 @@ export function createFakeApi(): FakeApi {
     const call: RecordedCall = {
       method,
       path: url.pathname,
+      search: url.search,
       headers,
       ...(body !== undefined ? { body } : {}),
     };

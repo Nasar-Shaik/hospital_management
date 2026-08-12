@@ -230,3 +230,58 @@ describe("role decides only where you land", () => {
     expect(homeFor([], held())).toBe("alerts");
   });
 });
+
+/**
+ * 1. M2 — THE DOCTOR'S CLINICAL NAVIGATION, STILL DERIVED FROM PERMISSIONS ALONE.
+ *
+ * The M2 screens changed what the tabs CONTAIN, not how they are chosen. That distinction is worth
+ * a test of its own: the moment a clinical feature is worth hiding, `if (role === "DOCTOR")` starts
+ * to look like the obvious way to hide it — and produces an app that works at the hospital it was
+ * written for and quietly loses a tab at the next one, because roles are tenant-editable data.
+ */
+describe("1. the doctor's clinical tabs are a function of the grants, not of the word DOCTOR", () => {
+  const DOCTOR_GRANTS = held("patient:read", "encounter:read", "order:read", "emr:read");
+
+  it("gives a doctor Today, My patients, Results and Alerts", () => {
+    expect(tabsFor(DOCTOR_GRANTS).map((t) => t.name)).toEqual([
+      "queue",
+      "patients",
+      "orders",
+      "alerts",
+    ]);
+    // Retitled in M2 — the ROUTE names are unchanged, because renaming a route breaks every deep
+    // link and every shortcut a user has saved.
+    expect(tabsFor(DOCTOR_GRANTS).map((t) => t.title)).toEqual([
+      "Today",
+      "My patients",
+      "Results",
+      "Alerts",
+    ]);
+  });
+
+  it("lands them on Today, which is the clinical home", () => {
+    expect(homeFor(["DOCTOR"], DOCTOR_GRANTS)).toBe("queue");
+  });
+
+  it("gives the SAME tabs to a hospital's own invented role holding the same grants", () => {
+    // The whole point. A tenant that renames DOCTOR to CONSULTANT, or builds a registrar role out
+    // of the same permissions, gets an identical app.
+    expect(tabsFor(DOCTOR_GRANTS).map((t) => t.name)).toEqual(
+      tabsFor(held("patient:read", "encounter:read", "order:read", "emr:read")).map((t) => t.name),
+    );
+    expect(homeFor(["SENIOR_REGISTRAR"], DOCTOR_GRANTS)).toBe("queue");
+  });
+
+  it("removes Results from someone without order:read, and lands them elsewhere", () => {
+    const noOrders = held("patient:read", "encounter:read", "emr:read");
+    expect(tabsFor(noOrders).map((t) => t.name)).not.toContain("orders");
+    expect(homeFor(["DOCTOR"], noOrders)).toBe("queue");
+  });
+
+  it("keeps every clinical tab away from someone holding nothing clinical", () => {
+    // A cashier gets Billing and Alerts, and no route into a chart. The screens re-check anyway,
+    // and the server refuses regardless — this is the hiding half of the same rule.
+    const cashier = held("billing:read");
+    expect(tabsFor(cashier).map((t) => t.name)).toEqual(["billing", "alerts"]);
+  });
+});

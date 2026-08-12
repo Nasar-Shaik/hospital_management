@@ -55,6 +55,24 @@ export function isNetworkFailure(error: unknown): boolean {
 }
 
 /**
+ * True when this hospital did not buy the module the request belongs to (`HMS-PLAN-002`).
+ *
+ * ── THIS IS HOW THE PHONE LEARNS WHAT THE HOSPITAL HAS ──────────────────────
+ * There is no entitlements endpoint a clinician may read: `GET /subscription` needs
+ * `subscription:manage`, which is an administrator's permission and is not in the DOCTOR or NURSE
+ * grant. The server's own refusal is therefore the feature flag — ask for the inpatient list, and a
+ * clinic with no wards answers `HMS-PLAN-002` (`module.ops.ipd`).
+ *
+ * The distinction from a 403 is the point of having a separate code, and it is why this is a
+ * separate predicate: "not in your edition" means HIDE the entry point, because no amount of role
+ * editing will ever make it work. "Insufficient permission" means the same UI is right for somebody
+ * else at this hospital, and is reported rather than hidden.
+ */
+export function isFeatureUnavailable(error: unknown): boolean {
+  return error instanceof ApiClientError && error.code === "HMS-PLAN-002";
+}
+
+/**
  * True when the branch the app thinks it is in is no longer usable, in either of the two ways the
  * server can say so: it refused the write for want of a branch (`HMS-BRANCH-001`), or it refused
  * the caller for this site (a 403). Both mean the same recovery — re-read `/me/branches` (M0 §7).

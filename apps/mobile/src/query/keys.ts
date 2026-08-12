@@ -46,11 +46,57 @@ export const queryKeys = {
    */
   myBranches: (tenantSlug: string) => [tenantSlug, "me", "branches"] as const,
 
-  /* Everything below is branch-sensitive. M1 ships none of these screens; they are here so the
-   * first feature to need one does not invent a key shape of its own. */
+  /**
+   * A patient's allergy list is read HOSPITAL-WIDE, not per site: the allergy routes are
+   * `tenant`-scoped and `scopeFilter` deliberately does not narrow them (authorize.ts says so in
+   * as many words). Prefixing this with a branch would claim a distinction the server does not
+   * make, and would re-fetch the same rows on every switch — so it is keyed like `me`.
+   *
+   * This is the ONLY clinical key without a branch, and it is here rather than below so the
+   * exception is impossible to miss.
+   */
+  patientAllergies: (tenantSlug: string, patientId: string) =>
+    [tenantSlug, "patient", patientId, "allergies"] as const,
+
+  /**
+   * ── A LIST AND A RECORD NEVER SHARE A SEGMENT ───────────────────────────────
+   * Lists are PLURAL (`"encounters"`), single records are SINGULAR (`"encounter"`). It reads
+   * nicely and that is not why it is done.
+   *
+   * `encounters(scope)` with no filters is `[…, "encounters", ""]`. A detail key of
+   * `[…, "encounters", id]` would be the SAME key whenever the id is `""` — which is exactly what
+   * a screen passes while the route param is still resolving, or when a chart is opened with no
+   * visit in context. The disabled detail query would then observe the LIST's cache entry and
+   * hand a screen a `Paged<Encounter>` typed as an `Encounter`: no error, no failed request, just
+   * a chart rendering fields that are not there. Different words, no collision, no thinking.
+   */
   patients: (scope: QueryScope, filters?: string) => scoped(scope, "patients", filters ?? ""),
-  patient: (scope: QueryScope, id: string) => scoped(scope, "patients", id),
+  patient: (scope: QueryScope, id: string) => scoped(scope, "patient", id),
   encounters: (scope: QueryScope, filters?: string) => scoped(scope, "encounters", filters ?? ""),
   orders: (scope: QueryScope, filters?: string) => scoped(scope, "orders", filters ?? ""),
   notifications: (scope: QueryScope) => scoped(scope, "notifications"),
+
+  /* ── M2, the doctor's read-only surface ─────────────────────────────────── */
+
+  /** One visit. */
+  encounter: (scope: QueryScope, id: string) => scoped(scope, "encounter", id),
+  /** Everyone in a bed right now (`GET /inpatients`) — feature-gated on `module.ops.ipd`. */
+  inpatients: (scope: QueryScope) => scoped(scope, "inpatients"),
+  /** One order, including its result once released. */
+  order: (scope: QueryScope, id: string) => scoped(scope, "order", id),
+  /** This visit's chart, oldest first. */
+  encounterVitals: (scope: QueryScope, encounterId: string) =>
+    scoped(scope, "encounter", encounterId, "vitals"),
+  /** The patient's trend across visits, newest first. */
+  patientVitals: (scope: QueryScope, patientId: string) =>
+    scoped(scope, "patient", patientId, "vitals"),
+  /** The structured note for one visit. `null` until the doctor starts one. */
+  consultation: (scope: QueryScope, encounterId: string) =>
+    scoped(scope, "encounter", encounterId, "consultation"),
+  /** Prescriptions, filtered server-side; `filters` is the serialised query. */
+  prescriptions: (scope: QueryScope, filters?: string) =>
+    scoped(scope, "prescriptions", filters ?? ""),
+  /** Every encounter in one care story (`GET /episodes/:id/timeline`). */
+  episodeTimeline: (scope: QueryScope, episodeId: string) =>
+    scoped(scope, "episode", episodeId, "timeline"),
 } as const;

@@ -42,6 +42,12 @@ const RUNTIME_HOOKS = [
   "useActiveBranchLabel",
   "useBranchResolved",
   "useAppLifecycle",
+  // M2. `useClinical` and `useZoneFor` read the runtime for the api-client and the branch list;
+  // `usePatient` reads it through `useClinical`, one level down, which is exactly the indirection
+  // that makes a screen using only it look innocent while failing on the same first render.
+  "useClinical",
+  "useZoneFor",
+  "usePatient",
 ];
 
 function sourceFiles(dir: string, extensions = [".tsx"]): string[] {
@@ -55,6 +61,21 @@ function sourceFiles(dir: string, extensions = [".tsx"]): string[] {
 const routeFiles = (dir: string): string[] => sourceFiles(dir);
 
 const read = (file: string): string => readFileSync(file, "utf8");
+
+/**
+ * The file with its comments removed — for the checks that are about CODE.
+ *
+ * This codebase documents heavily, and the prose legitimately quotes the things the scans below
+ * forbid: `https://apollo.paperlesstech.in` as an example base URL, `toLocaleTimeString()` as the
+ * bug being avoided. Scanning the raw text would fail on the explanation of the rule, which is the
+ * fastest way to teach everybody to delete the comment instead of the mistake.
+ *
+ * Line comments are matched only when NOT preceded by a colon, so the `//` inside a `https://`
+ * that appears in real code still survives to be caught.
+ */
+function codeOnly(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
 
 /** Which runtime hooks a module calls. Matches the call, not the import, so a re-export cannot hide. */
 function hooksUsedIn(source: string): string[] {
@@ -227,6 +248,165 @@ describe("a store selector never returns a value it just built", () => {
           ).toBe(false);
         }
       });
+    },
+  );
+});
+
+/**
+ * ── THE THREE ARCHITECTURE RULES M2 CAN LOSE SILENTLY ───────────────────────
+ * Each of these is a one-line mistake that typechecks, bundles, passes every behavioural test, and
+ * is invisible in review because the line looks completely ordinary. They are checked structurally
+ * for the same reason the route guards are: the compiler has no opinion about any of them.
+ */
+describe("a clinical time is never rendered in the device's zone", () => {
+  /**
+   * `new Date(iso).toLocaleTimeString()` is the bug. It reads correctly, it is what the web app
+   * still does, and on a phone it silently re-times the whole ward round to wherever the reader is
+   * standing — turning an "08:00 dose" into a different number for every person who looks at it.
+   *
+   * `Intl.DateTimeFormat` WITHOUT a `timeZone` is the same bug wearing a longer name.
+   *
+   * `src/lib/time.ts` is the one exemption: it is the module that takes a zone and applies it, and
+   * it is unit-tested against fixed instants in `foundation.test.ts` and `clinical.test.ts`.
+   */
+  const DEVICE_CLOCK: [RegExp, string][] = [
+    [/\.toLocaleTimeString\s*\(/, "toLocaleTimeString() formats in the DEVICE's zone"],
+    [/\.toLocaleDateString\s*\(/, "toLocaleDateString() formats in the DEVICE's zone"],
+    [/\.toLocaleString\s*\(/, "toLocaleString() formats in the DEVICE's zone"],
+    [
+      /\.getHours\s*\(\)|\.getDate\s*\(\)(?!\s*[-+])/,
+      "getHours/getDate read the DEVICE's calendar",
+    ],
+  ];
+
+  const EXEMPT = ["src/lib/time.ts", "src/clinical/patient.ts"];
+
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  it("scans something", () => {
+    expect(scanned.length).toBeGreaterThan(20);
+  });
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      if (EXEMPT.includes(name)) return;
+      const source = codeOnly(read(file));
+
+      for (const [pattern, why] of DEVICE_CLOCK) {
+        expect(
+          pattern.test(source),
+          `${name} — ${why}. A clinical timestamp goes UTC → the BRANCH's zone → display; use ` +
+            `formatTime/formatDateTime from src/lib/time.ts with a zone from useZoneFor().`,
+        ).toBe(false);
+      }
+
+      /**
+       * A formatter built with no `timeZone` falls back to the device's. Matched by looking at the
+       * options object that follows, which is crude but catches the realistic mistake — someone
+       * reaching for `Intl` directly instead of the helpers.
+       */
+      for (const [, options] of source.matchAll(/new Intl\.DateTimeFormat\s*\(([^)]*)\)/g)) {
+        expect(
+          (options ?? "").includes("timeZone"),
+          `${name} builds an Intl.DateTimeFormat with no timeZone, so it formats in the device's ` +
+            `zone. Pass the branch's zone.`,
+        ).toBe(true);
+      }
+    },
+  );
+
+  it("proves src/lib/time.ts is the only place that formats at all", () => {
+    // Guards the exemption: if the helpers move, this list has to move with them, and the check
+    // above stops being vacuous rather than silently passing on a file that no longer exists.
+    expect(read(join(APP_DIR, "..", "src", "lib", "time.ts"))).toMatch(/timeZone: zone/);
+  });
+});
+
+describe("nothing reaches the network except through the ApiClient", () => {
+  /**
+   * The rule is in the M2 brief and it is worth a machine check: one `fetch("/api/v1/...")` inside
+   * a screen bypasses the tenant host, the bearer token, `X-Active-Branch`, the refresh-and-replay
+   * on 401 and `ApiClientError` — five guarantees, silently, in one line that looks like normal
+   * code. `src/lib/runtime.ts` is the one place a `fetch` legitimately appears: it wraps the
+   * transport to observe connectivity, and hands it to the client.
+   */
+  const EXEMPT = ["src/lib/runtime.ts", "src/lib/apiClient.ts"];
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      if (EXEMPT.includes(name)) return;
+      const source = codeOnly(read(file));
+
+      expect(
+        /\bfetch\s*\(/.test(source),
+        `${name} calls fetch() directly. Every request goes through @medicore/api-client, which ` +
+          `owns the tenant host, the token, the active-branch header, the 401 replay and the ` +
+          `error type.`,
+      ).toBe(false);
+
+      expect(
+        /["'`]https?:\/\//.test(source),
+        `${name} contains an absolute URL. The base URL is derived from the hospital profile ` +
+          `(src/lib/tenant.ts); a literal one would point a build at somebody else's server.`,
+      ).toBe(false);
+
+      // A hand-built query key would sidestep the branch prefix, which is the whole point of
+      // `keys.ts`. Descriptors come from `query/clinical.ts`; screens spread them.
+      if (!name.startsWith("src/query/")) {
+        expect(
+          /queryKey\s*:\s*\[/.test(source),
+          `${name} builds a queryKey from an inline array. Branch-sensitive keys must come from ` +
+            `src/query/keys.ts — via a descriptor in src/query/clinical.ts — or the ` +
+            `[tenant, branch] prefix gets forgotten on exactly one screen. ` +
+            `\`queryKey: queryKeys.something(...)\` is the allowed form.`,
+        ).toBe(false);
+      }
+    },
+  );
+});
+
+describe("a branch id is never taken from navigation", () => {
+  /**
+   * The active branch comes from the validated switcher and nowhere else (M0 §7, ADR-0015). A
+   * route param, a deep link or a push payload carrying `branchId` would be a caller-supplied
+   * branch — and the app would send it as `X-Active-Branch` on every subsequent request, which is
+   * precisely the "never trust a branchId from navigation" rule.
+   */
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      const source = codeOnly(read(file));
+      // `useLocalSearchParams<{...}>()` declares exactly what a route accepts. A branch in there
+      // is the mistake; matching the declaration catches it at the point it is introduced.
+      for (const [, declared] of source.matchAll(/useLocalSearchParams\s*<([^>]*)>/g)) {
+        expect(
+          /branch/i.test(declared ?? ""),
+          `${name} declares a branch-shaped route param (${declared ?? ""}). The active branch ` +
+            `comes only from the validated /me/branches selection.`,
+        ).toBe(false);
+      }
+
+      for (const [, declared] of source.matchAll(/params:\s*\{([^}]*)\}/g)) {
+        expect(
+          /branchId/.test(declared ?? ""),
+          `${name} passes a branchId through navigation params. Routes carry RECORD ids, which ` +
+            `the server authorizes; the branch is not one of them.`,
+        ).toBe(false);
+      }
     },
   );
 });

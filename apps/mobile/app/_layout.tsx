@@ -21,6 +21,7 @@ import { PrivacyCover } from "../src/components/PrivacyOverlay";
 import { useTheme } from "../src/hooks/useTheme";
 import type { MobileRuntime } from "../src/lib/runtime";
 import type { SessionEndReason } from "../src/lib/session";
+import type { Theme } from "../src/theme/tokens";
 
 export default function RootLayout(): React.JSX.Element {
   return (
@@ -73,7 +74,33 @@ function Shell(): React.JSX.Element {
           headerShown: false,
           contentStyle: { backgroundColor: theme.colors.bg },
         }}
-      />
+      >
+        {/**
+         * The clinical detail screens are pushed OVER the tab bar rather than living inside it.
+         *
+         * Two reasons, and the second is the load-bearing one. A chart is not a destination you
+         * switch to, it is somewhere you go and come back from — so it wants a stack and a back
+         * button, not a tab. And putting `patient/[id]` inside the `(app)` group would make Expo
+         * Router treat the directory as a nested navigator under `Tabs`, which is a lot of
+         * machinery for a screen whose only navigation is "back".
+         *
+         * These are the only routes here that need a header: they are the only ones a user arrives
+         * at by pushing. The header is declared rather than inherited because `screenOptions` above
+         * switches headers OFF for the auth and onboarding screens, which have their own.
+         */}
+        <Stack.Screen
+          name="patient/[id]"
+          options={{ headerShown: true, title: "Chart", ...detailHeader(theme) }}
+        />
+        <Stack.Screen
+          name="order/[id]"
+          options={{ headerShown: true, title: "Result", ...detailHeader(theme) }}
+        />
+        <Stack.Screen
+          name="inpatients"
+          options={{ headerShown: true, title: "Inpatients", ...detailHeader(theme) }}
+        />
+      </Stack>
       <PrivacyCover />
     </>
   );
@@ -109,6 +136,21 @@ function SessionBootstrap(): null {
   }, [runtime, router]);
 
   return null;
+}
+
+/** The themed header the pushed clinical screens share. One definition, three call sites. */
+function detailHeader(theme: Theme): {
+  headerStyle: { backgroundColor: string };
+  headerTintColor: string;
+  headerBackButtonDisplayMode: "minimal";
+} {
+  return {
+    headerStyle: { backgroundColor: theme.colors.bgElevated },
+    headerTintColor: theme.colors.fg,
+    // The chevron alone. A back button labelled with the previous screen's title pushes the
+    // patient's name off a narrow phone, and the name is the thing that must not move.
+    headerBackButtonDisplayMode: "minimal",
+  };
 }
 
 function Splash(): React.JSX.Element {
