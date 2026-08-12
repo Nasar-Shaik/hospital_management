@@ -6,7 +6,14 @@
  * on it.
  */
 import { describe, expect, it } from "vitest";
-import { createProfile, resolveBaseUrl, validateSlug } from "../src/lib/tenant";
+import {
+  createProfile,
+  hydrateProfile,
+  resolveBaseUrl,
+  toStoredProfile,
+  validateSlug,
+  type StoredProfile,
+} from "../src/lib/tenant";
 import { AGGREGATE, queryKeys, scoped } from "../src/query/keys";
 import {
   displayZone,
@@ -55,6 +62,61 @@ describe("the hospital is a URL, and a production build cannot be talked out of 
      */
     expect(validateSlug("admin")).toBe("reserved");
     expect(validateSlug("api")).toBe("reserved");
+  });
+});
+
+describe("a stored hospital is re-resolved against the build, never trusted from disk", () => {
+  it("stores identity only — no URL reaches the disk", () => {
+    const stored = toStoredProfile({
+      ...createProfile("apollo", DEV),
+      lastUserEmail: "a@apollo.test",
+    });
+
+    expect(stored).toEqual({ slug: "apollo", label: "apollo", lastUserEmail: "a@apollo.test" });
+    expect(JSON.stringify(stored)).not.toMatch(/http/);
+  });
+
+  it("re-derives the URL from the CURRENT build, so a domain change takes effect", () => {
+    /**
+     * The bug this prevents: a profile saved while the build resolved `localhost:4000` kept
+     * pointing there after the build moved to a LAN-reachable domain. The app could not be
+     * repaired from inside — the phone's data had to be cleared. It also breaks any future
+     * platform domain move, on every installed device at once.
+     */
+    const saved = toStoredProfile(createProfile("apollo", DEV));
+
+    expect(hydrateProfile(saved, DEV)?.baseUrl).toBe("http://apollo.localhost:4000");
+    expect(hydrateProfile(saved, PROD)?.baseUrl).toBe("https://apollo.paperlesstech.in");
+  });
+
+  it("ignores a baseUrl an attacker wrote into unencrypted storage", () => {
+    /**
+     * This list lives in AsyncStorage, which is world-readable on a rooted device. Trusting a URL
+     * from it would let an edited file point the app — and the password typed into it — anywhere.
+     * The slug still has to resolve through the build's own domain.
+     */
+    const tampered = {
+      slug: "apollo",
+      baseUrl: "https://attacker.example.com",
+    } as unknown as StoredProfile;
+
+    expect(hydrateProfile(tampered, PROD)?.baseUrl).toBe("https://apollo.paperlesstech.in");
+  });
+
+  it("drops an entry it can no longer address rather than crashing the launch", () => {
+    expect(hydrateProfile({ slug: "admin" }, PROD)).toBeUndefined(); // became reserved
+    expect(hydrateProfile({ slug: "not a slug" }, PROD)).toBeUndefined();
+    expect(hydrateProfile({} as StoredProfile, PROD)).toBeUndefined();
+  });
+
+  it("keeps the label and remembered email a user has accumulated", () => {
+    const hydrated = hydrateProfile(
+      { slug: "apollo", label: "Apollo Hyderabad", lastUserEmail: "n@apollo.test" },
+      PROD,
+    );
+
+    expect(hydrated?.label).toBe("Apollo Hyderabad");
+    expect(hydrated?.lastUserEmail).toBe("n@apollo.test");
   });
 });
 

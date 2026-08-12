@@ -72,3 +72,46 @@ export function createProfile(slug: string, options: ResolveBaseUrlOptions): Hos
   const normalised = slug.trim().toLowerCase();
   return { slug: normalised, label: normalised, baseUrl: resolveBaseUrl(normalised, options) };
 }
+
+/**
+ * What a device persists about a hospital: IDENTITY ONLY.
+ *
+ * `baseUrl` is deliberately absent. It is a function of the slug and the build profile, so storing
+ * it stores an answer that can go out of date while the question has not — and it puts a URL the
+ * app will call inside AsyncStorage, which is unencrypted and readable on a rooted device. See the
+ * header of `platform/profiles.ts`.
+ */
+export interface StoredProfile {
+  slug: string;
+  label?: string;
+  lastUserEmail?: string;
+}
+
+export function toStoredProfile(profile: HospitalProfile): StoredProfile {
+  return {
+    slug: profile.slug,
+    label: profile.label,
+    ...(profile.lastUserEmail ? { lastUserEmail: profile.lastUserEmail } : {}),
+  };
+}
+
+/**
+ * Rebuilds a usable profile from what was persisted, against the CURRENT build.
+ *
+ * Returns undefined for anything it cannot address: a non-string slug, a malformed one, or a slug
+ * that has since become reserved. Dropping such an entry is right — it can no longer reach a
+ * hospital, and the user can re-add a valid one — whereas throwing would make one bad row a
+ * launch-time crash for a list that is otherwise fine.
+ */
+export function hydrateProfile(
+  stored: StoredProfile,
+  options: ResolveBaseUrlOptions,
+): HospitalProfile | undefined {
+  if (typeof stored?.slug !== "string") return undefined;
+  if (validateSlug(stored.slug)) return undefined;
+  return {
+    ...createProfile(stored.slug, options),
+    ...(typeof stored.label === "string" && stored.label ? { label: stored.label } : {}),
+    ...(typeof stored.lastUserEmail === "string" ? { lastUserEmail: stored.lastUserEmail } : {}),
+  };
+}
