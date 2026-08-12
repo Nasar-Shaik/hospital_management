@@ -53,11 +53,17 @@ export async function writeBranchId(requested?: string): Promise<string | undefi
 
   const scope = ctx.scope;
 
-  // 2. A confined caller who can reach exactly one branch: no ambiguity, no prompt.
-  if (scope && !scope.allBranches && scope.branchIds.length === 1) return scope.branchIds[0];
-
-  // 3. Otherwise resolve the tenant's active branches. A hospital-wide binding sees every active
-  //    branch; a confined one sees the branches it holds.
+  /**
+   * 2. Resolve against the branches that are actually OPEN.
+   *
+   * There used to be a short-circuit here: a confined caller holding exactly one branch got that
+   * branch with no query. It was one query cheaper and wrong in one case — the branch had closed.
+   * Holding a binding to a site is not the same as the site being open, and nothing revokes the
+   * binding when a hospital retires a branch, so a receptionist whose only branch had shut went on
+   * stamping new records into it. `activeBranchCandidates` already intersects the held set with
+   * `status: "active"`, so deleting the special case is both the fix and one fewer branch of logic.
+   * The cost is identical: the same single indexed lookup either way.
+   */
   const candidates = await activeBranchCandidates(
     scope?.allBranches ?? false,
     scope?.branchIds ?? [],
@@ -112,6 +118,41 @@ function assertWritableBranch(requested: string): string {
   throw new AppError("HMS-AUTH-005", 403, "Insufficient permission", {
     branchId: ["you may not create records in that branch"],
   });
+}
+
+/**
+ * Is this id a branch this hospital is still operating?
+ *
+ * ── MEMBERSHIP IS NOT THE SAME QUESTION AS "IS IT OPEN" ─────────────────────
+ * `authorize` used to accept `X-Active-Branch` on membership alone, and for a hospital-wide
+ * binding on nothing at all — `allBranches` short-circuited before the id was looked at. Two
+ * consequences, and the second is the worse one:
+ *
+ *   1. A RETIRED branch stayed usable. `/me/branches` stops listing it, so the switcher forgets
+ *      it, but a phone that remembered the selection — or any client repeating a stored header —
+ *      kept acting in a site the hospital has closed. Membership outlives the branch: a user's
+ *      binding is not revoked when the site shuts.
+ *   2. A hospital-wide caller could name ANY id, including a branch belonging to ANOTHER TENANT.
+ *      Reads stayed safe (`tenantScopePlugin` still filters by tenant, so the query matched
+ *      nothing), but `writeBranchId` stamps `ctx.activeBranchId` onto new rows — so the id of a
+ *      different hospital's branch could be written into this one's records.
+ *
+ * Both close with the same check, so it applies to confined and hospital-wide callers alike.
+ * `tenantId` is in the filter, not assumed from the id.
+ *
+ * One `_id` lookup, and only when the header is present — an absent header is the ordinary case
+ * and still touches no database.
+ */
+export async function isActiveBranch(branchId: string): Promise<boolean> {
+  if (!Types.ObjectId.isValid(branchId)) return false;
+  const ctx = getContext();
+  const row = await ctx.connection
+    .collection<BranchRow>("branches")
+    .findOne(
+      { _id: new Types.ObjectId(branchId), tenantId: ctx.tenantId, status: "active" },
+      { projection: { _id: 1 } },
+    );
+  return row !== null;
 }
 
 /** The active branches the caller could write to — one query, only on the no-selection fallback. */

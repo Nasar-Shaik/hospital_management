@@ -1277,3 +1277,119 @@ describe("branchId enforcement survives the tenant plugin", () => {
     }
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * A RETIRED BRANCH IS NOT A PLACE YOU CAN STILL WORK
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a closed branch cannot be worked in, however the client asks", () => {
+  /**
+   * `X-Active-Branch` used to be checked against MEMBERSHIP alone, and for a hospital-wide
+   * binding against nothing at all — `allBranches` returned the header unexamined. Two holes:
+   *
+   *   1. Membership outlives the branch. Retiring a site does not revoke anyone's binding, so a
+   *      client that remembered the selection — a phone, most obviously — kept acting in a
+   *      hospital the organisation has closed, while `/me/branches` had already stopped listing
+   *      it. M0 §7 says the list outranks anything the phone remembers; this is the server half.
+   *   2. A hospital-wide caller could name ANY id, including one belonging to a DIFFERENT TENANT.
+   *      Reads stayed safe because the tenant plugin still filtered them, but `writeBranchId`
+   *      stamps the active branch onto new rows — so another hospital's branch id could be
+   *      written into this one's records.
+   *
+   * The rule now: reachable AND open AND in this tenant, or it is not a selection at all.
+   */
+  let retired = "";
+
+  beforeAll(async () => {
+    const made = await post("/api/v1/branches", tokenAdmin)
+      .send({ name: "Warangal", code: "WGL" })
+      .expect(201);
+    retired = made.body.data.id as string;
+
+    // Give a confined user a binding to it BEFORE it closes — the binding is what survives.
+    await createUserWithRole("recepw@branchiso.test", "RECEPTIONIST", [retired]);
+
+    await request(app)
+      .patch(`/api/v1/branches/${retired}`)
+      .set("Host", HOST)
+      .set("Authorization", `Bearer ${tokenAdmin}`)
+      .send({ status: "inactive" })
+      .expect(200);
+  }, 60_000);
+
+  it("drops it from the switcher, which is what the phone reads", async () => {
+    const mine = await get("/api/v1/me/branches", tokenAdmin).expect(200);
+    const ids = (mine.body.data.branches as { id: string }[]).map((b) => b.id);
+
+    expect(ids).not.toContain(retired);
+    expect(ids).toEqual(expect.arrayContaining([branchA, branchB]));
+  });
+
+  it("ignores it in X-Active-Branch from a HOSPITAL-WIDE caller — the unguarded path", async () => {
+    /**
+     * The admin may reach every branch, so membership can never refuse this one. Only the
+     * branch's own status can, which is exactly the check that did not exist.
+     */
+    const res = await post("/api/v1/patients", tokenAdmin, retired).send({
+      name: "Retired Site",
+      gender: "male",
+    });
+
+    /**
+     * The selection is discarded, so the admin is back in All mode with two open branches and no
+     * choice made — which `writeBranchId` refuses rather than guessing (HMS-BRANCH-001). A refusal
+     * is the RIGHT answer here; what must never happen is a row stamped into the closed site.
+     */
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+    expect(res.body.data?.patient?.branchId ?? undefined).not.toBe(retired);
+  });
+
+  it("ignores it for a CONFINED caller whose binding outlived the branch", async () => {
+    const tokenRecepW = await login("recepw@branchiso.test");
+
+    /**
+     * Her ONLY branch is closed. This caught a second, separate hole: `writeBranchId` short-circuited
+     * to "the one branch this caller holds" without asking whether it was still open, so the header
+     * guard above was bypassed entirely on the write path. The write must not land in the retired
+     * branch — refused or branchless, never there.
+     */
+    const res = await post("/api/v1/patients", tokenRecepW, retired).send({
+      name: "Closed Binding",
+      gender: "female",
+    });
+
+    expect(res.body.data?.patient?.branchId ?? undefined).not.toBe(retired);
+  });
+
+  it("refuses a branch id belonging to ANOTHER TENANT, even from a hospital-wide caller", async () => {
+    /**
+     * A syntactically valid id the admin has every permission to use, and no relationship to.
+     * Before the tenant-scoped lookup this was accepted verbatim and became the stamped branch.
+     */
+    const foreign = "64b7f0000000000000000009";
+    const res = await post("/api/v1/patients", tokenAdmin, foreign).send({
+      name: "Foreign Branch",
+      gender: "male",
+    });
+
+    // Same shape as the retired case: the id is discarded, so the caller must choose a real site.
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+    expect(res.body.data?.patient?.branchId ?? undefined).not.toBe(foreign);
+  });
+
+  it("does not 500 on a header that is not an id at all", async () => {
+    // A malformed selection is stale UI state, not an attack surface — it must degrade, not throw.
+    const res = await get("/api/v1/patients", tokenAdmin, "not-an-object-id");
+    expect(res.status).toBe(200);
+  });
+
+  it("still honours a branch that is open — the guard is not a blanket refusal", async () => {
+    const created = await post("/api/v1/patients", tokenAdmin, branchB)
+      .send({ name: "Open Site", gender: "female" })
+      .expect(201);
+
+    expect(created.body.data.patient.branchId).toBe(branchB);
+  });
+});

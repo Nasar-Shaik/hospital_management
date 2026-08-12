@@ -25,6 +25,7 @@
 import type { NextFunction, Request, Response } from "express";
 import type { FeatureFlag, PermissionDefinition } from "@medicore/permissions";
 import { getContext } from "../core/context/requestContext.js";
+import { isActiveBranch } from "../core/context/activeBranch.js";
 import { AppError, InsufficientPermissionError } from "../core/errors/appError.js";
 import { tagMiddleware } from "../core/http/routeInventory.js";
 import { tryRecordAudit } from "../core/audit/auditWriter.js";
@@ -121,11 +122,12 @@ export function authorize(permission: PermissionDefinition, options: AuthorizeOp
 
           // ── the ACTIVE branch (ADR-0015) ──────────────────────────────────
           // The one site this request acts in, chosen by the client via `X-Active-Branch` and
-          // validated HERE against the live allowed set — never trusted from the header alone, for
-          // the same reason scope is read live: a user moved off a branch must not keep acting in it
-          // by sending its id. An absent or not-permitted value leaves it undefined (All mode), which
-          // is exactly today's behaviour — so shipping this is a no-op until a branch is selected.
-          ctx.activeBranchId = resolveActiveBranch(req, branchIds, allBranches);
+          // validated HERE against the live allowed set AND the branch's own status — never trusted
+          // from the header alone, for the same reason scope is read live: a user moved off a branch
+          // must not keep acting in it by sending its id, and neither must anyone keep acting in a
+          // branch the hospital has closed. An absent, not-permitted or retired value leaves it
+          // undefined (All mode), so a stale selection degrades to the caller's own scope.
+          ctx.activeBranchId = await resolveActiveBranch(req, branchIds, allBranches);
 
           next();
         } catch (err) {
@@ -165,23 +167,32 @@ export function requireFeature(feature: FeatureFlag) {
 /**
  * Reads and validates the `X-Active-Branch` header against the caller's allowed set (ADR-0015).
  *
- * Returns the chosen branch id when it is one the caller may reach, otherwise `undefined` — which
- * means "no single branch selected" (All mode). It never throws: an absent header is the ordinary
- * case (an old client, a single-branch tenant), and a header naming a branch the caller cannot reach
- * is treated as "not selected" rather than an error, so a stale selection fails SAFE (to the
- * caller's own scope) instead of leaking or 500-ing.
+ * Returns the chosen branch id when it is one the caller may reach AND the hospital is still
+ * operating, otherwise `undefined` — which means "no single branch selected" (All mode). It never
+ * throws: an absent header is the ordinary case (an old client, a single-branch tenant), and a
+ * header naming a branch the caller cannot reach is treated as "not selected" rather than an error,
+ * so a stale selection fails SAFE (to the caller's own scope) instead of leaking or 500-ing.
+ *
+ * ── TWO GATES, NOT ONE ──────────────────────────────────────────────────────
+ * Membership answers "may this caller reach that site". It does NOT answer "is that site still
+ * open" — a user's branch binding is not revoked when a branch is retired, so membership alone let
+ * a remembered selection keep acting in a closed site. And for a hospital-wide binding there was no
+ * first gate at all: `allBranches` returned the raw header unexamined, so any id — including
+ * another tenant's — became the branch stamped on new records. `isActiveBranch` closes both, and
+ * its filter carries `tenantId` rather than trusting the id to imply it.
  */
-function resolveActiveBranch(
+async function resolveActiveBranch(
   req: Request,
   branchIds: string[],
   allBranches: boolean,
-): string | undefined {
+): Promise<string | undefined> {
   const raw = req.header("x-active-branch")?.trim();
   // Absent, or the explicit "all" sentinel → aggregate across the allowed set (All mode).
   if (!raw || raw.toLowerCase() === "all") return undefined;
   // A hospital-wide binding may act in any branch; a confined one only in its own.
-  if (allBranches || branchIds.includes(raw)) return raw;
-  return undefined;
+  if (!allBranches && !branchIds.includes(raw)) return undefined;
+  // …and either way the site has to still exist, in THIS tenant, and be open.
+  return (await isActiveBranch(raw)) ? raw : undefined;
 }
 
 /**
