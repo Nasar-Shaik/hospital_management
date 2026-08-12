@@ -18,6 +18,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ProfileProvider, useProfile } from "../src/providers/ProfileProvider";
 import { RuntimeProvider, useOptionalRuntime } from "../src/providers/RuntimeProvider";
 import { PrivacyCover } from "../src/components/PrivacyOverlay";
+import { LockGate } from "../src/components/LockGate";
 import { useTheme } from "../src/hooks/useTheme";
 import type { MobileRuntime } from "../src/lib/runtime";
 import type { SessionEndReason } from "../src/lib/session";
@@ -121,7 +122,13 @@ function Shell(): React.JSX.Element {
           options={{ headerShown: true, title: "Prescribe", ...detailHeader(theme) }}
         />
       </Stack>
+      {/**
+       * Both sit above the navigator, and the ORDER between them is the only thing that matters:
+       * the lock is last, so it paints over the privacy cover during the moment after a resume
+       * when both are up. The cover hides the app-switcher snapshot; the gate hides the app.
+       */}
       <PrivacyCover />
+      <LockGate />
     </>
   );
 }

@@ -50,7 +50,7 @@ import {
 } from "../src/clinical/ipd";
 import { attemptWardNote, matchingNote, newNotesSince } from "../src/clinical/wardNote";
 import { createIntentKeys } from "../src/lib/idempotency";
-import { attemptDischarge, isStayEnded } from "../src/clinical/discharge";
+import { isStayEnded } from "../src/clinical/discharge";
 import { isFeatureUnavailable, toUserMessage } from "../src/lib/net/errors";
 import { buildTimeline } from "../src/clinical/timeline";
 import type { Encounter, Paged, WardNote } from "@medicore/api-client";

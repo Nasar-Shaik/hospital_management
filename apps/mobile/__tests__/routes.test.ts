@@ -540,6 +540,79 @@ describe("an IPD write always goes through its reconciliation", () => {
   });
 });
 
+describe("the lock gate stands above the whole app", () => {
+  /**
+   * ── A GATE ONE SCREEN CAN FORGET IS NOT A GATE ──────────────────────────────
+   * `LockGate` returns `null` for the tree beneath it, which only works if it is mounted ABOVE the
+   * navigator — once, at the root, in the same place and for the same reason as `PrivacyCover`.
+   * Mounted per screen it would be forgotten by the next screen anybody adds, and the failure is
+   * silent: the app looks locked everywhere the author remembered and shows a chart everywhere
+   * they did not.
+   */
+  const root = read(join(APP_DIR, "_layout.tsx"));
+
+  it("is mounted at the root, next to the privacy cover", () => {
+    expect(root).toMatch(/<LockGate\s*\/>/);
+    expect(root).toMatch(/<PrivacyCover\s*\/>/);
+  });
+
+  it("paints AFTER the privacy cover, so the gate wins while both are up", () => {
+    // On a resume both are briefly mounted. If the cover were last it would paint over the gate,
+    // and dropping the cover first would flash the chart underneath.
+    const code = codeOnly(root);
+    expect(code.indexOf("<LockGate")).toBeGreaterThan(code.indexOf("<PrivacyCover"));
+  });
+
+  it("is the only place either one is mounted", () => {
+    const mounts = routes.filter((file) =>
+      /<(LockGate|PrivacyCover)\s*\/>/.test(codeOnly(read(file))),
+    );
+    expect(mounts.map(shortName)).toEqual(["_layout.tsx"]);
+  });
+
+  it("no screen renders its own lock — the root owns it", () => {
+    for (const file of routes) {
+      if (shortName(file) === "_layout.tsx") continue;
+      expect(
+        /useLock\s*\(/.test(codeOnly(read(file))),
+        `app/${shortName(file)} reads the lock store. The gate is rendered once at the root; a ` +
+          `screen that consults it is either duplicating the gate or working around it.`,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("the biometric prompt has exactly one owner", () => {
+  /**
+   * The same rule the Keychain and AsyncStorage have, and for the same reason: a direct import
+   * anywhere in `src/lib` would make every file that touches the lock un-runnable outside a
+   * simulator, and the attempt ladder is precisely what must be proven by a test. The eslint rule
+   * says so too; this says it where a reviewer reading the tests will see it.
+   */
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      if (name === "src/platform/biometrics.ts") return;
+      expect(
+        /from\s+["']expo-local-authentication["']/.test(codeOnly(read(file))),
+        `${name} imports expo-local-authentication directly. Go through the ` +
+          `BiometricAuthenticator port so the lock policy stays testable without a device.`,
+      ).toBe(false);
+    },
+  );
+
+  it("finds the one owner, so the rule is not vacuous", () => {
+    expect(read(join(APP_DIR, "..", "src", "platform", "biometrics.ts"))).toMatch(
+      /from "expo-local-authentication"/,
+    );
+  });
+});
+
 describe("the settings screen renders the tabs the bar cannot fit", () => {
   it("consumes splitTabs' overflow", () => {
     /**

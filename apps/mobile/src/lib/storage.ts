@@ -43,6 +43,35 @@ export interface Preferences {
 }
 
 /**
+ * The device's own "prove it is you" (M2 K) — Touch ID / Face ID / fingerprint / device passcode.
+ *
+ * A third port for the same reason as the other two: `expo-local-authentication` is a native
+ * module, and the lock policy is exactly the part that must be proven by a test rather than by
+ * trying it on a phone. `src/platform/biometrics.ts` implements it; the tests implement it in
+ * memory and can therefore make a scan fail five times in a row on CI, which no simulator will do
+ * on request.
+ *
+ * ── IT ANSWERS TO THE DEVICE, NOT TO THE SERVER ─────────────────────────────
+ * Nothing here is authentication in the API's sense. The server has already decided who this is
+ * and the session is already valid; this only decides whether the phone renders it. A successful
+ * scan is worth precisely as much as the device's own lock screen — which, for the threat this
+ * addresses (a doctor's unlocked phone put down on a ward), is exactly the right amount.
+ */
+export interface BiometricAuthenticator {
+  /** Is there a sensor, and has anybody enrolled on it? Both, separately — see `lock.ts`. */
+  capability(): Promise<{ hasHardware: boolean; isEnrolled: boolean }>;
+  /**
+   * Prompt. `reason` is shown by the OS and must say what is being unlocked, in the user's terms.
+   *
+   * Never rejects: every failure mode is a value, because the caller's job is to CLASSIFY the
+   * outcome (`afterAttempt`) and a thrown error would arrive at a `catch` block that cannot tell
+   * "the user pressed cancel" from "the sensor is locked out" — two outcomes with opposite
+   * consequences for the attempt counter.
+   */
+  authenticate(reason: string): Promise<"success" | "failed" | "cancelled" | "unavailable">;
+}
+
+/**
  * Keys are namespaced by hospital profile, because one person may work at two hospitals and the
  * two sessions must not overwrite each other (M0 §6). A bare `refreshToken` key would mean signing
  * into Apollo silently signs you out of Fortis.
@@ -53,6 +82,13 @@ export const storageKeys = {
   profiles: "medicore.profiles",
   lastProfile: "medicore.profiles.last",
   theme: "medicore.theme",
+  /**
+   * Whether the screen lock is on, per hospital (M2 K). A PREFERENCE, not a secret: knowing a
+   * phone has the gate switched on tells an attacker nothing they cannot learn by opening the app,
+   * and a Keychain read is only possible while the device is unlocked — which is precisely the
+   * condition the gate has to work under.
+   */
+  screenLock: (slug: string): string => `medicore.${slug}.screenLock`,
 } as const;
 
 /** An in-memory implementation of both ports. Used by tests; never shipped in a build. */

@@ -6,6 +6,7 @@ import { createRuntime, type MobileRuntime } from "../../src/lib/runtime";
 import { createMemoryStorage } from "../../src/lib/storage";
 import { createProfile } from "../../src/lib/tenant";
 import type { SessionEndReason } from "../../src/lib/session";
+import type { BiometricAuthenticator } from "../../src/lib/storage";
 import { createFakeApi, ok, type FakeApi } from "./fakeApi";
 
 export const SLUG = "apollo";
@@ -50,9 +51,46 @@ export function tokenPair(overrides: Partial<{ accessToken: string; refreshToken
   };
 }
 
+/**
+ * A biometric sensor that does exactly what a test tells it to.
+ *
+ * This is the whole reason `BiometricAuthenticator` is a port: no simulator will fail a scan five
+ * times on request, and the attempt ladder is the part of the lock most worth proving.
+ */
+export interface FakeBiometrics extends BiometricAuthenticator {
+  /** Queue the outcome of the next `authenticate()`. Falls back to `answer` when empty. */
+  next(...results: Awaited<ReturnType<BiometricAuthenticator["authenticate"]>>[]): void;
+  /** The standing answer once the queue is empty. */
+  answer: Awaited<ReturnType<BiometricAuthenticator["authenticate"]>>;
+  capabilityIs(capability: { hasHardware: boolean; isEnrolled: boolean }): void;
+  /** Every prompt shown, so a test can assert the user was told what they were unlocking. */
+  prompts: string[];
+}
+
+export function createFakeBiometrics(): FakeBiometrics {
+  const queue: Awaited<ReturnType<BiometricAuthenticator["authenticate"]>>[] = [];
+  let capability = { hasHardware: true, isEnrolled: true };
+
+  const fake: FakeBiometrics = {
+    answer: "success",
+    prompts: [],
+    next: (...results) => queue.push(...results),
+    capabilityIs: (next) => {
+      capability = next;
+    },
+    capability: () => Promise.resolve(capability),
+    authenticate: (reason) => {
+      fake.prompts.push(reason);
+      return Promise.resolve(queue.shift() ?? fake.answer);
+    },
+  };
+  return fake;
+}
+
 export interface Harness {
   runtime: MobileRuntime;
   api: FakeApi;
+  biometrics: FakeBiometrics;
   secureStore: ReturnType<typeof createMemoryStorage>;
   preferences: ReturnType<typeof createMemoryStorage>;
   /** Every reason a session ended during the test, in order. */
@@ -69,6 +107,7 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
   const api = createFakeApi();
   const secureStore = createMemoryStorage();
   const preferences = createMemoryStorage();
+  const biometrics = createFakeBiometrics();
   const sessionEndings: SessionEndReason[] = [];
 
   const runtime = createRuntime({
@@ -79,6 +118,7 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
     secureStore,
     preferences,
     fetchImpl: api.fetchImpl,
+    biometrics,
     ...(options.now ? { now: options.now } : {}),
     onSessionEnded: (reason) => sessionEndings.push(reason),
   });
@@ -86,6 +126,7 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
   return {
     runtime,
     api,
+    biometrics,
     secureStore,
     preferences,
     sessionEndings,

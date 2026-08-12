@@ -11,6 +11,7 @@ import { useRuntime } from "../providers/RuntimeProvider";
 import { can, type SessionState } from "../state/session";
 import { activeBranchLabel, type BranchState } from "../state/branch";
 import type { ConnectivityState } from "../state/connectivity";
+import type { LockStoreState } from "../state/lock";
 
 export function useSession<T>(selector: (state: SessionState) => T): T {
   return useStore(useRuntime().session, selector);
@@ -22,6 +23,11 @@ export function useBranch<T>(selector: (state: BranchState) => T): T {
 
 export function useConnectivity<T>(selector: (state: ConnectivityState) => T): T {
   return useStore(useRuntime().connectivity, selector);
+}
+
+/** The lock gate's state (M2 K). Read by the root gate and by the settings toggle. */
+export function useLock<T>(selector: (state: LockStoreState) => T): T {
+  return useStore(useRuntime().lock, selector);
 }
 
 /**

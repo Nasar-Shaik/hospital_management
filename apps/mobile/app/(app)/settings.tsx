@@ -19,6 +19,7 @@ import { splitTabs } from "../../src/navigation/tabsFor";
 import { appConfig, appVersion } from "../../src/platform/config";
 import type { ThemePreference } from "../../src/state/theme";
 import { space, typography } from "../../src/theme/tokens";
+import { ScreenLockSetting } from "../../src/components/ScreenLockSetting";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "system", label: "Match device" },
@@ -95,6 +96,10 @@ export default function SettingsScreen(): React.JSX.Element {
               />
             ))}
           </View>
+        </Section>
+
+        <Section title="Security">
+          <ScreenLockSetting />
         </Section>
 
         <Section title="About">

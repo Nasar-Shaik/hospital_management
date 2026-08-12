@@ -49,6 +49,12 @@ export default [
               message:
                 "Use src/platform/preferences.ts. AsyncStorage must never hold a token (M0 §15).",
             },
+            {
+              name: "expo-local-authentication",
+              message:
+                "Use src/platform/biometrics.ts — one module owns the prompt, so the lock policy " +
+                "stays testable without a device (M2 K).",
+            },
           ],
         },
       ],
@@ -56,7 +62,11 @@ export default [
   },
   {
     // The two files that legitimately own those platform APIs.
-    files: ["src/platform/secureStore.ts", "src/platform/preferences.ts"],
+    files: [
+      "src/platform/secureStore.ts",
+      "src/platform/preferences.ts",
+      "src/platform/biometrics.ts",
+    ],
     rules: { "no-restricted-imports": "off" },
   },
   {

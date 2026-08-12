@@ -12,11 +12,12 @@ import { useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import { useRuntime } from "../providers/RuntimeProvider";
 import { actionsOnPhase, actionsOnResume, type AppPhase } from "../lib/lifecycle";
+import { LOCK_AFTER_MS, NO_BIOMETRICS, shouldLock } from "../lib/lock";
 
 export interface LifecycleState {
   /** True while the app is not fully foregrounded — the privacy overlay follows this exactly. */
   obscured: boolean;
-  /** Set when the absence was long enough to require a re-unlock. M2 acts on it; M1 records it. */
+  /** Set when the absence was long enough to require a re-unlock. M2 K acts on it. */
   lockRequired: boolean;
 }
 
@@ -55,6 +56,32 @@ export function useAppLifecycle(): LifecycleState {
 
       setState({ obscured: !actions.hideOverlay, lockRequired: actions.requireUnlock });
 
+      /**
+       * ── THE GATE GOES UP BEFORE ANYTHING ELSE IS DONE (M2 K) ──────────────────
+       * `shouldLock` decides; this only performs. It runs before the refetch and before the
+       * revalidation deliberately: those are network round trips, and a chart must not be visible
+       * for the second and a half they take. Raising the lock is synchronous, so the frame that
+       * follows a resume is the gate — never the ward list that was on screen an hour ago.
+       *
+       * The capability probe IS async, so the lock is raised first with whatever the store already
+       * knows and refined a tick later. Waiting for the probe would put a native round trip in
+       * front of the gate, which is the one thing that must not be waited on.
+       */
+      const state = runtime.lock.getState();
+      if (
+        shouldLock(
+          {
+            enabled: state.enabled,
+            hasSession: runtime.session.getState().user !== undefined,
+            awayMs,
+          },
+          LOCK_AFTER_MS,
+        )
+      ) {
+        state.lock(state.capability);
+        void probeCapability(runtime);
+      }
+
       if (actions.refetchActive) void runtime.queryClient.invalidateQueries({ type: "active" });
       if (actions.revalidateSession || actions.revalidateBranches) {
         void revalidate(runtime, actions.revalidateBranches);
@@ -65,6 +92,23 @@ export function useAppLifecycle(): LifecycleState {
   }, [runtime]);
 
   return state;
+}
+
+/**
+ * What this device can offer, asked of the device rather than remembered.
+ *
+ * Re-probed on every lock because the answer genuinely changes: a user can remove their last
+ * fingerprint in Settings while the app is backgrounded, and a gate that then offered a biometric
+ * prompt would show one that fails every time with no way past it.
+ */
+async function probeCapability(runtime: ReturnType<typeof useRuntime>): Promise<void> {
+  const authenticator = runtime.biometrics;
+  const capability = authenticator ? await authenticator.capability() : NO_BIOMETRICS;
+  const state = runtime.lock.getState();
+  // Only while the gate is still up: an unlock may have landed during the probe, and a stale
+  // capability written over an unlocked store is noise. `setCapability`, never `lock` — see the
+  // store, which explains why re-locking here would hand back a spent attempt.
+  if (state.state === "locked") state.setCapability(capability);
 }
 
 /**

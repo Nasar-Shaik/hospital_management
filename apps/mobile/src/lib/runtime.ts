@@ -25,8 +25,15 @@ import { createBranchController, type BranchController } from "./branch";
 import { createSessionStore, type SessionStore } from "../state/session";
 import { createBranchStore, type BranchStore } from "../state/branch";
 import { createConnectivityStore, type ConnectivityStore } from "../state/connectivity";
+import { createLockStore, type LockStore } from "../state/lock";
 import type { HospitalProfile } from "./tenant";
-import type { Preferences, SecureStorage } from "./storage";
+import {
+  storageKeys,
+  type BiometricAuthenticator,
+  type Preferences,
+  type SecureStorage,
+} from "./storage";
+import { readLockPreference } from "./lock";
 import { createLogger, type Logger } from "./log";
 import { shouldRetryRead, shouldRetryMutation, backoffMs } from "./net/retry";
 
@@ -34,6 +41,12 @@ export interface RuntimeDeps {
   profile: HospitalProfile;
   secureStore: SecureStorage;
   preferences: Preferences;
+  /**
+   * The device's biometric prompt (M2 K). Optional: a runtime built without one simply never
+   * offers the biometric door, and the lock falls back to the password path — which is the same
+   * behaviour as a phone with no sensor, and the reason tests need no device.
+   */
+  biometrics?: BiometricAuthenticator;
   fetchImpl?: typeof fetch;
   logger?: Logger;
   now?: () => number;
@@ -48,8 +61,17 @@ export interface MobileRuntime {
   session: SessionStore;
   branch: BranchStore;
   connectivity: ConnectivityStore;
+  /** Whether the app is showing anything at all (M2 K). Read by the root gate. */
+  lock: LockStore;
   auth: AuthController;
   branches: BranchController;
+  /**
+   * The device prompt, or `undefined` when this build has none. The gate checks for it rather
+   * than assuming — see `unlockMethod`.
+   */
+  biometrics?: BiometricAuthenticator;
+  /** Non-secret settings. Exposed so the lock's preference can be written from Settings (M2 K). */
+  preferences: Preferences;
   /** Owned here so that no sign-out or branch switch can forget to clear it. */
   queryClient: QueryClient;
   logger: Logger;
@@ -61,6 +83,20 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
   const session = createSessionStore();
   const branch = createBranchStore();
   const connectivity = createConnectivityStore();
+  const lock = createLockStore();
+
+  /**
+   * The lock preference, read once at startup (M2 K).
+   *
+   * Fire and forget, and deliberately NOT awaited by anything: the gate only matters on a RESUME,
+   * which is minutes away at the earliest, so a disk read has no reason to sit in front of the
+   * first frame. A failed read leaves the gate off — the state a user can always recover from in
+   * Settings, where a gate stuck ON with no enrolled finger would be a locked-out doctor.
+   */
+  void deps.preferences
+    .get(storageKeys.screenLock(deps.profile.slug))
+    .then((stored) => lock.getState().setEnabled(readLockPreference(stored)))
+    .catch(() => undefined);
 
   /**
    * Connectivity is observed at the transport seam rather than from a native module, because the
@@ -147,6 +183,12 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
     /** Everything that must be true again after a session ends, in one place. */
     onSessionEnded: (reason) => {
       branch.getState().reset();
+      /**
+       * The gate comes DOWN on sign-out, always. The next screen is the login form: a lock in
+       * front of it would demand a fingerprint to reach a password field, and on a device whose
+       * enrolment has just been removed that is an app nobody can open.
+       */
+      lock.getState().reset();
       queryClient.clear();
       logger.info("session ended", { tenantSlug: deps.profile.slug, code: reason });
       deps.onSessionEnded?.(reason);
@@ -172,8 +214,11 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
     session,
     branch,
     connectivity,
+    lock,
     auth,
     branches,
+    ...(deps.biometrics ? { biometrics: deps.biometrics } : {}),
+    preferences: deps.preferences,
     queryClient,
     logger,
   };
