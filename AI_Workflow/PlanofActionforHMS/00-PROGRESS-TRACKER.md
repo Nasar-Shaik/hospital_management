@@ -1,8 +1,24 @@
 # 00 — Development Progress Tracker
 
-**Single source of truth for "how far along is this project."** Any human or AI model picking up this repo starts here.
+> ## ⚠️ The module ledger below is superseded
+>
+> **For "how far along is this project", read [`AI_Workflow/projectTracker.md`](../projectTracker.md).**
+>
+> §4's ledger drifted from the code: it marks **F1 Billing**, **E1 Appointments**, **C7 MRD**,
+> **C5 Wallet**, **B13 Mortuary** and **G1–G3 apps** as not started, and all six are built. The
+> activity log in §8 stops at 2026-07-16 while work continued to 2026-08-12. It was updated
+> separately from the work, which is the failure mode the replacement is designed around.
+>
+> **This file remains authoritative for §5 Key Decisions Log and §8 Activity Log** — the
+> append-only history, which is still correct and must not be rewritten. Statuses live elsewhere
+> now.
 
-> **Update rule:** whenever a phase/module/document changes state, update this file in the same commit (PR checklist item, Doc 09 §18). Statuses: `⬜ Not started` · `🟨 In progress` · `✅ Done` · `⛔ Blocked`.
+**Historical decision log and activity history.** Statuses moved to `projectTracker.md` on
+2026-08-12.
+
+> **Update rule:** append decisions to §5 and activity to §8 as they happen. Do **not** update the
+> §3/§4 status tables here — change them in `projectTracker.md`, in the same commit as the work.
+> Statuses: `⬜ Not started` · `🟨 In progress` · `✅ Done` · `⛔ Blocked`.
 
 ---
 
