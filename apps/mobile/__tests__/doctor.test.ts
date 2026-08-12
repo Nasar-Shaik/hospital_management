@@ -254,6 +254,9 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       queryKeys.orders(scope),
       queryKeys.order(scope, ""),
       queryKeys.prescriptions(scope),
+      queryKeys.prescription(scope, ""),
+      queryKeys.catalogue(scope),
+      queryKeys.catalogue(scope, "pharmacy"),
       queryKeys.inpatients(scope),
       queryKeys.notifications(scope),
       queryKeys.encounterVitals(scope, ""),
@@ -290,6 +293,9 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       q.outstandingResults().queryKey,
       q.order("").queryKey,
       q.prescriptions("").queryKey,
+      q.prescription("").queryKey,
+      q.catalogue().queryKey,
+      q.catalogue("pharmacy").queryKey,
     ].map((key) => JSON.stringify(key));
 
     expect(new Set(keys).size).toBe(keys.length);

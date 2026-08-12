@@ -100,6 +100,26 @@ function Shell(): React.JSX.Element {
           name="inpatients"
           options={{ headerShown: true, title: "Inpatients", ...detailHeader(theme) }}
         />
+
+        {/**
+         * The write screens (M2 slice 2). Pushed, headered, and reached only from a visit — each
+         * takes an `encounterId`, because a note, an order and a prescription all hang off ONE
+         * visit (ADR-0013). `gestureEnabled` is left on: `useUnsavedChanges` intercepts the swipe
+         * through `beforeRemove`, which is the event every exit fires, so disabling the gesture
+         * would remove an escape without adding any protection.
+         */}
+        <Stack.Screen
+          name="consultation/[encounterId]"
+          options={{ headerShown: true, title: "Consultation", ...detailHeader(theme) }}
+        />
+        <Stack.Screen
+          name="order-pad/[encounterId]"
+          options={{ headerShown: true, title: "Order tests", ...detailHeader(theme) }}
+        />
+        <Stack.Screen
+          name="prescribe/[encounterId]"
+          options={{ headerShown: true, title: "Prescribe", ...detailHeader(theme) }}
+        />
       </Stack>
       <PrivacyCover />
     </>

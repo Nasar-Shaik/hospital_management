@@ -263,6 +263,39 @@ export function toUserMessage(error: unknown): UserFacingError {
         action: "retry",
       };
 
+    /* ── clinical state (M2 writes) ────────────────────────────────────────── */
+    case "HMS-STATE-001":
+      /**
+       * The record moved on. Almost always because somebody else acted — the visit was closed
+       * while the note sat open, the prescription was signed on another device.
+       *
+       * `reload`, never `retry`. Retrying re-sends a transition the state machine has already
+       * refused and will refuse identically; reloading is what actually shows the user the world
+       * they are now in. Signing has its own reconciliation on top of this (`clinical/signing.ts`)
+       * because there the refusal usually means "it already worked", which is not a failure at all
+       * and must never be shown as one.
+       */
+      return {
+        ...base,
+        title: "This has already moved on",
+        body: "Someone else changed this record, or it is no longer at a stage where that is possible. Reload to see where it stands.",
+        severity: "notice",
+        action: "reload",
+      };
+    case "HMS-RX-001":
+      /**
+       * A contraindication. Not an error in the ordinary sense — the server is asking the
+       * prescriber to take responsibility, and the prescribing screen handles it as a REVIEW step
+       * with the alerts on display rather than as a failed save. This wording is the fallback for
+       * anywhere else the code could surface.
+       */
+      return {
+        ...base,
+        title: "Blocked by a safety alert",
+        body: "This prescription conflicts with something on the patient's record. Review the alert and record a reason if you still intend to prescribe it.",
+        severity: "blocking",
+      };
+
     /* ── the server ────────────────────────────────────────────────────────── */
     case "HMS-GEN-404":
       return {

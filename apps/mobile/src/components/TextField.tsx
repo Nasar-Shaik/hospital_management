@@ -28,6 +28,9 @@ export function TextField({
         placeholderTextColor={theme.colors.fgSubtle}
         style={[
           styles.input,
+          // A clinical note is paragraphs, not a line. Without this the text starts vertically
+          // centred in a one-line box and scrolls out of sight as the doctor types.
+          input.multiline ? styles.multiline : null,
           {
             color: theme.colors.fg,
             backgroundColor: theme.colors.bgSubtle,
@@ -54,6 +57,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space[3],
     ...typography.body,
   },
+  multiline: { minHeight: 96, paddingVertical: space[2], textAlignVertical: "top" },
   error: { ...typography.caption },
   hint: { ...typography.caption },
 });

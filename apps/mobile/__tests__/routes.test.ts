@@ -374,6 +374,51 @@ describe("nothing reaches the network except through the ApiClient", () => {
   );
 });
 
+describe("a screen that writes clinical text protects it", () => {
+  /**
+   * ── THE PROTECTION IS TWO RULES, AND ONLY ONE IS SCANNABLE ──────────────────
+   * The load-bearing one is that a failed save never clears the form: the mutation's `onSuccess`
+   * is the ONLY place the baseline moves, so a 500, a timeout or a dropped connection leaves every
+   * word on screen. That lives inside a component's state and cannot be checked from here — it is
+   * covered by the consultation tests in `writes.test.ts` at the module level (`patchFor` /
+   * `isDirty` against an unmoved baseline).
+   *
+   * The one that CAN be checked structurally is the second: a screen holding unsaved clinical text
+   * must intercept navigation away from it. `useUnsavedChanges` hooks `beforeRemove`, which is the
+   * one event every exit fires — the header chevron, the hardware back button, and the edge swipe.
+   * Forgetting it is a one-line omission that loses a consultation note to a habitual back-swipe,
+   * and nothing else in the gate would notice.
+   */
+  const WRITES = /\buseClinicalWrite\s*\(/;
+  const PROTECTS = /\buseUnsavedChanges\s*\(/;
+
+  /**
+   * The order pad writes, and deliberately does not ask. What it holds is a SELECTION of catalogue
+   * codes — two taps to rebuild, no typed clinical information — so a confirmation on the way out
+   * would be a dialog that trains people to dismiss dialogs. The moment it grows a free-text field
+   * it must come off this list.
+   */
+  const NO_TYPED_CONTENT = ["app/order-pad/[encounterId].tsx"];
+
+  it.each(routes.map((file) => [shortName(file), file]))("%s", (name, file) => {
+    const source = codeOnly(read(file));
+    if (!WRITES.test(source)) return;
+    if (NO_TYPED_CONTENT.includes(`app/${name}`)) return;
+
+    expect(
+      PROTECTS.test(source),
+      `app/${name} performs a clinical write but never calls useUnsavedChanges. A doctor who ` +
+        `swipes back mid-note loses it silently. Add the guard, or add the screen to ` +
+        `NO_TYPED_CONTENT with a reason if it holds nothing worth protecting.`,
+    ).toBe(true);
+  });
+
+  it("finds the write screens at all, so the check is not vacuous", () => {
+    const writers = routes.filter((file) => WRITES.test(codeOnly(read(file))));
+    expect(writers.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe("a branch id is never taken from navigation", () => {
   /**
    * The active branch comes from the validated switcher and nowhere else (M0 §7, ADR-0015). A

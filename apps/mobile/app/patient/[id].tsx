@@ -26,6 +26,7 @@ import type { Encounter } from "@medicore/api-client";
 import { Screen } from "../../src/components/Screen";
 import { Card, SectionTitle } from "../../src/components/Card";
 import { Pill } from "../../src/components/Pill";
+import { Button } from "../../src/components/Button";
 import { QueryGate } from "../../src/components/QueryGate";
 import { EmptyState } from "../../src/components/StateView";
 import {
@@ -45,6 +46,7 @@ import {
   encounterClassLabel,
   encounterStatusLabel,
   encounterStatusTone,
+  isLiveEncounter,
 } from "../../src/clinical/encounters";
 import { latestReading } from "../../src/clinical/vitals";
 import { sortForReview } from "../../src/clinical/results";
@@ -130,6 +132,8 @@ function PatientChart(): React.JSX.Element {
 
         {visit ? <VisitBanner encounter={visit} zone={zone} /> : null}
 
+        {visit ? <ClinicalActions encounter={visit} /> : null}
+
         <View style={styles.segments}>
           {SEGMENTS.map((option) => (
             <SegmentTab
@@ -207,6 +211,67 @@ function VisitBanner({
         <Text style={[typography.body, { color: theme.colors.fg }]}>{encounter.reason}</Text>
       ) : null}
     </Card>
+  );
+}
+
+/**
+ * The three clinical writes, as explicit destinations.
+ *
+ * ── AN ACTION IS OFFERED ONLY WHERE IT IS MEANINGFUL ────────────────────────
+ * Each needs the permission AND an open visit. Prescribing against a closed encounter is refused
+ * server-side with `HMS-STATE-001` ("cannot prescribe against a closed visit"), and offering a
+ * button whose only possible outcome is that refusal teaches doctors to distrust the buttons. The
+ * server is still the authority — this only declines to invite a request that cannot succeed.
+ *
+ * They navigate. Nothing here mutates, and in particular nothing here signs: the signature lives
+ * behind the review stage of the prescribing screen and is reachable from nowhere else.
+ */
+function ClinicalActions({ encounter }: { encounter: Encounter }): React.JSX.Element | null {
+  const router = useRouter();
+  const { can } = useCapabilities();
+  const open = isLiveEncounter(encounter);
+  if (!open) return null;
+
+  const actions: { label: string; needs: string; go: () => void }[] = [
+    {
+      label: "Consultation note",
+      needs: "emr:write",
+      go: () =>
+        router.push({
+          pathname: "/consultation/[encounterId]",
+          params: { encounterId: encounter.id },
+        }),
+    },
+    {
+      label: "Order tests",
+      needs: "order:create",
+      go: () =>
+        router.push({
+          pathname: "/order-pad/[encounterId]",
+          params: { encounterId: encounter.id },
+        }),
+    },
+    {
+      label: "Prescribe",
+      needs: "prescription:create",
+      go: () =>
+        router.push({
+          pathname: "/prescribe/[encounterId]",
+          params: { encounterId: encounter.id },
+        }),
+    },
+  ].filter((action) => can(action.needs));
+
+  if (actions.length === 0) return null;
+
+  return (
+    <View style={styles.actions}>
+      {actions.map((action) => (
+        <View key={action.label} style={styles.action}>
+          <Button label={action.label} variant="secondary" onPress={action.go} />
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -542,4 +607,6 @@ const styles = StyleSheet.create({
   section: { gap: space[2] },
   field: { gap: 2 },
   visitRow: { flexDirection: "row", justifyContent: "space-between", gap: space[2] },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: space[2] },
+  action: { flexGrow: 1, flexBasis: "30%" },
 });

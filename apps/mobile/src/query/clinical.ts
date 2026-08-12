@@ -22,6 +22,8 @@
 import type {
   Allergy,
   ApiClient,
+  CatalogueItem,
+  ChargeCategory,
   ConsultationNote,
   Encounter,
   EncounterStatus,
@@ -256,6 +258,25 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
 
     order(id: string): Read<Order> {
       return { queryKey: queryKeys.order(scope, id), queryFn: () => api.getOrder(id) };
+    },
+
+    /**
+     * What the doctor may order or prescribe. NO PRICES — same collection as the tariff, stripped,
+     * so a patient's means cannot shape what they are offered (`billing.routes.ts`).
+     */
+    catalogue(category?: ChargeCategory): Read<CatalogueItem[]> {
+      return {
+        queryKey: queryKeys.catalogue(scope, category),
+        queryFn: () => api.listCatalogue(category ? { category } : {}),
+      };
+    },
+
+    /** One prescription, by id — the oracle the sign reconciliation reads. */
+    prescription(id: string): Read<Prescription> {
+      return {
+        queryKey: queryKeys.prescription(scope, id),
+        queryFn: () => api.getPrescription(id),
+      };
     },
 
     /** `current: true` — a chart shows what is in force, not the versions it replaced. */

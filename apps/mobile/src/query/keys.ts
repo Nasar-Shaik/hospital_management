@@ -93,9 +93,21 @@ export const queryKeys = {
   /** The structured note for one visit. `null` until the doctor starts one. */
   consultation: (scope: QueryScope, encounterId: string) =>
     scoped(scope, "encounter", encounterId, "consultation"),
+  /** One prescription, by id. Singular — see the list/record note above. */
+  prescription: (scope: QueryScope, id: string) => scoped(scope, "prescription", id),
   /** Prescriptions, filtered server-side; `filters` is the serialised query. */
   prescriptions: (scope: QueryScope, filters?: string) =>
     scoped(scope, "prescriptions", filters ?? ""),
+  /**
+   * The price-free service catalogue the order and prescribing pads read.
+   *
+   * Branch-scoped like everything else, even though the catalogue is configuration rather than
+   * clinical data: a hospital may genuinely stock different things at different sites, and the
+   * server's own scoping decides. Guessing that it is tenant-wide would be a guess, and the cost
+   * of being wrong is a doctor offered a test the branch cannot run.
+   */
+  catalogue: (scope: QueryScope, category?: string) =>
+    scoped(scope, "catalogue", category ?? "all"),
   /** Every encounter in one care story (`GET /episodes/:id/timeline`). */
   episodeTimeline: (scope: QueryScope, episodeId: string) =>
     scoped(scope, "episode", episodeId, "timeline"),
