@@ -293,6 +293,24 @@ export async function setVisitSummary(
  * bed inventory this is the closest thing the hospital has to an occupancy list, and it is
  * derived from where the patients actually are rather than from a map somebody maintains.
  * Sorted by ward then bed, which is the order a doctor physically walks.
+ *
+ * ── `_id` BREAKS THE TIE, AND PAGING IS WHY ─────────────────────────────────
+ * Ward and bed code come close to identifying a row — `one_open_stay_per_bed_per_branch`
+ * (migration 0020) is a unique partial index over `{tenantId, branchId, bed.ward, bed.bedCode}`
+ * where `open` and `bed.bedCode` both exist, so two open stays cannot share a bed at one site.
+ * Close, but not enough, in two real cases the index deliberately does not cover:
+ *
+ *   NO BED       — the partial filter requires `bed.bedCode` to exist, so any number of open IP
+ *                  encounters may carry no bed at all. Every one of them sorts with both fields
+ *                  missing, and they all compare equal.
+ *   TWO BRANCHES — the index is per branch. In All-branches mode "General ward / A-12" at
+ *                  Hyderabad and the same at Chennai are two rows with one sort key.
+ *
+ * MongoDB gives no stable order between equal keys, and it need not give the SAME order to the
+ * `skip(0)` and `skip(40)` executions of one query — so a patient can land on both pages while
+ * another lands on neither. Appending the unique `_id` makes the ordering TOTAL, which is what
+ * makes `skip`-based paging correct rather than usually correct. It costs nothing: the tie-break
+ * only decides rows that were already equal.
  */
 export async function listInpatients(filter: { limit: number; skip: number }): Promise<{
   items: Encounter[];
@@ -304,7 +322,7 @@ export async function listInpatients(filter: { limit: number; skip: number }): P
   const [docs, total] = await Promise.all([
     model
       .find(query)
-      .sort({ "bed.ward": 1, "bed.bedCode": 1 })
+      .sort({ "bed.ward": 1, "bed.bedCode": 1, _id: 1 })
       .skip(filter.skip)
       .limit(filter.limit)
       .lean<EncounterDoc[]>(),

@@ -68,7 +68,7 @@ export default function Today(): React.JSX.Element {
   });
 
   const inpatients = useQuery({
-    ...queries.inpatients(),
+    ...queries.inpatientCount(),
     enabled: ready && canReadEncounters,
   });
 
@@ -93,7 +93,14 @@ export default function Today(): React.JSX.Element {
   const outstanding = results.data?.meta.total ?? results.data?.items.length ?? 0;
 
   const ipdUnavailable = isFeatureUnavailable(inpatients.error);
-  const admitted = inpatients.data?.length ?? 0;
+  /**
+   * `meta.total` — the hospital's number, not "how many rows arrived".
+   *
+   * The endpoint was capped at 100 with no meta until the ward was paged, so this card used to
+   * read an array length: a hospital with 140 admitted patients told its doctors "100 in beds" on
+   * the first screen they see. The count query asks for one row and reads the server's own total.
+   */
+  const admitted = inpatients.data?.meta.total ?? 0;
 
   const refreshing = round.isRefetching || inpatients.isRefetching || results.isRefetching;
   const refresh = (): void => {

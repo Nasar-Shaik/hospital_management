@@ -9,6 +9,7 @@ import * as encounters from "./encounter.service.js";
 import type {
   AdmitBody,
   ListEncountersQuery,
+  ListInpatientsQuery,
   StartEncounterBody,
   TransferBody,
   VisitSummaryBody,
@@ -137,8 +138,28 @@ export const transferDoctor: RequestHandler = async (req, res) => {
   ok(res, await encounters.transferDoctor(id, body.doctorId, body.reason));
 };
 
-/** Everyone in a bed right now — the ward round's list. */
-export const listInpatients: RequestHandler = async (_req, res) => {
-  const { items } = await encounters.listInpatients({ limit: 100, skip: 0 });
-  ok(res, items);
+/**
+ * Everyone in a bed right now, one page at a time.
+ *
+ * ── THE `total` WAS COMPUTED AND THROWN AWAY ────────────────────────────────
+ * The repository has always returned `{ items, total }` and this controller used to discard the
+ * second half, send a bare array, and hard-code `{ limit: 100, skip: 0 }`. A hospital with more
+ * than a hundred open stays therefore saw a hundred, with nothing in the response to say so —
+ * admitted patients silently absent from the ward round, which is the worst shape a list bug can
+ * take. `meta` now carries the same four fields every other list on this API sends.
+ */
+export const listInpatients: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as ListInpatientsQuery;
+
+  const { items, total } = await encounters.listInpatients({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+  });
+
+  ok(res, items, 200, {
+    page: query.page,
+    limit: query.limit,
+    total,
+    hasMore: query.page * query.limit < total,
+  });
 };

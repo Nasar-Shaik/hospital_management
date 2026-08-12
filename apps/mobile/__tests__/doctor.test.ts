@@ -495,8 +495,7 @@ describe("13. the inpatient entry point is gated by the server's own refusal", (
     const h = await signedIn();
     h.api.on("GET", INPATIENTS, () => fail(403, "HMS-PLAN-002", "Feature not in your edition"));
 
-    const error = await h.runtime.queryClient
-      .fetchQuery(queriesOf(h.runtime).inpatients())
+    const error = await firstPage(h.runtime, queriesOf(h.runtime).inpatients())
       .then(() => undefined)
       .catch((e: unknown) => e);
 
@@ -513,8 +512,7 @@ describe("13. the inpatient entry point is gated by the server's own refusal", (
     const h = await signedIn();
     h.api.on("GET", INPATIENTS, () => fail(403, "HMS-AUTH-005", "Insufficient permission"));
 
-    const error = await h.runtime.queryClient
-      .fetchQuery(queriesOf(h.runtime).inpatients())
+    const error = await firstPage(h.runtime, queriesOf(h.runtime).inpatients())
       .then(() => undefined)
       .catch((e: unknown) => e);
 
@@ -525,20 +523,25 @@ describe("13. the inpatient entry point is gated by the server's own refusal", (
   it("shows the ward when the hospital has one", async () => {
     const h = await signedIn();
     h.api.on("GET", INPATIENTS, () =>
-      ok([
-        encounter({
-          id: "ip-1",
-          class: "IP",
-          status: "admitted",
-          admittedAt: "2026-08-10T06:00:00.000Z",
-          bed: { ward: "General Ward", bedCode: "A-12", tariffCode: "BED_GEN" },
-        }),
-      ]),
+      okPaged(
+        page([
+          encounter({
+            id: "ip-1",
+            class: "IP",
+            status: "admitted",
+            admittedAt: "2026-08-10T06:00:00.000Z",
+            bed: { ward: "General Ward", bedCode: "A-12", tariffCode: "BED_GEN" },
+          }),
+        ]),
+      ),
     );
 
-    const list = await h.runtime.queryClient.fetchQuery(queriesOf(h.runtime).inpatients());
-    expect(list[0]?.bed?.bedCode).toBe("A-12");
-    expect(list[0]?.class).toBe("IP");
+    const first = await firstPage(h.runtime, queriesOf(h.runtime).inpatients());
+    expect(first.items[0]?.bed?.bedCode).toBe("A-12");
+    expect(first.items[0]?.class).toBe("IP");
+    // Paged like every other list: the page is asked for explicitly, and `total` comes back.
+    expect(h.api.callsTo("GET", INPATIENTS)[0]?.search).toContain("page=1");
+    expect(first.meta.total).toBe(1);
   });
 });
 

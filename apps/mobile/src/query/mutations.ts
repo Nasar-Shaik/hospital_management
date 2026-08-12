@@ -136,21 +136,39 @@ export function clinicalMutations(api: ApiClient, scope: QueryScope) {
     /* ── J, the ward ────────────────────────────────────────────────────────── */
 
     /**
-     * Today's entry on the round, through the reconciliation in `clinical/wardNote.ts`.
+     * Today's entry on the round — an `Idempotency-Key` AND the reconciliation in
+     * `clinical/wardNote.ts`. Both, because they cover different failures.
      *
-     * Resolves with an outcome rather than rejecting, for the same reason `sign` does: "the request
-     * failed and the note is on the chart" is a SUCCESS, and a rejection cannot say that.
+     * ── WHAT THE KEY FIXES ──────────────────────────────────────────────────────
+     * The server now replays the original 201 for a repeated key and writes nothing, so a retry of
+     * THIS submission can no longer append a second permanent note. That is the strong guarantee
+     * and it belongs on the server, where it holds for every client.
      *
-     * `before` is the notes as the screen had them a moment ago. It is passed in rather than
-     * fetched here because the whole point is that it predates the attempt — a snapshot taken
-     * inside this function would already contain the note we are trying to detect.
+     * ── WHAT THE KEY DOES NOT FIX, AND WHY RECONCILIATION STAYS ─────────────────
+     * The key makes a retry safe; it does not tell the DOCTOR what happened. When the response is
+     * lost the phone still has no idea whether the note landed, and the honest answer to "is it on
+     * the chart?" can only come from the chart. Reconciliation is what turns a dropped connection
+     * into "the note is there — nothing was written twice" instead of a failure the doctor
+     * responds to by writing it again somewhere else.
+     *
+     * They also fail differently: a key is scoped to one attempt on one device and expires, while
+     * the chart is the record. Deleting either layer would be a regression, and the medico-legal
+     * rule is unchanged — never claim a note was saved without evidence.
+     *
+     * `before` is the notes as the screen had them a moment ago. Passed in rather than fetched
+     * here because the whole point is that it predates the attempt.
      */
     addWardNote(
       encounterId: string,
-      context: { before: readonly WardNote[] | undefined; authorId?: string },
+      context: {
+        before: readonly WardNote[] | undefined;
+        authorId?: string;
+        /** Stable across the retries of ONE submission — see `lib/idempotency.ts`. */
+        key?: string;
+      },
     ): Write<string, WardNoteOutcome> {
       const deps: WardNoteDeps = {
-        add: (text) => api.addWardNote(encounterId, text),
+        add: (text) => api.addWardNote(encounterId, text, context.key),
         reload: () => api.listWardNotes(encounterId),
         before: context.before,
         ...(context.authorId ? { authorId: context.authorId } : {}),

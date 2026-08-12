@@ -23,6 +23,7 @@ import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./admission.controller.js";
 import {
   bedBoard,
@@ -58,6 +59,21 @@ export function admissionRouter(): Router {
     asyncHandler(controller.getBedBoard),
   );
 
+  /**
+   * ── A WARD NOTE IS APPEND-ONLY, SO A RETRY IS PERMANENT ─────────────────────
+   * There is no update path and no delete path (`wardNote.model.ts` explains why), and the
+   * repository does not de-duplicate. Before this key, a client whose response was lost on ward
+   * wifi and pressed save again left TWO identical contemporaneous entries on a medico-legal
+   * record, for ever. Nothing server-side stopped it.
+   *
+   * `idempotent()` is the mechanism the rest of the API already uses for exactly this — the
+   * sibling `POST /encounters/:id/admit` carries it — so the retry now replays the original 201
+   * and writes nothing. Honoured, not demanded: a request with no header behaves precisely as it
+   * did, which is what keeps this additive inside v1 (Doc 04 §5.1).
+   *
+   * It sits last, after `validate`, so the fingerprint is taken from the PARSED body and a
+   * malformed first attempt does not burn the key.
+   */
   router.post(
     "/encounters/:id/notes",
     authenticate(),
@@ -65,6 +81,7 @@ export function admissionRouter(): Router {
     validate(idParamSchema, "params"),
     validate(addNoteSchema),
     responds(wardNote, { status: 201 }),
+    idempotent("Replays the ward note this key already wrote."),
     asyncHandler(controller.addNote),
   );
 

@@ -4305,9 +4305,21 @@ export class ApiClient {
     return this.request<AdmitResult>("POST", `/api/v1/encounters/${encounterId}/admit`, input);
   }
 
-  /** Everyone in a bed right now — the ward round's list. */
-  listInpatients(): Promise<Encounter[]> {
-    return this.request<Encounter[]>("GET", "/api/v1/inpatients");
+  /**
+   * Everyone in a bed right now — the ward round's list, paged.
+   *
+   * `limit` defaults to 100 SERVER-SIDE, which is what this endpoint always returned before it
+   * took parameters. Sending nothing therefore behaves exactly as it used to, and `meta.total`
+   * now tells a caller whether there is more — a hospital with more than a hundred open stays
+   * used to be silently truncated with nothing in the response to say so.
+   */
+  listInpatients(params: { page?: number; limit?: number } = {}): Promise<Paged<Encounter>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<Encounter>(`/api/v1/inpatients${qs ? `?${qs}` : ""}`);
   }
 
   /* ── Bed inventory & board (Module B4) ───────────────────────────────────── */
@@ -4385,8 +4397,22 @@ export class ApiClient {
     return this.request<InventoryBed>("PATCH", `/api/v1/beds/${id}`, patch);
   }
 
-  addWardNote(encounterId: string, text: string): Promise<WardNote> {
-    return this.request<WardNote>("POST", `/api/v1/encounters/${encounterId}/notes`, { text });
+  /**
+   * Today's entry on the ward round.
+   *
+   * ── SEND THE KEY. A WARD NOTE CANNOT BE UNDONE ──────────────────────────────
+   * Notes are append-only: no update path, no delete path. Without `key`, a retry after a lost
+   * response leaves two identical contemporaneous entries on a medico-legal record, permanently —
+   * the server does not de-duplicate on content and never will, because two genuinely separate
+   * observations may read the same. With it, the retry replays the original 201 and writes nothing.
+   */
+  addWardNote(encounterId: string, text: string, key?: string): Promise<WardNote> {
+    return this.request<WardNote>(
+      "POST",
+      `/api/v1/encounters/${encounterId}/notes`,
+      { text },
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
   }
 
   /**

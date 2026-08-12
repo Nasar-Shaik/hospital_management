@@ -893,7 +893,8 @@ function Ward() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setBeds(await api.listInpatients());
+      // Paged now; the server's default limit is still 100, so this reads exactly as it did.
+      setBeds((await api.listInpatients()).items);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load the ward.");

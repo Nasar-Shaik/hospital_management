@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { BRANCH_CHN, BRANCH_HYD, PASSWORD, USER, createHarness } from "./support/harness";
-import { created, fail, ok, type FakeApi } from "./support/fakeApi";
+import { created, fail, ok, okPaged, type FakeApi } from "./support/fakeApi";
 import {
   IP_ENCOUNTER_ID,
   PATIENT_ID,
@@ -42,7 +42,6 @@ import {
   isAdmission,
   isStayOpen,
   marStatusTone,
-  mayBeTruncated,
   placementFor,
   placementLabel,
   placementsByEncounter,
@@ -50,9 +49,11 @@ import {
   summariseDoses,
 } from "../src/clinical/ipd";
 import { attemptWardNote, matchingNote, newNotesSince } from "../src/clinical/wardNote";
+import { createIntentKeys } from "../src/lib/idempotency";
 import { attemptDischarge, isStayEnded } from "../src/clinical/discharge";
 import { isFeatureUnavailable, toUserMessage } from "../src/lib/net/errors";
 import { buildTimeline } from "../src/clinical/timeline";
+import type { Encounter, Paged, WardNote } from "@medicore/api-client";
 import type { MobileRuntime } from "../src/lib/runtime";
 
 const INPATIENTS = "/api/v1/inpatients";
@@ -83,6 +84,40 @@ function scopeOf(runtime: MobileRuntime) {
 const readsOf = (runtime: MobileRuntime) => clinicalQueries(runtime.api, scopeOf(runtime));
 const writesOf = (runtime: MobileRuntime) => clinicalMutations(runtime.api, scopeOf(runtime));
 
+/**
+ * Fetch the first page of the ward, and hand back the page.
+ *
+ * `fetchQuery` would also "work" on an infinite descriptor — the extra fields are ignored — but it
+ * calls `queryFn` with no `pageParam`, so the request goes out with no `page` and the test quietly
+ * stops exercising the pagination it is here to prove.
+ */
+async function firstPage(runtime: MobileRuntime): Promise<Paged<Encounter>> {
+  const result = await runtime.queryClient.fetchInfiniteQuery(readsOf(runtime).inpatients());
+  const first = result.pages[0];
+  if (!first) throw new Error("fetchInfiniteQuery resolved with no pages");
+  return first;
+}
+
+/**
+ * Every page, walked exactly as `useInfiniteQuery` walks it.
+ *
+ * Driven by the descriptor's OWN `getNextPageParam`, so this proves the app's paging logic rather
+ * than the test's: a `getNextPageParam` that stopped early, or never stopped, fails here.
+ */
+async function allPages(runtime: MobileRuntime): Promise<Encounter[]> {
+  const read = readsOf(runtime).inpatients();
+  const items: Encounter[] = [];
+  let pageParam: number | undefined = read.initialPageParam;
+
+  // A guard, not a limit: an infinite loop in a test reads as a 90-second hang, not as a failure.
+  for (let guard = 0; pageParam !== undefined && guard < 50; guard += 1) {
+    const page: Paged<Encounter> = await read.queryFn({ pageParam });
+    items.push(...page.items);
+    pageParam = read.getNextPageParam(page);
+  }
+  return items;
+}
+
 async function onWard(options: { permissions?: string[] } = {}) {
   const h = createHarness();
   h.happyPath({
@@ -96,19 +131,37 @@ async function onWard(options: { permissions?: string[] } = {}) {
 }
 
 /**
- * The ward-note endpoint AS IT ACTUALLY IS: no idempotency key, no de-duplication.
+ * The ward-note endpoint, modelled with the real middleware's behaviour.
  *
- * Asking twice really does produce two notes. That is the whole reason `attemptWardNote` exists,
- * and a fake that quietly de-duplicated would make the reconciliation look unnecessary while
+ * ── TWO LAYERS, MODELLED SEPARATELY, BECAUSE THEY FAIL SEPARATELY ───────────
+ * `POST /encounters/:id/notes` now carries `idempotent()`, so a repeated key replays the original
+ * 201 byte for byte and writes nothing — a key→response map, exactly as `middleware/idempotent.ts`
+ * does. That is the strong guarantee, and `keyed()` below models it.
+ *
+ * WITHOUT a key the endpoint still appends: there is no content de-duplication and there never
+ * will be, because two genuinely separate observations may read the same. That is why the mobile
+ * reconciliation stays, and `unkeyed()` models that path so the tests can prove it still works.
+ * A fake that de-duplicated unconditionally would make the reconciliation look unnecessary while
  * hiding the bug it prevents.
  */
-function fakeWard(api: FakeApi) {
+function fakeWard(api: FakeApi, options: { honourKeys?: boolean } = {}) {
+  const honourKeys = options.honourKeys ?? true;
+  const byKey = new Map<string, WardNote>();
+  const keysSeen: string[] = [];
   let notes = [wardNote()];
   let sequence = 1;
   let dropNext = false;
 
   api.on("GET", NOTES, () => ok(notes));
   api.on("POST", NOTES, (call) => {
+    const key = call.headers["idempotency-key"];
+    if (key) keysSeen.push(key);
+
+    if (honourKeys && key && byKey.has(key)) {
+      // Byte-identical to the first answer, plus the marker. Nothing is appended.
+      return created(byKey.get(key), { "Idempotency-Replayed": "true" });
+    }
+
     sequence += 1;
     const body = call.body as { text: string };
     const note = wardNote({
@@ -117,10 +170,11 @@ function fakeWard(api: FakeApi) {
       at: "2026-08-12T04:00:00.000Z",
     });
     notes = [...notes, note];
+    if (honourKeys && key) byKey.set(key, note);
 
     if (dropNext) {
       dropNext = false;
-      // Committed, then the wire died. Exactly the case the reconciliation is for.
+      // Committed, then the wire died. Exactly the case both layers exist for.
       throw new TypeError("Network request failed");
     }
     return created(note);
@@ -131,8 +185,9 @@ function fakeWard(api: FakeApi) {
     get count(): number {
       return notes.length;
     },
-    get all() {
-      return notes;
+    /** Every `Idempotency-Key` the client sent, in order. */
+    get keys(): string[] {
+      return keysSeen;
     },
     loseNextResponse(): void {
       dropNext = true;
@@ -155,15 +210,16 @@ describe("1. the inpatient list", () => {
         bed: { ward: "ICU", bedCode: "I-01", tariffCode: "BED-ICU" },
       }),
     ];
-    h.api.on("GET", INPATIENTS, () => ok(ward));
+    h.api.on("GET", INPATIENTS, () => okPaged(page(ward)));
     h.api.on("GET", BED_BOARD, () => ok(bedBoard()));
 
-    const list = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
+    const first = await firstPage(h.runtime);
 
-    expect(list).toHaveLength(2);
+    expect(first.items).toHaveLength(2);
     expect(h.api.callsTo("GET", INPATIENTS)).toHaveLength(1);
-    // No parameters — the endpoint takes none. Sending some would be inventing an API.
-    expect(h.api.callsTo("GET", INPATIENTS)[0]?.search).toBe("");
+    // Paged like every other list on this API — page and limit on the wire, `total` in the meta.
+    expect(h.api.callsTo("GET", INPATIENTS)[0]?.search).toContain("page=1");
+    expect(first.meta.total).toBe(2);
   });
 
   it("groups by ward in first-appearance order, so the walking order survives", async () => {
@@ -216,12 +272,13 @@ describe("1. the inpatient list", () => {
 describe("2. the empty ward", () => {
   it("is an empty list, not an error", async () => {
     const h = await onWard();
-    h.api.on("GET", INPATIENTS, () => ok([]));
+    h.api.on("GET", INPATIENTS, () => okPaged(page([])));
 
-    const list = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
+    const first = await firstPage(h.runtime);
 
-    expect(list).toEqual([]);
-    expect(groupByWard(list, undefined)).toEqual([]);
+    expect(first.items).toEqual([]);
+    expect(first.meta.total).toBe(0);
+    expect(groupByWard(first.items, undefined)).toEqual([]);
   });
 });
 
@@ -230,14 +287,12 @@ describe("3. the ward list failing", () => {
     const h = await onWard();
     h.api.on("GET", INPATIENTS, () => fail(503, "HMS-GEN-503"));
 
-    await expect(
-      h.runtime.queryClient.fetchQuery({ ...readsOf(h.runtime).inpatients(), retry: false }),
-    ).rejects.toThrow();
+    await expect(firstPage(h.runtime)).rejects.toThrow();
 
     const shown = toUserMessage(
       await readsOf(h.runtime)
         .inpatients()
-        .queryFn()
+        .queryFn({ pageParam: 1 })
         .catch((e: unknown) => e),
     );
     expect(shown.action).toBe("retry");
@@ -250,7 +305,7 @@ describe("3. the ward list failing", () => {
 
     const error = await readsOf(h.runtime)
       .inpatients()
-      .queryFn()
+      .queryFn({ pageParam: 1 })
       .catch((e: unknown) => e);
 
     expect(toUserMessage(error).title).toBe("No connection");
@@ -264,12 +319,12 @@ describe("3. the ward list failing", () => {
 describe("4. selecting a patient", () => {
   it("takes identity from the bed board — no per-row patient lookup for a placed stay", async () => {
     const h = await onWard();
-    h.api.on("GET", INPATIENTS, () => ok([inpatient()]));
+    h.api.on("GET", INPATIENTS, () => okPaged(page([inpatient()])));
     h.api.on("GET", BED_BOARD, () => ok(bedBoard()));
 
-    const list = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
+    const first = await firstPage(h.runtime);
     const board = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).bedBoard());
-    const groups = groupByWard(list, board);
+    const groups = groupByWard(first.items, board);
 
     expect(groups[0]?.patients[0]?.patientName).toBe("Meera Nair");
     expect(groups[0]?.patients[0]?.uhid).toBe("APL000123");
@@ -541,22 +596,30 @@ describe("13. switching branch", () => {
 
     h.api.on("GET", INPATIENTS, () =>
       h.runtime.branch.getState().activeBranchId === BRANCH_HYD.id
-        ? ok([inpatient({ id: "hyd-stay", patientId: "patient-hyd", branchId: BRANCH_HYD.id })])
-        : ok([inpatient({ id: "chn-stay", patientId: "patient-chn", branchId: BRANCH_CHN.id })]),
+        ? okPaged(
+            page([
+              inpatient({ id: "hyd-stay", patientId: "patient-hyd", branchId: BRANCH_HYD.id }),
+            ]),
+          )
+        : okPaged(
+            page([
+              inpatient({ id: "chn-stay", patientId: "patient-chn", branchId: BRANCH_CHN.id }),
+            ]),
+          ),
     );
 
-    const hydKey = queryKeys.inpatients(scopeOf(h.runtime));
-    await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
-    expect(h.runtime.queryClient.getQueryData(hydKey)).toHaveLength(1);
+    const hydKey = readsOf(h.runtime).inpatients().queryKey;
+    await firstPage(h.runtime);
+    expect(h.runtime.queryClient.getQueryData(hydKey)).toBeDefined();
 
     await h.runtime.branches.select(USER.id, BRANCH_CHN.id);
 
-    const chnKey = queryKeys.inpatients(scopeOf(h.runtime));
+    const chnKey = readsOf(h.runtime).inpatients().queryKey;
     expect(chnKey).not.toEqual(hydKey);
 
-    const after = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
-    expect(after[0]?.id).toBe("chn-stay");
-    expect(after[0]?.branchId).toBe(BRANCH_CHN.id);
+    const after = await firstPage(h.runtime);
+    expect(after.items[0]?.id).toBe("chn-stay");
+    expect(after.items[0]?.branchId).toBe(BRANCH_CHN.id);
   });
 
   it("sends the new branch on the wire, not the remembered one", async () => {
@@ -573,10 +636,10 @@ describe("13. switching branch", () => {
 
   it("clears the previous site's ward from the cache on a switch", async () => {
     const h = await onWard();
-    h.api.on("GET", INPATIENTS, () => ok([inpatient()]));
+    h.api.on("GET", INPATIENTS, () => okPaged(page([inpatient()])));
 
-    const hydKey = queryKeys.inpatients(scopeOf(h.runtime));
-    await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
+    const hydKey = readsOf(h.runtime).inpatients().queryKey;
+    await firstPage(h.runtime);
     expect(h.runtime.queryClient.getQueryData(hydKey)).toBeDefined();
 
     await h.runtime.branches.select(USER.id, BRANCH_CHN.id);
@@ -598,7 +661,7 @@ describe("14. a hospital without wards", () => {
 
     const error = await readsOf(h.runtime)
       .inpatients()
-      .queryFn()
+      .queryFn({ pageParam: 1 })
       .catch((e: unknown) => e);
 
     expect(isFeatureUnavailable(error)).toBe(true);
@@ -607,11 +670,11 @@ describe("14. a hospital without wards", () => {
 
   it("keeps the MAR's gate separate from the ward's — wards without nursing still work", async () => {
     const h = await onWard();
-    h.api.on("GET", INPATIENTS, () => ok([inpatient()]));
+    h.api.on("GET", INPATIENTS, () => okPaged(page([inpatient()])));
     h.api.on("GET", NOTES, () => ok([wardNote()]));
     h.api.on("GET", MAR, () => fail(403, "HMS-PLAN-002", "module.clinical.nursing not in plan"));
 
-    const list = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatients());
+    const first = await firstPage(h.runtime);
     const notes = await h.runtime.queryClient.fetchQuery(
       readsOf(h.runtime).wardNotes(IP_ENCOUNTER_ID),
     );
@@ -621,7 +684,7 @@ describe("14. a hospital without wards", () => {
       .catch((e: unknown) => e);
 
     // The ward survives its own module being present while nursing is not.
-    expect(list).toHaveLength(1);
+    expect(first.items).toHaveLength(1);
     expect(notes).toHaveLength(1);
     expect(isFeatureUnavailable(marError)).toBe(true);
   });
@@ -939,11 +1002,199 @@ describe("19. discharge", () => {
   });
 });
 
-describe("20. the list the server capped", () => {
-  it("says there may be more rather than implying the ward is complete", () => {
-    expect(mayBeTruncated(Array.from({ length: 99 }))).toBe(false);
-    // The endpoint's hard `limit: 100`, with no `meta` to confirm it. A full page is the only hint.
-    expect(mayBeTruncated(Array.from({ length: 100 }))).toBe(true);
+describe("20. a ward bigger than one page", () => {
+  /**
+   * ── THE REGRESSION THIS EXISTS FOR ──────────────────────────────────────────
+   * `GET /inpatients` used to hard-code `{ limit: 100, skip: 0 }` and discard the repository's
+   * `total`, so a hospital with more than a hundred open stays saw a hundred — with nothing in the
+   * response to say the rest existed. Admitted patients silently missing from a ward round.
+   */
+  function ward(size: number) {
+    return Array.from({ length: size }, (_, i) =>
+      inpatient({
+        id: `stay-${String(i)}`,
+        patientId: `patient-${String(i)}`,
+        bed: { ward: "General ward", bedCode: `G-${String(i)}`, tariffCode: "BED-GEN" },
+      }),
+    );
+  }
+
+  function servePages(h: Awaited<ReturnType<typeof onWard>>, all: Encounter[]) {
+    h.api.on("GET", INPATIENTS, (call) => {
+      const params = new URLSearchParams(call.search);
+      const pageNo = Number(params.get("page") ?? "1");
+      const limit = Number(params.get("limit") ?? "100");
+      const start = (pageNo - 1) * limit;
+      return okPaged({
+        items: all.slice(start, start + limit),
+        meta: { page: pageNo, limit, total: all.length, hasMore: start + limit < all.length },
+      });
+    });
+  }
+
+  it("reports the hospital's total on page 1, not the page's length", async () => {
+    const h = await onWard();
+    servePages(h, ward(140));
+
+    const first = await firstPage(h.runtime);
+
+    expect(first.items).toHaveLength(40);
+    // The number the home screen and the header show. 140, never 40 and never 100.
+    expect(first.meta.total).toBe(140);
+    expect(first.meta.hasMore).toBe(true);
+  });
+
+  it("pages past 100 — no patient is silently truncated", async () => {
+    const h = await onWard();
+    servePages(h, ward(140));
+
+    const everyone = await allPages(h.runtime);
+
+    expect(everyone).toHaveLength(140);
+    expect(everyone.at(-1)?.id).toBe("stay-139");
+  });
+
+  it("never repeats a patient between pages", async () => {
+    const h = await onWard();
+    servePages(h, ward(140));
+
+    const everyone = await allPages(h.runtime);
+    const ids = everyone.map((e) => e.id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("stops asking once the server says there is no more", async () => {
+    const h = await onWard();
+    servePages(h, ward(45));
+
+    await allPages(h.runtime);
+
+    // 45 rows at 40 a page is exactly two requests. A third would mean `hasMore` was ignored.
+    expect(h.api.callsTo("GET", INPATIENTS)).toHaveLength(2);
+  });
+
+  it("asks for one row when it only needs the count", async () => {
+    const h = await onWard();
+    servePages(h, ward(140));
+
+    const count = await h.runtime.queryClient.fetchQuery(readsOf(h.runtime).inpatientCount());
+
+    expect(count.meta.total).toBe(140);
+    expect(count.items).toHaveLength(1);
+    expect(h.api.callsTo("GET", INPATIENTS)[0]?.search).toContain("limit=1");
+  });
+
+  it("keys the count apart from the list, so neither serves the other's answer", () => {
+    const scope = { tenantSlug: "apollo", branchId: "branch-hyd" };
+    const reads = clinicalQueries({} as never, scope);
+    expect(reads.inpatients().queryKey).not.toEqual(reads.inpatientCount().queryKey);
+  });
+});
+
+describe("21. the ward note carries an idempotency key", () => {
+  /**
+   * ── THE KEY AND THE RECONCILIATION ARE DIFFERENT LAYERS ─────────────────────
+   * The key makes a RETRY safe: the server replays and appends nothing. The reconciliation makes
+   * the retry UNNECESSARY to guess about: it tells the doctor whether the note is on the chart.
+   * Neither replaces the other, and these tests hold both.
+   */
+  it("sends a key, and reuses the SAME one when the response is lost", async () => {
+    const h = await onWard();
+    const ward = fakeWard(h.api);
+    const before = await h.runtime.api.listWardNotes(IP_ENCOUNTER_ID);
+    const keys = createIntentKeys();
+    ward.loseNextResponse();
+
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      before,
+      key: keys.keyFor("note"),
+      authorId: USER.id,
+    });
+
+    // The first attempt commits and the wire dies; the doctor presses save again.
+    await write.mutationFn("Chest clear. Continue same.");
+    const again = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      before,
+      key: keys.keyFor("note"),
+      authorId: USER.id,
+    });
+    const outcome = await again.mutationFn("Chest clear. Continue same.");
+
+    expect(ward.keys).toHaveLength(2);
+    // One key for one note. A fresh key per press would defeat the whole mechanism.
+    expect(new Set(ward.keys).size).toBe(1);
+    expect(outcome.outcome).toBe("saved");
+    // The server replayed rather than appending: ONE note, not two.
+    expect(ward.count).toBe(2);
+  });
+
+  it("a landed note resets the key, so the next note is a new intent", async () => {
+    const h = await onWard();
+    const ward = fakeWard(h.api);
+    const before = await h.runtime.api.listWardNotes(IP_ENCOUNTER_ID);
+    const keys = createIntentKeys();
+
+    const first = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      before,
+      key: keys.keyFor("note"),
+      authorId: USER.id,
+    });
+    await first.mutationFn("Morning round: stable.");
+    keys.reset();
+
+    const second = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      before,
+      key: keys.keyFor("note"),
+      authorId: USER.id,
+    });
+    await second.mutationFn("Evening round: still stable.");
+
+    // Two different keys, two real observations. The key must not suppress genuine entries.
+    expect(new Set(ward.keys).size).toBe(2);
+    expect(ward.count).toBe(3);
+  });
+
+  it("the reconciliation still saves the day when the key is not honoured", async () => {
+    /**
+     * ── THE MEDICO-LEGAL FLOOR ──────────────────────────────────────────────────
+     * A proxy strips an unfamiliar header; a hospital runs an API build from before the key was
+     * mounted. Either way the server appends, and the ONLY thing that stops the doctor writing the
+     * note a second time is the reconciliation. It must keep working with the key present and
+     * ignored — which is exactly what `honourKeys: false` models.
+     */
+    const h = await onWard();
+    const ward = fakeWard(h.api, { honourKeys: false });
+    const before = await h.runtime.api.listWardNotes(IP_ENCOUNTER_ID);
+    ward.loseNextResponse();
+
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      before,
+      key: "k-stripped-by-a-proxy",
+      authorId: USER.id,
+    });
+    const outcome = await write.mutationFn("Chest clear. Continue same.");
+
+    expect(outcome.outcome).toBe("saved");
+    expect(outcome.outcome === "saved" && outcome.reconciled).toBe(true);
+    // Told the truth from the chart, so the doctor does not write it again.
+    expect(ward.count).toBe(2);
+  });
+
+  it("still refuses to claim a save it cannot evidence, key or no key", async () => {
+    const h = await onWard();
+    const ward = fakeWard(h.api);
+    ward.loseNextResponse();
+
+    // No snapshot: the note DID land, and the honest answer is still "not saved" — a duplicate is
+    // recoverable and a lost clinical note is not. Unchanged by server-side idempotency.
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      before: undefined,
+      key: "k-no-snapshot",
+    });
+    const outcome = await write.mutationFn("Chest clear. Continue same.");
+
+    expect(outcome.outcome).toBe("notSaved");
   });
 });
 
@@ -954,13 +1205,13 @@ describe("20. the list the server capped", () => {
 describe("every IPD read goes through the shipped ApiClient", () => {
   it("carries the tenant host, the bearer token and the active branch on every request", async () => {
     const h = await onWard();
-    h.api.on("GET", INPATIENTS, () => ok([inpatient()]));
+    h.api.on("GET", INPATIENTS, () => okPaged(page([inpatient()])));
     h.api.on("GET", BED_BOARD, () => ok(bedBoard()));
     h.api.on("GET", NOTES, () => ok([wardNote()]));
     h.api.on("GET", MAR, () => ok([dose()]));
 
     const reads = readsOf(h.runtime);
-    await reads.inpatients().queryFn();
+    await reads.inpatients().queryFn({ pageParam: 1 });
     await reads.bedBoard().queryFn();
     await reads.wardNotes(IP_ENCOUNTER_ID).queryFn();
     await reads.medications(IP_ENCOUNTER_ID).queryFn();

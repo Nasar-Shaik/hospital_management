@@ -37,6 +37,7 @@ import {
   closeEncounterSchema,
   idParamSchema,
   listEncountersQuerySchema,
+  listInpatientsQuerySchema,
   startEncounterSchema,
   visitSummarySchema,
 } from "./encounter.schema.js";
@@ -104,12 +105,18 @@ export function encounterRouter(): Router {
   /**
    * Everyone in a bed right now. Gated on `module.ops.ipd` — a clinic has no wards, and
    * the honest answer to a clinic asking for its ward list is "you did not buy one".
+   *
+   * Paged like every other list here. The default `limit` is 100 rather than the usual 20
+   * precisely so this stays backward compatible: that is what the controller hard-coded before
+   * there was a query schema, and shrinking an existing client's ward list would be the same
+   * "patients vanish" bug seen from the other side (`listInpatientsQuerySchema`).
    */
   router.get(
     "/inpatients",
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, IPD_FEATURE),
-    responds(encounter.array()),
+    validate(listInpatientsQuerySchema, "query"),
+    responds(encounter.array(), { meta: true }),
     asyncHandler(controller.listInpatients),
   );
 

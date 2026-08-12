@@ -62,6 +62,16 @@ export interface InfiniteRead<T> {
 export const PAGE_SIZE = 20;
 
 /**
+ * The ward round's page.
+ *
+ * Larger than `PAGE_SIZE` because these rows are CHEAP: `/bed-board` supplies the name and UHID
+ * for every occupied bed in one request, so an inpatient row costs no `getPatient` at all — the
+ * reason `PAGE_SIZE` is 20 does not apply here. Still well under the server's 100 cap, so the
+ * first bay paints without waiting for the whole hospital.
+ */
+export const INPATIENT_PAGE = 40;
+
+/**
  * The filter half of a key, as a stable string.
  *
  * Sorted and `undefined`-stripped so that `{status, doctorId}` and `{doctorId, status}` are the
@@ -173,14 +183,37 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
      * entitlements endpoint it has no permission to read (`/subscription` needs
      * `subscription:manage`, which no clinician holds).
      *
-     * ── NOT PAGED, AND NOT BY CHOICE ────────────────────────────────────────────
-     * The endpoint takes no parameters at all: the controller calls the repository with a hard
-     * `{ limit: 100, skip: 0 }` and returns a bare array, discarding the `total` the repository
-     * computed. There is nothing to page with, so `mayBeTruncated` reads the only signal that
-     * exists — exactly 100 rows — and the screen says so rather than implying completeness.
+     * ── PAGED, IN THE SAME SHAPE AS EVERY OTHER LIST ────────────────────────────
+     * A ward round is scrolled, so this is an infinite read like My Patients rather than a single
+     * page with a warning on it. `INPATIENT_PAGE` is smaller than the server's default of 100 on
+     * purpose: a phone renders the first bay in one round trip instead of waiting for a hundred
+     * rows, and the rest arrives as the doctor walks.
      */
-    inpatients(): Read<Encounter[]> {
-      return { queryKey: queryKeys.inpatients(scope), queryFn: () => api.listInpatients() };
+    inpatients(): InfiniteRead<Encounter> {
+      const filters = filterKey({ limit: INPATIENT_PAGE });
+      return {
+        queryKey: queryKeys.inpatients(scope, filters),
+        queryFn: ({ pageParam }) => api.listInpatients({ page: pageParam, limit: INPATIENT_PAGE }),
+        initialPageParam: 1,
+        getNextPageParam: nextPage,
+      };
+    },
+
+    /**
+     * How many patients are in beds — for the home screen's card, from `meta.total`.
+     *
+     * ── ONE ROW, AND THE COUNT IS EXACT ─────────────────────────────────────────
+     * Same shape as `outstandingResults`: ask for a single row and read the server's own count off
+     * the meta. Before this endpoint was paged the card could only count what it had received, so
+     * a hospital with 140 open stays reported "100 in beds" — a wrong number stated as a fact, on
+     * the first screen a doctor sees. It also drags one row of PHI over the wire instead of forty.
+     */
+    inpatientCount(): Read<Paged<Encounter>> {
+      const filters = filterKey({ limit: 1, view: "count" });
+      return {
+        queryKey: queryKeys.inpatients(scope, filters),
+        queryFn: () => api.listInpatients({ page: 1, limit: 1 }),
+      };
     },
 
     /**

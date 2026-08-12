@@ -80,8 +80,15 @@ export const queryKeys = {
 
   /** One visit. */
   encounter: (scope: QueryScope, id: string) => scoped(scope, "encounter", id),
-  /** Everyone in a bed right now (`GET /inpatients`) — feature-gated on `module.ops.ipd`. */
-  inpatients: (scope: QueryScope) => scoped(scope, "inpatients"),
+  /**
+   * Everyone in a bed right now (`GET /inpatients`) — feature-gated on `module.ops.ipd`.
+   *
+   * Takes a `filters` segment like every other list, because the ward is read two ways: the round
+   * itself pages through it, and the home screen asks for one row to read `meta.total` off. Same
+   * endpoint, different requests — so they must be different cache entries, or the count query
+   * would serve its one-row answer to the list.
+   */
+  inpatients: (scope: QueryScope, filters?: string) => scoped(scope, "inpatients", filters ?? ""),
   /** One order, including its result once released. */
   order: (scope: QueryScope, id: string) => scoped(scope, "order", id),
   /** This visit's chart, oldest first. */

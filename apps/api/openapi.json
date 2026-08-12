@@ -11306,6 +11306,29 @@
         "operationId": "get_v1_inpatients",
         "tags": ["inpatients"],
         "summary": "GET /api/v1/inpatients",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success.",
@@ -11323,9 +11346,22 @@
                       "items": {
                         "$ref": "#/components/schemas/Encounter"
                       }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
                     }
                   },
-                  "required": ["success", "data"]
+                  "required": ["success", "data", "meta"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
                 }
               }
             }
@@ -17248,6 +17284,18 @@
               "type": "string",
               "pattern": "^[a-f\\d]{24}$"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the ward note this key already wrote. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
           }
         ],
         "requestBody": {
@@ -17292,6 +17340,16 @@
           },
           "400": {
             "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
             "content": {
               "application/json": {
                 "schema": {

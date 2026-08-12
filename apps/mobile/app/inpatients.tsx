@@ -29,8 +29,9 @@
 import { useMemo, useState } from "react";
 import { RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Screen } from "../src/components/Screen";
+import { Button } from "../src/components/Button";
 import { Card } from "../src/components/Card";
 import { Pill } from "../src/components/Pill";
 import { QueryGate } from "../src/components/QueryGate";
@@ -46,7 +47,6 @@ import { encounterStatusLabel, encounterStatusTone } from "../src/clinical/encou
 import {
   dayOfStay,
   groupByWard,
-  mayBeTruncated,
   placementLabel,
   wardKindLabel,
   type RoundPatient,
@@ -69,11 +69,21 @@ function Inpatients(): React.JSX.Element {
   const canReadEncounters = can("encounter:read");
   const canReadChart = can("emr:read");
 
-  const list = useQuery({ ...queries.inpatients(), enabled: ready && canReadEncounters });
+  const list = useInfiniteQuery({ ...queries.inpatients(), enabled: ready && canReadEncounters });
   const board = useQuery({ ...queries.bedBoard(), enabled: ready && canReadChart });
 
-  const inpatients = useMemo(() => list.data ?? [], [list.data]);
+  /**
+   * Every page so far, flattened, in the order the server sent them — which is ward then bed then
+   * `_id`, a TOTAL order, so no patient can appear on two pages or fall between them.
+   */
+  const inpatients = useMemo(
+    () => (list.data?.pages ?? []).flatMap((page) => page.items),
+    [list.data],
+  );
   const groups = useMemo(() => groupByWard(inpatients, board.data), [inpatients, board.data]);
+
+  /** The hospital's real number, from `meta.total` — not "how many rows have loaded". */
+  const total = list.data?.pages[0]?.meta.total ?? inpatients.length;
 
   /**
    * ── THIS FILTER IS A VIEW, NOT AN ACCESS CONTROL ────────────────────────────
@@ -136,14 +146,33 @@ function Inpatients(): React.JSX.Element {
               tintColor={theme.colors.brand}
             />
           }
+          /**
+           * ── THE FILTER AND INFINITE LOADING HAVE TO COOPERATE ────────────────────
+           * `onEndReached` fires against the FILTERED list, so a doctor narrowed to a four-bed ICU
+           * would stop paging and never discover the ICU patients still on page three. The fetch is
+           * therefore driven by whether the SERVER has more, not by what is on screen.
+           */
+          onEndReached={() => {
+            if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
+          }}
+          onEndReachedThreshold={0.5}
           ListHeaderComponent={
             <WardFilter
               groups={groups}
               selected={ward}
               onSelect={setWard}
-              total={inpatients.length}
-              truncated={mayBeTruncated(inpatients)}
+              total={total}
+              loaded={inpatients.length}
             />
+          }
+          ListFooterComponent={
+            list.hasNextPage ? (
+              <LoadMore
+                loading={list.isFetchingNextPage}
+                remaining={total - inpatients.length}
+                onPress={() => void list.fetchNextPage()}
+              />
+            ) : null
           }
           renderSectionHeader={({ section }) => <WardHeader group={section.group} />}
           renderItem={({ item }) => (
@@ -176,29 +205,32 @@ function WardFilter({
   selected,
   onSelect,
   total,
-  truncated,
+  loaded,
 }: {
   groups: readonly WardGroup[];
   selected: string;
   onSelect: (ward: string) => void;
+  /** The hospital's count, from `meta.total`. */
   total: number;
-  truncated: boolean;
+  /** How many have been fetched so far. */
+  loaded: number;
 }): React.JSX.Element {
   const theme = useTheme();
 
   return (
     <View style={styles.header}>
+      {/**
+       * The count is the WARD's, not the page's.
+       *
+       * `meta.total` is what the server counted, so this says "48 patients in beds" from the first
+       * page onward and reads "showing 40" underneath while the rest loads. Before the endpoint was
+       * paged there was no total at all and this line could only report what had arrived — which,
+       * past a hundred stays, was a smaller number stated as a fact.
+       */}
       <Text style={[typography.caption, { color: theme.colors.fgMuted }]}>
         {total === 1 ? "1 patient in a bed" : `${String(total)} patients in beds`}
+        {loaded < total ? ` · showing ${String(loaded)}` : ""}
       </Text>
-
-      {/* The endpoint has no paging and returns a bare array, so a full page is the only hint that
-          there is more. Saying "showing the first 100" beats implying this is everybody. */}
-      {truncated ? (
-        <Text style={[typography.caption, { color: theme.colors.warning }]}>
-          Showing the first {String(total)} — there may be more admitted patients.
-        </Text>
-      ) : null}
 
       {groups.length > 1 ? (
         <View style={styles.chips}>
@@ -305,6 +337,41 @@ function RoundRow({
   );
 }
 
+/**
+ * The tail of the list — and a TAPPABLE one, not only a spinner.
+ *
+ * `onEndReached` is unreliable in exactly the situation that matters here: a doctor filtered to one
+ * ward may have a screen that does not scroll, so the event never fires and the remaining pages
+ * never load. An explicit control is the fallback, and it states how many are still to come so the
+ * absence is visible rather than inferred.
+ */
+function LoadMore({
+  loading,
+  remaining,
+  onPress,
+}: {
+  loading: boolean;
+  remaining: number;
+  onPress: () => void;
+}): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <View style={styles.more}>
+      {loading ? (
+        <Text style={[typography.caption, { color: theme.colors.fgMuted }]}>
+          Loading more patients…
+        </Text>
+      ) : (
+        <Button
+          label={remaining > 0 ? `Load ${String(remaining)} more` : "Load more"}
+          variant="secondary"
+          onPress={onPress}
+        />
+      )}
+    </View>
+  );
+}
+
 function Chip({
   label,
   selected,
@@ -360,4 +427,5 @@ const styles = StyleSheet.create({
   top: { flexDirection: "row", alignItems: "flex-start", gap: space[2] },
   name: { flex: 1, gap: 2 },
   uhid: { fontVariant: ["tabular-nums"] },
+  more: { paddingTop: space[3] },
 });

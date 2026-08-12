@@ -34,6 +34,7 @@ import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
 import {
   useClinicalMutations,
   useClinicalWrite,
+  useIntentKeys,
   useUnsavedChanges,
   useWriteGuard,
 } from "../../src/hooks/useWrite";
@@ -69,13 +70,31 @@ function WardNoteScreen(): React.JSX.Element {
    */
   const before: readonly WardNote[] | undefined = notes.isSuccess ? notes.data : undefined;
 
+  /**
+   * One key for one note, stable across its retries.
+   *
+   * `keyFor("note")` returns the same string until `reset()`, which happens only once a note has
+   * landed — so pressing save again after a failure REPLAYS the first attempt server-side rather
+   * than writing a second entry, while the next note the doctor writes is a genuinely new intent
+   * with a new key. Minting per press would defeat the whole mechanism.
+   */
+  const keys = useIntentKeys();
+
   const write = useClinicalWrite(
-    mutations.addWardNote(encounterId, { before, ...(userId ? { authorId: userId } : {}) }),
+    mutations.addWardNote(encounterId, {
+      before,
+      key: keys.keyFor("note"),
+      ...(userId ? { authorId: userId } : {}),
+    }),
     {
       onSuccess: (result) => {
         setOutcome(result);
         // Cleared on a landed note ONLY. Every other outcome leaves the words on screen.
-        if (result.outcome === "saved") setText("");
+        if (result.outcome === "saved") {
+          setText("");
+          // The note is on the chart, so the next one is a new intent and needs its own key.
+          keys.reset();
+        }
       },
     },
   );

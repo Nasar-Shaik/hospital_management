@@ -14,6 +14,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
+import { Types } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -667,5 +668,417 @@ describe("handing the patient to another doctor", () => {
     );
     expect(orders.body.data).toHaveLength(1);
     expect(orders.body.data[0].encounterId).toBe(opId);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 6. THE WARD ROUND LIST IS PAGED
+ *
+ * The regression: `GET /inpatients` hard-coded `{ limit: 100, skip: 0 }` and threw away the
+ * `total` the repository had already computed. A hospital with more than a hundred open stays
+ * saw a hundred, with nothing in the response to say the rest existed — admitted patients
+ * silently absent from the ward round, which is the worst shape a list bug can take.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the ward round list pages, and says how many there are", () => {
+  /**
+   * Puts `count` open IP encounters in the ward, written straight to the collection.
+   *
+   * ── WHY NOT DRIVE 100 ADMISSIONS THROUGH HTTP ───────────────────────────────
+   * The claim under test is that the ENDPOINT pages — that `?page=2` reaches the 101st row and
+   * that `meta.total` counts them all. Admitting works and is proven by its own tests above;
+   * repeating it a hundred times here would add a hundred patients, a hundred OP encounters and a
+   * hundred billing events to a shared test database, which is slow enough to destabilise every
+   * suite that runs after it. Seeding the exact rows the query reads is the honest short cut:
+   * `listInpatients` selects on `class: "IP"` and `open: true` and nothing else.
+   *
+   * `beforeEach` deletes every IP encounter, so these never leak into another test.
+   */
+  async function fillWard(count: number, from: number): Promise<string[]> {
+    // Stamped the way `writeBranchId()` stamps a real admission — the main site. Without it the
+    // rows would be invisible to `scopeFilter()`, and the test would prove nothing.
+    const main = await pvt.connection.collection("branches").findOne({ isMain: true });
+    const branchId = (main?._id as Types.ObjectId | undefined)?.toHexString();
+    const now = new Date();
+    const docs = Array.from({ length: count }, (_, i) => {
+      const n = from + i;
+      return {
+        _id: new Types.ObjectId(),
+        tenantId: pvt.id,
+        ...(branchId ? { branchId } : {}),
+        patientId: new Types.ObjectId(),
+        episodeId: new Types.ObjectId(),
+        origin: "transfer",
+        class: "IP",
+        status: "in_progress",
+        open: true,
+        doctorId: pvt.doctorId,
+        activeOrderCount: 0,
+        history: [],
+        bed: {
+          ward: "Paged Ward",
+          bedCode: `P-${String(n).padStart(4, "0")}`,
+          tariffCode: "BED_GEN",
+        },
+        arrivedAt: now,
+        admittedAt: now,
+        createdBy: pvt.doctorId,
+        /**
+         * `isDeleted` is not optional here. `tenantScopePlugin` adds `{ isDeleted: false }` to
+         * every read, and a raw insert bypasses the Mongoose default — so a document without the
+         * field is invisible to the very endpoint under test, and the suite would report an empty
+         * ward as though pagination had failed.
+         */
+        isDeleted: false,
+        version: 0,
+        schemaVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
+
+    await pvt.connection.collection("encounters").insertMany(docs);
+    return docs.map((d) => d._id.toHexString());
+  }
+
+  async function ward(query = ""): Promise<request.Response> {
+    return auth(request(app).get(`/api/v1/inpatients${query}`), pvt, pvt.doctorToken).expect(200);
+  }
+
+  it("sends `meta` with the hospital's real total", async () => {
+    await fillWard(3, 10);
+
+    const res = await ward("?page=1&limit=2");
+
+    expect(res.body.data).toHaveLength(2);
+    // The count is of every open stay, not of the page. This is the field that used to not exist.
+    expect(res.body.meta.total).toBeGreaterThanOrEqual(3);
+    expect(res.body.meta.page).toBe(1);
+    expect(res.body.meta.limit).toBe(2);
+    expect(res.body.meta.hasMore).toBe(true);
+  });
+
+  it("page 2 is different patients from page 1, and none is repeated", async () => {
+    await fillWard(5, 20);
+
+    const first = await ward("?page=1&limit=3");
+    const second = await ward("?page=2&limit=3");
+
+    const ids1 = first.body.data.map((e: { id: string }) => e.id) as string[];
+    const ids2 = second.body.data.map((e: { id: string }) => e.id) as string[];
+
+    expect(ids1).toHaveLength(3);
+    expect(ids2.length).toBeGreaterThan(0);
+    // The `_id` tie-break in the repository's sort is what makes this reliable: ward and bed code
+    // do not identify a row, and without a total order a patient can land on both pages.
+    expect(ids1.filter((id) => ids2.includes(id))).toEqual([]);
+  });
+
+  it("walks the WHOLE ward across pages without losing or repeating anyone", async () => {
+    const admitted = await fillWard(7, 30);
+
+    const seen: string[] = [];
+    for (let page = 1; page <= 5; page += 1) {
+      const res = await ward(`?page=${String(page)}&limit=2`);
+      seen.push(...(res.body.data.map((e: { id: string }) => e.id) as string[]));
+      if (!res.body.meta.hasMore) break;
+    }
+
+    expect(new Set(seen).size).toBe(seen.length);
+    for (const id of admitted) expect(seen).toContain(id);
+  });
+
+  it("pages stays that TIE on the sort key — the ones with no bed recorded", async () => {
+    /**
+     * ── WHY THE SORT CARRIES `_id` ──────────────────────────────────────────────
+     * `one_open_stay_per_bed_per_branch` already stops two open stays sharing a bed at one site, so
+     * placed patients cannot tie. Stays with NO bed can: the index's partial filter requires
+     * `bed.bedCode` to exist, so any number of them may be open at once and every one sorts with
+     * both fields missing. Paging over an order that is not total can then return the same patient
+     * on two pages and another on none.
+     *
+     * What this test does NOT do, stated plainly: removing the `_id` tie-break does not make it
+     * fail. Forcing MongoDB to return two different orders for two executions of one query is not
+     * something a test can do on demand. The tie-break is kept because the total ordering is what
+     * makes `skip` paging correct — not because this test would catch its absence.
+     */
+    const now = new Date();
+    const main = await pvt.connection.collection("branches").findOne({ isMain: true });
+    const tied = Array.from({ length: 6 }, () => ({
+      _id: new Types.ObjectId(),
+      tenantId: pvt.id,
+      ...(main ? { branchId: (main._id as Types.ObjectId).toHexString() } : {}),
+      patientId: new Types.ObjectId(),
+      episodeId: new Types.ObjectId(),
+      origin: "transfer",
+      class: "IP",
+      status: "in_progress",
+      open: true,
+      activeOrderCount: 0,
+      history: [],
+      // No bed — so every one of these sorts with both sort fields missing, and they all tie.
+      arrivedAt: now,
+      admittedAt: now,
+      isDeleted: false,
+      version: 0,
+      schemaVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await pvt.connection.collection("encounters").insertMany(tied);
+
+    const seen: string[] = [];
+    for (let page = 1; page <= 4; page += 1) {
+      const res = await ward(`?page=${String(page)}&limit=2`);
+      seen.push(...(res.body.data.map((e: { id: string }) => e.id) as string[]));
+      if (!res.body.meta.hasMore) break;
+    }
+
+    expect(new Set(seen).size).toBe(seen.length);
+    for (const doc of tied) expect(seen).toContain(doc._id.toHexString());
+  });
+
+  it("more than 100 open stays are NOT silently truncated", async () => {
+    /**
+     * ── THE ORIGINAL BUG, DIRECTLY ─────────────────────────────────────────────
+     * The old controller could not express this at all: 105 admitted patients came back as 100
+     * with no `meta`, and the client had no way to know. Kept to a single extra page rather than
+     * a hundred more admissions, because the assertion is about the CAP, not about volume.
+     */
+    const admitted = await fillWard(105, 100);
+
+    const capped = await ward("?limit=100");
+    const rest = await ward("?page=2&limit=100");
+
+    expect(capped.body.data).toHaveLength(100);
+    expect(capped.body.meta.total).toBe(105);
+    expect(capped.body.meta.hasMore).toBe(true);
+
+    // The five past the cap. Unreachable before this change, by any request that could be made.
+    expect(rest.body.data).toHaveLength(5);
+    const seen = [...capped.body.data, ...rest.body.data].map((e: { id: string }) => e.id);
+    for (const id of admitted) expect(seen).toContain(id);
+  });
+
+  it("a caller that sends no parameters still gets up to 100 — the compatibility promise", async () => {
+    const res = await ward();
+
+    expect(res.body.meta.limit).toBe(100);
+    expect(res.body.meta.page).toBe(1);
+  });
+
+  it("refuses a limit above the house cap rather than quietly honouring it", async () => {
+    const res = await auth(request(app).get("/api/v1/inpatients?limit=5000"), pvt, pvt.doctorToken);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+  });
+
+  it("stays branch-scoped and feature-gated exactly as before", async () => {
+    // The nurse holds `encounter:read` too; what neither role can do is escape `scopeFilter()`.
+    const nurse = await auth(
+      request(app).get("/api/v1/inpatients?page=1&limit=5"),
+      pvt,
+      pvt.nurseToken,
+    ).expect(200);
+    expect(nurse.body.meta).toBeDefined();
+
+    // A hospital without `module.ops.ipd` is refused on the plan, not on the page.
+    const clinic = await auth(request(app).get("/api/v1/inpatients"), gov, gov.doctorToken);
+    expect([200, 403]).toContain(clinic.status);
+    if (clinic.status === 403) expect(clinic.body.error.code).toBe("HMS-PLAN-002");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 7. A WARD NOTE CANNOT BE WRITTEN TWICE BY A RETRY
+ *
+ * Notes are append-only: no update path, no delete path, and the repository does not
+ * de-duplicate. Before `idempotent()` was mounted here, a client whose response was lost and
+ * pressed save again left TWO identical contemporaneous entries on a medico-legal record,
+ * permanently. The mobile app reconciles on top of this; the server is what makes it impossible.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a ward note honours Idempotency-Key", () => {
+  const NOTE = { text: "Reviewed on the round. Afebrile overnight, chest clear." };
+
+  async function admittedPatient(seed: number): Promise<string> {
+    const opId = await inConsultation(
+      pvt,
+      `Note Patient ${String(seed)}`,
+      `94${String(seed).padStart(8, "0")}`,
+    );
+    const res = await admit(pvt, opId, {
+      ward: "Note Ward",
+      bedCode: `N-${String(seed)}`,
+      tariffCode: "BED_GEN",
+    });
+    return res.body.data.inpatient.id as string;
+  }
+
+  const notesOf = async (ipId: string): Promise<unknown[]> => {
+    const res = await auth(
+      request(app).get(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    ).expect(200);
+    return res.body.data as unknown[];
+  };
+
+  it("writes the note normally when a key is sent", async () => {
+    const ipId = await admittedPatient(1);
+
+    const res = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", "ward-note-key-0001")
+      .send(NOTE)
+      .expect(201);
+
+    expect(res.body.data.type).toBe("progress");
+    expect(res.body.data.text).toBe(NOTE.text);
+    // Written from the ENCOUNTER, never the body — the same rule as orders and prescriptions.
+    expect(res.body.data.encounterId).toBe(ipId);
+    expect(res.body.data.branchId ?? null).toBe(res.body.data.branchId ?? null);
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("replays the original note for the same key, and writes nothing", async () => {
+    const ipId = await admittedPatient(2);
+    const key = "ward-note-key-0002";
+
+    const first = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", key)
+      .send(NOTE)
+      .expect(201);
+
+    const replay = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", key)
+      .send(NOTE)
+      .expect(201);
+
+    // Byte-identical, including the id — the retry reports what the FIRST attempt did.
+    expect(replay.body.data.id).toBe(first.body.data.id);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    // The assertion that matters: the chart has ONE note, not two.
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("refuses the same key with a DIFFERENT note rather than replaying it", async () => {
+    const ipId = await admittedPatient(3);
+    const key = "ward-note-key-0003";
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .set("Idempotency-Key", key)
+      .send(NOTE)
+      .expect(201);
+
+    const different = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", key)
+      .send({ text: "A completely different observation about a different problem." });
+
+    /**
+     * A silent replay here would be the dangerous outcome: the doctor's SECOND note would vanish
+     * and they would be shown the first one as though it had just been written.
+     */
+    expect(different.status).toBe(409);
+    expect(different.body.error.code).toBe("HMS-REQ-002");
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("writes exactly one note when the same key arrives concurrently", async () => {
+    const ipId = await admittedPatient(4);
+    const key = "ward-note-key-0004";
+
+    const send = () =>
+      auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+        .set("Idempotency-Key", key)
+        .send(NOTE);
+
+    const results = await Promise.all([send(), send(), send()]);
+
+    // One executes; the others replay it or are told it is still running (HMS-REQ-004). None of
+    // those three outcomes may create a second note, and that is the only claim being made.
+    for (const res of results) {
+      expect([201, 409]).toContain(res.status);
+      if (res.status === 409) expect(res.body.error.code).toBe("HMS-REQ-004");
+    }
+    expect(results.some((r) => r.status === 201)).toBe(true);
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("a different key on the same encounter writes a SECOND note — two real observations", async () => {
+    const ipId = await admittedPatient(5);
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .set("Idempotency-Key", "ward-note-key-0005a")
+      .send({ text: "Morning round: stable." })
+      .expect(201);
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .set("Idempotency-Key", "ward-note-key-0005b")
+      .send({ text: "Evening round: still stable." })
+      .expect(201);
+
+    // The key must not suppress genuine entries — a ward round writes one every day.
+    expect(await notesOf(ipId)).toHaveLength(2);
+  });
+
+  it("an old client that sends NO key still works, exactly as before", async () => {
+    const ipId = await admittedPatient(6);
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .send(NOTE)
+      .expect(201);
+
+    // Honoured, not demanded. Making the header mandatory would be a breaking change in v1.
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("refuses a malformed key rather than silently ignoring it", async () => {
+    const ipId = await admittedPatient(7);
+
+    const res = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", "no")
+      .send(NOTE);
+
+    // Dropping a bad key would leave a client believing it is protected when it is not — worse
+    // than refusing, and worse than never having sent one.
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+    expect(await notesOf(ipId)).toHaveLength(0);
+  });
+
+  it("still enforces authorization — a key does not buy permission", async () => {
+    const ipId = await admittedPatient(8);
+
+    // The NURSE holds `emr:read` but not `emr:write`. The key is consumed by nobody.
+    const res = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.nurseToken,
+    )
+      .set("Idempotency-Key", "ward-note-key-0008")
+      .send(NOTE);
+
+    expect(res.status).toBe(403);
+    expect(await notesOf(ipId)).toHaveLength(0);
   });
 });

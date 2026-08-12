@@ -54,6 +54,28 @@ export const listEncountersQuerySchema = z
   })
   .strict();
 
+/**
+ * The ward round's list. Same `page`/`limit` pair as every other list on this API.
+ *
+ * ── THE DEFAULT IS 100, NOT 20, AND THAT IS THE COMPATIBILITY PROMISE ───────
+ * This endpoint took no parameters at all and the controller called the repository with a
+ * hard-coded `{ limit: 100, skip: 0 }`, so a caller that sends nothing has always received up to a
+ * hundred stays. Defaulting to the usual 20 would silently shrink every existing client's ward
+ * list by 80% — the exact "patients disappear" failure this change exists to fix, introduced from
+ * the other direction. The default therefore preserves today's behaviour EXACTLY, and `page` is
+ * what makes the rest reachable.
+ *
+ * The `max(100)` cap is the house limit and is unchanged from what the controller enforced.
+ */
+export const listInpatientsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(100),
+  })
+  .strict();
+
+export type ListInpatientsQuery = z.infer<typeof listInpatientsQuerySchema>;
+
 export const idParamSchema = z.object({ id: objectId }).strict();
 
 /** Cancellation REQUIRES a reason — "cancelled" with no why is useless downstream. */
