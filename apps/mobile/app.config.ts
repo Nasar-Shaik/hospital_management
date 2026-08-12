@@ -35,9 +35,22 @@ const ENVIRONMENT = (process.env.EXPO_PUBLIC_ENV ?? "development") as Environmen
 /**
  * The domain hospital slugs are resolved against — `apollo` → `https://apollo.<domain>`.
  * The hostname IS the tenant (Doc 04 §5.1), so this is the only tenancy knob a build carries.
+ *
+ * ── WHY DEVELOPMENT IS THE ONLY OVERRIDABLE ROW ─────────────────────────────
+ * `localhost` is a lie on a physical phone: `apollo.localhost` resolves to the PHONE's loopback,
+ * so the handset looks for the API on itself and never reaches the Mac. A simulator shares the
+ * host's loopback and does not have this problem, which is exactly why it goes unnoticed.
+ *
+ * The fix cannot be an IP, because the slug has to be a SUBDOMAIN for the server to read a tenant
+ * out of it — `apollo.192.168.1.7` is not a resolvable name. A wildcard DNS service is, so device
+ * work sets this to something like `192.168.1.7.sslip.io:4000` (see the README) and the URL stays
+ * the host, exactly as M0 §6 requires.
+ *
+ * Staging and production are NOT overridable. Which estate a signed build may reach is the trust
+ * decision in the header above, and an environment variable is not allowed to move it.
  */
 const TENANT_DOMAIN: Record<Environment, string> = {
-  development: "localhost:4000",
+  development: process.env.MEDICORE_DEV_TENANT_DOMAIN ?? "localhost:4000",
   staging: "staging.paperlesstech.in",
   production: "paperlesstech.in",
 };

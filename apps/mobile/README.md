@@ -90,8 +90,53 @@ whether plain HTTP is permitted at all:
 Only `development` can produce an `http://` URL, and there is no runtime setting that changes it.
 
 For local work, run the API (`pnpm docker:dev` then `pnpm --filter @medicore/api dev`), provision a
-tenant, and enter its slug. A simulator resolves `*.localhost` to the host machine; a physical
-device does not — use your machine's LAN address in `app.config.ts`'s development entry.
+tenant, and enter its slug. The **hospital code is the tenant slug** — the subdomain, not a URL and
+not a password. `pnpm --filter @medicore/api provision` creates one.
+
+### A physical phone cannot use `localhost`
+
+A simulator shares the Mac's loopback, so `apollo.localhost:4000` works there and this problem
+never shows up. On a handset `apollo.localhost` resolves to **the phone**, which is not running the
+API, so every request fails no matter how good the wifi is.
+
+An IP does not fix it either: the server reads the tenant out of the **subdomain**
+(`slugFromHost` in `resolveTenant.ts`), and `apollo.192.168.1.7` is not a name anything resolves.
+What is needed is a real hostname that happens to point at your Mac, which is what the wildcard DNS
+services provide — `192.168.1.7.sslip.io` resolves to `192.168.1.7`, and so does anything under it.
+
+Both sides have to agree on the domain, because the server matches the Host header against its own:
+
+```bash
+# apps/api/.env — while doing device work
+TENANT_BASE_DOMAIN=192.168.1.7.sslip.io     # was: localhost
+
+# then, in apps/mobile
+MEDICORE_DEV_TENANT_DOMAIN=192.168.1.7.sslip.io:4000 pnpm start -c
+```
+
+`apollo` now becomes `http://apollo.192.168.1.7.sslip.io:4000`, the phone resolves it to your Mac,
+and the server reads `apollo` out of the subdomain exactly as it does in production. Confirm before
+reaching for the phone — a tenant-resolution failure and a wifi failure look identical from a
+handset:
+
+```bash
+curl -s -H 'Host: apollo.192.168.1.7.sslip.io' http://192.168.1.7:4000/api/v1/auth/login \
+  -X POST -H 'Content-Type: application/json' -d '{}'
+# HMS-VAL-001 → the tenant resolved; the request only lacks credentials. Good.
+# HMS-TEN-001 → the host did not match a tenant. The two domains disagree.
+```
+
+Two things to know before flipping it:
+
+- **Substitute your own address.** `ipconfig getifaddr en0`. It changes with the network, and both
+  values have to change together.
+- **It moves the web app too.** `TENANT_BASE_DOMAIN` also drives the dev CORS allowlist
+  (`*.<domain>`), so while it is switched, browse to `apollo.192.168.1.7.sslip.io:3000` rather than
+  `apollo.localhost:3000`. React Native does not enforce CORS, so the phone is indifferent. Set it
+  back to `localhost` when you are done with the device.
+
+Nothing about this reaches a real build: `MEDICORE_DEV_TENANT_DOMAIN` is read only for the
+`development` profile, and staging and production remain fixed in `app.config.ts`.
 
 ## Running it on a real phone
 
