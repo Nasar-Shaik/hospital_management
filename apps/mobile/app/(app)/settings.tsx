@@ -15,6 +15,7 @@ import { useRuntime } from "../../src/providers/RuntimeProvider";
 import { useProfile } from "../../src/providers/ProfileProvider";
 import { useActiveBranchLabel, useConnectivity, useSession } from "../../src/hooks/useStores";
 import { themeStore, useTheme } from "../../src/hooks/useTheme";
+import { splitTabs } from "../../src/navigation/tabsFor";
 import { appConfig, appVersion } from "../../src/platform/config";
 import type { ThemePreference } from "../../src/state/theme";
 import { space, typography } from "../../src/theme/tokens";
@@ -32,7 +33,15 @@ export default function SettingsScreen(): React.JSX.Element {
   const { profile, clear } = useProfile();
 
   const user = useSession((s) => s.user);
-  const permissionCount = useSession((s) => s.permissions.size);
+  const permissions = useSession((s) => s.permissions);
+  const permissionCount = permissions.size;
+
+  /**
+   * The bar holds five (M0 §8), so a user entitled to more loses the surplus. `splitTabs` has
+   * always returned it; until now nothing rendered it, which meant an administrator holding every
+   * grant simply could not open Billing from the app. This is the "More" the tab bar promises.
+   */
+  const { overflow } = splitTabs(permissions);
   const branchLabel = useActiveBranchLabel();
   const online = useConnectivity((s) => s.online);
   const preference = useStore(themeStore, (s) => s.preference);
@@ -61,6 +70,19 @@ export default function SettingsScreen(): React.JSX.Element {
             onPress={() => router.push("/branch")}
           />
         </Section>
+
+        {overflow.length > 0 ? (
+          <Section title="More">
+            {overflow.map((tab) => (
+              <Button
+                key={tab.name}
+                label={tab.title}
+                variant="secondary"
+                onPress={() => router.push(`/${tab.name}`)}
+              />
+            ))}
+          </Section>
+        ) : null}
 
         <Section title="Appearance">
           <View style={styles.options}>

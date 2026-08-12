@@ -65,6 +65,66 @@ describe("9. the tab bar is a function of the permission set", () => {
   });
 });
 
+describe("9b. a user is never landed on, or cut off from, a tab", () => {
+  /**
+   * Both of these were found by driving the real runtime against a seeded TENANT_ADMIN, not by
+   * reading the code — the failure needs a user holding MORE than five tabs to appear at all, and
+   * every hand-written fixture in this file happened to hold fewer.
+   */
+  const everything = new Set(ALL_PERMISSION_CODES);
+
+  it("never sends a role to a tab that is missing from its own bar", () => {
+    // TENANT_ADMIN prefers `billing`, which overflows for someone holding all six. Landing there
+    // put an administrator on a screen with no tab selected and no way back to it.
+    const home = homeFor(["TENANT_ADMIN"], everything);
+    const { visible } = splitTabs(everything);
+
+    expect(visible.map((t) => t.name)).toContain(home);
+  });
+
+  it("holds that for every role in the map, at every permission set that yields one", () => {
+    const roles = [
+      "DOCTOR",
+      "NURSE",
+      "RECEPTIONIST",
+      "PHARMACIST",
+      "LAB_TECHNICIAN",
+      "TENANT_ADMIN",
+    ];
+    const sets = [
+      everything,
+      held("patient:read", "billing:read"),
+      held("encounter:read", "patient:read", "order:read"),
+      held(),
+    ];
+
+    for (const role of roles) {
+      for (const set of sets) {
+        const home = homeFor([role], set);
+        if (home === undefined) continue;
+        expect(
+          splitTabs(set).visible.map((t) => t.name),
+          `${role} on ${[...set].length} grants`,
+        ).toContain(home);
+      }
+    }
+  });
+
+  it("keeps every entitled tab reachable — the overflow is rendered, not discarded", () => {
+    /**
+     * `splitTabs` has always returned an overflow; for a while nothing consumed it, so a tab past
+     * the fifth was computed and then silently dropped. Settings renders it now. This asserts the
+     * partition is total, which is the property that makes "reachable somewhere" true.
+     */
+    const { visible, overflow } = splitTabs(everything);
+    const reachable = [...visible, ...overflow].map((t) => t.name);
+
+    expect(new Set(reachable)).toEqual(new Set(tabsFor(everything).map((t) => t.name)));
+    expect(reachable).toHaveLength(new Set(reachable).size); // no tab in both halves
+    expect(overflow.map((t) => t.name)).toContain("billing");
+  });
+});
+
 describe("10. a capability the user does not hold is not offered", () => {
   it("hides the pharmacy tab from a doctor", () => {
     const doctor = held("patient:read", "encounter:read", "order:read");

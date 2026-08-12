@@ -76,6 +76,12 @@ export function splitTabs(held: ReadonlySet<string>): {
  * unknown, or the preferred tab is not among the ones this user can see, it falls through to the
  * first available tab, so a renamed or custom role degrades to something sensible instead of a
  * blank screen.
+ *
+ * ── IT MUST MATCH AGAINST `visible`, NOT `tabsFor` ──────────────────────────
+ * Those two differ for exactly the user this mapping was written for. A TENANT_ADMIN holds all six
+ * tabs, so `billing` is pushed into the overflow — and matching against the full list landed them
+ * on a screen with no tab in the bar and no way back to it. Caught by driving the real runtime
+ * against a seeded admin, not by reading the code.
  */
 const PREFERRED_HOME: Record<string, string> = {
   DOCTOR: "queue",
@@ -87,10 +93,10 @@ const PREFERRED_HOME: Record<string, string> = {
 };
 
 export function homeFor(roles: readonly string[], held: ReadonlySet<string>): string | undefined {
-  const available = tabsFor(held);
+  const { visible } = splitTabs(held);
   for (const role of roles) {
     const preferred = PREFERRED_HOME[role];
-    if (preferred && available.some((tab) => tab.name === preferred)) return preferred;
+    if (preferred && visible.some((tab) => tab.name === preferred)) return preferred;
   }
-  return available[0]?.name;
+  return visible[0]?.name;
 }
