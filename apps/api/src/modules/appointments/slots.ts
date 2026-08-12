@@ -8,14 +8,19 @@
  * bookable slots that no longer exist and free time nobody can book. The only
  * durable rows are the appointments themselves.
  *
- * ── TIME IS THE HARD PART, AND IT IS DELIBERATELY SIMPLE HERE ────────────────
- * `startMinute` is minutes from LOCAL midnight, and slots are built by adding
- * minutes to the local midnight of the requested date. That is correct as long as
- * the hospital's clock has no daylight-saving discontinuity in the middle of a
- * clinic session — true across India and the launch markets, and not something to
- * silently assume forever. When a hospital in a DST zone is onboarded, the fix is
- * a per-tenant IANA timezone and a real date library, NOT arithmetic patched here.
- * Recorded so the next person finds a decision rather than a bug.
+ * ── TIME IS THE HARD PART, AND THE CALLER NOW OWNS IT (M0 §21 item C) ────────
+ * `startMinute` is minutes from the clinic's midnight, and this module is handed that midnight as
+ * an INSTANT rather than deriving one. It used to call `d.setHours(0,0,0,0)`, which is midnight in
+ * the PROCESS zone — UTC on the shipped image — so a 09:00 clinic was offered at 14:30 IST.
+ *
+ * Resolving the zone is the service's job (`clinicZone`, `dayRangeInZone`), because only it knows
+ * which branch the request is scoped to. What is left here is arithmetic on a known anchor, which
+ * is the part that genuinely is simple.
+ *
+ * Still true, and still worth stating: a session spanning a daylight-saving discontinuity would
+ * drift by the offset change, because minutes are added to a fixed instant. India does not observe
+ * DST and neither do the launch markets. When one is onboarded the fix is to re-resolve the
+ * wall-clock time per slot, not to patch arithmetic here.
  */
 export interface SlotTemplate {
   startMinute: number;
@@ -28,20 +33,17 @@ export interface Slot {
   endAt: Date;
 }
 
-/** Local midnight of the given day — the anchor every slot is offset from. */
-function midnight(day: Date): Date {
-  const d = new Date(day);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
 /**
- * Every slot a template produces on `day`. Partial trailing time is discarded: a
+ * Every slot a template produces on a day. Partial trailing time is discarded: a
  * 09:00–13:10 window with 15-minute slots ends at 13:00, because a 10-minute
  * stub is not an appointment anyone can keep.
+ *
+ * @param clinicMidnight the UTC instant at which the clinic's own day begins — from
+ * `dayRangeInZone(dayKey, branchZone).from`. NOT a date to be truncated here: this module has no
+ * way to know which zone the truncation should happen in, and guessing is the defect item C fixed.
  */
-export function slotsFor(day: Date, template: SlotTemplate): Slot[] {
-  const base = midnight(day).getTime();
+export function slotsFor(clinicMidnight: Date, template: SlotTemplate): Slot[] {
+  const base = clinicMidnight.getTime();
   const slots: Slot[] = [];
 
   for (

@@ -67,6 +67,12 @@ const SUITE_DB = {
   idempotency: 16,
   /** The mobile contract suite — drives `@medicore/api-client` against the real app. */
   mobile: 17,
+  /**
+   * The clinic-clock suite (M0 §21 item C). Its own database because it moves a branch into a
+   * far timezone, and a registry entry cached under another suite's key would hand that branch
+   * back with the wrong zone — which is precisely the thing it exists to detect.
+   */
+  appointmentsTz: 18,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

@@ -26,7 +26,11 @@ import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
+import { env } from "../../config/env.js";
+import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
+import { zoneOrDefault } from "../../core/time/zone.js";
 import { getPatient } from "../patients/index.js";
+import { getBranch } from "../branches/index.js";
 import { startEncounter } from "../encounters/index.js";
 import * as repo from "./appointment.repository.js";
 import { canTransition, type AppointmentStatus } from "./appointment.model.js";
@@ -51,24 +55,59 @@ function invalidTransition(from: AppointmentStatus, to: AppointmentStatus): AppE
   return new AppError("HMS-STATE-001", 422, "Invalid state transition", { from, to });
 }
 
-function startOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+/* ════════════════════════════════════════════════════════════════════════════
+ * THE CLINIC'S CLOCK (M0 §21 item C)
+ *
+ * ── THE DEFECT THIS REPLACES ────────────────────────────────────────────────
+ * Every boundary here used to read the PROCESS timezone: `d.setHours(0,0,0,0)` for the day,
+ * `d.getDay()` for the weekday, `d.getFullYear()` for the leave key. That is correct only when the
+ * server happens to run in the hospital's zone — and nothing sets `TZ` in the Dockerfile, the
+ * compose file or `.env.example`, so the shipped image runs in **UTC**. A clinic configured
+ * 09:00–13:00 therefore had its slots generated at 09:00 UTC, which is **14:30 IST**: every
+ * appointment in production offered at the wrong time.
+ *
+ * It survived because the API suite pins `TZ: "Asia/Kolkata"` (vitest.config.ts) — the tests ran in
+ * the one timezone where the bug is invisible. `appointments.tz.int.test.ts` is written to be
+ * immune to that pin: it puts the clinic in a branch zone 9.5 hours away from the process zone.
+ *
+ * ── THE RULE ────────────────────────────────────────────────────────────────
+ * A clinic session is a WALL-CLOCK fact at a SITE: "Mondays, 09:00–13:00, in Hyderabad". Every
+ * boundary resolves through the branch's own zone, never the container's.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The zone a doctor's clinic keeps: the branch's, else the platform default.
+ *
+ * A branch row whose timezone was written before `isValidTimeZone` existed falls through
+ * `zoneOrDefault` rather than throwing — a booking screen must not 500 over a settings field
+ * somebody typed two years ago.
+ */
+async function clinicZone(branchId?: string): Promise<string> {
+  if (!branchId) return env.DEFAULT_TIMEZONE;
+  const branch = await getBranch(branchId).catch(() => undefined);
+  return zoneOrDefault(branch?.timezone, env.DEFAULT_TIMEZONE);
 }
 
-function endOfDay(d: Date): Date {
-  const x = startOfDay(d);
-  x.setDate(x.getDate() + 1);
-  return x;
-}
+/**
+ * `YYYY-MM-DD` at the clinic, for an INSTANT.
+ *
+ * ── EVERY DATE THAT REACHES THIS SERVICE IS AN INSTANT, AND THAT IS THE CONTRACT ─
+ * `?date=` is `z.coerce.date()` and the shipped client sends `date.toISOString()`, so what arrives
+ * is a moment, not a calendar square. Which clinic day it belongs to is therefore a genuine zone
+ * question and this is the only correct way to ask it.
+ *
+ * The trap, recorded because the first draft of this fix fell into it: if the parameter ever
+ * becomes a date-only `YYYY-MM-DD` string, it must NOT come through here. `2026-08-17` coerces to
+ * UTC midnight, which in New York is 20:00 on the 16th — a Monday clinic would resolve to Sunday
+ * and the grid would come back empty. A named date has no zone to convert FROM; its parts are the
+ * answer. Changing the schema means changing this line with it.
+ */
+const clinicDayKey = (at: Date, zone: string): string => dayKeyInZone(at, zone);
 
-/** `YYYY-MM-DD` in the hospital's local reckoning — the key doctor leave is stored and matched on. */
-function localDateStr(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+/** The weekday a `YYYY-MM-DD` key falls on, 0 = Sunday. Parsed as UTC so no zone can shift it. */
+function weekdayOf(dayKey: string): number {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1)).getUTCDay();
 }
 
 /**
@@ -93,17 +132,27 @@ export async function getAvailability(
    * selected the doctor's whole week is offered, exactly as before branches existed.
    */
   const activeBranchId = getContext().activeBranchId;
-  const schedules = await repo.findSchedules(doctorId, day.getDay(), activeBranchId);
+  const zone = await clinicZone(activeBranchId);
+
+  /**
+   * One key, derived once, so the weekday, the leave lookup and the slot anchor cannot disagree
+   * about which day is being discussed — which is exactly how the old code drifted.
+   */
+  const dayKey = clinicDayKey(day, zone);
+
+  const schedules = await repo.findSchedules(doctorId, weekdayOf(dayKey), activeBranchId);
   if (schedules.length === 0) return [];
 
   // On leave that day → no slots, whatever the weekly schedule says. Leave is the exception that wins.
-  if (await repo.isOnLeave(doctorId, localDateStr(day))) return [];
+  if (await repo.isOnLeave(doctorId, dayKey)) return [];
 
-  const taken = await repo.bookedStartsFor(doctorId, startOfDay(day), endOfDay(day));
+  // The clinic's own day, as UTC instants. Half-open — see `dayRangeInZone`.
+  const { from, before } = dayRangeInZone(dayKey, zone);
+  const taken = await repo.bookedStartsFor(doctorId, from, before);
 
   // A doctor may hold more than one session in a day (a morning and an evening
   // clinic), so the slots of every matching template are unioned.
-  const all = schedules.flatMap((s) => slotsFor(day, s));
+  const all = schedules.flatMap((s) => slotsFor(from, s));
   return availableSlots(all, taken, now).sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
 }
 
@@ -120,9 +169,11 @@ export interface BookAppointmentInput {
  * Checking a patient in for next Tuesday puts them in TODAY's queue and makes the
  * doctor's list lie about who is actually waiting.
  */
-function assertToday(startAt: Date): void {
-  const today = startOfDay(new Date());
-  if (startAt < today || startAt >= endOfDay(new Date())) {
+async function assertToday(startAt: Date, branchId?: string): Promise<void> {
+  // Compared as DAY KEYS at the clinic. On a UTC server the old instant comparison let a 09:00 IST
+  // appointment be checked in from 18:30 the evening before, and refused it at 05:00 on the day.
+  const zone = await clinicZone(branchId);
+  if (clinicDayKey(startAt, zone) !== clinicDayKey(new Date(), zone)) {
     throw new AppError("HMS-STATE-001", 422, "Invalid state transition", {
       to: "checked_in",
       reason: "a patient can only be checked in on the day of their appointment",
@@ -162,8 +213,14 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
    * bookable and the schedule becomes decorative — you get 03:47 appointments and
    * a doctor with no idea they were expected.
    */
-  const schedules = await repo.findSchedules(input.doctorId, input.startAt.getDay(), branchId);
-  const offered = schedules.flatMap((s) => slotsFor(input.startAt, s));
+  const zone = await clinicZone(branchId);
+  // `startAt` IS an instant here — it came off the wire as a full timestamp — so which clinic day
+  // it belongs to is a genuine zone question, unlike the named date in `getAvailability`.
+  const dayKey = clinicDayKey(input.startAt, zone);
+  const { from: clinicMidnight } = dayRangeInZone(dayKey, zone);
+
+  const schedules = await repo.findSchedules(input.doctorId, weekdayOf(dayKey), branchId);
+  const offered = schedules.flatMap((s) => slotsFor(clinicMidnight, s));
   const slot = offered.find((s) => s.startAt.getTime() === input.startAt.getTime());
 
   if (!slot) {
@@ -179,7 +236,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
   }
 
   // The doctor is on leave that day — the schedule would offer the slot, but they are away.
-  if (await repo.isOnLeave(input.doctorId, localDateStr(slot.startAt))) {
+  if (await repo.isOnLeave(input.doctorId, clinicDayKey(slot.startAt, zone))) {
     throw new AppError("HMS-VAL-001", 400, "Validation failed", {
       startAt: ["the doctor is on leave that day"],
     });
@@ -266,7 +323,7 @@ async function transition(
      * lie about who is actually waiting.
      */
     if (to === "checked_in") {
-      assertToday(current.startAt);
+      await assertToday(current.startAt, current.branchId);
       // The TOKEN is no longer issued here. It belongs to the Encounter (ADR-0013):
       // a walk-in has a token and no appointment, and in a government hospital that
       // is not an edge case — it is every patient. `checkInAppointment` creates the
@@ -352,7 +409,7 @@ export async function checkInAppointment(id: string): Promise<repo.Appointment> 
   if (!canTransition(current.status, "checked_in")) {
     throw invalidTransition(current.status, "checked_in");
   }
-  assertToday(current.startAt);
+  await assertToday(current.startAt, current.branchId);
 
   const { encounter } = await startEncounter({
     patientId: current.patientId,
