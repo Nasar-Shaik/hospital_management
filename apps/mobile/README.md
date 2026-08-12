@@ -103,7 +103,7 @@ Verify by asking the dev server what Expo Go asks it:
 ```bash
 curl -s -H "expo-platform: android" -H "accept: multipart/mixed,application/expo+json,application/json" \
   http://<your-ip>:19000/ | grep -o '"runtimeVersion":"[^"]*"'
-# exposdk:57.0.0  → Expo Go can load it
+# exposdk:54.0.0  → Expo Go can load it
 # 0.1.0           → Expo Go will refuse it
 ```
 
@@ -131,7 +131,7 @@ curl http://<your-ip>:19000/        # must be an Expo manifest, not another app'
   `http://<your-ip>:19000` in the phone's browser. `pnpm start:tunnel` works around it.
 - **A stale Metro cache** after changing `app.config.ts`, `metro.config.js` or import paths. The
   terminal has the real error; `start -c` clears it.
-- **Expo Go older than the project's SDK.** This app is on SDK 57.
+- **Expo Go older than the project's SDK.** This app is on SDK 54 — see the top of this file.
 
 ## Things that will bite
 
