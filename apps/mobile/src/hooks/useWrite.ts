@@ -12,10 +12,11 @@ import { Alert } from "react-native";
 import { useNavigation } from "expo-router";
 import { useMutation, useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import { useRuntime } from "../providers/RuntimeProvider";
-import { useBranch, useConnectivity, useSession } from "./useStores";
+import { useBranch, useConnectivity, useLicence, useSession } from "./useStores";
 import { useClinical } from "./useClinical";
 import { clinicalMutations, type ClinicalMutations, type Write } from "../query/mutations";
 import { writeGuard, type WriteGuardResult } from "../lib/guard";
+import { blocksWrites } from "../lib/licence";
 import { createIntentKeys, type IntentKeys } from "../lib/idempotency";
 
 /**
@@ -28,18 +29,22 @@ import { createIntentKeys, type IntentKeys } from "../lib/idempotency";
  * Not authorization. The server re-checks every request and is the only thing that decides. This
  * decides whether the request is worth making, and gives a disabled button something to say.
  *
- * ── THE LICENCE IS SERVER-ENFORCED, NOT OBSERVED HERE ───────────────────────
- * `createRuntime` accepts an `onLicenseState` hook and M1 left it unwired, so the phone holds no
- * licence state to guard on. Passing `false` is therefore the honest value rather than an
- * assumption: a lapsed subscription is refused server-side with `HMS-TEN-005`, which the error
- * map already renders as a blocking "an administrator must renew it". The cost of the gap is that
- * the refusal arrives after the tap instead of before it.
+ * ── THE LICENCE IS SERVER-ENFORCED, AND NOW ALSO OBSERVED (M2 L) ────────────
+ * M1 shipped this passing `licenceExpired: false` because `onLicenseState` was accepted and never
+ * wired — an honest placeholder at the time, and a hole: the guard's own contract has a licence
+ * branch that nothing could ever reach. It is wired now, from the two channels the API actually
+ * has (`lib/licence.ts`), so the block arrives before the tap rather than after it.
+ *
+ * What has not changed is who decides. `HMS-TEN-005` is refused server-side, in `resolveTenant`,
+ * before authentication — this only stops the app inviting a doctor to type a discharge summary
+ * into a form that is already certain to be refused.
  */
 export function useWriteGuard(needs?: string): WriteGuardResult {
   const online = useConnectivity((s) => s.online);
   const validated = useBranch((s) => s.validated);
   const activeBranchId = useBranch((s) => s.activeBranchId);
   const permissions = useSession((s) => s.permissions);
+  const licence = useLicence();
 
   return useMemo(
     () =>
@@ -49,13 +54,15 @@ export function useWriteGuard(needs?: string): WriteGuardResult {
         // Every clinical write is stamped with a branch (ADR-0015), so every one of them needs a
         // single site resolved. All-branches mode is a reading posture.
         requiresBranch: true,
-        licenceExpired: false,
+        // GRACE deliberately does NOT block — see `blocksWrites`. A hospital the server is still
+        // serving must still be able to record what was done to a patient.
+        licenceExpired: blocksWrites(licence),
         ...(needs ? { needs } : {}),
         // The store's own `Set`, passed through — not a copy. `writeGuard` only reads it, and
         // rebuilding one here would allocate on every render for no benefit.
         held: permissions,
       }),
-    [online, validated, activeBranchId, needs, permissions],
+    [online, validated, activeBranchId, needs, permissions, licence],
   );
 }
 

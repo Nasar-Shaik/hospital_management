@@ -11,6 +11,8 @@ import { useRuntime } from "../providers/RuntimeProvider";
 import { can, type SessionState } from "../state/session";
 import { activeBranchLabel, type BranchState } from "../state/branch";
 import type { ConnectivityState } from "../state/connectivity";
+import { currentLicence } from "../state/licence";
+import type { Licence } from "../lib/licence";
 import type { LockStoreState } from "../state/lock";
 
 export function useSession<T>(selector: (state: SessionState) => T): T {
@@ -28,6 +30,17 @@ export function useConnectivity<T>(selector: (state: ConnectivityState) => T): T
 /** The lock gate's state (M2 K). Read by the root gate and by the settings toggle. */
 export function useLock<T>(selector: (state: LockStoreState) => T): T {
   return useStore(useRuntime().lock, selector);
+}
+
+/**
+ * The hospital's subscription (M2 L), resolved across the header and the refusal channels.
+ *
+ * Deliberately NOT parameterised by a selector like the others: there is exactly one thing to read,
+ * and `currentLicence` is safe to pass by reference because it returns a stored object or a module
+ * constant — never one it just built. See `state/licence.ts`.
+ */
+export function useLicence(): Licence {
+  return useStore(useRuntime().licence, currentLicence);
 }
 
 /**

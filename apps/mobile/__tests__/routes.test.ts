@@ -279,7 +279,18 @@ describe("a clinical time is never rendered in the device's zone", () => {
     ],
   ];
 
-  const EXEMPT = ["src/lib/time.ts", "src/clinical/patient.ts"];
+  /**
+   * ── `src/clinical/patient.ts` WAS EXEMPT, AND THAT IS HOW IT HID (M2 L) ────
+   * `ageInYears` read `now.getFullYear()` / `getMonth()` / `getDate()` — the DEVICE's calendar —
+   * and the exemption above it meant this scan walked straight past. A consultant reviewing a
+   * Hyderabad ward from London at 21:00 is already on the next IST day, so a patient whose
+   * birthday is today at the hospital was shown a year younger on their own chart.
+   *
+   * It now derives today from `formatDayKey(now, zone)` like everything else, so the exemption is
+   * gone and this scan is its regression test. `src/lib/time.ts` remains the only one, because it
+   * is the module that takes a zone and applies it.
+   */
+  const EXEMPT = ["src/lib/time.ts"];
 
   const scanned = [
     ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
@@ -623,5 +634,158 @@ describe("the settings screen renders the tabs the bar cannot fit", () => {
     const settings = read(join(APP_DIR, "(app)", "settings.tsx"));
     expect(settings).toMatch(/splitTabs/);
     expect(settings).toMatch(/overflow/);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * M2 L — the release-hardening rules, checked structurally
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe("the licence has exactly one owner", () => {
+  /**
+   * M1's failure here was not a wrong value, it was a value with no source: `useWriteGuard` passed
+   * `licenceExpired: false` because nothing fed it. The obvious repair — let each write screen
+   * decide for itself — would recreate that in five places, and the fifth one would read the
+   * header state and block on GRACE, refusing to save a prescription at a hospital the server is
+   * still serving.
+   *
+   * So the derivation lives in `lib/licence.ts`, is applied in `useWriteGuard`, and nowhere else
+   * may name the states at all.
+   */
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  const OWNERS = [
+    "src/lib/licence.ts",
+    "src/state/licence.ts",
+    "src/hooks/useWrite.ts",
+    "src/hooks/useStores.ts",
+    "src/lib/runtime.ts",
+    "src/components/LicenceNotice.tsx",
+    /**
+     * The error map names `HMS-TEN-005` because rendering a code as a sentence is its whole job —
+     * it is the one place any wire code becomes user-facing text, and the licence is not special
+     * enough to be an exception to that. It decides no POLICY: it produces a message, and the
+     * blocking full-screen state that goes with it.
+     */
+    "src/lib/net/errors.ts",
+  ];
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      if (OWNERS.includes(name)) return;
+      const source = codeOnly(read(file));
+
+      expect(
+        /["'](?:EXPIRING|GRACE)["']|HMS-TEN-005/.test(source),
+        `${name} decides something about the licence itself. There is one derivation — ` +
+          `blocksWrites()/licenceNotice() in src/lib/licence.ts — and screens render its answer. ` +
+          `A second opinion is how GRACE ends up blocking a write the server would have accepted.`,
+      ).toBe(false);
+    },
+  );
+
+  it("proves the guard actually consumes it, so the rule is not vacuous", () => {
+    // `codeOnly`, because the comment above the guard quotes the very literal being forbidden —
+    // scanning the raw text would fail on the explanation of the rule rather than on a breach.
+    const guard = codeOnly(read(join(APP_DIR, "..", "src", "hooks", "useWrite.ts")));
+    expect(guard).toMatch(/licenceExpired: blocksWrites\(licence\)/);
+    // The literal that started all this. If it comes back, the guard is lying again.
+    expect(guard).not.toMatch(/licenceExpired:\s*false/);
+  });
+
+  it("wires the runtime to both channels, because either alone is wrong", () => {
+    const runtime = read(join(APP_DIR, "..", "src", "lib", "runtime.ts"));
+    // The header channel: ACTIVE/EXPIRING/GRACE, on every served response.
+    expect(runtime).toMatch(/onLicenseState/);
+    // The refusal channel: the ONLY way expiry is observable, since a refused request never
+    // reaches `setLicenseHeaders` and so can never carry an EXPIRED header.
+    expect(runtime).toMatch(/isLicenceRefusal/);
+  });
+});
+
+describe("nothing clinical is written to disk", () => {
+  /**
+   * M0 §5/§15: the Keychain holds ONE refresh token, AsyncStorage holds non-secret settings, and
+   * the query cache lives in memory and dies with the process. A persisted chart on a phone that
+   * is lost is a breach with no revocation path — there is no "sign out remotely" for a file.
+   *
+   * The realistic mistake is not a rogue `writeFile`; it is somebody reaching for a cache persister
+   * to make a cold start feel faster. That is the import this looks for.
+   */
+  const scanned = [
+    ...sourceFiles(APP_DIR, [".ts", ".tsx"]),
+    ...sourceFiles(join(APP_DIR, "..", "src"), [".ts", ".tsx"]),
+  ];
+
+  const BANNED: [RegExp, string][] = [
+    [
+      /persistQueryClient|createSyncStoragePersister|createAsyncStoragePersister/,
+      "persists the query cache, which is the whole chart",
+    ],
+    [
+      /@react-native-async-storage\/async-storage/,
+      "imports AsyncStorage directly instead of the Preferences port",
+    ],
+    [/expo-secure-store/, "imports the Keychain directly instead of the SecureStorage port"],
+    [/expo-file-system/, "writes to the filesystem"],
+    [
+      /\bconsole\.(?:log|info|debug)\s*\(/,
+      "logs to the console, which on a release build is a PHI sink nobody reads",
+    ],
+  ];
+
+  const PORTS = [
+    "src/platform/preferences.ts",
+    "src/platform/secureStore.ts",
+    "src/platform/profiles.ts",
+    "src/lib/log.ts",
+  ];
+
+  it.each(scanned.map((f) => [relative(join(APP_DIR, ".."), f).split(sep).join("/"), f]))(
+    "%s",
+    (name, file) => {
+      if (PORTS.includes(name)) return;
+      const source = codeOnly(read(file));
+
+      for (const [pattern, why] of BANNED) {
+        expect(pattern.test(source), `${name} ${why}.`).toBe(false);
+      }
+    },
+  );
+
+  it("keeps the analytics pipeline empty, as M0 §15 requires until a scrubber exists", () => {
+    const manifest = JSON.parse(read(join(APP_DIR, "..", "package.json"))) as {
+      dependencies?: Record<string, string>;
+    };
+    const deps = Object.keys(manifest.dependencies ?? {});
+
+    for (const vendor of ["sentry", "amplitude", "mixpanel", "segment", "firebase", "bugsnag"]) {
+      expect(
+        deps.some((dep) => dep.toLowerCase().includes(vendor)),
+        `${vendor} is installed. No analytics or crash SDK may ship before the PHI scrubber ` +
+          `exists (M0 §15) — a stack trace and a screen name are enough to identify a patient.`,
+      ).toBe(false);
+    }
+  });
+
+  it("proves the log context cannot carry a patient at all", () => {
+    /**
+     * The signature IS the control: `LogContext` is an allow-list of primitives, and there is no
+     * overload taking an arbitrary object. A leak requires editing that interface, which is
+     * exactly where a reviewer is looking.
+     */
+    const log = read(join(APP_DIR, "..", "src", "lib", "log.ts"));
+    expect(log).toMatch(/interface LogContext/);
+    for (const field of ["name", "patient", "uhid", "dob", "diagnosis", "note"]) {
+      expect(
+        new RegExp(`^\\s*${field}\\??:`, "m").test(log),
+        `LogContext has a '${field}' field. Every field here is written to a log line; this one ` +
+          `carries PHI.`,
+      ).toBe(false);
+    }
   });
 });

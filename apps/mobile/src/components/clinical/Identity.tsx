@@ -18,7 +18,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import type { Allergy, Patient } from "@medicore/api-client";
 import { useTheme } from "../../hooks/useTheme";
-import { useClinical } from "../../hooks/useClinical";
+import { useClinical, useZoneFor } from "../../hooks/useClinical";
 import { space, typography } from "../../theme/tokens";
 import { demographics, isSupersededRecord } from "../../clinical/patient";
 import { Pill } from "../Pill";
@@ -71,7 +71,16 @@ export function PatientName({
  */
 export function PatientIdentity({ patient }: { patient: Patient }): React.JSX.Element {
   const theme = useTheme();
+  const zoneFor = useZoneFor();
   const superseded = isSupersededRecord(patient);
+
+  /**
+   * Age is a calendar fact, so "today" has to be the hospital's today and not the phone's — the
+   * same rule as every timestamp on the chart, arriving through a different door. See `ageInYears`.
+   * A patient record carries no branch of its own, so this is the reader's active site, which is
+   * the right answer for the one screen that shows a full identity block.
+   */
+  const zone = zoneFor(undefined);
 
   return (
     <View style={styles.identity}>
@@ -84,7 +93,7 @@ export function PatientIdentity({ patient }: { patient: Patient }): React.JSX.El
       </Text>
       <View style={styles.meta}>
         <Text style={[typography.body, { color: theme.colors.fgMuted }]}>
-          {demographics(patient)}
+          {demographics(patient, new Date(), zone)}
         </Text>
         {patient.bloodGroup ? (
           <Text style={[typography.body, { color: theme.colors.fgMuted }]}>

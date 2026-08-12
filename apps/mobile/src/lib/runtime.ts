@@ -18,14 +18,16 @@
  * the "not yet ready" window is nil because no request can be issued before this function returns.
  */
 import type { ApiClient, DeprecationNotice, LicenseHeader } from "@medicore/api-client";
-import { QueryClient } from "@tanstack/query-core";
+import { MutationCache, QueryCache, QueryClient } from "@tanstack/query-core";
 import { createApiClient } from "./apiClient";
 import { createAuthController, type AuthController, type SessionEndReason } from "./session";
 import { createBranchController, type BranchController } from "./branch";
 import { createSessionStore, type SessionStore } from "../state/session";
 import { createBranchStore, type BranchStore } from "../state/branch";
 import { createConnectivityStore, type ConnectivityStore } from "../state/connectivity";
+import { createLicenceStore, type LicenceStore } from "../state/licence";
 import { createLockStore, type LockStore } from "../state/lock";
+import { isLicenceRefusal } from "./licence";
 import type { HospitalProfile } from "./tenant";
 import {
   storageKeys,
@@ -61,6 +63,11 @@ export interface MobileRuntime {
   session: SessionStore;
   branch: BranchStore;
   connectivity: ConnectivityStore;
+  /**
+   * The hospital's subscription, as the server's own responses describe it (M2 L). Read by the
+   * write guard and by the renewal banner — never by anything that enforces.
+   */
+  licence: LicenceStore;
   /** Whether the app is showing anything at all (M2 K). Read by the root gate. */
   lock: LockStore;
   auth: AuthController;
@@ -83,6 +90,7 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
   const session = createSessionStore();
   const branch = createBranchStore();
   const connectivity = createConnectivityStore();
+  const licence = createLicenceStore();
   const lock = createLockStore();
 
   /**
@@ -120,7 +128,34 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
     }
   }) as typeof fetch;
 
+  /**
+   * ── WHERE THE APP LEARNS ITS LICENCE HAS LAPSED (M2 L) ────────────────────
+   * `HMS-TEN-005` is the ONLY way it can: there is no `EXPIRED` header, because the response that
+   * would carry one is refused before any header is set (`lib/licence.ts` sets out the two
+   * channels). So the refusal has to be caught where every request's failure passes, and these two
+   * caches are that place — one for reads, one for writes, both owned here rather than by a screen.
+   *
+   * `served()` is taken from successful READS only. Several clinical mutations deliberately RESOLVE
+   * on failure — `attemptWardNote` answers "not saved" rather than throwing, because a doctor needs
+   * a classified outcome and not an exception — so a mutation's success is not evidence that the
+   * server is serving this hospital, and using it as such would clear a real block.
+   */
+  const queryCache = new QueryCache({
+    onSuccess: () => licence.getState().served(),
+    onError: (error) => {
+      if (isLicenceRefusal(error)) licence.getState().refuse();
+    },
+  });
+
+  const mutationCache = new MutationCache({
+    onError: (error) => {
+      if (isLicenceRefusal(error)) licence.getState().refuse();
+    },
+  });
+
   const queryClient = new QueryClient({
+    queryCache,
+    mutationCache,
     defaultOptions: {
       queries: {
         retry: shouldRetryRead,
@@ -148,7 +183,19 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
     getActiveBranch: () =>
       branch.getState().validated ? branch.getState().activeBranchId : undefined,
     onUnauthorized: () => auth.refreshOnce(),
-    ...(deps.onLicenseState ? { onLicenseState: deps.onLicenseState } : {}),
+    /**
+     * The warning channel (M2 L). Every served response carries the hospital's licence state, so
+     * this is fed on every call with no poll and no dedicated endpoint. `null` means the response
+     * had no licence headers, which means perpetual — the store treats it as such.
+     *
+     * `deps.onLicenseState` is still called afterwards so a host can observe it too; the store is
+     * wired unconditionally, because a hook nobody passed was exactly how M1 ended up with a write
+     * guard that assumed the licence was fine.
+     */
+    onLicenseState: (state: LicenseHeader | null) => {
+      licence.getState().observed(state);
+      deps.onLicenseState?.(state);
+    },
     onDeprecation: (notice: DeprecationNotice, path: string) =>
       logger.warn("endpoint is being retired", { route: path, code: notice.sunsetAt ?? undefined }),
     fetchImpl: instrumentedFetch,
@@ -189,6 +236,12 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
        * enrolment has just been removed that is an app nobody can open.
        */
       lock.getState().reset();
+      /**
+       * The licence belongs to the HOSPITAL, not the session — but the next person to sign in
+       * deserves to learn it from their own responses rather than inherit a refusal recorded
+       * before a renewal that may have happened while nobody was signed in.
+       */
+      licence.getState().reset();
       queryClient.clear();
       logger.info("session ended", { tenantSlug: deps.profile.slug, code: reason });
       deps.onSessionEnded?.(reason);
@@ -214,6 +267,7 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
     session,
     branch,
     connectivity,
+    licence,
     lock,
     auth,
     branches,

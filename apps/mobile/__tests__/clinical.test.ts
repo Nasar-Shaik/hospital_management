@@ -346,6 +346,30 @@ describe("identity is a safety control", () => {
     expect(ageInYears("1991-04-02", new Date("2026-04-02T12:00:00.000Z"))).toBe(35);
   });
 
+  it("counts to TODAY AT THE HOSPITAL, not to today on the reader's phone (M2 L)", () => {
+    /**
+     * The regression. `ageInYears` read `now.getFullYear()` / `getMonth()` / `getDate()` — the
+     * DEVICE's calendar — and `src/clinical/patient.ts` was exempt from the device-clock scan, so
+     * nothing noticed.
+     *
+     * 18:00 UTC on the 12th is already the 13th in Kiritimati (+14) and still the 12th in London.
+     * A patient born on the 13th therefore has their birthday TODAY at a Kiritimati hospital and
+     * TOMORROW at a London one — and the chart must say what the hospital says, whoever is reading
+     * it and wherever they are standing.
+     */
+    const at = new Date("2026-08-12T18:00:00.000Z");
+    expect(ageInYears("1991-08-13", at, "Pacific/Kiritimati")).toBe(35);
+    expect(ageInYears("1991-08-13", at, "Europe/London")).toBe(34);
+
+    // And the same one-day gap through the rendered identity line, which is what a doctor reads.
+    expect(demographics({ gender: "female", dob: "1991-08-13" }, at, "Pacific/Kiritimati")).toBe(
+      "35 y · F",
+    );
+    expect(demographics({ gender: "female", dob: "1991-08-13" }, at, "Europe/London")).toBe(
+      "34 y · F",
+    );
+  });
+
   it("returns nothing rather than 0 for a date it cannot read", () => {
     // "0 y" on a chart reads as a newborn, which is a dangerous thing to print about an adult.
     expect(ageInYears(undefined)).toBeUndefined();

@@ -8,12 +8,13 @@
  * refuses regardless: the UI hides, it does not enforce.
  */
 import { useEffect } from "react";
-import { Pressable } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, Redirect, Tabs } from "expo-router";
 import { requireRuntime, useRuntime } from "../../src/providers/RuntimeProvider";
 import { useCapabilities, useSession } from "../../src/hooks/useStores";
 import { useTheme } from "../../src/hooks/useTheme";
+import { LicenceNotice } from "../../src/components/LicenceNotice";
 import { TABS, splitTabs } from "../../src/navigation/tabsFor";
 
 /**
@@ -44,51 +45,66 @@ function AppLayout(): React.JSX.Element {
   const shown = new Set(visible.map((tab) => tab.name));
 
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: true,
-        tabBarActiveTintColor: theme.colors.brandStrong,
-        tabBarInactiveTintColor: theme.colors.fgSubtle,
-        tabBarStyle: {
-          backgroundColor: theme.colors.bgElevated,
-          borderTopColor: theme.colors.border,
-        },
-        headerStyle: { backgroundColor: theme.colors.bgElevated },
-        headerTintColor: theme.colors.fg,
-        sceneStyle: { backgroundColor: theme.colors.bg },
-        headerRight: () => (
-          <Link href="/settings" asChild>
-            <Pressable accessibilityRole="button" accessibilityLabel="Settings" hitSlop={12}>
-              <Ionicons name="settings-outline" size={22} color={theme.colors.fgMuted} />
-            </Pressable>
-          </Link>
-        ),
-      }}
-    >
-      {/* The role home. Never in the bar — it only redirects. */}
-      <Tabs.Screen name="index" options={{ href: null, headerShown: false }} />
+    /**
+     * The licence warning sits ABOVE the navigator rather than inside a screen (M2 L): it is a
+     * fact about the hospital, not about whatever the doctor is looking at, and a banner that
+     * appeared only on the home tab would be missed by everyone who deep-links into a chart.
+     *
+     * It renders `null` for a healthy licence, so this wrapper costs nothing on almost every day.
+     */
+    <View style={styles.shell}>
+      <LicenceNotice />
+      <Tabs
+        screenOptions={{
+          headerShown: true,
+          tabBarActiveTintColor: theme.colors.brandStrong,
+          tabBarInactiveTintColor: theme.colors.fgSubtle,
+          tabBarStyle: {
+            backgroundColor: theme.colors.bgElevated,
+            borderTopColor: theme.colors.border,
+          },
+          headerStyle: { backgroundColor: theme.colors.bgElevated },
+          headerTintColor: theme.colors.fg,
+          sceneStyle: { backgroundColor: theme.colors.bg },
+          headerRight: () => (
+            <Link href="/settings" asChild>
+              <Pressable accessibilityRole="button" accessibilityLabel="Settings" hitSlop={12}>
+                <Ionicons name="settings-outline" size={22} color={theme.colors.fgMuted} />
+              </Pressable>
+            </Link>
+          ),
+        }}
+      >
+        {/* The role home. Never in the bar — it only redirects. */}
+        <Tabs.Screen name="index" options={{ href: null, headerShown: false }} />
 
-      {TABS.map((tab) => (
-        <Tabs.Screen
-          key={tab.name}
-          name={tab.name}
-          options={{
-            title: tab.title,
-            // `href: null` keeps the ROUTE reachable while removing it from the bar, which is
-            // exactly the distinction between hiding and forbidding.
-            href: shown.has(tab.name) ? undefined : null,
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name={tab.icon as never} size={size} color={color} />
-            ),
-          }}
-        />
-      ))}
+        {TABS.map((tab) => (
+          <Tabs.Screen
+            key={tab.name}
+            name={tab.name}
+            options={{
+              title: tab.title,
+              // `href: null` keeps the ROUTE reachable while removing it from the bar, which is
+              // exactly the distinction between hiding and forbidding.
+              href: shown.has(tab.name) ? undefined : null,
+              tabBarIcon: ({ color, size }) => (
+                <Ionicons name={tab.icon as never} size={size} color={color} />
+              ),
+            }}
+          />
+        ))}
 
-      {/* Reachable from the header, never from the bar — five tabs is the ceiling (M0 §8). */}
-      <Tabs.Screen name="settings" options={{ title: "Settings", href: null }} />
-      <Tabs.Screen name="branch" options={{ title: "Branch", href: null }} />
-    </Tabs>
+        {/* Reachable from the header, never from the bar — five tabs is the ceiling (M0 §8). */}
+        <Tabs.Screen name="settings" options={{ title: "Settings", href: null }} />
+        <Tabs.Screen name="branch" options={{ title: "Branch", href: null }} />
+      </Tabs>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  /** The navigator still owns everything below the banner, so it needs the remaining height. */
+  shell: { flex: 1 },
+});
 
 export default requireRuntime(AppLayout);
