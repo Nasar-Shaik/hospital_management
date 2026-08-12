@@ -6,8 +6,8 @@
  * login rather than being asked for a code they entered months ago.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import type { HospitalProfile } from "../lib/tenant.js";
-import { lastUsedProfile, loadProfiles, saveProfile } from "../platform/profiles.js";
+import type { HospitalProfile } from "../lib/tenant";
+import { lastUsedProfile, loadProfiles, saveProfile } from "../platform/profiles";
 
 interface ProfileContextValue {
   profile?: HospitalProfile;

@@ -5,9 +5,9 @@
  * phone has been used at Apollo". Each profile owns its own secure-store namespace for its refresh
  * token (`storageKeys`), so signing into a second hospital cannot sign you out of the first.
  */
-import { preferences } from "./preferences.js";
-import { storageKeys } from "../lib/storage.js";
-import type { HospitalProfile } from "../lib/tenant.js";
+import { preferences } from "./preferences";
+import { storageKeys } from "../lib/storage";
+import type { HospitalProfile } from "../lib/tenant";
 
 export async function loadProfiles(): Promise<HospitalProfile[]> {
   const raw = await preferences.get(storageKeys.profiles);

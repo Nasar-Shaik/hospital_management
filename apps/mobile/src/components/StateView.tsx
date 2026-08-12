@@ -10,9 +10,9 @@
  * raw exception, so a screen cannot render one even in a hurry.
  */
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { useTheme } from "../hooks/useTheme.js";
-import { radius, size, space, typography } from "../theme/tokens.js";
-import type { UserFacingError } from "../lib/net/errors.js";
+import { useTheme } from "../hooks/useTheme";
+import { radius, size, space, typography } from "../theme/tokens";
+import type { UserFacingError } from "../lib/net/errors";
 
 export function LoadingState({ label = "Loading…" }: { label?: string }): React.JSX.Element {
   const theme = useTheme();

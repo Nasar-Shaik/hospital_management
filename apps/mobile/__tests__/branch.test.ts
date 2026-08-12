@@ -6,9 +6,9 @@
  * of a server fact, and every path that could send one re-reads the list first.
  */
 import { describe, expect, it } from "vitest";
-import { BRANCH_CHN, BRANCH_HYD, PASSWORD, SLUG, USER, createHarness } from "./support/harness.js";
-import { ok } from "./support/fakeApi.js";
-import { storageKeys } from "../src/lib/storage.js";
+import { BRANCH_CHN, BRANCH_HYD, PASSWORD, SLUG, USER, createHarness } from "./support/harness";
+import { ok } from "./support/fakeApi";
+import { storageKeys } from "../src/lib/storage";
 
 const branchKey = storageKeys.activeBranch(SLUG, USER.id);
 

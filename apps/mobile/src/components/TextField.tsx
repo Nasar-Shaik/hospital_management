@@ -1,6 +1,6 @@
 import { StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
-import { useTheme } from "../hooks/useTheme.js";
-import { radius, size, space, typography } from "../theme/tokens.js";
+import { useTheme } from "../hooks/useTheme";
+import { radius, size, space, typography } from "../theme/tokens";
 
 /**
  * A labelled input that renders the API's field errors directly.

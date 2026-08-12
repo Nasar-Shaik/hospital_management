@@ -9,15 +9,15 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { API_VERSION } from "@medicore/api-client";
 import { useStore } from "zustand";
-import { Screen } from "../../src/components/Screen.js";
-import { Button } from "../../src/components/Button.js";
-import { useRuntime } from "../../src/providers/RuntimeProvider.js";
-import { useProfile } from "../../src/providers/ProfileProvider.js";
-import { useActiveBranchLabel, useConnectivity, useSession } from "../../src/hooks/useStores.js";
-import { themeStore, useTheme } from "../../src/hooks/useTheme.js";
-import { appConfig, appVersion } from "../../src/platform/config.js";
-import type { ThemePreference } from "../../src/state/theme.js";
-import { space, typography } from "../../src/theme/tokens.js";
+import { Screen } from "../../src/components/Screen";
+import { Button } from "../../src/components/Button";
+import { useRuntime } from "../../src/providers/RuntimeProvider";
+import { useProfile } from "../../src/providers/ProfileProvider";
+import { useActiveBranchLabel, useConnectivity, useSession } from "../../src/hooks/useStores";
+import { themeStore, useTheme } from "../../src/hooks/useTheme";
+import { appConfig, appVersion } from "../../src/platform/config";
+import type { ThemePreference } from "../../src/state/theme";
+import { space, typography } from "../../src/theme/tokens";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "system", label: "Match device" },

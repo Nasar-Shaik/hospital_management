@@ -17,7 +17,7 @@
  * correct outcome, and far better than a crash on launch.
  */
 import * as SecureStore from "expo-secure-store";
-import type { SecureStorage } from "../lib/storage.js";
+import type { SecureStorage } from "../lib/storage";
 
 const OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,

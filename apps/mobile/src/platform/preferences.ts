@@ -10,7 +10,7 @@
  * records why the rule exists.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import type { Preferences } from "../lib/storage.js";
+import type { Preferences } from "../lib/storage";
 
 export const preferences: Preferences = {
   async get(key) {

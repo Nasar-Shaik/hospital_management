@@ -10,9 +10,9 @@
  * Each is replaced by a real screen in the milestone named on it.
  */
 import { Redirect } from "expo-router";
-import { Screen } from "./Screen.js";
-import { EmptyState } from "./StateView.js";
-import { useCapabilities } from "../hooks/useStores.js";
+import { Screen } from "./Screen";
+import { EmptyState } from "./StateView";
+import { useCapabilities } from "../hooks/useStores";
 
 export function ComingLater({
   title,

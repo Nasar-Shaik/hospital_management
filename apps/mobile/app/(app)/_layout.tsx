@@ -11,10 +11,10 @@ import { useEffect } from "react";
 import { Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, Redirect, Tabs } from "expo-router";
-import { useRuntime } from "../../src/providers/RuntimeProvider.js";
-import { useCapabilities, useSession } from "../../src/hooks/useStores.js";
-import { useTheme } from "../../src/hooks/useTheme.js";
-import { TABS, splitTabs } from "../../src/navigation/tabsFor.js";
+import { useRuntime } from "../../src/providers/RuntimeProvider";
+import { useCapabilities, useSession } from "../../src/hooks/useStores";
+import { useTheme } from "../../src/hooks/useTheme";
+import { TABS, splitTabs } from "../../src/navigation/tabsFor";
 
 export default function AppLayout(): React.JSX.Element {
   const theme = useTheme();

@@ -8,9 +8,9 @@
  */
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Redirect } from "expo-router";
-import { useSession } from "../../src/hooks/useStores.js";
-import { useTheme } from "../../src/hooks/useTheme.js";
-import { homeFor } from "../../src/navigation/tabsFor.js";
+import { useSession } from "../../src/hooks/useStores";
+import { useTheme } from "../../src/hooks/useTheme";
+import { homeFor } from "../../src/navigation/tabsFor";
 
 export default function Home(): React.JSX.Element {
   const theme = useTheme();

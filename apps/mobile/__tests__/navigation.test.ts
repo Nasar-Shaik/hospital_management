@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { ALL_PERMISSION_CODES } from "@medicore/permissions";
-import { MAX_VISIBLE_TABS, TABS, homeFor, splitTabs, tabsFor } from "../src/navigation/tabsFor.js";
-import { writeGuard } from "../src/lib/guard.js";
+import { MAX_VISIBLE_TABS, TABS, homeFor, splitTabs, tabsFor } from "../src/navigation/tabsFor";
+import { writeGuard } from "../src/lib/guard";
 
 const held = (...codes: string[]): ReadonlySet<string> => new Set(codes);
 

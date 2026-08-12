@@ -15,12 +15,12 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { ProfileProvider, useProfile } from "../src/providers/ProfileProvider.js";
-import { RuntimeProvider, useOptionalRuntime } from "../src/providers/RuntimeProvider.js";
-import { useAppLifecycle } from "../src/hooks/useAppLifecycle.js";
-import { PrivacyOverlay } from "../src/components/PrivacyOverlay.js";
-import { useTheme } from "../src/hooks/useTheme.js";
-import type { SessionEndReason } from "../src/lib/session.js";
+import { ProfileProvider, useProfile } from "../src/providers/ProfileProvider";
+import { RuntimeProvider, useOptionalRuntime } from "../src/providers/RuntimeProvider";
+import { useAppLifecycle } from "../src/hooks/useAppLifecycle";
+import { PrivacyOverlay } from "../src/components/PrivacyOverlay";
+import { useTheme } from "../src/hooks/useTheme";
+import type { SessionEndReason } from "../src/lib/session";
 
 export default function RootLayout(): React.JSX.Element {
   return (

@@ -19,16 +19,16 @@
  */
 import type { ApiClient, DeprecationNotice, LicenseHeader } from "@medicore/api-client";
 import { QueryClient } from "@tanstack/query-core";
-import { createApiClient } from "./apiClient.js";
-import { createAuthController, type AuthController, type SessionEndReason } from "./session.js";
-import { createBranchController, type BranchController } from "./branch.js";
-import { createSessionStore, type SessionStore } from "../state/session.js";
-import { createBranchStore, type BranchStore } from "../state/branch.js";
-import { createConnectivityStore, type ConnectivityStore } from "../state/connectivity.js";
-import type { HospitalProfile } from "./tenant.js";
-import type { Preferences, SecureStorage } from "./storage.js";
-import { createLogger, type Logger } from "./log.js";
-import { shouldRetryRead, shouldRetryMutation, backoffMs } from "./net/retry.js";
+import { createApiClient } from "./apiClient";
+import { createAuthController, type AuthController, type SessionEndReason } from "./session";
+import { createBranchController, type BranchController } from "./branch";
+import { createSessionStore, type SessionStore } from "../state/session";
+import { createBranchStore, type BranchStore } from "../state/branch";
+import { createConnectivityStore, type ConnectivityStore } from "../state/connectivity";
+import type { HospitalProfile } from "./tenant";
+import type { Preferences, SecureStorage } from "./storage";
+import { createLogger, type Logger } from "./log";
+import { shouldRetryRead, shouldRetryMutation, backoffMs } from "./net/retry";
 
 export interface RuntimeDeps {
   profile: HospitalProfile;

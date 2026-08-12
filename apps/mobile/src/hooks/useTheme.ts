@@ -1,7 +1,7 @@
 import { useColorScheme } from "react-native";
 import { useStore } from "zustand";
-import { createThemeStore, resolveScheme } from "../state/theme.js";
-import { themes, type Theme } from "../theme/tokens.js";
+import { createThemeStore, resolveScheme } from "../state/theme";
+import { themes, type Theme } from "../theme/tokens";
 
 /**
  * One store for the whole app. Theme is the one piece of state that legitimately outlives a

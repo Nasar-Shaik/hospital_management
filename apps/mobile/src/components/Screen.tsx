@@ -1,7 +1,7 @@
 import { StyleSheet, View, type ViewStyle } from "react-native";
 import { SafeAreaView, type Edge } from "react-native-safe-area-context";
-import { useTheme } from "../hooks/useTheme.js";
-import { space } from "../theme/tokens.js";
+import { useTheme } from "../hooks/useTheme";
+import { space } from "../theme/tokens";
 
 /**
  * The page frame: safe-area insets and the themed background, in one place.

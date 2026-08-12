@@ -1,4 +1,4 @@
-import { ComingLater } from "../../src/components/ComingLater.js";
+import { ComingLater } from "../../src/components/ComingLater";
 
 /**
  * No `needs`: every signed-in person has an inbox. It arrives in M4 together with the backend's

@@ -8,14 +8,14 @@
 import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Screen } from "../src/components/Screen.js";
-import { TextField } from "../src/components/TextField.js";
-import { Button } from "../src/components/Button.js";
-import { ErrorState } from "../src/components/StateView.js";
-import { useRuntime } from "../src/providers/RuntimeProvider.js";
-import { useTheme } from "../src/hooks/useTheme.js";
-import { toUserMessage, type UserFacingError } from "../src/lib/net/errors.js";
-import { space, typography } from "../src/theme/tokens.js";
+import { Screen } from "../src/components/Screen";
+import { TextField } from "../src/components/TextField";
+import { Button } from "../src/components/Button";
+import { ErrorState } from "../src/components/StateView";
+import { useRuntime } from "../src/providers/RuntimeProvider";
+import { useTheme } from "../src/hooks/useTheme";
+import { toUserMessage, type UserFacingError } from "../src/lib/net/errors";
+import { space, typography } from "../src/theme/tokens";
 
 export default function MfaScreen(): React.JSX.Element {
   const theme = useTheme();

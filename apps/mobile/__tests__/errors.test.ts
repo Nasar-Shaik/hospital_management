@@ -16,10 +16,10 @@ import {
   isNetworkFailure,
   isSessionExpired,
   toUserMessage,
-} from "../src/lib/net/errors.js";
-import { shouldRetryMutation, shouldRetryRead } from "../src/lib/net/retry.js";
-import { PASSWORD, USER, createHarness } from "./support/harness.js";
-import { created, fail, ok } from "./support/fakeApi.js";
+} from "../src/lib/net/errors";
+import { shouldRetryMutation, shouldRetryRead } from "../src/lib/net/retry";
+import { PASSWORD, USER, createHarness } from "./support/harness";
+import { created, fail, ok } from "./support/fakeApi";
 
 const apiError = (status: number, code: string, details?: unknown): ApiClientError =>
   new ApiClientError(status, code, "developer-facing text", details, "trace-1");

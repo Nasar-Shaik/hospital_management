@@ -20,7 +20,7 @@
  * a cold start. The refresh token travels in the body, which is the native path the API supports.
  */
 import { ApiClient, type DeprecationNotice, type LicenseHeader } from "@medicore/api-client";
-import type { HospitalProfile } from "./tenant.js";
+import type { HospitalProfile } from "./tenant";
 
 export interface ApiClientDeps {
   profile: HospitalProfile;

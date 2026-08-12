@@ -6,8 +6,8 @@
  * page, and gets the user back to somewhere real.
  */
 import { Stack, useRouter } from "expo-router";
-import { Screen } from "../src/components/Screen.js";
-import { ErrorState } from "../src/components/StateView.js";
+import { Screen } from "../src/components/Screen";
+import { ErrorState } from "../src/components/StateView";
 
 export default function NotFound(): React.JSX.Element {
   const router = useRouter();

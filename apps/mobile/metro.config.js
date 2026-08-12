@@ -12,6 +12,15 @@
  * 0.73 and it is what makes the isolated (non-hoisted) layout work at all. If bundling ever fails
  * to resolve a transitive React Native dependency, the documented escape hatch is
  * `node-linker=hoisted` in the ROOT `.npmrc` — it is a workspace-wide setting, not a per-app one.
+ *
+ * ── DO NOT SET `disableHierarchicalLookup` ──────────────────────────────────
+ * Every monorepo guide recommends it, and every one of them assumes a HOISTED layout where all
+ * dependencies sit in one flat tree. Under pnpm the opposite is true: a package's own
+ * dependencies live beside it in `node_modules/.pnpm/<pkg>@<version>/node_modules/`, and walking
+ * up from the importing file is the ONLY way to find them. It was set here initially and the
+ * first bundle failed with "@expo/metro-runtime could not be found within the project or in
+ * these directories: node_modules, ../../node_modules" — the two paths below, which are exactly
+ * what disabling the walk leaves you with.
  */
 const path = require("node:path");
 const { getDefaultConfig } = require("expo/metro-config");
@@ -27,6 +36,5 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 config.resolver.unstable_enableSymlinks = true;
-config.resolver.disableHierarchicalLookup = true;
 
 module.exports = config;

@@ -4,14 +4,17 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "start": "expo start --port 8082",
+    "android": "expo start --port 8082 --android",
+    "ios": "expo start --port 8082 --ios",
+    "start:tunnel": "expo start --port 8082 --tunnel",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint app src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bundle:check": "expo export --platform ios --platform android --output-dir .expo/bundle-check --no-bytecode"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~57.0.9",
     "@expo/vector-icons": "^15.1.1",
     "@medicore/api-client": "workspace:*",
     "@medicore/permissions": "workspace:*",

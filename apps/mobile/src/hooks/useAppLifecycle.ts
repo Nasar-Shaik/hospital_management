@@ -10,8 +10,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import { useRuntime } from "../providers/RuntimeProvider.js";
-import { actionsOnPhase, actionsOnResume, type AppPhase } from "../lib/lifecycle.js";
+import { useRuntime } from "../providers/RuntimeProvider";
+import { actionsOnPhase, actionsOnResume, type AppPhase } from "../lib/lifecycle";
 
 export interface LifecycleState {
   /** True while the app is not fully foregrounded — the privacy overlay follows this exactly. */

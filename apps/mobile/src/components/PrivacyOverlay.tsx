@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View } from "react-native";
-import { useTheme } from "../hooks/useTheme.js";
-import { space, typography } from "../theme/tokens.js";
+import { useTheme } from "../hooks/useTheme";
+import { space, typography } from "../theme/tokens";
 
 /**
  * What the app switcher gets to photograph (M0 §15).

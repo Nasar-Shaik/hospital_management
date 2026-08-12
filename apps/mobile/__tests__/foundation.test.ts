@@ -6,22 +6,22 @@
  * on it.
  */
 import { describe, expect, it } from "vitest";
-import { createProfile, resolveBaseUrl, validateSlug } from "../src/lib/tenant.js";
-import { AGGREGATE, queryKeys, scoped } from "../src/query/keys.js";
+import { createProfile, resolveBaseUrl, validateSlug } from "../src/lib/tenant";
+import { AGGREGATE, queryKeys, scoped } from "../src/query/keys";
 import {
   displayZone,
   formatDateTime,
   formatTime,
   isValidZone,
   parseInstant,
-} from "../src/lib/time.js";
+} from "../src/lib/time";
 import {
   LOCK_AFTER_MS,
   SHORT_ABSENCE_MS,
   actionsOnPhase,
   actionsOnResume,
-} from "../src/lib/lifecycle.js";
-import { createLogger, templatePath, type LogContext, type LogLevel } from "../src/lib/log.js";
+} from "../src/lib/lifecycle";
+import { createLogger, templatePath, type LogContext, type LogLevel } from "../src/lib/log";
 
 const PROD = { tenantDomain: "paperlesstech.in", insecureTransportAllowed: false };
 const DEV = { tenantDomain: "localhost:4000", insecureTransportAllowed: true };

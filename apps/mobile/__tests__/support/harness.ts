@@ -2,11 +2,11 @@
  * A signed-out runtime wired to a fake transport and an in-memory Keychain, plus the fixtures a
  * happy path needs. One per test — nothing is shared, so ordering cannot matter.
  */
-import { createRuntime, type MobileRuntime } from "../../src/lib/runtime.js";
-import { createMemoryStorage } from "../../src/lib/storage.js";
-import { createProfile } from "../../src/lib/tenant.js";
-import type { SessionEndReason } from "../../src/lib/session.js";
-import { createFakeApi, ok, type FakeApi } from "./fakeApi.js";
+import { createRuntime, type MobileRuntime } from "../../src/lib/runtime";
+import { createMemoryStorage } from "../../src/lib/storage";
+import { createProfile } from "../../src/lib/tenant";
+import type { SessionEndReason } from "../../src/lib/session";
+import { createFakeApi, ok, type FakeApi } from "./fakeApi";
 
 export const SLUG = "apollo";
 export const PASSWORD = "V4lid!Password#2026";

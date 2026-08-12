@@ -19,9 +19,9 @@
  *     exchanges it. That one round trip is the price of not leaving a bearer credential on disk.
  */
 import { ApiClient, isMfaChallenge, type LoginResult, type TokenPair } from "@medicore/api-client";
-import type { SessionStore } from "../state/session.js";
-import type { SecureStorage } from "./storage.js";
-import { storageKeys } from "./storage.js";
+import type { SessionStore } from "../state/session";
+import type { SecureStorage } from "./storage";
+import { storageKeys } from "./storage";
 
 /** Why a session ended — the app shows a different message for each. */
 export type SessionEndReason =

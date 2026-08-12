@@ -14,9 +14,9 @@
  * thing standing between a remembered selection and records created against a closed site.
  */
 import type { ApiClient, Branch } from "@medicore/api-client";
-import type { BranchStore } from "../state/branch.js";
-import type { Preferences } from "./storage.js";
-import { storageKeys } from "./storage.js";
+import type { BranchStore } from "../state/branch";
+import type { Preferences } from "./storage";
+import { storageKeys } from "./storage";
 
 /** The sentinel persisted for All-branches mode, matching what the API calls it. */
 const AGGREGATE = "all";

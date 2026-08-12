@@ -8,9 +8,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { ApiClientError, isMfaChallenge } from "@medicore/api-client";
-import { createHarness, PASSWORD, SLUG, USER, tokenPair } from "./support/harness.js";
-import { fail, ok } from "./support/fakeApi.js";
-import { storageKeys } from "../src/lib/storage.js";
+import { createHarness, PASSWORD, SLUG, USER, tokenPair } from "./support/harness";
+import { fail, ok } from "./support/fakeApi";
+import { storageKeys } from "../src/lib/storage";
 
 const refreshKey = storageKeys.refreshToken(SLUG);
 

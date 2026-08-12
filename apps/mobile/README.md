@@ -52,6 +52,47 @@ For local work, run the API (`pnpm docker:dev` then `pnpm --filter @medicore/api
 tenant, and enter its slug. A simulator resolves `*.localhost` to the host machine; a physical
 device does not — use your machine's LAN address in `app.config.ts`'s development entry.
 
+## Running it on a real phone
+
+```bash
+pnpm --filter @medicore/mobile start        # add -c after changing config or resolving imports
+pnpm --filter @medicore/mobile bundle:check # bundles both platforms headlessly — no device
+```
+
+`bundle:check` is the one that matters in review. **Typecheck and the test suite can both pass on
+code Metro cannot bundle**, because TypeScript and Vite resolve `./foo.js` to `foo.tsx` and Metro
+does not. Run it before claiming the app starts.
+
+### Why the dev server runs on 8082, not 8081
+
+**Deliberate, and it is not arbitrary.** 8081 is the React Native default, so every Expo project on
+a machine wants it — and this team runs a second one (the School ERP) alongside this app. When two
+processes contend for it the failure is genuinely nasty rather than obvious:
+
+- The first process takes IPv4 `*:8081`. Metro starts anyway and binds **IPv6** `*:8081`, printing
+  no warning that it did not get the port it wanted.
+- The QR code encodes `exp://<your-ipv4>:8081`, so the phone connects to the **other project's**
+  server, asks it for an Expo manifest, and gets whatever that service returns.
+- Expo Go reports `java.io.IOException: Failed to download remote update` — which names neither
+  the port, the other process, nor the fact that the two apps collided.
+
+It cost an afternoon once. Two projects, two ports; HMS mobile owns 8082. (HMS API is 4000, web is
+3000.) If you ever need to check by hand:
+
+```bash
+lsof -nP -iTCP:8081 -sTCP:LISTEN     # who else is here
+curl http://<your-ip>:8082/          # should be Expo, not another app's JSON
+```
+
+### Other reasons Expo Go fails to connect
+
+1. **Phone and Mac are not on the same network**, or the wifi has client isolation. Test by opening
+   `http://<your-ip>:8082` in the phone's browser. `pnpm start:tunnel` works around it.
+2. **A stale Metro cache** after changing `app.config.ts`, `metro.config.js` or import paths — the
+   terminal shows the real error, and `start -c` clears it.
+3. **Expo Go's SDK is older than the project's.** This app is on SDK 57; update Expo Go from the
+   store, or use a development build.
+
 ## Things that will bite
 
 - **`Asia/Kolkata` is not in `Intl.supportedValuesOf("timeZone")`.** That list carries the legacy

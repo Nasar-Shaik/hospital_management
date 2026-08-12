@@ -16,13 +16,13 @@
  */
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createRuntime, type MobileRuntime } from "../lib/runtime.js";
-import type { HospitalProfile } from "../lib/tenant.js";
-import type { SessionEndReason } from "../lib/session.js";
-import { secureStore } from "../platform/secureStore.js";
-import { preferences } from "../platform/preferences.js";
-import { appConfig } from "../platform/config.js";
-import { createLogger } from "../lib/log.js";
+import { createRuntime, type MobileRuntime } from "../lib/runtime";
+import type { HospitalProfile } from "../lib/tenant";
+import type { SessionEndReason } from "../lib/session";
+import { secureStore } from "../platform/secureStore";
+import { preferences } from "../platform/preferences";
+import { appConfig } from "../platform/config";
+import { createLogger } from "../lib/log";
 
 const RuntimeContext = createContext<MobileRuntime | undefined>(undefined);
 

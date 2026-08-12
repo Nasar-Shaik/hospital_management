@@ -9,14 +9,14 @@
 import { useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Screen } from "../src/components/Screen.js";
-import { TextField } from "../src/components/TextField.js";
-import { Button } from "../src/components/Button.js";
-import { useProfile } from "../src/providers/ProfileProvider.js";
-import { useTheme } from "../src/hooks/useTheme.js";
-import { createProfile, validateSlug, type SlugProblem } from "../src/lib/tenant.js";
-import { appConfig } from "../src/platform/config.js";
-import { space, typography } from "../src/theme/tokens.js";
+import { Screen } from "../src/components/Screen";
+import { TextField } from "../src/components/TextField";
+import { Button } from "../src/components/Button";
+import { useProfile } from "../src/providers/ProfileProvider";
+import { useTheme } from "../src/hooks/useTheme";
+import { createProfile, validateSlug, type SlugProblem } from "../src/lib/tenant";
+import { appConfig } from "../src/platform/config";
+import { space, typography } from "../src/theme/tokens";
 
 const MESSAGES: Record<SlugProblem, string> = {
   empty: "Enter the code your hospital gave you.",

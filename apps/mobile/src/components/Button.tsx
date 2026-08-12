@@ -1,6 +1,6 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { useTheme } from "../hooks/useTheme.js";
-import { radius, size, space, typography } from "../theme/tokens.js";
+import { useTheme } from "../hooks/useTheme";
+import { radius, size, space, typography } from "../theme/tokens";
 
 /**
  * ── A DISABLED BUTTON MUST SAY WHY ──────────────────────────────────────────
