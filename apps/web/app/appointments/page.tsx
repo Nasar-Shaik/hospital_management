@@ -81,6 +81,131 @@ function toHHMM(minutes: number): string {
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
+/* ── why there are no slots, and when to look instead ─────────────────────── */
+
+/**
+ * The doctor's week, shown the moment one is selected.
+ *
+ * ── THE QUESTION A CLERK IS ACTUALLY ASKING ─────────────────────────────────
+ * "No open slots" answers the wrong question. The clerk has a patient in front of them and needs
+ * to know one of two things: is this doctor away today, or do they simply never sit on a Wednesday
+ * — and either way, WHEN can this patient be booked? Without that they close the screen and write
+ * the appointment in a diary, which is where a booking system starts being ignored.
+ *
+ * ── IT READS THE HOURS, NOT THE SESSIONS, AND THE DIFFERENCE MATTERS ────────
+ * `doctorSchedules` (weekday + start/end/slotMinutes) is what `getAvailability` actually generates
+ * slots from. `doctorAvailability` (morning/afternoon/evening sessions) is a separate, softer
+ * roster that the slot generator does NOT consult — see the note in `/doctors`. Showing sessions
+ * here would explain the empty grid with a fact that has no bearing on it.
+ */
+function DoctorWeek({
+  doctorId,
+  day,
+  onPickDay,
+}: {
+  doctorId: string;
+  day: string;
+  onPickDay: (day: string) => void;
+}) {
+  const { api } = useAuth();
+  const [hours, setHours] = useState<{ weekday: number; label: string }[]>([]);
+  const [leave, setLeave] = useState<{ fromDate: string; toDate: string; reason?: string }[]>([]);
+
+  useEffect(() => {
+    if (!doctorId) return;
+    void Promise.all([api.getDoctorSchedule(doctorId), api.getDoctorLeave(doctorId)])
+      .then(([rows, away]) => {
+        setHours(
+          rows.map((r) => ({
+            weekday: r.weekday,
+            label: `${toHHMM(r.startMinute)}–${toHHMM(r.endMinute)}`,
+          })),
+        );
+        setLeave(away);
+      })
+      // Silent: this panel EXPLAINS the screen, it is not the screen. A hospital whose roster
+      // reads fail should still see the slot grid and the doctor's day.
+      .catch(() => undefined);
+  }, [api, doctorId]);
+
+  if (!doctorId || hours.length === 0) return null;
+
+  const onLeave = leave.find((l) => day >= l.fromDate && day <= l.toDate);
+  const worked = new Set(hours.map((h) => h.weekday));
+
+  /**
+   * The next date this doctor actually sits, skipping leave. Capped at 28 days: past four weeks
+   * the honest answer is "not soon — talk to them", not a date to click.
+   */
+  let nextDay: string | undefined;
+  for (let i = 1; i <= 28 && !nextDay; i += 1) {
+    const probe = new Date(`${day}T00:00:00`);
+    probe.setDate(probe.getDate() + i);
+    const key = toDateInput(probe);
+    const blocked = leave.some((l) => key >= l.fromDate && key <= l.toDate);
+    if (worked.has(probe.getDay()) && !blocked) nextDay = key;
+  }
+
+  return (
+    <Card>
+      <h2 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">This doctor&apos;s week</h2>
+
+      {onLeave && (
+        <div className="mb-3">
+          <Alert tone="warning">
+            On leave {fmtDay(onLeave.fromDate)} – {fmtDay(onLeave.toDate)}
+            {onLeave.reason ? ` · ${onLeave.reason}` : ""}. No slots are offered on these days.
+          </Alert>
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-1.5">
+        {WEEKDAYS.map((name, index) => {
+          const sitting = hours.filter((h) => h.weekday === index);
+          const isDay = new Date(`${day}T00:00:00`).getDay() === index;
+          return (
+            <div
+              key={name}
+              className={`rounded-lg border px-2.5 py-1.5 text-xs ${
+                isDay
+                  ? "border-[var(--color-brand-500)] bg-[var(--color-brand-50)]"
+                  : "border-[var(--color-border)] bg-[var(--color-bg-subtle)]"
+              }`}
+            >
+              <div className="font-medium text-[var(--color-fg)]">{name.slice(0, 3)}</div>
+              <div className="text-[var(--color-fg-subtle)]">
+                {sitting.length > 0 ? sitting.map((s) => s.label).join(", ") : "—"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {nextDay && (
+        <p className="mt-3 text-sm text-[var(--color-fg-muted)]">
+          Next clinic:{" "}
+          <button
+            type="button"
+            onClick={() => onPickDay(nextDay)}
+            className="font-medium text-[var(--color-brand-600)] underline underline-offset-2"
+          >
+            {fmtDay(nextDay)}
+          </button>
+        </p>
+      )}
+    </Card>
+  );
+}
+
+/** `Wed 12 Aug` — short enough for a banner, unambiguous enough for a booking. */
+function fmtDay(key: string): string {
+  return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
 /**
  * A doctor's weekly clinic hours — the template every bookable slot is derived
  * from. One row per weekday; saving replaces that day's session (the API upserts
@@ -377,8 +502,24 @@ function Appointments() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Appointments</h1>
+        {/**
+         * ── THE TWO INTAKE DOORS, NAMED ON BOTH OF THEM ─────────────────────
+         * Appointments and Reception are not alternatives and not duplicates: they are the
+         * SCHEDULED and the WALK-IN way into the same visit. Checking a patient in here creates
+         * exactly the encounter Reception would have created, with `origin: "appointment"` instead
+         * of `"walk_in"`, and puts them in the same queue with the same token (ADR-0013).
+         *
+         * Saying so on both screens is the cheapest fix for the question this page kept raising —
+         * "so which one do I use?" — whose real answer is "did they book ahead or not?".
+         */}
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          One doctor, one day. Click an open slot to book it.
+          Booked ahead — one doctor, one day. Click an open slot to book it, then{" "}
+          <strong className="font-medium">Check in</strong> on the day to put the patient in the
+          queue. A patient who just walked in goes through{" "}
+          <a href="/reception" className="underline underline-offset-2">
+            Reception
+          </a>{" "}
+          instead.
         </p>
       </div>
 
@@ -443,6 +584,9 @@ function Appointments() {
           />
         </PermissionGate>
       </Card>
+
+      {/* Context BEFORE the grid: an empty grid is only readable once you know the week. */}
+      <DoctorWeek doctorId={doctorId} day={day} onPickDay={setDay} />
 
       {/* ── the slot grid ── */}
       <PermissionGate can={can} permission="appointment:create">

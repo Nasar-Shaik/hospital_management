@@ -479,8 +479,19 @@ function Reception() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Reception</h1>
+        {/**
+         * The counterpart of the note on Appointments. Both screens create the SAME thing — an
+         * encounter in the doctor's queue — and differ only in whether the patient booked ahead
+         * (`origin: "walk_in"` vs `"appointment"`, ADR-0013). Naming the other door here is what
+         * stops the two reading as competing ways to do one job.
+         */}
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          Register a patient who has walked in, and see everyone who came today.
+          Walked in today — register them and put them in a doctor&apos;s queue. A patient who
+          booked ahead is checked in from{" "}
+          <a href="/appointments" className="underline underline-offset-2">
+            Appointments
+          </a>{" "}
+          instead, and lands in the same queue.
         </p>
       </div>
 
