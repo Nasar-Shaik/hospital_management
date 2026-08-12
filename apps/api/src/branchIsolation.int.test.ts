@@ -1393,3 +1393,52 @@ describe("a closed branch cannot be worked in, however the client asks", () => {
     expect(created.body.data.patient.branchId).toBe(branchB);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * A BRANCH'S TIMEZONE IS THE ONE EVERY BED-DAY IS COUNTED IN
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a branch cannot be given a timezone the server cannot format in", () => {
+  /**
+   * `Branch.timezone` was `z.string().max(64)` — anything at all. It reaches
+   * `Intl.DateTimeFormat` in `dayKeyInZone`, which every bed-day charge is counted from, and
+   * `Intl` throws on a zone it does not know: one typo in a branch record became a 500 on every
+   * bed-day for that site. The unit suite (`core/time/zone.test.ts`) pins the RULE; this pins
+   * that the rule is actually wired to the edge.
+   */
+  it("accepts a real IANA zone", async () => {
+    const res = await post("/api/v1/branches", tokenAdmin)
+      .send({ name: "Kochi", code: "COK", timezone: "Asia/Kolkata" })
+      .expect(201);
+
+    expect(res.body.data.timezone).toBe("Asia/Kolkata");
+  });
+
+  it("refuses an abbreviation, which Intl would have accepted and mis-resolved", async () => {
+    const res = await post("/api/v1/branches", tokenAdmin)
+      .send({ name: "Bad Zone", code: "BADZ", timezone: "IST" })
+      .expect(400);
+
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+    expect(JSON.stringify(res.body.error.details)).toMatch(/IANA/i);
+  });
+
+  it("refuses a bare UTC offset", async () => {
+    await post("/api/v1/branches", tokenAdmin)
+      .send({ name: "Offset Zone", code: "OFFZ", timezone: "+05:30" })
+      .expect(400);
+  });
+
+  it("refuses it on UPDATE too — the edge is not only the create path", async () => {
+    // Patches an EXISTING branch rather than making one: the edition caps branch count, and a
+    // refused request writes nothing, so Chennai is unchanged by this.
+    const res = await request(app)
+      .patch(`/api/v1/branches/${branchB}`)
+      .set("Host", HOST)
+      .set("Authorization", `Bearer ${tokenAdmin}`)
+      .send({ timezone: "Nowhere/Fake" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+  });
+});

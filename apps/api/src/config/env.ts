@@ -4,6 +4,7 @@
  */
 import { z } from "@medicore/validation";
 import { activeProfile, applyProductionInvariants, PROFILE_DEFAULTS } from "./profiles.js";
+import { isValidTimeZone } from "../core/time/zone.js";
 
 /**
  * A boolean from an environment variable. Never use `z.coerce.boolean()` for this.
@@ -251,7 +252,17 @@ const envSchema = z.object({
    * hospital group spans Kochi and Dubai, this is the line that becomes a lookup —
    * not a search through every template.
    */
-  DEFAULT_TIMEZONE: z.string().default("Asia/Kolkata"),
+  DEFAULT_TIMEZONE: z
+    .string()
+    .default("Asia/Kolkata")
+    /**
+     * Validated at BOOT, not at first use. This zone is the fallback every bed-day falls back
+     * TO, so a typo here does not fail one branch — it fails the substitute the others rely on.
+     * The env loader is already fail-fast by design (Doc 04 §2.3); this belongs with it.
+     */
+    .refine(isValidTimeZone, {
+      message: "DEFAULT_TIMEZONE must be an IANA zone such as Asia/Kolkata",
+    }),
 });
 
 export type Env = z.infer<typeof envSchema>;

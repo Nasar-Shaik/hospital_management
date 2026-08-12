@@ -2,8 +2,21 @@
  * Branch DTOs (Doc 09 §5/§6). `.strict()` — an unexpected field is a 400.
  */
 import { z } from "@medicore/validation";
+import { isValidTimeZone } from "../../core/time/zone.js";
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "invalid id");
+
+/**
+ * An IANA zone this runtime can actually format in.
+ *
+ * Unvalidated, this field reached `Intl.DateTimeFormat` in `calendarDaysStarted` and threw a
+ * `RangeError` — one typo in a branch record became a 500 on every bed-day calculation for that
+ * site. The rule deliberately rejects `IST` and `+05:30`, which `Intl` accepts and silently
+ * resolves to the wrong thing; see `core/time/zone.ts` for why neither obvious check works alone.
+ */
+const timezone = z.string().trim().max(64).refine(isValidTimeZone, {
+  message: "expected an IANA zone such as Asia/Kolkata — not an abbreviation or a UTC offset",
+});
 
 export const createBranchSchema = z
   .object({
@@ -13,7 +26,7 @@ export const createBranchSchema = z
     address: z.string().trim().max(500).optional(),
     contactPhone: z.string().trim().max(40).optional(),
     contactEmail: z.string().trim().email().max(160).optional(),
-    timezone: z.string().trim().max(64).optional(),
+    timezone: timezone.optional(),
     gstin: z.string().trim().max(32).optional(),
   })
   .strict();
@@ -25,7 +38,7 @@ export const updateBranchSchema = z
     address: z.string().trim().max(500).optional(),
     contactPhone: z.string().trim().max(40).optional(),
     contactEmail: z.string().trim().email().max(160).optional(),
-    timezone: z.string().trim().max(64).optional(),
+    timezone: timezone.optional(),
     gstin: z.string().trim().max(32).optional(),
   })
   .strict()

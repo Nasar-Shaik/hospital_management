@@ -14,6 +14,8 @@
  * list. It is a bug that hides for years and then loses exactly one record — usually
  * the one somebody is looking for.
  */
+import { env } from "../../config/env.js";
+import { zoneOrDefault } from "./zone.js";
 
 /**
  * Which calendar day an instant falls on, in the hospital's zone. `2026-07-16`.
@@ -23,7 +25,11 @@
  */
 export function dayKeyInZone(at: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
+    // Validation at the edge stops new bad data; it cannot fix a branch row written before the
+    // rule existed, and `Intl` throws on an unknown zone. A stay costed in the platform default
+    // is wrong by at most a day boundary and shows in the bill; a RangeError here is a ward that
+    // cannot discharge anybody. See `core/time/zone.ts`.
+    timeZone: zoneOrDefault(timeZone, env.DEFAULT_TIMEZONE),
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
