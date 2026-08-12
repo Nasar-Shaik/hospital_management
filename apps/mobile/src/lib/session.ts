@@ -98,16 +98,23 @@ export function createAuthController(deps: AuthControllerDeps): AuthController {
 
   /** Best-effort with a hard ceiling. The request may still be in flight; for a logout that is fine. */
   async function withTimeout(work: Promise<unknown>, ms: number): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    /**
+     * The timer handle is never annotated, deliberately. React Native's global `setTimeout`
+     * returns a `number` and Node's returns a `Timeout`, and which one a file sees depends on
+     * whose type definitions won — it changed under us on an SDK downgrade and broke the build.
+     * Letting `handle` be inferred at the call site and closing over `clearTimeout` keeps this
+     * correct on both, with no `as` and no platform branch.
+     */
+    let cancel = (): void => {};
+    const expiry = new Promise<void>((resolve) => {
+      const handle = setTimeout(resolve, ms);
+      cancel = () => clearTimeout(handle);
+    });
+
     try {
-      await Promise.race([
-        work,
-        new Promise((resolve) => {
-          timer = setTimeout(resolve, ms);
-        }),
-      ]);
+      await Promise.race([work, expiry]);
     } finally {
-      if (timer) clearTimeout(timer);
+      cancel();
     }
   }
 

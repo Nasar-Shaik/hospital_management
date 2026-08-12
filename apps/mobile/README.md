@@ -6,6 +6,26 @@ ships here — those are M2 onward. See
 [MOBILE_M0_ARCHITECTURE.md](../../AI_Workflow/docs/MOBILE_M0_ARCHITECTURE.md) for the approved
 architecture; this README covers only what is specific to running and extending the code.
 
+## Why this app is on Expo SDK 54 and not the latest
+
+**Pinned to match the other Expo app on the team's phones.** Expo Go serves exactly one SDK per
+app version, and this team also develops `school_management/mobile`, which is on SDK 54. The Play
+Store's Expo Go was 54.0.8 when M1 was built — SDK 57 was not installable at all — so an app on 57
+could not be opened on a real device without either breaking the ERP or building a custom dev
+client.
+
+SDK 54 is still supported by Expo, so this is a currency decision rather than a security one. It
+carries a real cost (RN 0.81 rather than 0.86) and it is **temporary**:
+
+- **Upgrade when** the ERP moves to the same SDK, or when this app moves to a development build —
+  which it must do by **M2 anyway**, because `expo-local-authentication` (the biometric gate) does
+  not work in Expo Go, and certainly by M4 for push.
+- **Do not raise the SDK alone.** Raising it silently costs whoever is holding a phone the ability
+  to run the app. Move both projects, or move to a dev client first.
+
+M0 §1 said "the current supported Expo SDK at M1", which this satisfies — the constraint that
+decided _which_ supported SDK is recorded here.
+
 ## The one structural rule
 
 ```

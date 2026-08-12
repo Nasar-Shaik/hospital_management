@@ -16,6 +16,9 @@ onlyBuiltDependencies:
 # .pnpm/@types+react@<other-version>". It appeared the moment `apps/mobile` was added and its
 # React Native dependencies resolved a different patch, and the error names a path rather than the
 # cause, so it is worth pinning rather than rediscovering.
+#
+# Tracks whatever React the mobile app's Expo SDK pins (SDK 54 → React 19.1), because that is the
+# only one of the four apps whose React version is chosen for it rather than by us.
 overrides:
-  "@types/react": 19.2.18
-  "@types/react-dom": 19.2.3
+  "@types/react": 19.1.17
+  "@types/react-dom": 19.1.11
