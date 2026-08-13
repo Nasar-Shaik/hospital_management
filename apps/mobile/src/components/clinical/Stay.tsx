@@ -8,7 +8,7 @@
  * between an OPD patient and a ward patient should feel they changed context, not application.
  */
 import { StyleSheet, Text, View } from "react-native";
-import type { Encounter, MedicationAdministration, WardNote } from "@medicore/api-client";
+import type { DoseSlot, Encounter, MedicationAdministration, WardNote } from "@medicore/api-client";
 import { Card } from "../Card";
 import { Pill } from "../Pill";
 import { useTheme } from "../../hooks/useTheme";
@@ -18,6 +18,8 @@ import {
   dayOfStay,
   dispositionLabel,
   isStayOpen,
+  doseStateLabel,
+  doseStateTone,
   marStatusLabel,
   marStatusTone,
   placementLabel,
@@ -205,3 +207,45 @@ const styles = StyleSheet.create({
   drug: { flex: 1, fontWeight: "600" },
   labelled: { gap: 2 },
 });
+
+/**
+ * One SCHEDULED dose — what is due, as opposed to what was given (M3-S3).
+ *
+ * Deliberately a sibling of `DoseRow` rather than a mode of it. They answer different questions
+ * and the difference must be visible at a glance on a ward round: this row leads with the time the
+ * dose is DUE, where `DoseRow` leads with the time it was GIVEN. Collapsing them into one
+ * component with a flag is how "due at 14:00" eventually renders where "given at 14:03" belongs.
+ *
+ * Read-only. Charting is S5 and needs an explicit confirmation step.
+ */
+export function DoseSlotRow({ slot, zone }: { slot: DoseSlot; zone: string }): React.JSX.Element {
+  const theme = useTheme();
+  const at = parseInstant(slot.scheduledFor);
+  const state = doseStateLabel(slot.state);
+
+  return (
+    <View
+      style={[styles.entry, { borderTopColor: theme.colors.border }]}
+      accessible
+      accessibilityLabel={`${slot.drugName}, ${slot.dose}, ${slot.route}${
+        at ? `, due ${formatTime(at, { zone })}` : ""
+      }. ${state}.`}
+    >
+      <View style={styles.row}>
+        <Text style={[typography.body, styles.drug, { color: theme.colors.fg }]} numberOfLines={2}>
+          {slot.drugName}
+        </Text>
+        <Pill label={state} tone={doseStateTone(slot.state)} />
+      </View>
+
+      <Text style={[typography.caption, { color: theme.colors.fgMuted }]}>
+        {slot.dose} · {slot.route}
+        {at ? ` · due ${formatTime(at, { zone })}` : ""}
+      </Text>
+
+      {slot.reason ? (
+        <Text style={[typography.caption, { color: theme.colors.warning }]}>{slot.reason}</Text>
+      ) : null}
+    </View>
+  );
+}

@@ -1105,6 +1105,7 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/encounters/64b7f0000000000000000001/medication-administrations",
     body: { prescriptionId: "64b7f0000000000000000001", lineIndex: 0, status: "given" },
   },
+  "GET /api/v1/ward-worklist": { method: "get", url: "/api/v1/ward-worklist" },
   "GET /api/v1/encounters/:id/medication-schedule": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/medication-schedule",

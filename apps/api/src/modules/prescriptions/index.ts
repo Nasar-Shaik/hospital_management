@@ -38,6 +38,8 @@ export {
 
 export {
   findByOrderId,
+  /** Batch read for the ward worklist — current versions only. */
+  listForEncounters,
   addDispensedQty,
   prescriptionsByUser,
   setStatus as setPrescriptionStatus,

@@ -141,4 +141,28 @@ export const queryKeys = {
    */
   medications: (scope: QueryScope, encounterId: string) =>
     scoped(scope, "encounter", encounterId, "medications"),
+
+  /* ── M3, the nurse's surface ────────────────────────────────────────────── */
+
+  /**
+   * The ward worklist (`GET /ward-worklist`) — one page of admitted patients with allergy and
+   * due-dose state resolved server-side.
+   *
+   * Branch-scoped, and takes a `filters` segment like every other list: the SAME ward name means
+   * different patients at different sites, and the screen asks for one ward at a time. Without
+   * the filter in the key, switching ward would serve the previous ward's rows for a frame — a
+   * list of the wrong patients, which is the failure this whole file exists to prevent.
+   */
+  wardWorklist: (scope: QueryScope, filters?: string) =>
+    scoped(scope, "ward-worklist", filters ?? ""),
+
+  /**
+   * What is DUE on one stay today (`GET /encounters/:id/medication-schedule`).
+   *
+   * A SEPARATE key from `medications`, which is the record of what was given. They answer
+   * different questions and one must never be served for the other: "the 14:00 dose is due" and
+   * "the 14:00 dose was given" differ by exactly the thing a nurse is deciding.
+   */
+  medicationSchedule: (scope: QueryScope, encounterId: string) =>
+    scoped(scope, "encounter", encounterId, "medication-schedule"),
 } as const;

@@ -38,6 +38,7 @@ import {
   outcomeResult,
   transferBedResult,
   wardNote,
+  worklistRow,
 } from "./admission.contract.js";
 import {
   addNoteSchema,
@@ -47,6 +48,7 @@ import {
   idParamSchema,
   listNotesQuerySchema,
   transferBedSchema,
+  worklistQuerySchema,
 } from "./admission.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_IPD } as const;
@@ -65,6 +67,25 @@ export function admissionRouter(): Router {
     authorize(PERMISSIONS.EMR_READ, FEATURE),
     responds(bedBoard),
     asyncHandler(controller.getBedBoard),
+  );
+
+  /**
+   * The ward worklist (M3-S3) — one page of admitted patients with allergy and due-dose state.
+   *
+   * `emr:read`, the general clinical read. It grants no new reach: every field is already
+   * readable through `/inpatients`, `/patients/:id/allergies` and the MAR endpoints by anyone
+   * holding it. What this adds is that a twenty-bed ward costs four queries instead of sixty-one.
+   *
+   * Paged with the same `page`/`limit`/`meta.total` contract as every other list, so "is there
+   * more?" has the same answer everywhere and no client needs a second dialect.
+   */
+  router.get(
+    "/ward-worklist",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_READ, FEATURE),
+    validate(worklistQuerySchema, "query"),
+    responds(worklistRow.array(), { meta: true }),
+    asyncHandler(controller.getWorklist),
   );
 
   /**

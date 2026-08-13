@@ -37,7 +37,7 @@ import {
 import { VitalsCard, VitalsHistoryRow } from "../../src/components/clinical/Vitals";
 import { OrderRow } from "../../src/components/clinical/Results";
 import { TimelineRow } from "../../src/components/clinical/Timeline";
-import { DoseRow, StayCard, WardNoteRow } from "../../src/components/clinical/Stay";
+import { DoseRow, DoseSlotRow, StayCard, WardNoteRow } from "../../src/components/clinical/Stay";
 import { requireRuntime } from "../../src/providers/RuntimeProvider";
 import { useCapabilities } from "../../src/hooks/useStores";
 import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
@@ -57,6 +57,7 @@ import {
   placementsByEncounter,
   sortDoses,
   summariseDoses,
+  summariseSlots,
 } from "../../src/clinical/ipd";
 import { latestReading } from "../../src/clinical/vitals";
 import { sortForReview } from "../../src/clinical/results";
@@ -339,6 +340,18 @@ function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): Reac
   const board = useQuery({ ...queries.bedBoard(), enabled: ready });
   const notes = useQuery({ ...queries.wardNotes(encounter.id), enabled: ready });
   const doses = useQuery({ ...queries.medications(encounter.id), enabled: ready });
+  /**
+   * What is DUE, as opposed to what was given (M3-S3). A separate query and a separate key: "the
+   * 14:00 dose is due" and "the 14:00 dose was given" differ by exactly the thing being decided,
+   * and serving one for the other would be the worst possible cache collision on this screen.
+   *
+   * Only for a stay that is still open — a discharged patient has no round left to run, and
+   * showing yesterday's due list on a closed stay invites somebody to act on it.
+   */
+  const schedule = useQuery({
+    ...queries.medicationSchedule(encounter.id),
+    enabled: ready && isStayOpen(encounter),
+  });
 
   const placement = placementFor(encounter, placementsByEncounter(board.data));
   // Newest first: on a round the question is what happened since yesterday, and the server returns
@@ -346,6 +359,7 @@ function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): Reac
   const entries = [...(notes.data ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   const given = sortDoses(doses.data ?? []);
   const summary = summariseDoses(given);
+  const dueSummary = summariseSlots(schedule.data ?? []);
 
   return (
     <View style={styles.section}>
@@ -368,6 +382,46 @@ function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): Reac
           ))}
         </Card>
       </QueryGate>
+
+      {/**
+       * ── DUE TODAY ─────────────────────────────────────────────────────────────
+       * Every state on this list is the SERVER's: `due` and `overdue` are resolved in the branch's
+       * timezone against real administration rows (M3-S1). Nothing here is computed from the
+       * handset clock, so a phone set to the wrong time cannot make a late antibiotic look on time.
+       *
+       * Read-only in S3. Charting a dose is S5, and it needs a confirmation naming the patient,
+       * the drug, the dose and the route — not a tap on a scrolling list.
+       */}
+      {isFeatureUnavailable(schedule.error) || !isStayOpen(encounter) ? null : (
+        <>
+          <SectionTitle
+            title="Due today"
+            trailing={
+              dueSummary.overdue > 0
+                ? `${String(dueSummary.due)} due · ${String(dueSummary.overdue)} overdue`
+                : String(dueSummary.due)
+            }
+          />
+          <QueryGate
+            loading={schedule.isPending && ready}
+            error={schedule.error}
+            empty={(schedule.data ?? []).length === 0}
+            emptyTitle="Nothing scheduled today"
+            emptyBody="Regular doses from a signed prescription appear here. As-needed drugs never do — they have no scheduled time."
+            onRetry={() => void schedule.refetch()}
+          >
+            <Card>
+              {(schedule.data ?? []).map((slot) => (
+                <DoseSlotRow
+                  key={`${slot.prescriptionId}:${String(slot.lineIndex)}:${slot.scheduledFor}`}
+                  slot={slot}
+                  zone={zone}
+                />
+              ))}
+            </Card>
+          </QueryGate>
+        </>
+      )}
 
       {/**
        * ── THE MAR IS HIDDEN WHEN THE HOSPITAL DOES NOT HAVE IT ──────────────────

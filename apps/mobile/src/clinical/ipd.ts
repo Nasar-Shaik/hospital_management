@@ -34,6 +34,7 @@
  */
 import type {
   BedBoard,
+  DoseSlot,
   Encounter,
   MarStatus,
   MedicationAdministration,
@@ -382,4 +383,53 @@ export function summariseDoses(doses: readonly MedicationAdministration[]): MarS
     else missed += 1;
   }
   return { given, missed };
+}
+
+/* ── the dose SCHEDULE, as distinct from the dose RECORD (M3-S3) ───────────── */
+
+/**
+ * What a scheduled slot is showing.
+ *
+ * The four recorded outcomes carry the tones the MAR already uses, so "given" looks the same
+ * wherever it appears. `due` and `overdue` are the SERVER's derivation — see `DoseSlot` in the
+ * client — and are never recomputed here.
+ */
+export function doseStateLabel(state: DoseSlot["state"]): string {
+  if (state === "due") return "Due";
+  if (state === "overdue") return "Overdue";
+  return marStatusLabel(state);
+}
+
+export function doseStateTone(state: DoseSlot["state"]): ClinicalTone {
+  if (state === "due") return "waiting";
+  if (state === "overdue") return "critical";
+  return marStatusTone(state);
+}
+
+export interface SlotSummary {
+  /** Slots nobody has answered yet — `due` plus `overdue`, which is what "outstanding" means. */
+  due: number;
+  /** A subset of `due`, never additional to it. */
+  overdue: number;
+  answered: number;
+}
+
+/**
+ * The heading count for "Due today".
+ *
+ * `overdue` is counted INSIDE `due` rather than beside it: a nurse reading "3 due · 2 overdue"
+ * must not be able to read it as five outstanding doses. The two numbers describe one set.
+ */
+export function summariseSlots(slots: readonly DoseSlot[]): SlotSummary {
+  let due = 0;
+  let overdue = 0;
+  let answered = 0;
+  for (const slot of slots) {
+    if (slot.state === "due") due += 1;
+    else if (slot.state === "overdue") {
+      due += 1;
+      overdue += 1;
+    } else answered += 1;
+  }
+  return { due, overdue, answered };
 }

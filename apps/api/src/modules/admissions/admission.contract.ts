@@ -5,6 +5,7 @@ import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves, type Returns } from "../../core/http/contract.js";
 import { ROOM_KINDS, WARD_KINDS, WARD_STATUSES } from "../wards/index.js";
 import { WARD_NOTE_TYPES } from "./wardNote.model.js";
+import type { WorklistRow } from "./worklist.js";
 import type { WardNote } from "./wardNote.repository.js";
 import type { BedBoard } from "./bedBoard.js";
 import type { dischargeWithSummary, recordOutcome, transferBed } from "./admission.service.js";
@@ -127,3 +128,31 @@ export const transferBedResult = contract(
 export type TransferBedResultProof = Proves<
   Matches<typeof transferBedResult, Returns<typeof transferBed>>
 >;
+
+/**
+ * One line of the ward worklist (M3-S3).
+ *
+ * Deliberately a SUMMARY, not a chart: counts and flags a nurse triages from, with the detail one
+ * tap away through the per-patient endpoints. Identity is not repeated here — `/bed-board` already
+ * resolves name and UHID for every occupied bed in one query, and duplicating it would create a
+ * second place for a patient's name to be wrong.
+ */
+export const worklistRow = contract(
+  "WorklistRow",
+  z.object({
+    encounterId: z.string(),
+    patientId: z.string(),
+    ward: z.string().optional(),
+    bedCode: z.string().optional(),
+    admittedAt: z.string().optional(),
+    status: z.string(),
+    /** Active allergen CODES. Empty means none recorded — never "none". */
+    allergens: z.array(z.string()),
+    severeAllergy: z.boolean(),
+    /** Doses expected today that nobody has answered. Server-computed, in the ward's timezone. */
+    dosesDue: z.number(),
+    /** Of those, the ones already past their round. A subset of `dosesDue`. */
+    dosesOverdue: z.number(),
+  }),
+);
+export type WorklistRowProof = Proves<Matches<typeof worklistRow, WorklistRow>>;

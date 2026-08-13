@@ -179,6 +179,30 @@ export interface ListPrescriptionsFilter {
   skip: number;
 }
 
+/**
+ * Live prescriptions for MANY stays at once — the ward worklist's single query.
+ *
+ * `currentOnly` semantics, inlined: a superseded version is not in force, and offering its doses
+ * on a ward round would show a dose the prescriber has already replaced. Branch-scoped through
+ * `scopeFilter` exactly as the paged read is.
+ */
+export async function listForEncounters(encounterIds: readonly string[]): Promise<Prescription[]> {
+  const ids = encounterIds
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (ids.length === 0) return [];
+
+  const docs = await getPrescriptionModel(getTenantDb())
+    .find({
+      ...scopeFilter("prescribedBy"),
+      encounterId: { $in: ids },
+      supersededById: { $exists: false },
+    })
+    .lean<PrescriptionDoc[]>();
+
+  return docs.map(toPrescription);
+}
+
 export async function list(
   filter: ListPrescriptionsFilter,
 ): Promise<{ items: Prescription[]; total: number }> {

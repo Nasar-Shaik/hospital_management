@@ -10,8 +10,10 @@ import type {
   DischargeBody,
   OutcomeBody,
   ListNotesQuery,
+  WorklistQuery,
   TransferBedBody,
 } from "./admission.schema.js";
+import { wardWorklist } from "./worklist.js";
 import { ok } from "../../core/http/respond.js";
 
 /** The free-and-occupied bed board — the inventory joined to who is actually admitted. */
@@ -90,4 +92,15 @@ export const recordOutcome: RequestHandler = async (req, res) => {
     await admissions.recordOutcome({ encounterId: id, outcome: body.outcome, text: body.text }),
     201,
   );
+};
+
+/** One page of the ward, with allergy and due-dose state resolved server-side. */
+export const getWorklist: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as WorklistQuery;
+  const { items, total } = await wardWorklist({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+    ...(query.ward ? { ward: query.ward } : {}),
+  });
+  ok(res, items, 200, { page: query.page, limit: query.limit, total });
 };

@@ -211,6 +211,30 @@ async function admitPatient(name: string): Promise<string> {
   return enc.body.data.encounter.id as string;
 }
 
+/**
+ * A genuinely ADMITTED patient, returning the INPATIENT encounter.
+ *
+ * `admitPatient` above opens an OP visit, which is all the MAR itself needs — a dose can be
+ * charted on any encounter. The ward worklist reads `/inpatients`, which is `class: IP` and
+ * `open: true`, so its tests need the real admission chain: queue, start, admit. `arrived →
+ * admitted` is not a legal edge, and the patient must actually have been seen.
+ */
+async function admitToWard(name: string): Promise<string> {
+  const opId = await admitPatient(name);
+  await auth(request(app).post(`/api/v1/encounters/${opId}/queue`), receptionToken);
+  await auth(request(app).post(`/api/v1/encounters/${opId}/start`), doctorToken).expect(200);
+
+  const admitted = await auth(request(app).post(`/api/v1/encounters/${opId}/admit`), doctorToken)
+    .send({
+      ward: "General",
+      bedCode: `B-${Math.floor(Math.random() * 1e6)}`,
+      tariffCode: "BED_GEN",
+    })
+    .expect(201);
+
+  return admitted.body.data.inpatient.id as string;
+}
+
 /** A signed, administrable prescription for the encounter. */
 async function signedRx(encounterId: string, lines: unknown[]): Promise<string> {
   const draft = await auth(request(app).post("/api/v1/prescriptions"), doctorToken)
@@ -769,5 +793,116 @@ describe("branch isolation", () => {
 
     expect((await schedule(enc).expect(200)).body.data.length).toBeGreaterThan(0);
     expect((await schedule(enc, undefined, otherSiteNurseToken).expect(200)).body.data).toEqual([]);
+  });
+});
+
+/* ── 10. the ward worklist (M3-S3) ─────────────────────────────────────────── */
+
+describe("the ward worklist", () => {
+  /**
+   * The endpoint exists to answer, in ONE request, what the phone would otherwise assemble from
+   * a per-patient allergy call and a per-encounter schedule call. These tests pin the two numbers
+   * a nurse triages from and the isolation properties around them.
+   */
+  function worklist(query = "", token = nurseToken) {
+    return auth(request(app).get(`/api/v1/ward-worklist${query}`), token);
+  }
+
+  it("reports doses due and the allergy flag without a per-patient request", async () => {
+    const enc = await admitToWard("Worklist Subject");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const chart = await auth(request(app).get(`/api/v1/encounters/${enc}`), nurseToken).expect(200);
+    const patientId = chart.body.data.patientId as string;
+
+    await auth(request(app).post(`/api/v1/patients/${patientId}/allergies`), nurseToken)
+      .send({ allergen: "penicillins", severity: "severe" })
+      .expect(201);
+
+    const res = await worklist().expect(200);
+    const mine = (res.body.data as { encounterId: string }[]).find((r) => r.encounterId === enc);
+
+    expect(mine).toMatchObject({
+      patientId,
+      allergens: ["penicillins"],
+      severeAllergy: true,
+    });
+    // The schedule endpoint is the oracle; the worklist must agree with it exactly.
+    const slots = (await schedule(enc).expect(200)).body.data as { state: string }[];
+    const outstanding = slots.filter((s) => s.state === "due" || s.state === "overdue").length;
+    expect((mine as { dosesDue: number }).dosesDue).toBe(outstanding);
+    expect(rx).toBeTruthy();
+  });
+
+  it("stops counting a dose once it has been charted", async () => {
+    const enc = await admitToWard("Worklist Charted");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const before = (await worklist().expect(200)).body.data as {
+      encounterId: string;
+      dosesDue: number;
+    }[];
+    const start = before.find((r) => r.encounterId === enc)?.dosesDue ?? 0;
+    expect(start).toBeGreaterThan(0);
+
+    const slotAt = ((await schedule(enc).expect(200)).body.data as { scheduledFor: string }[])[0]
+      ?.scheduledFor as string;
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slotAt,
+    }).expect(201);
+
+    const after = (await worklist().expect(200)).body.data as {
+      encounterId: string;
+      dosesDue: number;
+    }[];
+    expect(after.find((r) => r.encounterId === enc)?.dosesDue).toBe(start - 1);
+  });
+
+  it("never counts a PRN drug as due — it has no scheduled time", async () => {
+    const enc = await admitToWard("Worklist PRN");
+    await signedRx(enc, [PARACETAMOL_PRN]);
+    const res = await worklist().expect(200);
+    const mine = (res.body.data as { encounterId: string; dosesDue: number }[]).find(
+      (r) => r.encounterId === enc,
+    );
+    expect(mine?.dosesDue).toBe(0);
+  });
+
+  it("narrows to one ward, and pages with a real total", async () => {
+    await admitToWard("Worklist Ward A");
+    const all = await worklist().expect(200);
+    expect(all.body.meta.total).toBeGreaterThan(0);
+
+    const none = await worklist("?ward=NoSuchWard").expect(200);
+    expect(none.body.data).toEqual([]);
+    expect(none.body.meta.total).toBe(0);
+
+    // A page smaller than the population must say there is more rather than truncate silently.
+    const firstPage = await worklist("?limit=1&page=1").expect(200);
+    expect(firstPage.body.data).toHaveLength(1);
+    expect(firstPage.body.meta.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it("pages without losing or repeating a patient", async () => {
+    for (const name of ["Page One", "Page Two", "Page Three"]) await admitToWard(name);
+
+    const total = (await worklist("?limit=1").expect(200)).body.meta.total as number;
+    const seen: string[] = [];
+    for (let page = 1; page <= total; page += 1) {
+      const res = await worklist(`?limit=1&page=${String(page)}`).expect(200);
+      for (const r of res.body.data as { encounterId: string }[]) seen.push(r.encounterId);
+    }
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+  });
+
+  it("shows nothing of another site's ward", async () => {
+    await admitToWard("Worklist Isolation");
+    expect((await worklist().expect(200)).body.data.length).toBeGreaterThan(0);
+    expect((await worklist("", otherSiteNurseToken).expect(200)).body.data).toEqual([]);
+  });
+
+  it("refuses a role with no clinical read", async () => {
+    await worklist("", receptionToken).expect(403);
   });
 });

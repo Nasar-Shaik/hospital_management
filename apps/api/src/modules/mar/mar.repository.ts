@@ -59,6 +59,25 @@ export async function listByEncounter(encounterId: string): Promise<MedicationAd
   return docs.map(toEntry);
 }
 
+/**
+ * Administrations for MANY stays at once — the ward worklist's single query.
+ *
+ * Branch-scoped like its per-encounter sibling: a dose given at another site is not this ward's
+ * business, and the worklist only ever asks about stays it can already see.
+ */
+export async function listByEncounters(
+  encounterIds: readonly string[],
+): Promise<MedicationAdministration[]> {
+  const ids = encounterIds
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (ids.length === 0) return [];
+  const docs = await getMarModel(getTenantDb())
+    .find({ encounterId: { $in: ids }, ...scopeFilter() })
+    .lean<MedicationAdministrationDoc[]>();
+  return docs.map(toEntry);
+}
+
 /** The administration already holding a dose slot, if one does. The 409's oracle. */
 export async function findBySlot(
   prescriptionId: string,

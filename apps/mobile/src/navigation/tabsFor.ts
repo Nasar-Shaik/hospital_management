@@ -38,6 +38,13 @@ export const TABS: readonly TabDefinition[] = [
   { name: "queue", title: "Today", icon: "today-outline", needs: ["encounter:read"] },
   { name: "patients", title: "My patients", icon: "people-outline", needs: ["patient:read"] },
   { name: "orders", title: "Results", icon: "flask-outline", needs: ["order:read"] },
+  /**
+   * The nurse's home (M3-S3). `nursing:manage` rather than `emr:read`: the question this tab
+   * answers is "do you WORK a ward", not "may you read a chart" — a pharmacist and a doctor both
+   * hold `emr:read` and neither rounds from this screen. The screen itself still needs `emr:read`
+   * and says so; the server refuses regardless.
+   */
+  { name: "ward", title: "Ward", icon: "bed-outline", needs: ["nursing:manage"] },
   { name: "pharmacy", title: "Pharmacy", icon: "medkit-outline", needs: ["pharmacy:dispense"] },
   { name: "billing", title: "Billing", icon: "cash-outline", needs: ["billing:read"] },
   { name: "alerts", title: "Alerts", icon: "notifications-outline", needs: [] },

@@ -26,6 +26,7 @@ import type {
   CatalogueItem,
   ChargeCategory,
   ConsultationNote,
+  DoseSlot,
   Encounter,
   EncounterStatus,
   MedicationAdministration,
@@ -35,6 +36,7 @@ import type {
   Prescription,
   VitalsReading,
   WardNote,
+  WorklistRow,
 } from "@medicore/api-client";
 import { queryKeys, type QueryScope } from "./keys";
 
@@ -213,6 +215,49 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
       return {
         queryKey: queryKeys.inpatients(scope, filters),
         queryFn: () => api.listInpatients({ page: 1, limit: 1 }),
+      };
+    },
+
+    /**
+     * The ward worklist (M3-S3) — one page of admitted patients with allergy and due-dose state.
+     *
+     * ── THIS IS THE NURSE'S LIST, AND IT IS ONE REQUEST ─────────────────────────
+     * Assembling the same view on the phone would cost a per-patient allergy call and a
+     * per-encounter schedule call on top of the page itself: sixty-one requests for a twenty-bed
+     * ward. The server does it in four queries, so this is the descriptor the worklist uses and
+     * the per-patient reads are kept for the chart, where there is exactly one patient.
+     *
+     * `ward` is a SERVER filter, not a display one. The doctor's round filters wards in the client
+     * because it has the whole branch in hand already; a nurse on a 300-bed site does not, and
+     * paging through the hospital to find their own patients is not a workable ward round.
+     */
+    wardWorklist(ward?: string): InfiniteRead<WorklistRow> {
+      const filters = filterKey({ limit: INPATIENT_PAGE, ward });
+      return {
+        queryKey: queryKeys.wardWorklist(scope, filters),
+        queryFn: ({ pageParam }) =>
+          api.listWardWorklist({
+            page: pageParam,
+            limit: INPATIENT_PAGE,
+            ...(ward ? { ward } : {}),
+          }),
+        initialPageParam: 1,
+        getNextPageParam: nextPage,
+      };
+    },
+
+    /**
+     * What is DUE on this stay today, and what has happened to each dose (M3-S1).
+     *
+     * Separate from `medications()`, which is the record of what was GIVEN. The server resolves
+     * `due` / `overdue` in the branch's timezone against real administration rows — the phone
+     * never decides whether a dose is late, because a handset with the wrong clock would then be
+     * deciding whether a patient's antibiotic is overdue.
+     */
+    medicationSchedule(encounterId: string): Read<DoseSlot[]> {
+      return {
+        queryKey: queryKeys.medicationSchedule(scope, encounterId),
+        queryFn: () => api.listMedicationSchedule(encounterId),
       };
     },
 

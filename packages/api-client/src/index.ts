@@ -1140,6 +1140,28 @@ export interface ConsultationNote {
 
 export type MarStatus = "given" | "held" | "refused" | "not_available";
 
+/**
+ * One line of the ward worklist — a nurse's triage view of an admitted patient.
+ *
+ * Every number here is the SERVER's. `dosesDue` and `dosesOverdue` are resolved in the branch's
+ * timezone against real administration rows; never recompute them from a local clock, and never
+ * infer "missed" from a handset's idea of the time.
+ */
+export interface WorklistRow {
+  encounterId: string;
+  patientId: string;
+  ward?: string;
+  bedCode?: string;
+  admittedAt?: string;
+  status: string;
+  /** Active allergen CODES. Empty means none RECORDED — which is not the same as none. */
+  allergens: string[];
+  severeAllergy: boolean;
+  dosesDue: number;
+  /** A subset of `dosesDue`, never additional to it. */
+  dosesOverdue: number;
+}
+
 /** One dose given (or held/refused) to an inpatient against a signed prescription line. */
 export interface MedicationAdministration {
   id: string;
@@ -4429,6 +4451,28 @@ export class ApiClient {
     }
     const qs = query.toString();
     return this.paged<Encounter>(`/api/v1/inpatients${qs ? `?${qs}` : ""}`);
+  }
+
+  /**
+   * One page of the ward, with allergy and due-dose state resolved server-side.
+   * Needs `emr:read` + `module.ops.ipd`.
+   *
+   * ── USE THIS RATHER THAN ASSEMBLING IT CLIENT-SIDE ────────────────────────
+   * The same information can be had from `/inpatients` plus a per-patient allergy call plus a
+   * per-encounter schedule call. For a twenty-bed ward that is sixty-one requests on hospital
+   * wifi; this is four queries server-side however long the page.
+   *
+   * `ward` filters by NAME, because an admission records its bed as text.
+   */
+  listWardWorklist(
+    params: { ward?: string; page?: number; limit?: number } = {},
+  ): Promise<Paged<WorklistRow>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<WorklistRow>(`/api/v1/ward-worklist${qs ? `?${qs}` : ""}`);
   }
 
   /* ── Bed inventory & board (Module B4) ───────────────────────────────────── */

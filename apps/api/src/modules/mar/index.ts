@@ -19,6 +19,9 @@ export {
 
 export { MAR_STATUSES, type MarStatus } from "./mar.model.js";
 
+/** The ward worklist's batch read (M3-S3) — administrations for a whole page of stays. */
+export { listByEncounters } from "./mar.repository.js";
+
 /** The dose schedule — pure, and reusable by the nurse worklist without going through HTTP. */
 export {
   dosesInRange,
