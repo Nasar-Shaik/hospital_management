@@ -1146,15 +1146,46 @@ export interface MedicationAdministration {
   encounterId: string;
   patientId: string;
   prescriptionId: string;
+  /** Which line of the prescription. Absent on rows charted before dose slots existed. */
+  lineIndex?: number;
   drugCode: string;
   drugName: string;
   dose: string;
   route: string;
   status: MarStatus;
+  /** The dose slot this answers. Absent for PRN, which has no slots and is repeatable. */
+  scheduledFor?: string;
   administeredAt: string;
   reason?: string;
   note?: string;
   administeredBy?: string;
+}
+
+/**
+ * What a scheduled dose is showing.
+ *
+ * The four `MarStatus` values are recorded facts. `due` and `overdue` are derived BY THE SERVER
+ * from the ward's clock — never compute them locally, or a phone in the wrong timezone decides
+ * whether a patient's antibiotic is late.
+ */
+export type DoseState = MarStatus | "due" | "overdue";
+
+/** One dose the prescription says is expected today, and what happened to it. */
+export interface DoseSlot {
+  prescriptionId: string;
+  lineIndex: number;
+  drugCode: string;
+  drugName: string;
+  dose: string;
+  route: string;
+  frequency: string;
+  /** The instant the dose is due, ISO. Render it in the BRANCH's zone. */
+  scheduledFor: string;
+  state: DoseState;
+  administrationId?: string;
+  administeredAt?: string;
+  administeredBy?: string;
+  reason?: string;
 }
 
 /* ── insurance (patient policies + claims) ── */
@@ -3337,13 +3368,43 @@ export class ApiClient {
     );
   }
 
-  /** Charts a dose against a signed prescription line. Needs `mar:administer`. */
+  /**
+   * The doses due on a ward day, with what has happened to each. Needs `emr:read`.
+   *
+   * The `date` is the WARD's calendar day (`YYYY-MM-DD`), resolved in the branch's timezone by the
+   * server. Omit it for today. This is also the reconciliation path after a lost response: ask
+   * what the server holds rather than inferring it from a local clock.
+   */
+  listMedicationSchedule(encounterId: string, date?: string): Promise<DoseSlot[]> {
+    const qs = date ? `?date=${encodeURIComponent(date)}` : "";
+    return this.request<DoseSlot[]>(
+      "GET",
+      `/api/v1/encounters/${encounterId}/medication-schedule${qs}`,
+    );
+  }
+
+  /**
+   * Charts a dose against a signed prescription line. Needs `mar:administer`.
+   *
+   * ── A 409 HERE IS AN ANSWER, NOT A FAILURE ────────────────────────────────
+   * `HMS-MAR-001` means the dose slot is already taken, and `details.existing` carries the
+   * administration that took it. A client whose response was lost must show that — "already given
+   * at 14:03 by …" — and must NOT retry into a second dose. Scheduled doses are protected by a
+   * unique index, so this is authoritative even against another nurse on another device.
+   *
+   * `scheduledFor` is optional: send the slot from `listMedicationSchedule` when charting a round,
+   * omit it for a PRN dose. Omitting it on a scheduled drug does not opt out of the protection —
+   * the server binds the nearest round itself.
+   */
   recordMedicationAdministration(
     encounterId: string,
     input: {
       prescriptionId: string;
       drugCode: string;
+      /** Required only when the same drug appears on the prescription more than once. */
+      lineIndex?: number;
       status: MarStatus;
+      scheduledFor?: string;
       administeredAt?: string;
       reason?: string;
       note?: string;

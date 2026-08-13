@@ -2041,4 +2041,61 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0049-one-administration-per-dose-slot",
+    description:
+      "MAR safety (M3-S1): a scheduled dose slot may hold at most ONE administration. Closes the " +
+      "defect where two nurses charting the same round wrote two `given` rows, silently, for ever.",
+    /**
+     * ── THE DEFECT THIS CLOSES ──────────────────────────────────────────────────
+     * `medicationAdministrations` shipped with two indexes (0040), both NON-unique, and no
+     * uniqueness at any other layer either — not the model, not the schema, not the service. The
+     * service proved the prescription was real, signed and for this encounter, then wrote a row
+     * unconditionally, however many times it was asked. Two nurses on two phones both charting the
+     * 14:00 antibiotic produced TWO `given` rows. The chart then reads as a double dose, nothing
+     * flags it, and because the MAR is append-only neither row can be withdrawn.
+     *
+     * `Idempotency-Key` (0048) does not help: it dedupes ONE client replaying ONE request. Two
+     * nurses send two different keys, and both are honoured. Only the database can arbitrate
+     * between two processes, which is why the fix is an index and not a service check.
+     *
+     * ── WHY THIS CANNOT FAIL ON EXISTING DATA ───────────────────────────────────
+     * The key includes `scheduledFor`, a field introduced by the same change. **No historical row
+     * has it**, and the partial filter admits only rows that do — so at creation time the index
+     * covers ZERO existing documents and there is nothing for it to conflict with. The safety
+     * argument is structural, not a hope that production happens to be clean.
+     *
+     * Historical duplicates therefore survive untouched, outside the index, which is the correct
+     * outcome: they are real clinical history and a migration must not rewrite them to make an
+     * index build succeed. `mar.int.test.ts` seeds pre-existing duplicates and runs this migration
+     * over them, so "safe on dirty data" is proved rather than asserted.
+     *
+     * ── WHY THE PARTIAL FILTER IS LOAD-BEARING ──────────────────────────────────
+     * A PRN (`SOS`) dose has NO slot and may legitimately be given many times a day. Constraining
+     * it would refuse the second real dose — a worse defect than the one being fixed, and one that
+     * lands on a patient in pain. Rows with no `scheduledFor` stay unconstrained, deliberately.
+     *
+     * `lineIndex`, not `drugCode`: a prescription may carry the same drug twice (a QID round and a
+     * SOS line for breakthrough), and `prescription.schema.ts` places no uniqueness rule on lines.
+     * See `mar.model.ts` for why a line's POSITION is a safe identity.
+     */
+    up: async (db) => {
+      await db.collection("medicationAdministrations").createIndex(
+        { tenantId: 1, prescriptionId: 1, lineIndex: 1, scheduledFor: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { scheduledFor: { $exists: true } },
+          background: true,
+          name: "one_administration_per_dose_slot",
+        },
+      );
+    },
+    /** Drops only what this migration added; 0040 still owns the collection and its two reads. */
+    down: async (db) => {
+      await db
+        .collection("medicationAdministrations")
+        .dropIndex("one_administration_per_dose_slot")
+        .catch(() => undefined);
+    },
+  },
 ];

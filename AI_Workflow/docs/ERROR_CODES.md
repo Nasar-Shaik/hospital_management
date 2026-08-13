@@ -45,6 +45,7 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-RX-002  | 422  | Drug interaction (`details.severity`)     | Review; override per policy                                    | no    |
 | HMS-LAB-001 | 422  | Sample rejected (`details.reason`)        | Recollect                                                      | no    |
 | HMS-LAB-002 | 403  | Result approval requires pathologist role | Route to approver                                              | no    |
+| HMS-MAR-001 | 409  | This dose has already been administered   | Show `details.existing`; do NOT retry — see below              | no    |
 
 ## Financial
 
@@ -100,3 +101,13 @@ are separate codes because the remedies are opposite.
 A successful retry of an identical request is **not** an error: it returns the original status and
 body with `Idempotency-Replayed: true`. See `docs/IDEMPOTENCY.md` for the full contract and the
 per-endpoint matrix.
+
+### `HMS-MAR-001` is a THIRD kind of 409, and the distinction is clinical
+
+An `Idempotency-Key` 409 says _"you already sent this request"_. `HMS-MAR-001` says _"somebody
+already gave this dose"_ — possibly a different nurse, on a different device, with a different key.
+Only a unique index can answer that, and only the database can arbitrate it (migration 0049).
+
+`details.existing` carries the administration holding the slot: who gave it, when, and with what
+outcome. That is what a client must show. **A client must never retry into it** — the whole purpose
+of the code is that a lost response cannot become a second dose in a patient.

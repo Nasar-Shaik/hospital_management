@@ -73,6 +73,13 @@ const SUITE_DB = {
    * back with the wrong zone — which is precisely the thing it exists to detect.
    */
   appointmentsTz: 18,
+  /**
+   * The MAR safety spine (M3-S1). Its own database because it moves a branch to America/New_York
+   * to prove dose rounds resolve on the WARD's clock — a branch cached under another suite's key
+   * would hand it back in the default zone and the timezone assertions would pass for the wrong
+   * reason, which is the one outcome worse than failing.
+   */
+  mar: 19,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

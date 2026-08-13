@@ -2174,6 +2174,62 @@
           "uploadedAt"
         ]
       },
+      "DoseSlot": {
+        "type": "object",
+        "properties": {
+          "prescriptionId": {
+            "type": "string"
+          },
+          "lineIndex": {
+            "type": "number"
+          },
+          "drugCode": {
+            "type": "string"
+          },
+          "drugName": {
+            "type": "string"
+          },
+          "dose": {
+            "type": "string"
+          },
+          "route": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string"
+          },
+          "scheduledFor": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["given", "held", "refused", "not_available", "due", "overdue"]
+          },
+          "administrationId": {
+            "type": "string"
+          },
+          "administeredAt": {
+            "type": "string"
+          },
+          "administeredBy": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prescriptionId",
+          "lineIndex",
+          "drugCode",
+          "drugName",
+          "dose",
+          "route",
+          "frequency",
+          "scheduledFor",
+          "state"
+        ]
+      },
       "DuesAgeingReport": {
         "type": "object",
         "properties": {
@@ -3251,6 +3307,9 @@
           "prescriptionId": {
             "type": "string"
           },
+          "lineIndex": {
+            "type": "number"
+          },
           "drugCode": {
             "type": "string"
           },
@@ -3266,6 +3325,9 @@
           "status": {
             "type": "string",
             "enum": ["given", "held", "refused", "not_available"]
+          },
+          "scheduledFor": {
+            "type": "string"
           },
           "administeredAt": {
             "type": "string"
@@ -22733,9 +22795,18 @@
                     "minLength": 1,
                     "maxLength": 64
                   },
+                  "lineIndex": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 19
+                  },
                   "status": {
                     "type": "string",
                     "enum": ["given", "held", "refused", "not_available"]
+                  },
+                  "scheduledFor": {
+                    "type": "string",
+                    "format": "date-time"
                   },
                   "administeredAt": {
                     "type": "string",
@@ -22814,6 +22885,85 @@
           }
         ],
         "x-permission": "mar:administer",
+        "x-feature": "module.clinical.nursing"
+      }
+    },
+    "/api/v1/encounters/{id}/medication-schedule": {
+      "get": {
+        "operationId": "get_v1_encounters_id_medication_schedule",
+        "tags": ["encounters"],
+        "summary": "GET /api/v1/encounters/{id}/medication-schedule",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DoseSlot"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "emr:read",
         "x-feature": "module.clinical.nursing"
       }
     },

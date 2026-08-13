@@ -115,6 +115,12 @@ const MAR_LABEL: Record<MarStatus, string> = {
 /** The signed prescriptions in force, flattened to the drug lines a nurse gives against. */
 interface DrugLine {
   prescriptionId: string;
+  /**
+   * WHICH line of the prescription. Sent with every administration because `drugCode` alone is
+   * ambiguous: a prescription may carry the same drug twice (a regular round and a PRN line), and
+   * the server refuses a code that matches more than one rather than charting an arbitrary one.
+   */
+  lineIndex: number;
   drugCode: string;
   drugName: string;
   dose: string;
@@ -150,8 +156,9 @@ function MedicationRecord({
         );
         setLines(
           live.flatMap((p) =>
-            p.lines.map((l) => ({
+            p.lines.map((l, lineIndex) => ({
               prescriptionId: p.id,
+              lineIndex,
               drugCode: l.drugCode,
               drugName: l.drugName,
               dose: l.dose,
@@ -179,11 +186,12 @@ function MedicationRecord({
       const r = window.prompt("Note (optional):") ?? "";
       reason = r.trim() || undefined;
     }
-    setBusy(`${line.prescriptionId}:${line.drugCode}`);
+    setBusy(`${line.prescriptionId}:${String(line.lineIndex)}`);
     setError(null);
     try {
       await api.recordMedicationAdministration(encounterId, {
         prescriptionId: line.prescriptionId,
+        lineIndex: line.lineIndex,
         drugCode: line.drugCode,
         status,
         ...(reason ? { reason } : {}),
@@ -212,7 +220,7 @@ function MedicationRecord({
       ) : (
         <ul className="space-y-1.5">
           {lines.map((l) => {
-            const key = `${l.prescriptionId}:${l.drugCode}`;
+            const key = `${l.prescriptionId}:${String(l.lineIndex)}`;
             return (
               <li
                 key={key}

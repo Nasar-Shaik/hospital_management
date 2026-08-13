@@ -21,8 +21,12 @@ import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
 import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./mar.controller.js";
-import { medicationAdministration } from "./mar.contract.js";
-import { recordAdministrationSchema, encounterIdParamSchema } from "./mar.schema.js";
+import { medicationAdministration, doseSlot } from "./mar.contract.js";
+import {
+  recordAdministrationSchema,
+  encounterIdParamSchema,
+  scheduleQuerySchema,
+} from "./mar.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.CLINICAL_NURSING } as const;
 
@@ -36,6 +40,26 @@ export function marRouter(): Router {
     validate(encounterIdParamSchema, "params"),
     responds(medicationAdministration.array()),
     asyncHandler(controller.listAdministrations),
+  );
+
+  /**
+   * What is DUE, and what has happened to each dose (M3-S1).
+   *
+   * `emr:read` like its sibling: the doctor reviewing the round and the nurse working it are
+   * asking the same question, and neither is a write.
+   *
+   * This is the endpoint that makes "was the 2pm antibiotic given?" answerable. It is also the
+   * reconciliation path a client uses after a lost response — ask the server what it holds rather
+   * than guessing from a local clock.
+   */
+  router.get(
+    "/encounters/:id/medication-schedule",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_READ, FEATURE),
+    validate(encounterIdParamSchema, "params"),
+    validate(scheduleQuerySchema, "query"),
+    responds(doseSlot.array()),
+    asyncHandler(controller.getSchedule),
   );
 
   router.post(
