@@ -29,6 +29,8 @@ import type {
   Prescription,
   PrescriptionLineInput,
   PrescriptionScreening,
+  RecordVitalsInput,
+  VitalsReading,
   WardNote,
 } from "@medicore/api-client";
 import type { QueryScope } from "./keys";
@@ -36,6 +38,7 @@ import type { ConsultationPatch } from "../clinical/consultation";
 import type { OrderRequest } from "../clinical/prescribing";
 import { attemptSign, type SignDeps, type SignOutcome } from "../clinical/signing";
 import { attemptWardNote, type WardNoteDeps, type WardNoteOutcome } from "../clinical/wardNote";
+import { attemptVitals, type VitalsOutcome } from "../clinical/vitalsWrite";
 import {
   attemptDischarge,
   type DischargeDeps,
@@ -175,6 +178,39 @@ export function clinicalMutations(api: ApiClient, scope: QueryScope) {
       };
       return {
         mutationFn: (text) => attemptWardNote(deps, text),
+        invalidates: branchPrefix,
+      };
+    },
+
+    /**
+     * Observations, through the reconciliation in `clinical/vitalsWrite.ts` (M3-S4).
+     *
+     * ── THE NURSE'S FIRST WRITE, AND IT INVALIDATES MORE THAN IT LOOKS ──────────
+     * A charted reading changes the visit's chart, the patient's trend, and the ward worklist's
+     * `latestVitalsAt` / `vitalsAbnormal` — a row on a screen this mutation was not called from.
+     * The branch prefix catches all three without anybody maintaining the list, which is exactly
+     * the trade the header describes.
+     *
+     * `before` is the visit's readings as the screen had them a moment ago; passed in rather than
+     * fetched here because the whole point is that it predates the attempt.
+     */
+    recordVitals(
+      encounterId: string,
+      context: {
+        before: readonly VitalsReading[] | undefined;
+        recordedBy?: string;
+        /** Stable across the retries of ONE submission — see `lib/idempotency.ts`. */
+        key?: string;
+      },
+    ): Write<RecordVitalsInput, VitalsOutcome> {
+      return {
+        mutationFn: (input) =>
+          attemptVitals({
+            record: () => api.recordVitals(encounterId, input, context.key),
+            reload: () => api.listEncounterVitals(encounterId),
+            before: context.before,
+            ...(context.recordedBy ? { recordedBy: context.recordedBy } : {}),
+          }),
         invalidates: branchPrefix,
       };
     },

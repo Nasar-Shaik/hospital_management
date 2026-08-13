@@ -121,6 +121,12 @@ function Shell(): React.JSX.Element {
           name="prescribe/[encounterId]"
           options={{ headerShown: true, title: "Prescribe", ...detailHeader(theme) }}
         />
+        {/* The nurse's write (M3-S4). Same shape as the three above and for the same reason: a set
+            of observations hangs off ONE visit. */}
+        <Stack.Screen
+          name="vitals/[encounterId]"
+          options={{ headerShown: true, title: "Observations", ...detailHeader(theme) }}
+        />
       </Stack>
       {/**
        * Both sit above the navigator, and the ORDER between them is the only thing that matters:

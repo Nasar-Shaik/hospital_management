@@ -92,6 +92,19 @@ export function flagsFor(row: WorklistRow): WorklistFlag[] {
     });
   }
 
+  /**
+   * The SERVER's `abnormal` on the last reading (M3-S4) — the same `assess()` the chart paints,
+   * never re-derived from the values. Last, because an out-of-range observation already charted is
+   * context for the round rather than a task on it: the doses are what is outstanding.
+   */
+  if (row.vitalsAbnormal) {
+    flags.push({
+      label: "Obs out of range",
+      tone: "warning",
+      accessibilityLabel: "Last observations were outside the reference range",
+    });
+  }
+
   return flags;
 }
 
@@ -116,7 +129,28 @@ export function bedLabel(row: WorklistRow): string {
  * An empty flag row could mean "this patient needs nothing" or "we could not load it". The
  * worklist says the first explicitly, because a nurse skipping a patient on the strength of a
  * blank is the failure mode that matters.
+ *
+ * Derived from `flagsFor` rather than from a second list of conditions, so a flag added later
+ * cannot leave a row saying "nothing due" underneath a pill that says otherwise.
  */
 export function quietLabel(row: WorklistRow): string | undefined {
-  return row.dosesDue === 0 && row.allergens.length === 0 ? "Nothing due" : undefined;
+  return flagsFor(row).length === 0 ? "Nothing due" : undefined;
+}
+
+/**
+ * When observations were last charted, as words (M3-S4).
+ *
+ * ── IT SAYS WHEN, AND NEVER WHETHER THEY ARE OVERDUE ────────────────────────
+ * There is no observation-frequency order anywhere in this product, so nothing — here or on the
+ * server — knows how often this patient is meant to be observed. A worklist that decided
+ * four-hourly was the rule would mark a stable post-op patient late on a ward that observes twelve
+ * hourly, and a nurse who learns the app cries wolf stops reading it. The time is stated; the
+ * judgement stays with the person doing the round.
+ *
+ * `formatted` is passed in because turning an instant into "Today 14:05" needs the ward's zone and
+ * the ward's today, and this module holds no clock — the same rule as the rest of the file.
+ */
+export function observationsLabel(row: WorklistRow, formatted: string | undefined): string {
+  if (!row.latestVitalsAt) return "No observations on this stay";
+  return formatted ? `Obs ${formatted}` : "Observations recorded";
 }

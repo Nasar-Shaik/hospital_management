@@ -82,6 +82,12 @@ const SUITE_DB = {
   mar: 19,
   /** Nursing documentation + allergy reach (M3-S2). Two branches and two tenants of its own. */
   nursing: 20,
+  /**
+   * Nurse vitals capture (M3-S4). Its own database because the idempotency assertions read the
+   * key store directly: a replay claimed under another suite's key would report "one reading" for
+   * the wrong reason, which is worse than failing.
+   */
+  vitals: 21,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

@@ -199,7 +199,12 @@ function PatientChart(): React.JSX.Element {
         ) : active === "stay" && visit ? (
           <Stay encounter={visit} zone={zone} />
         ) : active === "vitals" ? (
-          <Vitals patientId={patientId} encounterId={encounterId} zoneFor={zoneFor} />
+          <Vitals
+            patientId={patientId}
+            encounterId={encounterId}
+            zoneFor={zoneFor}
+            encounter={visit}
+          />
         ) : active === "results" ? (
           <Results
             patientId={patientId}
@@ -622,10 +627,12 @@ function Vitals({
   patientId,
   encounterId,
   zoneFor,
+  encounter,
 }: {
   patientId: string;
   encounterId: string | undefined;
   zoneFor: (branchId?: string) => string;
+  encounter: Encounter | undefined;
 }): React.JSX.Element {
   const { queries, ready } = useClinical();
 
@@ -650,6 +657,8 @@ function Vitals({
 
   return (
     <View style={styles.section}>
+      <RecordVitalsAction encounter={encounter} />
+
       <QueryGate
         loading={trend.isPending && ready}
         error={trend.error}
@@ -659,10 +668,16 @@ function Vitals({
         loadingLabel="Loading observations…"
         onRetry={() => void trend.refetch()}
       >
+        {/**
+         * Each reading in ITS OWN branch's zone (M3-S4). The patient trend is deliberately
+         * tenant-wide server-side — a weight recorded at one site is the same person's weight at
+         * another — so this list genuinely spans branches, and stamping it all with the reader's
+         * active zone would misdate every reading taken elsewhere.
+         */}
         {latest ? (
           <VitalsCard
             reading={latest}
-            zone={zoneFor(undefined)}
+            zone={zoneFor(latest.branchId)}
             heading={visitReadings.length > 0 ? "Latest — this visit" : "Latest recorded"}
           />
         ) : null}
@@ -673,11 +688,51 @@ function Vitals({
           <SectionTitle title="Earlier" trailing={String(history.length)} />
           <Card>
             {history.map((reading) => (
-              <VitalsHistoryRow key={reading.id} reading={reading} zone={zoneFor(undefined)} />
+              <VitalsHistoryRow
+                key={reading.id}
+                reading={reading}
+                zone={zoneFor(reading.branchId)}
+              />
             ))}
           </Card>
         </>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * "Record observations" — the nurse's way into the capture screen (M3-S4).
+ *
+ * Needs `vitals:record` AND an open visit AND a visit in context. The last is not a nicety: a
+ * reading hangs off an encounter, so a chart opened without one has nothing to chart against, and
+ * offering the button would lead to a screen that cannot save. UI gating only — the API enforces
+ * `vitals:record` independently, and would refuse this write from a hand-rolled request.
+ */
+function RecordVitalsAction({
+  encounter,
+}: {
+  encounter: Encounter | undefined;
+}): React.JSX.Element | null {
+  const router = useRouter();
+  const { can } = useCapabilities();
+
+  if (!encounter || !isStayOpen(encounter) || !can("vitals:record")) return null;
+
+  return (
+    <View style={styles.actions}>
+      <View style={styles.action}>
+        <Button
+          label="Record observations"
+          variant="secondary"
+          onPress={() =>
+            router.push({
+              pathname: "/vitals/[encounterId]",
+              params: { encounterId: encounter.id },
+            })
+          }
+        />
+      </View>
     </View>
   );
 }

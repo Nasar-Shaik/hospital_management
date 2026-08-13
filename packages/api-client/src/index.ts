@@ -1160,6 +1160,16 @@ export interface WorklistRow {
   dosesDue: number;
   /** A subset of `dosesDue`, never additional to it. */
   dosesOverdue: number;
+  /**
+   * When observations were last charted on this stay; absent means none on this admission.
+   *
+   * There is no "obs overdue" counterpart, and that is deliberate: nothing in the product records
+   * how often a given patient should be observed, so any lateness a client computed would be a
+   * protocol it invented. Show the time; let the nurse judge it.
+   */
+  latestVitalsAt?: string;
+  /** The SERVER's assessment of that reading. Never re-derive it from the values. */
+  vitalsAbnormal: boolean;
 }
 
 /** One dose given (or held/refused) to an inpatient against a signed prescription line. */
@@ -1331,6 +1341,15 @@ export interface VitalsReading extends Partial<Record<VitalField, number>> {
   notes?: string;
   recordedBy: string;
   recordedAt: string;
+  /**
+   * The site the observation was taken at.
+   *
+   * Present because the PATIENT trend (`listPatientVitals`) is deliberately tenant-wide — a weight
+   * recorded at one branch is the same person's weight at another — so one list can genuinely span
+   * sites in different timezones. Render each reading's time in ITS branch's zone, not the
+   * reader's active one, or a 22:00 observation from another city reads as 20:30 here.
+   */
+  branchId?: string;
   flags: Partial<Record<VitalField, VitalFlag>>;
   /** True when any recorded value is outside its adult reference range. */
   abnormal: boolean;
@@ -3545,9 +3564,27 @@ export class ApiClient {
 
   /* ── vitals ── */
 
-  /** Charts one set of observations against a visit. Needs `vitals:record`. */
-  recordVitals(encounterId: string, input: RecordVitalsInput): Promise<VitalsReading> {
-    return this.request<VitalsReading>("POST", `/api/v1/encounters/${encounterId}/vitals`, input);
+  /**
+   * Charts one set of observations against a visit. Needs `vitals:record`.
+   *
+   * ── THE KEY IS NOT OPTIONAL IN PRACTICE, ONLY IN THE SIGNATURE ──────────────
+   * The route has carried `idempotent()` since it shipped, and until M3-S4 no client could reach
+   * it: this method sent no header, so every retry after a lost response charted a SECOND set of
+   * observations. A duplicate reading is milder than a duplicate dose, and it is not harmless —
+   * the chart is append-only, so a phantom 14:05 blood pressure is permanent, and the next
+   * clinician cannot tell which of the two the patient actually had.
+   *
+   * `key` stays optional because omitting it is what the web app does today and making it
+   * mandatory would be a breaking change to a shipped method. New callers pass one.
+   */
+  recordVitals(
+    encounterId: string,
+    input: RecordVitalsInput,
+    key?: string,
+  ): Promise<VitalsReading> {
+    return this.request<VitalsReading>("POST", `/api/v1/encounters/${encounterId}/vitals`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /** Every reading on one visit, oldest first — the visit's chart. */

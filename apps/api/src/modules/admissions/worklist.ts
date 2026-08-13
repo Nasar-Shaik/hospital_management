@@ -12,9 +12,9 @@
  * schedule design was written with this in mind — "so the nurse worklist can ask this for a whole
  * ward without a query per patient per drug".
  *
- * This costs **four queries, whatever the page size**: the inpatient page, then one `$in` each for
- * allergies, live prescriptions and administrations. The dose slots themselves are arithmetic on
- * data already in memory.
+ * This costs **five queries, whatever the page size**: the inpatient page, then one `$in` each for
+ * allergies, live prescriptions, administrations and the latest observations. The dose slots
+ * themselves are arithmetic on data already in memory.
  *
  * ── IT INVENTS NOTHING ──────────────────────────────────────────────────────
  * Every number here is derived by the SAME code the per-patient endpoints use: `dosesInRange`
@@ -25,7 +25,8 @@
  *
  * ── WHY `admissions` OWNS IT ────────────────────────────────────────────────
  * It is the ward's view of a stay, which is this module's whole subject. The dependency direction
- * stays acyclic: admissions → encounters, mar, allergies, and nothing depends on admissions.
+ * stays acyclic: admissions → encounters, mar, allergies, vitals, and nothing depends on
+ * admissions.
  */
 import { env } from "../../config/env.js";
 import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
@@ -35,6 +36,7 @@ import { listInpatients, type Encounter } from "../encounters/index.js";
 import { activeForPatients, type Allergy } from "../allergies/index.js";
 import { listForEncounters, isDispensable } from "../prescriptions/index.js";
 import { listByEncounters, dosesInRange, type Course } from "../mar/index.js";
+import { latestForEncounters } from "../vitals/index.js";
 
 /** Mirrors the per-encounter schedule view: a dose is late an hour after its round. */
 const OVERDUE_AFTER_MS = 60 * 60 * 1000;
@@ -55,6 +57,24 @@ export interface WorklistRow {
   dosesDue: number;
   /** Of those, the ones already past their round. A subset of `dosesDue`, never additional. */
   dosesOverdue: number;
+
+  /**
+   * When observations were last charted on this stay. Absent means NONE on this admission — which
+   * is a fact worth showing, not an empty cell.
+   *
+   * ── THERE IS DELIBERATELY NO "OBS DUE" HERE ─────────────────────────────────
+   * A row could say "obs overdue" only if the domain knew how often this patient is meant to be
+   * observed, and it does not: there is no observation-frequency order anywhere in the product.
+   * Picking a number — four-hourly, six-hourly — would be a clinical protocol invented in a
+   * worklist, and it would mark a stable post-op patient "overdue" on a ward that observes twelve
+   * hourly. The nurse gets the time and decides; the software does not pretend to know.
+   */
+  latestVitalsAt?: string;
+  /**
+   * Whether that last reading was outside its reference range — the SERVER's `abnormal`, computed
+   * by the same `assess()` the chart paints, never re-derived. False when nothing is charted.
+   */
+  vitalsAbnormal: boolean;
 }
 
 export interface WorklistPage {
@@ -80,10 +100,13 @@ export async function wardWorklist(filter: {
   const encounterIds = encounters.map((e) => e.id);
   const patientIds = [...new Set(encounters.map((e) => e.patientId))];
 
-  const [allergies, prescriptions, administrations] = await Promise.all([
+  const [allergies, prescriptions, administrations, vitals] = await Promise.all([
     activeForPatients(patientIds),
     listForEncounters(encounterIds),
     listByEncounters(encounterIds),
+    // The newest reading per encounter, in one `$in` — the vitals module's own batch read, which
+    // exists precisely so a list does not ask per patient (M3-S4).
+    latestForEncounters(encounterIds),
   ]);
 
   /**
@@ -105,6 +128,7 @@ export async function wardWorklist(filter: {
 
   const items = encounters.map((encounter) => {
     const patientAllergies = allergyByPatient.get(encounter.patientId) ?? [];
+    const lastObs = vitals[encounter.id];
     const { due, overdue } = countDoses(
       rxByEncounter.get(encounter.id) ?? [],
       answered,
@@ -125,6 +149,8 @@ export async function wardWorklist(filter: {
       severeAllergy: patientAllergies.some((a) => a.severity === "severe"),
       dosesDue: due,
       dosesOverdue: overdue,
+      ...(lastObs ? { latestVitalsAt: lastObs.recordedAt.toISOString() } : {}),
+      vitalsAbnormal: lastObs?.abnormal ?? false,
     } satisfies WorklistRow;
   });
 

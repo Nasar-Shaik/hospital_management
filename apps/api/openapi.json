@@ -6170,6 +6170,12 @@
           },
           "dosesOverdue": {
             "type": "number"
+          },
+          "latestVitalsAt": {
+            "type": "string"
+          },
+          "vitalsAbnormal": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -6179,7 +6185,8 @@
           "allergens",
           "severeAllergy",
           "dosesDue",
-          "dosesOverdue"
+          "dosesOverdue",
+          "vitalsAbnormal"
         ]
       },
       "PageMeta": {

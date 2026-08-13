@@ -153,6 +153,10 @@ export const worklistRow = contract(
     dosesDue: z.number(),
     /** Of those, the ones already past their round. A subset of `dosesDue`. */
     dosesOverdue: z.number(),
+    /** When observations were last charted on this stay. Absent means none on this admission. */
+    latestVitalsAt: z.string().optional(),
+    /** The SERVER's `abnormal` on that reading. False when nothing is charted. */
+    vitalsAbnormal: z.boolean(),
   }),
 );
 export type WorklistRowProof = Proves<Matches<typeof worklistRow, WorklistRow>>;

@@ -6,10 +6,13 @@
  * blood pressure must be able to chart it; a hospital that cannot is not a hospital.
  *
  * ── THE PERMISSION SPLIT ────────────────────────────────────────────────────
- * `vitals:record` — chart a reading. NURSES above all (this is the permission that finally gives
- *                   the seeded nurse role its daily job), and doctors, who take observations too.
- *                   Reception does NOT have it: the desk books and takes money, it does not
- *                   measure patients.
+ * `vitals:record` — chart a reading. The NURSE role holds it, and in the seeded catalogue it is
+ *                   the ONLY role that does. Reception does not: the desk books and takes money,
+ *                   it does not measure patients. Nor, today, does DOCTOR — this header used to
+ *                   claim otherwise, and M3-S4's integration suite proved the claim false (a
+ *                   doctor charting a BP gets a 403). Whether to grant it is a hospital's policy
+ *                   decision and the catalogue is editable per tenant, so it is left alone here
+ *                   rather than widened by a comment nobody checked.
  * `emr:read`      — read the chart. It is clinical PHI, so it sits behind the clinical read
  *                   permission rather than `encounter:read`: a receptionist can see THAT a visit
  *                   exists without being shown the patient's blood pressure.

@@ -39,8 +39,14 @@ import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
 import { useTheme } from "../../src/hooks/useTheme";
 import { isFeatureUnavailable } from "../../src/lib/net/errors";
 import { dayOfStay, identitiesByEncounter } from "../../src/clinical/ipd";
-import { bedLabel, flagsFor, quietLabel, triageOrder } from "../../src/clinical/worklist";
-import { parseInstant } from "../../src/lib/time";
+import {
+  bedLabel,
+  flagsFor,
+  observationsLabel,
+  quietLabel,
+  triageOrder,
+} from "../../src/clinical/worklist";
+import { formatRelativeDay, formatTime, parseInstant } from "../../src/lib/time";
 import { radius, size, space, typography } from "../../src/theme/tokens";
 
 /** No ward chosen — the whole branch, which is what a small hospital wants anyway. */
@@ -175,8 +181,17 @@ function WardWorklist(): React.JSX.Element {
               uhid={identities.get(item.encounterId)?.uhid}
               zone={zone}
               now={now}
+              /**
+               * `encounterId`, spelled exactly as the chart reads it. S3 shipped this as
+               * `?encounter=`, which the chart silently ignored: the nurse arrived at a chart with
+               * no visit in context — no Stay tab, no due-today list, no observations for THIS
+               * admission — and nothing anywhere reported an error. A test pins the name now.
+               */
               onPress={() =>
-                router.push(`/patient/${item.patientId}?encounter=${item.encounterId}`)
+                router.push({
+                  pathname: "/patient/[id]",
+                  params: { id: item.patientId, encounterId: item.encounterId },
+                })
               }
             />
           )}
@@ -253,11 +268,23 @@ function WorklistCard({
   const admitted = parseInstant(row.admittedAt);
   const day = admitted ? dayOfStay(admitted, now, zone) : undefined;
 
+  /**
+   * The last observation, in the WARD's zone and against the ward's today (M3-S4). The formatting
+   * happens here because `clinical/worklist.ts` holds no clock by design; the words come from
+   * there so the "none recorded" case is stated in one place.
+   */
+  const obsAt = parseInstant(row.latestVitalsAt);
+  const obs = observationsLabel(
+    row,
+    obsAt ? `${formatRelativeDay(obsAt, zone, now)} ${formatTime(obsAt, { zone })}` : undefined,
+  );
+
   const spoken = [
     name ?? "Patient",
     uhid ? `UHID ${uhid}` : undefined,
     bedLabel(row),
     day !== undefined ? `day ${String(day)} of stay` : undefined,
+    obs,
     ...flags.map((f) => f.accessibilityLabel),
     quiet,
   ]
@@ -285,6 +312,8 @@ function WorklistCard({
           {bedLabel(row)}
           {day !== undefined ? ` · Day ${String(day)}` : ""}
         </Text>
+
+        <Text style={[typography.caption, { color: theme.colors.fgSubtle }]}>{obs}</Text>
 
         {flags.length > 0 ? (
           <View style={styles.flags}>

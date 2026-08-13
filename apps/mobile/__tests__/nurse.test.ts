@@ -18,7 +18,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorklistRow, DoseSlot } from "@medicore/api-client";
 import { queryKeys } from "../src/query/keys";
-import { bedLabel, flagsFor, quietLabel, triageOrder } from "../src/clinical/worklist";
+import {
+  bedLabel,
+  flagsFor,
+  observationsLabel,
+  quietLabel,
+  triageOrder,
+} from "../src/clinical/worklist";
 import { doseStateLabel, doseStateTone, summariseSlots } from "../src/clinical/ipd";
 
 const scope = { tenantSlug: "apollo", branchId: "branch-a" };
@@ -32,6 +38,7 @@ function row(over: Partial<WorklistRow> = {}): WorklistRow {
     severeAllergy: false,
     dosesDue: 0,
     dosesOverdue: 0,
+    vitalsAbnormal: false,
     ...over,
   };
 }
@@ -156,6 +163,43 @@ describe("row flags", () => {
     expect(quietLabel(row())).toBe("Nothing due");
     expect(quietLabel(row({ dosesDue: 1 }))).toBeUndefined();
     expect(quietLabel(row({ allergens: ["latex"] }))).toBeUndefined();
+    // Derived from the flags, so a flag added later cannot leave a row claiming "nothing due"
+    // underneath a pill that says otherwise (M3-S4 added exactly such a flag).
+    expect(quietLabel(row({ vitalsAbnormal: true }))).toBeUndefined();
+  });
+
+  /* ── observations, added in M3-S4 ── */
+
+  /**
+   * The pill is the SERVER's `abnormal` on the last reading — the same `assess()` the chart
+   * paints. The phone is given a boolean and renders it; it never sees a reference range.
+   */
+  it("shows the server's out-of-range assessment, last in the row", () => {
+    expect(flagsFor(row({ vitalsAbnormal: true })).map((f) => f.label)).toEqual([
+      "Obs out of range",
+    ]);
+    expect(flagsFor(row({ dosesDue: 1, vitalsAbnormal: true })).map((f) => f.label)).toEqual([
+      "1 due",
+      "Obs out of range",
+    ]);
+  });
+
+  it("says nothing about observations when the server did not flag them", () => {
+    expect(flagsFor(row({ latestVitalsAt: "2026-06-11T09:00:00.000Z" }))).toEqual([]);
+  });
+
+  /**
+   * ── NO INVENTED OBSERVATION SCHEDULE ──────────────────────────────────────
+   * Nothing in the product records how often a patient should be observed, so the row states WHEN
+   * and never whether that is late. A worklist that decided four-hourly was the rule would mark a
+   * stable post-op patient overdue on a ward that observes twelve hourly.
+   */
+  it("states when observations were last taken, never whether they are overdue", () => {
+    expect(observationsLabel(row({ latestVitalsAt: "x" }), "Today 09:00")).toBe("Obs Today 09:00");
+    expect(observationsLabel(row(), undefined)).toBe("No observations on this stay");
+    expect(observationsLabel(row({ latestVitalsAt: "x" }), "Today 09:00")).not.toMatch(
+      /overdue|late|due/i,
+    );
   });
 
   it("says where the patient is, and says so even when it does not know", () => {
@@ -301,5 +345,19 @@ describe("the worklist does not fan out per patient", () => {
   it("fetches the next page rather than truncating at the first", () => {
     expect(code).toContain("hasNextPage");
     expect(code).toContain("fetchNextPage");
+  });
+
+  /**
+   * ── THE PARAM NAME IS PART OF THE CONTRACT ────────────────────────────────
+   * S3 shipped this navigation as `?encounter=`, which `patient/[id].tsx` reads as `encounterId`
+   * and therefore ignored: the nurse arrived at a chart with no visit in context — no Stay tab, no
+   * due-today list, no observations for this admission — and nothing anywhere reported an error.
+   * A wrong param name fails silently by construction, which is exactly why it needs a test.
+   */
+  it("passes the encounter to the chart under the name the chart reads", () => {
+    const chart = readFileSync(join(__dirname, "..", "app/patient/[id].tsx"), "utf8");
+    expect(chart).toContain("useLocalSearchParams<{ id: string; encounterId?: string }>");
+    expect(code).toContain("encounterId: item.encounterId");
+    expect(code).not.toContain("?encounter=");
   });
 });
