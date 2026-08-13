@@ -1352,6 +1352,27 @@ export function findSlot(
 }
 
 /**
+ * The identity to hand an administration screen — and the ONLY thing that should travel.
+ *
+ * Not the drug name, not the dose, not the state. By the time a nurse acts on a row the world may
+ * have moved: another nurse may have answered that slot in the seconds since a round rendered. The
+ * destination re-reads all of it from the server and matches on this triple, so carrying anything
+ * else across is carrying a stale clinical claim.
+ *
+ * Lives beside `sameSlot` and `findSlot` because it is the CONSTRUCTOR for the type they consume —
+ * a round on the phone and a round in the browser must spell the identity the same way, and two
+ * hand-written copies of a three-field literal is how one of them quietly starts sending
+ * `drugCode`.
+ */
+export function slotRef(slot: DoseSlot): SlotRef {
+  return {
+    prescriptionId: slot.prescriptionId,
+    lineIndex: slot.lineIndex,
+    scheduledFor: slot.scheduledFor,
+  };
+}
+
+/**
  * Is this slot still open to an answer?
  *
  * `due` and `overdue` are the only open states, and both are DERIVED BY THE SERVER from the ward's

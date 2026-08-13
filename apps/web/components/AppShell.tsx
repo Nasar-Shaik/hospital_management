@@ -136,6 +136,21 @@ const NAVIGATION: NavSection[] = [
       },
       // `emr:read`: the ward round is a doctor's list of PATIENTS, not a bed-allocation tool.
       { label: "Ward", href: "/ward", icon: "ward", permission: "emr:read" },
+      /**
+       * The NURSE's round — who needs a drug next, across the whole ward (W4).
+       *
+       * `emr:read`, matching `GET /medication-round` exactly. Not `mar:administer`: a doctor
+       * reviewing what their patient has actually received is a legitimate reader of this list, and
+       * the round grants no reach they do not already have through the worklist and one schedule
+       * call per patient. The boundary that matters is on the WRITE, and that stays
+       * `mar:administer` — a viewer sees the round with its dose actions inert.
+       */
+      {
+        label: "Medication round",
+        href: "/medication-round",
+        icon: "medicines",
+        permission: "emr:read",
+      },
       { label: "Patients", href: "/patients", icon: "patients", permission: "patient:read" },
       {
         label: "Appointments",

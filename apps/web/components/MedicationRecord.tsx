@@ -21,8 +21,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiClientError,
+  findSlot,
+  isSlotOpen,
   type Allergy,
   type DoseSlot,
+  type SlotRef,
   type MarStatus,
   type MedicationAdministration,
   type Prescription,
@@ -44,6 +47,7 @@ import {
   type AttemptNotice,
   type DrugLine,
 } from "../lib/marAdminister";
+import { doseStateLabel } from "../lib/round";
 
 const MAR_TONE: Record<MarStatus, "success" | "warning" | "neutral"> = {
   given: "success",
@@ -57,6 +61,19 @@ const MAR_LABEL: Record<MarStatus, string> = {
   refused: "Refused",
   not_available: "Not available",
 };
+
+/**
+ * The server's current word on the dose the round pointed at — resolved on load, never navigated in.
+ *
+ * `gone` is its own state and not a failure: today's schedule rolled over in the ward's zone, or the
+ * order was stopped. Saying "that dose is no longer on today's schedule" is honest; silently showing
+ * the line's next dose instead would let a nurse chart a different one than they chose.
+ */
+type FocusState =
+  | null
+  | { state: "gone" }
+  | { state: "open"; slot: DoseSlot }
+  | { state: "answered"; slot: DoseSlot };
 
 /**
  * The identity one attempt is keyed on — the intent, not the click.
@@ -78,6 +95,8 @@ export function MedicationRecord({
   uhid,
   canAdminister,
   canReadAllergies,
+  focusSlot,
+  onCharted,
 }: {
   encounterId: string;
   patientId: string;
@@ -85,6 +104,24 @@ export function MedicationRecord({
   uhid: string;
   canAdminister: boolean;
   canReadAllergies: boolean;
+  /**
+   * The dose the nurse chose on the round (W4) — a HINT ABOUT WHICH LINE, never a clinical claim.
+   *
+   * ── WHAT ARRIVES HERE IS ALREADY OUT OF DATE ────────────────────────────────
+   * Between the round rendering and the nurse clicking, another nurse may have answered this exact
+   * slot. So nothing is read off this triple except which line to surface: the drug, the dose, the
+   * route, the time and above all the STATE are taken from the schedule this component fetches for
+   * itself on mount. If the slot is no longer open, the nurse is told so and no action is offered.
+   */
+  focusSlot?: SlotRef;
+  /**
+   * Fired once a dose has an ANSWER from the server — charted, or found already answered.
+   *
+   * The round uses it to re-read itself. It deliberately carries no payload: handing the caller a
+   * status would invite them to paint a row from it, and a round that colours itself from a
+   * callback is a round showing local state as though it were the server's.
+   */
+  onCharted?: () => void;
 }) {
   const { api, user } = useAuth();
   const { timezone } = useBranch();
@@ -99,6 +136,8 @@ export function MedicationRecord({
   const [reason, setReason] = useState("");
   const [inFlight, setInFlight] = useState(false);
   const [notice, setNotice] = useState<AttemptNotice | null>(null);
+  /** What the server currently says about the dose the round sent us to. Never what the round said. */
+  const [focus, setFocus] = useState<FocusState>(null);
   const { keyFor, clear } = useIntentKeys();
 
   /** Times on this screen are the WARD's, never the reader's — W2. */
@@ -134,17 +173,50 @@ export function MedicationRecord({
           (p) =>
             p.status === "signed" || p.status === "partially_dispensed" || p.status === "dispensed",
         );
+        /**
+         * The dose the round sent us, RE-READ from the schedule we just fetched.
+         *
+         * This is the whole reason the round may hand over an identity at all. `findSlot` matches
+         * on prescription + line + scheduled instant, and whatever comes back is the server's
+         * current word on that dose — which may be that another nurse answered it while the round
+         * sat on screen, or that it has left today's schedule entirely.
+         */
+        const focused = focusSlot ? findSlot(slots, focusSlot) : undefined;
+        setFocus(
+          !focusSlot
+            ? null
+            : !focused
+              ? { state: "gone" }
+              : isSlotOpen(focused)
+                ? { state: "open", slot: focused }
+                : { state: "answered", slot: focused },
+        );
+
         setLines(
           live.flatMap((p) =>
             p.lines.map((l, lineIndex) => {
               // The next dose still open on this line. `due`/`overdue` are the server's verdict —
               // an overdue dose is still very much giveable, so lateness is shown, not gated.
-              const slot = slots.find(
+              const nextOpen = slots.find(
                 (s) =>
                   s.prescriptionId === p.id &&
                   s.lineIndex === lineIndex &&
                   (s.state === "due" || s.state === "overdue"),
               );
+              /**
+               * On the line the nurse came here for, the CHOSEN dose wins over the earliest one.
+               *
+               * A patient on paracetamol QID has 08:00, 14:00, 20:00 and 02:00 open at once. A
+               * nurse who clicked 14:00 on the round must chart 14:00 — binding the earliest open
+               * slot instead would silently answer the 08:00 dose and leave the one they actually
+               * gave still showing as due.
+               */
+              const focusesThisLine =
+                focused !== undefined &&
+                isSlotOpen(focused) &&
+                focused.prescriptionId === p.id &&
+                focused.lineIndex === lineIndex;
+              const slot = focusesThisLine ? focused : nextOpen;
               return {
                 prescriptionId: p.id,
                 lineIndex,
@@ -255,6 +327,15 @@ export function MedicationRecord({
     if (result.outcome !== "failed") {
       setPending(null);
       load();
+      /**
+       * Tell the round to re-read ITSELF from the server.
+       *
+       * Not "mark that row given" — re-read. `recorded` and `alreadyAnswered` are both answers and
+       * both change the ward's outstanding work, and the only honest way for a list to reflect that
+       * is to ask the API again. A parent that patched a row locally would be showing its own
+       * optimism in the place a nurse checks what is still outstanding.
+       */
+      onCharted?.();
     }
   }
 
@@ -265,6 +346,25 @@ export function MedicationRecord({
   return (
     <div className="space-y-4">
       {error && <Alert tone="danger">{error}</Alert>}
+
+      {/*
+       * What became of the dose the nurse chose on the round, as the SERVER sees it now. Only the
+       * `open` case says nothing here — the highlighted line below is the answer to that one.
+       */}
+      {focus?.state === "gone" && (
+        <Alert tone="warning">
+          That dose is no longer on today&apos;s schedule for this patient. The medicines still due
+          are listed below.
+        </Alert>
+      )}
+      {focus?.state === "answered" && (
+        <Alert tone="warning">
+          {`That dose was already answered — ${doseStateLabel(focus.slot).text.toLowerCase()}${
+            focus.slot.administeredAt ? ` at ${clockLabel(focus.slot.administeredAt)}` : ""
+          } ${actorLabel(focus.slot.administeredBy, user?.id)}. Nothing was charted again.`}
+        </Alert>
+      )}
+
       {notice && (
         // `Alert` is already a live region — `role="status"` for a warning, `role="alert"` for a
         // danger. Wrapping the text in a second one would announce it twice.
@@ -291,12 +391,28 @@ export function MedicationRecord({
         <ul className="space-y-1.5">
           {lines.map((l) => {
             const key = `${l.prescriptionId}:${String(l.lineIndex)}`;
+            // The line the nurse arrived for, when the server still says that dose is open.
+            const chosen =
+              focus?.state === "open" &&
+              focus.slot.prescriptionId === l.prescriptionId &&
+              focus.slot.lineIndex === l.lineIndex;
             return (
               <li
                 key={key}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
+                  chosen
+                    ? "border-[var(--color-brand-500)] bg-[var(--color-brand-50)]"
+                    : "border-[var(--color-border)] bg-[var(--color-bg-subtle)]"
+                }`}
               >
                 <div>
+                  {/* Never colour alone: the chosen dose is named in words for anyone who cannot
+                      see the highlight, and it is the first thing read on the row. */}
+                  {chosen && (
+                    <span className="mr-2 rounded bg-[var(--color-brand-500)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
+                      Selected dose
+                    </span>
+                  )}
                   <span className="text-sm font-medium text-[var(--color-fg)]">{l.drugName}</span>
                   <span className="ml-2 text-xs text-[var(--color-fg-subtle)]">
                     {l.dose} · {l.route} · {l.frequency}
