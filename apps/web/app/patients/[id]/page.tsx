@@ -123,7 +123,7 @@ type TabKey =
   | "documents";
 
 function Profile() {
-  const { can, api } = useAuth();
+  const { can, api, user } = useAuth();
   const canWallet = can("wallet:manage");
   const canInsurance = can("insurance:link");
   const canFileClaim = can("insurance:claim");
@@ -384,6 +384,7 @@ function Profile() {
             encounters={encounters}
             canRecord={canRecordVitals}
             onSaved={(r) => setVitals((prev) => [r, ...prev])}
+            {...(user?.id ? { recordedBy: user.id } : {})}
           />
         )}
         {tab === "tests" && (

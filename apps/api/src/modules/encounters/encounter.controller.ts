@@ -151,7 +151,9 @@ export const transferDoctor: RequestHandler = async (req, res) => {
 export const listInpatients: RequestHandler = async (req, res) => {
   const query = req.query as unknown as ListInpatientsQuery;
 
-  const { items, total } = await encounters.listInpatients({
+  // Identity is resolved SERVER-side (see `listInpatientsWithIdentity`): the ward list names the
+  // patient in the bed, rather than leaving every client to reconstruct it from a patient page.
+  const { items, total } = await encounters.listInpatientsWithIdentity({
     limit: query.limit,
     skip: (query.page - 1) * query.limit,
     ...(query.ward ? { ward: query.ward } : {}),

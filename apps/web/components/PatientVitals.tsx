@@ -42,12 +42,15 @@ export function VitalsByVisit({
   encounters,
   canRecord,
   onSaved,
+  recordedBy,
 }: {
   api: ApiClient;
   readings: VitalsReading[];
   encounters: Encounter[];
   canRecord: boolean;
   onSaved: (reading: VitalsReading) => void;
+  /** The signed-in user, for reconciling a lost save against the chart. */
+  recordedBy?: string;
 }): JSX.Element {
   // Newest visit first — the same order the Visits tab uses.
   const byArrival = [...encounters].sort(
@@ -83,7 +86,18 @@ export function VitalsByVisit({
               Charted against the current visit — {visitLabel(openVisit)}
               {openVisit.token ? ` · token ${String(openVisit.token)}` : ""}
             </p>
-            <VitalsForm api={api} encounterId={openVisit.id} onSaved={onSaved} />
+            {/*
+             * `readings` is the patient's whole chart, which is a SAFE baseline: reconciliation is
+             * a set difference on ids, so anything already known here is excluded whichever visit
+             * it belongs to, and the reload only ever returns this visit's readings.
+             */}
+            <VitalsForm
+              api={api}
+              encounterId={openVisit.id}
+              onSaved={onSaved}
+              readings={readings}
+              {...(recordedBy ? { recordedBy } : {})}
+            />
           </Card>
         ) : (
           <Alert tone="info">

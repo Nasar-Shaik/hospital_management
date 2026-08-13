@@ -29,7 +29,12 @@ import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
 import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./encounter.controller.js";
-import { admitResult, encounter, startEncounterResult } from "./encounter.contract.js";
+import {
+  admitResult,
+  encounter,
+  inpatientRow,
+  startEncounterResult,
+} from "./encounter.contract.js";
 import {
   admitSchema,
   transferSchema,
@@ -116,7 +121,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, IPD_FEATURE),
     validate(listInpatientsQuerySchema, "query"),
-    responds(encounter.array(), { meta: true }),
+    responds(inpatientRow.array(), { meta: true }),
     asyncHandler(controller.listInpatients),
   );
 

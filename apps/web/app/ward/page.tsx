@@ -19,8 +19,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiClientError,
-  type Encounter,
-  type Patient,
+  type InpatientRow,
   type WardNote,
   type TerminalOutcome,
   type BedBoard,
@@ -685,8 +684,7 @@ function TransferBed({
 function Ward() {
   const { api, can } = useAuth();
 
-  const [beds, setBeds] = useState<Encounter[]>([]);
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [beds, setBeds] = useState<InpatientRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notes, setNotes] = useState<WardNote[]>([]);
   const [bill, setBill] = useState<{ total: number } | null>(null);
@@ -695,15 +693,22 @@ function Ward() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    void api
-      .listPatients({ limit: 100 })
-      .then((page) => setPatients(page.items))
-      .catch((err: unknown) =>
-        setError(err instanceof ApiClientError ? err.message : "Could not load patients."),
-      );
-  }, [api]);
-
+  /**
+   * ── THE PATIENT LIST THAT USED TO BE FETCHED HERE IS GONE, DELIBERATELY ─────
+   * This page resolved every name and UHID by matching `patientId` against
+   * `listPatients({ limit: 100 })` — the hundred most recently REGISTERED patients. Anyone
+   * admitted longer ago than that fell out of the window, and `nameOf` returned "—" while
+   * `uhidOf` returned "". W3 had by then wired both into the medication confirmation, so the check
+   * that catches the right drug given to the wrong patient could read:
+   *
+   *     Patient: —
+   *     UHID:
+   *
+   * Raising the limit would only move the boundary. `/inpatients` now names its own patients
+   * (`InpatientRow`), resolved server-side by the same call the bed board and the medication round
+   * make — so identity arrives with the stay it belongs to, and this screen makes one request
+   * fewer than it used to.
+   */
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -765,8 +770,7 @@ function Ward() {
   }, [selectedId, loadChart]);
 
   const selected = beds.find((e) => e.id === selectedId) ?? null;
-  const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
-  const uhidOf = (id: string): string => patients.find((p) => p.id === id)?.uhid ?? "";
+  // Identity travels WITH the stay now — see the note on `load`. No lookup, so nothing to miss.
 
   return (
     <div className="space-y-6">
@@ -805,9 +809,7 @@ function Ward() {
                         : "border-[var(--color-border)] bg-[var(--color-bg-subtle)] hover:border-[var(--color-border-strong)]"
                     }`}
                   >
-                    <p className="text-sm font-medium text-[var(--color-fg)]">
-                      {nameOf(e.patientId)}
-                    </p>
+                    <p className="text-sm font-medium text-[var(--color-fg)]">{e.patientName}</p>
                     <p className="text-xs text-[var(--color-fg-subtle)]">
                       {e.bed ? `${e.bed.ward} · ${e.bed.bedCode}` : "no bed recorded"}
                       {e.admittedAt ? ` · day ${String(daysIn(e.admittedAt))}` : ""}
@@ -832,10 +834,10 @@ function Ward() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-[var(--color-fg)]">
-                      {nameOf(selected.patientId)}
+                      {selected.patientName}
                     </h2>
                     <p className="text-sm text-[var(--color-fg-muted)]">
-                      {uhidOf(selected.patientId)}
+                      {selected.uhid}
                       {selected.bed ? ` · ${selected.bed.ward} · bed ${selected.bed.bedCode}` : ""}
                     </p>
                     {selected.admittedAt && (
@@ -912,8 +914,8 @@ function Ward() {
                   <MedicationRecord
                     encounterId={selected.id}
                     patientId={selected.patientId}
-                    patientName={nameOf(selected.patientId)}
-                    uhid={uhidOf(selected.patientId)}
+                    patientName={selected.patientName}
+                    uhid={selected.uhid}
                     canAdminister={can("mar:administer")}
                     canReadAllergies={can("allergy:read")}
                   />

@@ -23,7 +23,7 @@ import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
-import { getPatient } from "../patients/index.js";
+import { getPatient, namesByIds } from "../patients/index.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
 import { getBed } from "../wards/index.js";
 import * as repo from "./encounter.repository.js";
@@ -40,6 +40,56 @@ import {
 const logger = createLogger({ service: "encounters" });
 
 export type { Encounter } from "./encounter.repository.js";
+
+/**
+ * A stay on the ward list, carrying the patient it belongs to.
+ *
+ * The ward list is read by a human walking a ward: every consumer needs to know WHO is in the bed,
+ * and leaving them to reconstruct it from a separate patient list is what produced the defect this
+ * exists to close — a medication confirmation reaching a nurse with no name and no UHID because
+ * the patient had been admitted longer ago than the client's patient page reached back.
+ */
+export interface InpatientRow extends repo.Encounter {
+  /** `Unknown patient` when the record cannot be read — never silently blank. */
+  patientName: string;
+  uhid: string;
+}
+
+/**
+ * One page of the ward, with each stay's patient resolved.
+ *
+ * ── ONE EXTRA QUERY FOR THE PAGE, NOT ONE PER BED ───────────────────────────
+ * `namesByIds` takes the whole page's patient ids at once — the same call `/bed-board` and
+ * `/medication-round` already make, with the same hospital-wide semantics. It deliberately does
+ * NOT apply `scopeFilter()`: naming a patient whose encounter this caller can already see reveals
+ * nothing new, and branch-scoping the lookup would blank the identity of anyone registered at
+ * another site, which is the failure mode rather than the protection.
+ */
+export async function listInpatientsWithIdentity(filter: {
+  limit: number;
+  skip: number;
+  ward?: string;
+}): Promise<{ items: InpatientRow[]; total: number }> {
+  const { items, total } = await repo.listInpatients(filter);
+  if (items.length === 0) return { items: [], total };
+
+  const names = await namesByIds([...new Set(items.map((e) => e.patientId))]);
+  const byId = new Map(names.map((n) => [n.id, n]));
+
+  return {
+    items: items.map((encounter) => {
+      const who = byId.get(encounter.patientId);
+      return {
+        ...encounter,
+        // The bed board says "Unknown patient" in the same situation and for the same reason: a
+        // row that silently drops its identity is worse than one that says the lookup failed.
+        patientName: who?.name ?? "Unknown patient",
+        uhid: who?.uhid ?? "",
+      };
+    }),
+    total,
+  };
+}
 
 export interface StartEncounterInput {
   patientId: string;

@@ -16,9 +16,11 @@
  * title, because a red number is invisible to a colour-blind reader (Doc 08 accessibility).
  */
 import { useState, type FormEvent, type JSX } from "react";
+import { attemptVitals } from "@medicore/api-client";
 import type { ApiClient, TriageLevel, VitalField, VitalsReading } from "@medicore/api-client";
 import { Alert, Badge, Button, Card } from "./ui";
 import { ErrorAlert } from "./ui";
+import { useIdempotencyKey } from "../lib/idempotency";
 
 /** Display metadata per measurement — label, unit, and how many decimals it is quoted to. */
 const VITAL_META: Record<VitalField, { label: string; unit: string; step: string; max?: number }> =
@@ -256,20 +258,52 @@ export function VitalsForm({
   api,
   encounterId,
   onSaved,
+  readings,
+  recordedBy,
 }: {
   api: ApiClient;
   encounterId: string;
   onSaved: (reading: VitalsReading) => void;
+  /**
+   * The visit's readings as the screen had them a moment ago — the BASELINE reconciliation
+   * compares against. Omit it and an ambiguous save can never be resolved to "saved", which is the
+   * safe direction: with no snapshot, every reading in a reloaded chart looks new and last night's
+   * observation would be reported as this one.
+   */
+  readings?: readonly VitalsReading[];
+  /** The signed-in user. Narrows the reconciliation match; absent widens it, never breaks it. */
+  recordedBy?: string;
 }): JSX.Element {
   const [f, setF] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  /** Set when a save landed only because we went and looked — worth telling the nurse. */
+  const [reconciled, setReconciled] = useState(false);
 
-  const set = (patch: Partial<FormState>) => setF((prev) => ({ ...prev, ...patch }));
+  /**
+   * One key per SUBMISSION, held across the retries of that submission.
+   *
+   * ── WHY IT IS RENEWED ON EDIT AND NOT ONLY ON SUCCESS ───────────────────────
+   * A key that outlives a change to the figures is worse than no key: the server refuses a reused
+   * key carrying a different body (`HMS-REQ-002`), so a nurse who corrects a mistyped pulse and
+   * saves again would be locked out of charting at all. `lib/idempotency.ts` states the rule —
+   * hold it across a retry of the same request, drop it when the user changes what they are
+   * asking for — and this is that rule applied to a form.
+   */
+  const [saveKey, renewKey] = useIdempotencyKey();
+
+  const set = (patch: Partial<FormState>) => {
+    // The figures are changing, so the next save is a different request and needs its own key.
+    if (error != null) renewKey();
+    setError(null);
+    setReconciled(false);
+    setF((prev) => ({ ...prev, ...patch }));
+  };
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+    setReconciled(false);
 
     const measured: Partial<Record<VitalField, number>> = {};
     for (const field of FIELD_ORDER) {
@@ -285,24 +319,56 @@ export function VitalsForm({
     }
 
     setSaving(true);
-    try {
-      const saved = await api.recordVitals(encounterId, {
-        ...measured,
-        ...(f.triageLevel ? { triageLevel: f.triageLevel } : {}),
-        ...(f.notes.trim() ? { notes: f.notes.trim() } : {}),
-      });
+    /**
+     * The shared M3 envelope, not a web copy of it: the key makes a retry a REPLAY, and every
+     * ambiguous ending is resolved by re-reading the chart rather than by guessing. Nothing here
+     * decides whether the observation is normal — `flags`, `abnormal`, `bmi` and `recordedAt` all
+     * come back from the server and are rendered as given.
+     */
+    const outcome = await attemptVitals({
+      record: () =>
+        api.recordVitals(
+          encounterId,
+          {
+            ...measured,
+            ...(f.triageLevel ? { triageLevel: f.triageLevel } : {}),
+            ...(f.notes.trim() ? { notes: f.notes.trim() } : {}),
+          },
+          saveKey,
+        ),
+      reload: () => api.listEncounterVitals(encounterId),
+      before: readings,
+      ...(recordedBy ? { recordedBy } : {}),
+    });
+    setSaving(false);
+
+    if (outcome.outcome === "saved") {
+      // Only the server's own reading is ever handed on — including on the reconciled path, where
+      // it comes from the reloaded chart rather than from a response we never received.
       setF(EMPTY_FORM);
-      onSaved(saved);
-    } catch (err) {
-      setError(err);
-    } finally {
-      setSaving(false);
+      setReconciled(outcome.reconciled);
+      renewKey();
+      onSaved(outcome.reading);
+      return;
     }
+
+    /**
+     * Nothing was charted, or we could not establish that it was. The figures stay on screen and
+     * the key is deliberately NOT renewed: pressing save again re-sends the identical request
+     * under the identical key, which the server replays instead of writing a second observation.
+     */
+    setError(outcome.error);
   }
 
   return (
     <form onSubmit={submit} className="space-y-4">
       {error != null && <ErrorAlert error={error} fallback="Could not save the observations." />}
+      {reconciled && (
+        <Alert tone="info">
+          The reply was lost, so we checked the chart: these observations were saved. Nothing was
+          recorded twice.
+        </Alert>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {FIELD_ORDER.map((field) => {
@@ -378,6 +444,7 @@ export function VitalsPanel({
   canRecord,
   onSaved,
   emptyHint,
+  recordedBy,
 }: {
   api: ApiClient;
   encounterId: string;
@@ -385,6 +452,8 @@ export function VitalsPanel({
   canRecord: boolean;
   onSaved: (reading: VitalsReading) => void;
   emptyHint?: string;
+  /** The signed-in user, for reconciling a lost save against the chart. */
+  recordedBy?: string;
 }): JSX.Element {
   const latest = readings.length > 0 ? readings[readings.length - 1] : undefined;
 
@@ -402,7 +471,14 @@ export function VitalsPanel({
       {canRecord && (
         <Card className="p-4">
           <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">Record observations</h3>
-          <VitalsForm api={api} encounterId={encounterId} onSaved={onSaved} />
+          {/* `readings` is the reconciliation baseline — see `VitalsForm`. */}
+          <VitalsForm
+            api={api}
+            encounterId={encounterId}
+            onSaved={onSaved}
+            readings={readings}
+            {...(recordedBy ? { recordedBy } : {})}
+          />
         </Card>
       )}
 

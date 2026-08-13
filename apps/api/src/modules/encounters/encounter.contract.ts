@@ -10,7 +10,7 @@ import {
   ENCOUNTER_STATUSES,
 } from "./encounter.model.js";
 import type { Encounter } from "./encounter.repository.js";
-import type { AdmitResult, StartEncounterResult } from "./encounter.service.js";
+import type { AdmitResult, InpatientRow, StartEncounterResult } from "./encounter.service.js";
 
 const encounterStatus = z.enum(ENCOUNTER_STATUSES);
 
@@ -74,6 +74,33 @@ export const encounter = contract(
   }),
 );
 export type EncounterProof = Proves<Matches<typeof encounter, Encounter>>;
+
+/**
+ * A stay on the ward list, WITH the patient it belongs to.
+ *
+ * ── WHY THE WARD LIST IDENTIFIES ITS PATIENTS AND A BARE ENCOUNTER DOES NOT ──
+ * An encounter is a visit; naming the patient on every one of them would cost a lookup on paths
+ * that never display a name. But `/inpatients` is read by a human walking a ward, and every
+ * consumer of it needs exactly this: who is in the bed. Leaving them to reconstruct it produced a
+ * real defect — the web ward page resolved names from the hundred most recently REGISTERED
+ * patients, so anyone admitted longer ago than that reached the medication confirmation with no
+ * name and no UHID, which is the identity check that catches the right drug given to the wrong
+ * person.
+ *
+ * Resolved server-side by `namesByIds`, exactly as `/bed-board` and `/medication-round` already
+ * do — the same call, the same hospital-wide semantics, no new domain rule. Additive: every field
+ * an existing client reads is still here and still means what it meant.
+ */
+export const inpatientRow = contract(
+  "InpatientRow",
+  encounter.extend({
+    /** `Unknown patient` when the record cannot be read — never silently blank. */
+    patientName: z.string(),
+    /** Empty only when the patient record itself carries none. */
+    uhid: z.string(),
+  }),
+);
+export type InpatientRowProof = Proves<Matches<typeof inpatientRow, InpatientRow>>;
 
 /** 201 for a new visit, 200 when the patient was already in the building — `resumed` says which. */
 export const startEncounterResult = contract(

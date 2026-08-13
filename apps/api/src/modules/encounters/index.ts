@@ -22,6 +22,8 @@ export {
   type TransferBedInput,
   type TransferBedResult,
   listInpatients,
+  listInpatientsWithIdentity,
+  type InpatientRow,
   startEncounter,
   getEncounter,
   listEncounters,

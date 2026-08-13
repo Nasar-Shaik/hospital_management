@@ -336,6 +336,33 @@ describe("admission opens a second encounter in the same care story", () => {
     expect(ids).toContain(res.body.data.inpatient.id);
   });
 
+  /**
+   * ── THE WARD LIST NAMES ITS PATIENTS (D-1) ──────────────────────────────────
+   * It did not, and a client was left to reconstruct identity by matching `patientId` against a
+   * separately fetched patient page. The web ward page did exactly that against the hundred most
+   * recently REGISTERED patients, so anyone admitted longer ago reached the medication
+   * confirmation with a blank name and a blank UHID — the check that catches the right drug given
+   * to the wrong person.
+   *
+   * Resolved server-side now, by the same `namesByIds` the bed board and medication round use.
+   */
+  it("names the patient in every bed, so no client has to look them up", async () => {
+    const opId = await inConsultation(pvt, "Named Patient", "9200100009");
+    const res = await admit(pvt, opId);
+    const ipId = res.body.data.inpatient.id as string;
+
+    const ward = await auth(request(app).get("/api/v1/inpatients"), pvt, pvt.doctorToken).expect(
+      200,
+    );
+
+    const row = (ward.body.data as { id: string; patientName?: string; uhid?: string }[]).find(
+      (e) => e.id === ipId,
+    );
+    expect(row?.patientName).toBe("Named Patient");
+    // A real UHID, not an empty string standing in for one.
+    expect(row?.uhid).toMatch(/\S/);
+  });
+
   it("a patient already in a bed cannot be admitted again", async () => {
     const opId = await inConsultation(pvt, "Twice Patient", "9200100004");
     const res = await admit(pvt, opId);

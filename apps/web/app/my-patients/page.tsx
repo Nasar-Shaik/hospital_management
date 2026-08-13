@@ -1638,6 +1638,7 @@ function MyPatients() {
                     canRecord={can("vitals:record")}
                     onSaved={() => loadVitals(selected.id)}
                     emptyHint="No observations charted for this visit yet."
+                    {...(user?.id ? { recordedBy: user.id } : {})}
                   />
                 </CollapsibleCard>
               </PermissionGate>
