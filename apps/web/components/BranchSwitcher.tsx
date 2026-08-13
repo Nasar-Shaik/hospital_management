@@ -7,6 +7,12 @@
  * site): the whole multi-branch machinery stays invisible to the customers who do not use it. When
  * there IS a choice, it lists the user's branches and — if they may aggregate — an "All branches"
  * option that puts reports into cross-branch mode.
+ *
+ * ── THE SWITCH IS ANNOUNCED, NOT JUST DRAWN ─────────────────────────────────
+ * Choosing a branch discards every screen below and reloads it (`BranchScope`). A sighted user
+ * sees the spinners; a screen-reader user would get a silently changed button label and a page
+ * that quietly became something else. The live region says which site is now in force and that its
+ * data is loading — the same two facts, through the other channel.
  */
 import { useEffect, useRef, useState } from "react";
 import { useBranch } from "./BranchProvider";
@@ -14,7 +20,15 @@ import { useBranch } from "./BranchProvider";
 export function BranchSwitcher() {
   const { branches, active, canAggregate, hasChoice, select } = useBranch();
   const [open, setOpen] = useState(false);
+  const [switched, setSwitched] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  /** Turns a selection into both the scope change and the announcement. */
+  const choose = (branchId: string | null) => {
+    setSwitched(true);
+    select(branchId);
+    setOpen(false);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -32,6 +46,11 @@ export function BranchSwitcher() {
 
   return (
     <div className="relative" ref={ref}>
+      {/* Announced only after a deliberate switch — never on first load, which would read the
+          branch name at every sign-in for no reason. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {switched ? `Now working in ${label}. Loading this branch's data.` : ""}
+      </span>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -83,10 +102,7 @@ export function BranchSwitcher() {
               label="All branches"
               hint="Reports aggregate across sites"
               selected={!active}
-              onClick={() => {
-                select(null);
-                setOpen(false);
-              }}
+              onClick={() => choose(null)}
             />
           )}
 
@@ -96,10 +112,7 @@ export function BranchSwitcher() {
               label={b.name}
               hint={b.code}
               selected={active?.id === b.id}
-              onClick={() => {
-                select(b.id);
-                setOpen(false);
-              }}
+              onClick={() => choose(b.id)}
             />
           ))}
         </div>

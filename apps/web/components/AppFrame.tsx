@@ -21,6 +21,17 @@ import type { ReactNode } from "react";
 import { Protected } from "./Protected";
 
 /**
+ * ── IT IS ALSO WHERE BRANCH SCOPE IS APPLIED ────────────────────────────────
+ * For the same reason. The shell is hoisted here so it survives navigation; the PAGE beneath it is
+ * exactly the thing that must not survive a branch change. Wrapping `children` — and only
+ * `children` — in `BranchScope` discards the page on a switch while the rail, its scroll and the
+ * session above it stay put. Bare routes are wrapped too: `/opd-slip` and `/ip-sheet` are printed
+ * clinical documents, and they belong to a branch as much as any list does.
+ */
+import { BranchScope } from "./BranchScope";
+import { useBranch } from "./BranchProvider";
+
+/**
  * Routes that render WITHOUT the shell. Matched as exact-or-child (`/receipt` and `/receipt/…`), so
  * the singular print route never captures the plural `/receipts` billing list.
  */
@@ -47,6 +58,8 @@ function isBare(pathname: string): boolean {
 
 export function AppFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
-  if (isBare(pathname)) return <>{children}</>;
-  return <Protected>{children}</Protected>;
+  const { scopeId } = useBranch();
+  const scoped = <BranchScope scopeId={scopeId}>{children}</BranchScope>;
+  if (isBare(pathname)) return scoped;
+  return <Protected>{scoped}</Protected>;
 }

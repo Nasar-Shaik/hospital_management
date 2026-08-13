@@ -4,13 +4,20 @@
  * The active-branch context for the web app (ADR-0015).
  *
  * Loads the branches the signed-in user may act in (`GET /me/branches`), remembers which one is
- * active (per tab — see `lib/activeBranch.ts`), and refreshes the app when it changes so every list
- * re-fetches through the new `X-Active-Branch` header.
+ * active (per tab — see `lib/activeBranch.ts`), and publishes the SCOPE IDENTITY that the routed
+ * subtree is keyed on, so a selection discards the previous branch's data (see `BranchScope`).
  *
  * It is deliberately thin: the API client already reads the active branch live on each request, so
- * this provider's only jobs are (1) give the switcher its data and (2) turn a selection into a
- * refetch. A single-branch hospital or a single-branch user has nothing to choose — the switcher
+ * this provider's only jobs are (1) give the switcher its data and (2) turn a selection into a new
+ * scope. A single-branch hospital or a single-branch user has nothing to choose — the switcher
  * simply shows their one site.
+ *
+ * ── IT NO LONGER CALLS `router.refresh()` ───────────────────────────────────
+ * It used to, and that was the bug. `router.refresh()` re-fetches Server Components and preserves
+ * client React state — and every data page here is a client component holding its rows in
+ * `useState`. So the header changed and the data did not. The scope key below is what actually
+ * reloads the screen, and it does it by discarding the components rather than by asking them
+ * nicely. Removing the refresh also removes a redundant RSC round trip per switch.
  */
 import {
   createContext,
@@ -21,10 +28,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useRouter } from "next/navigation";
 import type { Branch } from "@medicore/api-client";
 import { useAuth } from "./AuthProvider";
 import { getActiveBranchId, setActiveBranchId } from "../lib/activeBranch";
+import { branchScopeId, reconcileBranch } from "../lib/branchScope";
+import { currentHost } from "../lib/api";
 
 interface BranchContextValue {
   /** The branches this user may act in. Empty until loaded, or for a user bound to none. */
@@ -37,7 +45,12 @@ interface BranchContextValue {
   loading: boolean;
   /** Whether the switcher is worth showing at all (more than one option). */
   hasChoice: boolean;
-  /** Select a branch by id, or `null` for All. Persists and refreshes the app. */
+  /**
+   * Identity of the data a branch-scoped screen is showing. The routed subtree is keyed on it, so
+   * a change here discards that screen and everything reloads for the new branch.
+   */
+  scopeId: string;
+  /** Select a branch by id, or `null` for All. Persists, and re-scopes the app. */
   select: (branchId: string | null) => void;
 }
 
@@ -45,7 +58,6 @@ const BranchContext = createContext<BranchContextValue | null>(null);
 
 export function BranchProvider({ children }: { children: ReactNode }) {
   const { user, api } = useAuth();
-  const router = useRouter();
 
   const [branches, setBranches] = useState<Branch[]>([]);
   const [canAggregate, setCanAggregate] = useState(false);
@@ -75,18 +87,16 @@ export function BranchProvider({ children }: { children: ReactNode }) {
         setBranches(res.branches);
         setCanAggregate(res.canAggregate);
 
-        // Reconcile the stored selection with what the user may actually reach now. If their stored
-        // branch is gone (access changed), fall back: to their only branch, or to All.
-        const stored = getActiveBranchId() ?? null;
-        const valid = stored && res.branches.some((b) => b.id === stored) ? stored : null;
-        if (!valid && res.branches.length === 1 && !res.canAggregate) {
-          // A single-branch user always works in that one site — pin it, no choice to make.
-          apply(res.branches[0]?.id ?? null);
-        } else if (valid !== stored) {
-          apply(valid);
-        } else {
-          setActiveId(valid);
-        }
+        // Reconcile the stored selection with what the user may actually reach now — the decision
+        // lives in `lib/branchScope.ts` so its edge cases (revoked binding, single-site user,
+        // aggregate right) can be tested without standing up a session.
+        const decided = reconcileBranch({
+          stored: getActiveBranchId() ?? null,
+          branches: res.branches,
+          canAggregate: res.canAggregate,
+        });
+        if (decided.persist) apply(decided.branchId);
+        else setActiveId(decided.branchId);
       })
       .catch(() => {
         if (!cancelled) {
@@ -102,14 +112,13 @@ export function BranchProvider({ children }: { children: ReactNode }) {
     };
   }, [user, api, apply]);
 
-  const select = useCallback(
-    (branchId: string | null) => {
-      apply(branchId);
-      // Everything on screen was fetched for the old branch — pull it all again.
-      router.refresh();
-    },
-    [apply, router],
-  );
+  /**
+   * Everything on screen was fetched for the old branch. Changing `activeId` changes `scopeId`,
+   * which re-keys the routed subtree — React discards those components and their state, and their
+   * loaders run again against the new `X-Active-Branch` header. No `router.refresh()`: it re-fetches
+   * Server Components and preserves exactly the client state that had to go.
+   */
+  const select = useCallback((branchId: string | null) => apply(branchId), [apply]);
 
   const value = useMemo<BranchContextValue>(() => {
     const active = branches.find((b) => b.id === activeId) ?? null;
@@ -119,6 +128,7 @@ export function BranchProvider({ children }: { children: ReactNode }) {
       canAggregate,
       loading,
       hasChoice: branches.length > 1 || canAggregate,
+      scopeId: branchScopeId({ tenant: currentHost(), branchId: activeId }),
       select,
     };
   }, [branches, activeId, canAggregate, loading, select]);
