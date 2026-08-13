@@ -428,6 +428,29 @@ describe("a screen that writes clinical text protects it", () => {
     const writers = routes.filter((file) => WRITES.test(codeOnly(read(file))));
     expect(writers.length).toBeGreaterThanOrEqual(3);
   });
+
+  /**
+   * ── AND EVERY WRITE SCREEN ASKS WHETHER THE WRITE IS POSSIBLE (M3-S6) ───────
+   * `useWriteGuard` is what stops a tap that cannot succeed: offline, no branch resolved, licence
+   * expired, or the permission missing. Every write screen calls it today — this pins that, with
+   * NO exemption list, because unlike the unsaved-changes guard there is no screen for which the
+   * answer is legitimately "does not apply". A clinical write with no guard offers a nurse a
+   * button that fails at the server, and offline it fails in the one way that matters most: with
+   * the outcome unknown.
+   */
+  const GUARDS = /\buseWriteGuard\s*\(/;
+
+  it.each(routes.map((file) => [shortName(file), file]))("%s guards its write", (name, file) => {
+    const source = codeOnly(read(file));
+    if (!WRITES.test(source)) return;
+
+    expect(
+      GUARDS.test(source),
+      `app/${name} performs a clinical write but never calls useWriteGuard. Offline, or with no ` +
+        `branch resolved, it will offer a button that cannot work — and for an irreversible ` +
+        `write the failure arrives after the tap, not before it.`,
+    ).toBe(true);
+  });
 });
 
 describe("a branch id is never taken from navigation", () => {

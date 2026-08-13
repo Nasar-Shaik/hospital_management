@@ -380,3 +380,123 @@ shipping whether or not the nurse mobile app follows.
 **Backward compatibility:** every change is additive. A client that never sends `scheduledFor`
 behaves exactly as it does today, which keeps this inside v1 — the same rule `idempotent()` was
 added under.
+
+---
+
+## 14. M3 as built — the invariants (M3-S6, final)
+
+Written at the close of M3-S6, from the code rather than from the slice reports. Everything here
+has a test; where something is defended only structurally, that is said.
+
+### 14.1 Medication administration
+
+| Invariant                                                      | Where it lives                                                                 |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| A dose slot is `prescriptionId` + `lineIndex` + `scheduledFor` | `mar.service.ts`, `marAdminister.ts`, `round.ts`                               |
+| One administration per scheduled slot                          | Migration `0049`, partial unique index — **the database is the arbiter**       |
+| PRN has no slot and stays repeatable                           | The partial filter `{ scheduledFor: { $exists: true } }`                       |
+| `status` is deliberately NOT in the index                      | "held then given" must be impossible                                           |
+| Historical rows predating slots are unconstrained              | The same partial filter — nothing to migrate                                   |
+| A duplicate answers `HMS-MAR-001` with the winning row         | `mar.service.ts`; the client must never retry into it                          |
+| Administration happens on ONE screen                           | `app/administer/[encounterId].tsx`. The round navigates to it and never writes |
+| The schedule and the round are one derivation                  | `slotsForStay`, called by `getSchedule` and `medicationRound`                  |
+
+`not_available` is a real `MAR_STATUS` the backend accepts and the app **displays** but does not
+**offer**. Deliberate, and re-affirmed in S5B: see §14.7.
+
+### 14.2 Idempotency
+
+Every M3 write carries an `Idempotency-Key`: vitals, nursing notes, ward notes, dose
+administration. The key is per clinical DECISION — Give, Hold and Refuse never share one.
+
+`fingerprint()` hashes `Date` values **by instant** (M3-S5A). Before that fix `Object.keys(new
+Date())` was `[]`, every date canonicalised to `{}`, and two requests differing only by a date
+replayed each other's response — a nurse charting the 18:00 dose under a stale key was shown the
+12:00 dose's success and nothing was written.
+
+`checkClientContract.ts` §6 now fails the gate when a route accepts a key and its client method
+cannot send one. That defect shipped twice (vitals in S4, MAR in S5A) and was found by hand both
+times; S6 found **eleven more** across the rest of the API and closed them.
+
+### 14.3 Reconciliation
+
+No clinical write reports success without server confirmation. Each irreversible write asks the
+record a question it can actually answer:
+
+- **Vitals** — "is there a new reading of mine?" (id-set difference plus authorship)
+- **MAR** — "is this slot answered?" (one question, one server answer — strictly stronger)
+- **Ward / nursing note** — "is this note on the chart?"
+
+The MAR's uncertain outcome is `unknown`, never `notSaved`: a nurse told "not saved" gives the
+dose again.
+
+### 14.4 Scope
+
+| Data                                                         | Scope                                                                         |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| encounters, vitals, notes, MAR, schedule, round, wards, beds | **Branch**                                                                    |
+| allergies                                                    | **Hospital-wide** — an allergy that does not follow the patient can kill them |
+| patients                                                     | Branch in practice — **see §14.7**, this contradicts ADR-0015 §5              |
+
+Every branch-sensitive query key begins `[tenantSlug, branchId]`. `doctor.test.ts` walks
+`queryKeys` itself and requires every key to be classified, so a new one cannot skip the check.
+Tenant isolation is physical (database per tenant) with `tenantScopePlugin` as belt and braces.
+
+### 14.5 Time
+
+Storage is UTC. The clinical day, the dose schedule and every displayed instant resolve in the
+**branch's** timezone. Never the device's, never the process's. The mobile round computes its day
+as `formatDayKey(now, branchZone)` and sends it explicitly, so two days are two cache entries;
+the server resolves the ward's today when no date is named. A source scan forbids
+`toLocaleTimeString`, `getHours` and a zone-less `Intl.DateTimeFormat` anywhere in the app.
+
+### 14.6 What M3 deliberately does not do
+
+- **No offline clinical writes.** The write guard disables the button and says why; mutations
+  never auto-retry.
+- **No nurse↔ward assignment.** The nurse picks the ward; the domain has no roster.
+- **No medication–allergy matching.** Allergies are context for a human. Nothing anywhere says a
+  drug is safe, and an empty list renders as "none recorded", never as clearance.
+- **No bulk or inline administration.** Every dose goes through the S5A confirmation.
+
+### 14.7 The cross-branch patient — an open domain conflict
+
+**ADR-0015 §5 says** patient identity is tenant-level, `patient.branchId` is provenance and
+"never an ownership wall", and "lookup by UHID is tenant-wide, so a patient registered in
+Hyderabad is found in Chennai". The Domain Glossary agrees: a UHID is "stable across visits and
+branches".
+
+**The code does the opposite.** `findByUhid`, `findByIdScoped`, `list` and every `getPatient`
+call site apply `scopeFilter()`. Proven in `branchIsolation.int.test.ts` §18:
+
+| Attempt (patient registered at Hyderabad) | Result                                                 |
+| ----------------------------------------- | ------------------------------------------------------ |
+| Read at Hyderabad                         | 200                                                    |
+| Read at Chennai, branch-confined clerk    | 404                                                    |
+| Read at Chennai, hospital-wide admin      | 404                                                    |
+| Find by UHID from Chennai                 | 0 rows                                                 |
+| Create an encounter at Chennai            | 404                                                    |
+| **Duplicate check at Chennai**            | **returns the Hyderabad record, with its id and UHID** |
+| Register the same person again at Chennai | 201, a second UHID                                     |
+
+The two halves disagree in the worst direction. The MPI is tenant-wide (correctly), so it shows a
+clerk a record the next request says does not exist; and the way through is a second chart. The
+severe allergy recorded at Hyderabad then sits on the chart the Chennai nurse cannot see, and
+their round shows "None recorded" — which reads as cleared.
+
+**Classification: (D) ambiguous — a genuine conflict between a normative ADR and the
+implementation, needing a product decision.** Not fixed in M3-S6, because the fix changes who may
+read a patient record — a security boundary spanning patients, encounters, admissions, web,
+reporting and the RBAC expectations that pin all of them. That is a domain decision with an owner,
+not a hardening task.
+
+The two candidate resolutions, neither chosen here:
+
+1. **Honour the ADR.** Make patient READS tenant-wide (list stays branch-defaulted for
+   convenience), leaving encounters, admissions and everything operational branch-scoped. Closest
+   to the written intent, and the clinically safer of the two.
+2. **Change the rule.** Declare patients branch-scoped, amend ADR-0015 §5 and the glossary, and
+   then fix the MPI to stop offering cross-branch candidates it cannot deliver — because leaving
+   that half is what produces the silent duplicate.
+
+Doing neither is the only option that is certainly wrong, and it is where the product is today.

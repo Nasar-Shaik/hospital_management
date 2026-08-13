@@ -1442,3 +1442,107 @@ describe("a branch cannot be given a timezone the server cannot format in", () =
     expect(res.body.error.code).toBe("HMS-VAL-001");
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 18. A PATIENT CANNOT MOVE BETWEEN BRANCHES — AND THE ADR SAYS THEY SHOULD
+ *
+ * ── THIS GROUP PINS A LIMITATION, NOT A DESIRED BEHAVIOUR ───────────────────
+ * ADR-0015 §5 is normative and unambiguous: "Patient identity stays tenant-level… `patient.branchId`
+ * is the REGISTERING branch — provenance and the default list scope — **never** an ownership wall:
+ * lookup by UHID is tenant-wide, so a patient registered in Hyderabad is found in Chennai." The
+ * Domain Glossary says the same of the UHID: "stable across visits and branches".
+ *
+ * The implementation does not do that. `findByUhid`, `findByIdScoped`, `list` and every
+ * `getPatient` call site apply `scopeFilter()`, so the wall the ADR forbids is exactly what is
+ * built — and a hospital-wide user cannot get around it either, because acting at a branch is
+ * required to write at all (`writeBranchId` refuses in All mode).
+ *
+ * ── WHY THAT IS A PATIENT-SAFETY PROBLEM AND NOT A TIDINESS ONE ─────────────
+ * The MPI is tenant-wide (`findCandidates` takes no scope filter — deliberately, and correctly).
+ * So the two halves disagree in the worst possible direction: the duplicate check SHOWS a Chennai
+ * clerk the Hyderabad record, including its id and UHID, and the clerk then cannot open it, cannot
+ * admit against it, and — below the score threshold — is allowed to register a second one. The
+ * patient ends up with two charts. The severe allergy recorded at Hyderabad sits on the chart the
+ * Chennai nurse cannot see, and their round shows "None recorded", which reads as cleared.
+ *
+ * ── WHY THIS IS NOT FIXED HERE (M3-S6) ──────────────────────────────────────
+ * The fix is not one line. It changes WHO MAY READ A PATIENT RECORD, which is a security boundary,
+ * across patients, encounters, admissions, web, reporting and the RBAC expectations that pin all
+ * of them. That is a domain decision with an owner, not a hardening task, and M3-S6 is hardening.
+ * These tests therefore assert TODAY's behaviour so the limitation is visible, reproducible and
+ * has a home — the day the decision is made, this group is where it changes.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a patient registered at one branch is unreachable at the other (ADR-0015 §5 conflict)", () => {
+  let hyderabadUhid = "";
+
+  beforeAll(async () => {
+    const pa = await get(`/api/v1/patients/${patientAId}`, tokenAdmin, branchA).expect(200);
+    hyderabadUhid = pa.body.data.uhid as string;
+    expect(hyderabadUhid).toMatch(/\S/);
+  });
+
+  it("is readable at the branch that registered them", async () => {
+    // Guards everything below: if this were also 404 the group would pass for the wrong reason.
+    await get(`/api/v1/patients/${patientAId}`, tokenRecepA).expect(200);
+  });
+
+  it("is 404 to a clerk at the other branch", async () => {
+    await get(`/api/v1/patients/${patientAId}`, tokenRecepB).expect(404);
+  });
+
+  /**
+   * The one that closes off every workaround. A hospital-wide binding sees all patients in All
+   * mode — but All mode cannot write, so to admit anybody you must select a branch, and selecting
+   * the other branch hides the patient again. There is no actor in the system who can treat this
+   * patient at Chennai.
+   */
+  it("is 404 even to a hospital-wide admin acting at the other branch", async () => {
+    await get(`/api/v1/patients/${patientAId}`, tokenAdmin, branchB).expect(404);
+    await get(`/api/v1/patients/${patientAId}`, tokenAdmin, branchA).expect(200);
+  });
+
+  /** ADR-0015 §5: "lookup by UHID is tenant-wide". It is not. */
+  it("cannot be found by UHID from the other branch, which the ADR says must work", async () => {
+    const res = await get(`/api/v1/patients?q=${hyderabadUhid}`, tokenRecepB).expect(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it("cannot be given an encounter at the other branch", async () => {
+    const res = await post("/api/v1/encounters", tokenRecepB, branchB).send({
+      patientId: patientAId,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  /**
+   * ── THE HALF THAT DOES CROSS, AND WHY THAT MAKES IT WORSE ─────────────────
+   * `findCandidates` is deliberately unscoped, so the duplicate check hands the Chennai clerk the
+   * Hyderabad patient's id and UHID — a record the very next request will tell them does not
+   * exist. One subsystem says "this person is already here"; the other says "no such patient".
+   */
+  it("IS visible to the duplicate check at the other branch — the two halves disagree", async () => {
+    const res = await post("/api/v1/patients/check-duplicates", tokenRecepB, branchB)
+      .send({ name: "Hyderabad Patient", gender: "female" })
+      .expect(200);
+
+    const candidates = res.body.data as { patient: { id: string; uhid: string } }[];
+    expect(candidates.map((c) => c.patient.id)).toContain(patientAId);
+  });
+
+  /**
+   * And the outcome a real front desk reaches: a second chart for one human. A name-only match
+   * scores below the block threshold, so nothing even asks the clerk to confirm. Above the
+   * threshold the only ways forward are `force` (a second chart, with an audit entry) or turning
+   * the patient away — so the duplicate is the *best* available outcome, not the careless one.
+   */
+  it("can be registered a second time at the other branch, with a second UHID", async () => {
+    const again = await post("/api/v1/patients", tokenRecepB, branchB)
+      .send({ name: "Hyderabad Patient", gender: "female" })
+      .expect(201);
+
+    const second = again.body.data.patient as { id: string; uhid: string };
+    expect(second.id).not.toBe(patientAId);
+    expect(second.uhid).not.toBe(hyderabadUhid);
+  });
+});

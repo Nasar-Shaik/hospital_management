@@ -3114,8 +3114,18 @@ export class ApiClient {
    * show `details.candidates` and let a human decide, NOT to silently retry with
    * `force`. That is the whole reason the API refuses instead of guessing.
    */
-  registerPatient(input: RegisterPatientInput): Promise<RegisterPatientResult> {
-    return this.request<RegisterPatientResult>("POST", "/api/v1/patients", input);
+  registerPatient(
+    input: RegisterPatientInput,
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<RegisterPatientResult> {
+    return this.request<RegisterPatientResult>("POST", "/api/v1/patients", input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   updatePatient(id: string, input: Partial<RegisterPatientInput>): Promise<Patient> {
@@ -3455,22 +3465,32 @@ export class ApiClient {
   }
 
   /** Files the statutory death record. Needs `death:certify` (licensed). */
-  recordDeath(input: {
-    encounterId: string;
-    diedAt: string;
-    pronouncedAt?: string;
-    immediateCause: string;
-    antecedentCause?: string;
-    underlyingCause?: string;
-    contributingConditions?: string;
-    manner?: MannerOfDeath;
-    medicoLegal?: boolean;
-    postmortemRequired?: boolean;
-    bodyHandedTo?: string;
-    bodyHandedRelationship?: string;
-    remarks?: string;
-  }): Promise<DeathRecord> {
-    return this.request<DeathRecord>("POST", "/api/v1/death-records", input);
+  recordDeath(
+    input: {
+      encounterId: string;
+      diedAt: string;
+      pronouncedAt?: string;
+      immediateCause: string;
+      antecedentCause?: string;
+      underlyingCause?: string;
+      contributingConditions?: string;
+      manner?: MannerOfDeath;
+      medicoLegal?: boolean;
+      postmortemRequired?: boolean;
+      bodyHandedTo?: string;
+      bodyHandedRelationship?: string;
+      remarks?: string;
+    },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<DeathRecord> {
+    return this.request<DeathRecord>("POST", "/api/v1/death-records", input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /* ── MAR — medication administration (D5 / nursing) ── */
@@ -3616,11 +3636,18 @@ export class ApiClient {
       claimedAmount: number;
       notes?: string;
     },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
   ): Promise<InsuranceClaim> {
     return this.request<InsuranceClaim>(
       "POST",
       `/api/v1/patients/${patientId}/insurance-claims`,
       input,
+      { ...(key ? { idempotencyKey: key } : {}) },
     );
   }
 
@@ -3828,18 +3855,28 @@ export class ApiClient {
   }
 
   /** Throws `ApiClientError` with `code === "HMS-APT-001"` when the slot went first. */
-  bookAppointment(input: {
-    patientId: string;
-    doctorId: string;
-    startAt: Date;
-    reason?: string;
-    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
-    branchId?: string;
-  }): Promise<Appointment> {
-    return this.request<Appointment>("POST", "/api/v1/appointments", {
-      ...input,
-      startAt: input.startAt.toISOString(),
-    });
+  bookAppointment(
+    input: {
+      patientId: string;
+      doctorId: string;
+      startAt: Date;
+      reason?: string;
+      /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+      branchId?: string;
+    },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<Appointment> {
+    return this.request<Appointment>(
+      "POST",
+      "/api/v1/appointments",
+      { ...input, startAt: input.startAt.toISOString() },
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
   }
 
   /* Lifecycle — STATE_MACHINE_CATALOG §1. The server refuses any edge not listed there. */
@@ -3978,18 +4015,28 @@ export class ApiClient {
    * error. A clerk facing a patient who has come back from the lab wants their visit
    * and their token, not a rejection they will work around with a duplicate record.
    */
-  startEncounter(input: {
-    patientId: string;
-    origin?: EncounterOrigin;
-    doctorId?: string;
-    departmentId?: string;
-    reason?: string;
-    /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
-    express?: boolean;
-    /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
-    branchId?: string;
-  }): Promise<StartEncounterResult> {
-    return this.request<StartEncounterResult>("POST", "/api/v1/encounters", input);
+  startEncounter(
+    input: {
+      patientId: string;
+      origin?: EncounterOrigin;
+      doctorId?: string;
+      departmentId?: string;
+      reason?: string;
+      /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
+      express?: boolean;
+      /** Write into a specific site (ADR-0015). Omitted = the caller's active branch. */
+      branchId?: string;
+    },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<StartEncounterResult> {
+    return this.request<StartEncounterResult>("POST", "/api/v1/encounters", input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /**
@@ -4519,13 +4566,32 @@ export class ApiClient {
   receiveStock(
     id: string,
     input: { quantity: number; batchNo?: string; expiry?: string },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
   ): Promise<StockMoveResult> {
-    return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/receive`, input);
+    return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/receive`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /** A manual correction — breakage, a write-off, a stock-take. `delta` is signed. */
-  adjustStock(id: string, input: { delta: number; reason: string }): Promise<StockMoveResult> {
-    return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/adjust`, input);
+  adjustStock(
+    id: string,
+    input: { delta: number; reason: string },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<StockMoveResult> {
+    return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/adjust`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /* ── Admissions ───────────────────────────────────────────────────────────
@@ -4548,8 +4614,16 @@ export class ApiClient {
       doctorId?: string;
       reason?: string;
     },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
   ): Promise<AdmitResult> {
-    return this.request<AdmitResult>("POST", `/api/v1/encounters/${encounterId}/admit`, input);
+    return this.request<AdmitResult>("POST", `/api/v1/encounters/${encounterId}/admit`, input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   /**
@@ -4784,12 +4858,22 @@ export class ApiClient {
    * for drugs to leave a shelf, and after that it is immutable — `amend` supersedes.
    */
 
-  createPrescription(input: {
-    encounterId: string;
-    lines: PrescriptionLineInput[];
-    notes?: string;
-  }): Promise<Prescription> {
-    return this.request<Prescription>("POST", "/api/v1/prescriptions", input);
+  createPrescription(
+    input: {
+      encounterId: string;
+      lines: PrescriptionLineInput[];
+      notes?: string;
+    },
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<Prescription> {
+    return this.request<Prescription>("POST", "/api/v1/prescriptions", input, {
+      ...(key ? { idempotencyKey: key } : {}),
+    });
   }
 
   listPrescriptions(
@@ -5029,11 +5113,21 @@ export class ApiClient {
   }
 
   /** Enrols a visit in a package — charges the bundle once. Needs `package:enroll`. */
-  enrollInPackage(encounterId: string, packageCode: string): Promise<PackageEnrollment> {
+  enrollInPackage(
+    encounterId: string,
+    packageCode: string,
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<PackageEnrollment> {
     return this.request<PackageEnrollment>(
       "POST",
       `/api/v1/encounters/${encounterId}/package-enrollments`,
       { packageCode },
+      { ...(key ? { idempotencyKey: key } : {}) },
     );
   }
 
@@ -5367,11 +5461,23 @@ export class ApiClient {
    * been an appointment, so `.id` on the result was `undefined` and the caller could not learn the
    * new appointment's id from the call that created it.
    */
-  rescheduleAppointment(id: string, startAt: string, reason: string): Promise<RescheduleResult> {
-    return this.request<RescheduleResult>("POST", `/api/v1/appointments/${id}/reschedule`, {
-      startAt,
-      reason,
-    });
+  rescheduleAppointment(
+    id: string,
+    startAt: string,
+    reason: string,
+    /**
+     * Stable across the retries of ONE submission, new for a genuinely new one. Without it the
+     * `idempotent()` middleware this route carries can never fire — see `checkClientContract.ts`
+     * §6, which exists because two clinical routes shipped exactly that way.
+     */
+    key?: string,
+  ): Promise<RescheduleResult> {
+    return this.request<RescheduleResult>(
+      "POST",
+      `/api/v1/appointments/${id}/reschedule`,
+      { startAt, reason },
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
   }
 
   /** Voids a posted charge. Never deleted — a reversal is a record, an absence is not. */

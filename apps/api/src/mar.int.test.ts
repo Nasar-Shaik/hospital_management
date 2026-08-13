@@ -214,13 +214,17 @@ beforeAll(async () => {
       await seedRbac();
       rivalDoctorId = await makeUser(`doc@${RIVAL_SLUG}.test`, "Dr Rival", "DOCTOR", []);
       await makeUser(`front@${RIVAL_SLUG}.test`, "Desk Rival", "RECEPTIONIST", []);
+      await makeUser(`nurse@${RIVAL_SLUG}.test`, "Sister Rival", "NURSE", []);
     },
   );
   rivalEncounterId = await admitAtRival(rivalDoctorId);
+  rivalAdministrationId = await chartAtRival(rivalEncounterId);
 }, 180_000);
 
 let rivalHost = "";
 let rivalEncounterId = "";
+/** A dose genuinely charted at the OTHER hospital — see `chartAtRival`. */
+let rivalAdministrationId = "";
 
 /** An admitted patient at the OTHER hospital. Mirrors `admitPatient`, on the rival's host. */
 async function admitAtRival(departmentId: string): Promise<string> {
@@ -253,6 +257,40 @@ async function admitAtRival(departmentId: string): Promise<string> {
     .expect(201);
 
   return admitted.body.data.inpatient.id as string;
+}
+
+/**
+ * A real, signed prescription and a real administration AT THE RIVAL HOSPITAL.
+ *
+ * ── WHY THIS FIXTURE HAD TO EXIST (found by falsification in M3-S6) ─────────
+ * The cross-tenant tests below used to ask this hospital about the rival's ENCOUNTER ID and
+ * assert an empty answer — which is true whether or not isolation works, because the id simply is
+ * not in this database and the rival had no MAR rows at all. Pinning the MAR repository to one
+ * shared database (the strongest possible breach) left every assertion green.
+ *
+ * So the rival now holds a dose that genuinely exists. "This hospital cannot see it" is then a
+ * claim about isolation rather than about an empty collection.
+ */
+async function chartAtRival(encounterId: string): Promise<string> {
+  const doc = await loginAt(rivalHost, `doc@${RIVAL_SLUG}.test`);
+  const nurse = await loginAt(rivalHost, `nurse@${RIVAL_SLUG}.test`);
+  const at = (r: request.Test, token: string) =>
+    r.set("Host", rivalHost).set("Authorization", `Bearer ${token}`);
+
+  const draft = await at(request(app).post("/api/v1/prescriptions"), doc)
+    .send({ encounterId, lines: [PARACETAMOL_TDS] })
+    .expect(201);
+  const rx = draft.body.data.id as string;
+  await at(request(app).post(`/api/v1/prescriptions/${rx}/sign`), doc).expect(200);
+
+  const given = await at(
+    request(app).post(`/api/v1/encounters/${encounterId}/medication-administrations`),
+    nurse,
+  )
+    .send({ prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode, status: "given" })
+    .expect(201);
+
+  return given.body.data.id as string;
 }
 
 afterAll(async () => {
@@ -1403,10 +1441,33 @@ describe("the medication round", () => {
     dosesOverdue: number;
   }
 
-  const rowFor = async (enc: string, query = "", token = nurseToken): Promise<RoundRow> => {
-    const res = await round(query, token).expect(200);
-    return (res.body.data as RoundRow[]).find((r) => r.encounterId === enc) as RoundRow;
+  /**
+   * One encounter's row, found by PAGING rather than by reading page one.
+   *
+   * ── A TEST HELPER THAT WENT STALE WITH THE WARD (found in M3-S6) ──────────
+   * This first read a single default page (limit 20) and searched it. Every test in this suite
+   * admits another patient to the same ward, so once the suite had grown past twenty the row it
+   * was looking for was on page one only by luck — `listInpatients` orders by ward then bedCode,
+   * and `admitToWard` gives each patient a RANDOM bed code. The result was a suite that passed
+   * standalone, passed most full runs, and failed one test at random in the others: exactly the
+   * shape that gets blamed on infrastructure and then ignored.
+   *
+   * Paging is the honest fix — the same thing a client does — and it cannot rot as the ward grows.
+   */
+  const rowsOf = async (query = "", token = nurseToken): Promise<RoundRow[]> => {
+    const all: RoundRow[] = [];
+    for (let page = 1; ; page += 1) {
+      const sep = query.startsWith("?") ? "&" : "?";
+      const res = await round(`${query}${sep}page=${String(page)}&limit=50`, token).expect(200);
+      const rows = res.body.data as RoundRow[];
+      all.push(...rows);
+      const meta = res.body.meta as { total: number };
+      if (all.length >= meta.total || rows.length === 0) return all;
+    }
   };
+
+  const rowFor = async (enc: string, query = "", token = nurseToken): Promise<RoundRow> =>
+    (await rowsOf(query, token)).find((r) => r.encounterId === enc) as RoundRow;
 
   it("returns the ward's doses with the patient named on every row", async () => {
     const enc = await admitToWard("Round Subject");
@@ -1685,7 +1746,8 @@ describe("the medication round", () => {
     await signedRx(enc, [PARACETAMOL_TDS]);
 
     expect((await rowFor(enc))?.encounterId).toBe(enc);
-    const theirs = (await round("", otherSiteNurseToken).expect(200)).body.data as RoundRow[];
+    // Paged, like `rowFor`: "absent from page one" is not the same claim as "absent".
+    const theirs = await rowsOf("", otherSiteNurseToken);
     expect(theirs.find((r) => r.encounterId === enc)).toBeUndefined();
   });
 
@@ -1744,7 +1806,7 @@ describe("the medication round", () => {
   });
 
   it("shows another hospital's ward not at all", async () => {
-    const theirs = (await round().expect(200)).body.data as RoundRow[];
+    const theirs = await rowsOf();
     expect(theirs.find((r) => r.encounterId === rivalEncounterId)).toBeUndefined();
   });
 
@@ -1816,11 +1878,30 @@ describe("another hospital's dose is unreachable", () => {
   });
 
   it("shows no schedule and no MAR for another tenant's encounter", async () => {
+    // The rival genuinely HAS a dose on this encounter — `chartAtRival` charted one — so an empty
+    // answer here is isolation working, not an empty collection.
+    expect(rivalAdministrationId).toMatch(/\S/);
+
     expect((await schedule(rivalEncounterId).expect(200)).body.data).toEqual([]);
     const rows = await auth(
       request(app).get(`/api/v1/encounters/${rivalEncounterId}/medication-administrations`),
       nurseToken,
     ).expect(200);
     expect(rows.body.data).toEqual([]);
+  });
+
+  /**
+   * And the same claim from the other side: the rival's own nurse still sees their dose. Without
+   * this, "nobody can see it" would also be satisfied by the row never having been written.
+   */
+  it("still shows that dose to the hospital it belongs to", async () => {
+    const theirNurse = await loginAt(rivalHost, `nurse@${RIVAL_SLUG}.test`);
+    const rows = await request(app)
+      .get(`/api/v1/encounters/${rivalEncounterId}/medication-administrations`)
+      .set("Host", rivalHost)
+      .set("Authorization", `Bearer ${theirNurse}`)
+      .expect(200);
+
+    expect((rows.body.data as { id: string }[]).map((r) => r.id)).toContain(rivalAdministrationId);
   });
 });

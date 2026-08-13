@@ -807,6 +807,100 @@ for (const name of noClientType) {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * 6 · IDEMPOTENCY REACH — a route that accepts a key must have a client that can send one
+ *
+ * ── THE DEFECT THIS EXISTS FOR, TWICE ───────────────────────────────────────
+ * `POST /encounters/:id/vitals` and `POST /encounters/:id/medication-administrations` both
+ * carried `idempotent()` from the day they shipped, and the client methods for both took no key
+ * — so the middleware could never fire for ANY caller. Found by hand in M3-S4 and again in
+ * M3-S5A, one slice apart, each time only because somebody happened to be reading that route.
+ *
+ * Nothing could have caught it: the route is correct, the client is correct, the spec documents
+ * the header, and the two are only wrong TOGETHER. Typecheck cannot see it, the contract check
+ * compares shapes rather than headers, and an integration test passes because a request with no
+ * key is honoured by design.
+ *
+ * The clinical cost is not theoretical. A dose has the unique index behind it, but a PRN dose has
+ * no slot by design and a ward note has nothing at all — for those, a retry after a lost response
+ * on hospital wifi is a second permanent row, and the mechanism built to prevent it was
+ * unreachable.
+ *
+ * ── WHAT IS CHECKED ─────────────────────────────────────────────────────────
+ * For every operation whose spec declares an `Idempotency-Key` parameter, the client's call for
+ * that path and method must pass `idempotencyKey` in its options. The key's VALUE is the caller's
+ * job (`lib/idempotency.ts` on mobile); what this pins is that the wire is connected at all.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The client's call expression for one `(method, path)`, as source text.
+ *
+ * Walks parens from the call site rather than regexing to the next `)`: the options object holds
+ * nested calls and template literals, and a lazy match stops inside one — reporting a method that
+ * DOES send a key as one that does not, which is the false alarm that gets a check deleted.
+ */
+function callTextFor(method: string, path: string): string | undefined {
+  const pattern = new RegExp(`"${method}",\\s*[\`"]`, "g");
+  for (const m of client.matchAll(pattern)) {
+    const start = m.index + m[0].length;
+    if (normalise(readPathFrom(client, start)) !== normalise(path)) continue;
+
+    let depth = 1;
+    let i = client.lastIndexOf("(", m.index) + 1;
+    for (; i < client.length && depth > 0; i++) {
+      if (client[i] === "(") depth += 1;
+      else if (client[i] === ")") depth -= 1;
+    }
+    return client.slice(m.index, i);
+  }
+  return undefined;
+}
+
+/**
+ * Operations whose idempotency is deliberately not reachable from THIS client, with the reason.
+ * As with `NOT_CLIENT_FACING`, the point is that a gap has to be argued for in writing.
+ */
+const NO_CLIENT_KEY: { match: RegExp; why: string }[] = [];
+
+const missingKey: string[] = [];
+let idempotentOps = 0;
+
+for (const [path, ops] of Object.entries(spec.paths as Record<string, Json>)) {
+  for (const [method, rawOp] of Object.entries(ops)) {
+    if (!METHODS.includes(method)) continue;
+    const params = ((rawOp as Json).parameters ?? []) as Json[];
+    const takesKey = params.some((p) => String(p.name ?? "").toLowerCase() === "idempotency-key");
+    if (!takesKey) continue;
+
+    idempotentOps += 1;
+    const label = `${method.toUpperCase()} ${path}`;
+    if (NO_CLIENT_KEY.some((e) => e.match.test(label))) continue;
+
+    const call = callTextFor(method.toUpperCase(), path);
+    // An operation with no client method at all is already reported by check 1; do not say it twice.
+    if (call === undefined) continue;
+    if (!call.includes("idempotencyKey")) missingKey.push(label);
+  }
+}
+
+// Guards the guard: a spec change that renamed the header would silently empty this check.
+if (idempotentOps === 0) {
+  failures.push(
+    "idempotency reach: the spec declares no `Idempotency-Key` parameter on any operation, so " +
+      "this check compared nothing. Either the header was renamed or the generator stopped " +
+      "emitting it — both make every write below look protected when it is not.",
+  );
+}
+
+for (const label of missingKey) {
+  failures.push(
+    `idempotency reach: \`${label}\` accepts an \`Idempotency-Key\` and the client method for it ` +
+      `sends none, so the middleware can never fire for any caller of this client. Add an ` +
+      `optional \`key\` parameter and pass \`{ idempotencyKey: key }\`, or list the operation in ` +
+      `NO_CLIENT_KEY with the reason.`,
+  );
+}
+
 /* ── report ───────────────────────────────────────────────────────────────── */
 
 const exempted = NOT_CLIENT_FACING.length;

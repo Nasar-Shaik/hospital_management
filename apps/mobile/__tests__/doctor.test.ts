@@ -199,9 +199,93 @@ describe("4. the list pages", () => {
  * ══════════════════════════════════════════════════════════════════════════ */
 
 describe("5. every branch-sensitive key carries the branch, and matches the header", () => {
-  it("prefixes tenant and branch on every clinical read", async () => {
+  /**
+   * ── EXHAUSTIVE, BECAUSE A HAND-MAINTAINED LIST GOES STALE (M3-S6) ───────────
+   * This started as a list of reads and was extended twice, each time AFTER a falsification run
+   * found it missing the newest feature: M3-S5A added the nurse's keys, and by M3-S5B the round's
+   * key was already absent again. A list that has to be remembered will be forgotten, and the
+   * symptom — the previous site's patients rendering for a frame after a switch — is a clinical
+   * error rather than a rendering glitch.
+   *
+   * So the check now walks `queryKeys` ITSELF. Every exported key must be classified below; a key
+   * added without a classification fails `covers every key` and there is nowhere to add it that
+   * does not also state which side of the branch boundary it sits on.
+   */
+  const HOSPITAL_WIDE = ["me", "myBranches", "patientAllergies"] as const;
+
+  /** How to call each key with placeholder arguments. The MAP is what must stay complete. */
+  function invoke(scope: {
+    tenantSlug: string;
+    branchId?: string;
+  }): Record<string, readonly unknown[]> {
+    const t = scope.tenantSlug;
+    return {
+      // Hospital-wide, deliberately — see `keys.ts` for each reason.
+      me: queryKeys.me(t),
+      myBranches: queryKeys.myBranches(t),
+      patientAllergies: queryKeys.patientAllergies(t, "p1"),
+
+      // Branch-scoped: everything clinical or operational.
+      patients: queryKeys.patients(scope),
+      patient: queryKeys.patient(scope, "p1"),
+      encounters: queryKeys.encounters(scope),
+      encounter: queryKeys.encounter(scope, "e1"),
+      orders: queryKeys.orders(scope),
+      order: queryKeys.order(scope, "o1"),
+      notifications: queryKeys.notifications(scope),
+      inpatients: queryKeys.inpatients(scope),
+      encounterVitals: queryKeys.encounterVitals(scope, "e1"),
+      patientVitals: queryKeys.patientVitals(scope, "p1"),
+      consultation: queryKeys.consultation(scope, "e1"),
+      prescription: queryKeys.prescription(scope, "rx1"),
+      prescriptions: queryKeys.prescriptions(scope),
+      catalogue: queryKeys.catalogue(scope),
+      episodeTimeline: queryKeys.episodeTimeline(scope, "ep1"),
+      bedBoard: queryKeys.bedBoard(scope),
+      wardNotes: queryKeys.wardNotes(scope, "e1"),
+      medications: queryKeys.medications(scope, "e1"),
+      wardWorklist: queryKeys.wardWorklist(scope),
+      medicationSchedule: queryKeys.medicationSchedule(scope, "e1"),
+      medicationRound: queryKeys.medicationRound(scope),
+    };
+  }
+
+  it("covers every key in queryKeys, so a new one cannot skip this check", async () => {
+    const h = await signedIn();
+    expect(Object.keys(invoke(scopeOf(h.runtime))).sort()).toEqual(Object.keys(queryKeys).sort());
+  });
+
+  it("prefixes tenant and branch on every key that is not hospital-wide", async () => {
     const h = await signedIn();
     const scope = scopeOf(h.runtime);
+    expect(scope.branchId).toBe(BRANCH_HYD.id);
+
+    for (const [name, key] of Object.entries(invoke(scope))) {
+      if ((HOSPITAL_WIDE as readonly string[]).includes(name)) continue;
+      expect(key.slice(0, 2), `${name} is missing the [tenant, branch] prefix`).toEqual([
+        SLUG,
+        BRANCH_HYD.id,
+      ]);
+    }
+  });
+
+  /**
+   * The other direction, and it matters just as much: a branch on the allergy key would re-fetch
+   * the same rows at every site and claim a distinction the server does not make. An allergy that
+   * does not follow the patient can kill them (ADR-0015 §5).
+   */
+  it("keeps the branch OUT of every hospital-wide key", async () => {
+    const h = await signedIn();
+    const keys = invoke(scopeOf(h.runtime));
+
+    for (const name of HOSPITAL_WIDE) {
+      expect(keys[name], `${name} leaked a branch id`).not.toContain(BRANCH_HYD.id);
+      expect(keys[name]?.[0]).toBe(SLUG);
+    }
+  });
+
+  it("prefixes tenant and branch on every shipped read descriptor", async () => {
+    const h = await signedIn();
     const q = queriesOf(h.runtime);
 
     const reads: readonly (readonly unknown[])[] = [
@@ -220,23 +304,17 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       q.outstandingResults().queryKey,
       q.order("o1").queryKey,
       q.prescriptions("p1").queryKey,
-      /**
-       * The nurse's reads (M2 J / M3). Added in M3-S5A after falsification: stripping the branch
-       * from `medicationSchedule` broke only the MAR suite's own key test, because this invariant —
-       * the one place that asks the question for EVERY clinical read — had never been extended
-       * past M2. A per-feature test catches a per-feature mistake; this catches the pattern.
-       */
       q.bedBoard().queryKey,
       q.wardNotes("e1").queryKey,
       q.medications("e1").queryKey,
       q.medicationSchedule("e1").queryKey,
       q.wardWorklist().queryKey,
+      q.medicationRound({ date: "2026-06-11" }).queryKey,
     ];
 
     for (const key of reads) {
       expect(key.slice(0, 2)).toEqual([SLUG, BRANCH_HYD.id]);
     }
-    expect(scope.branchId).toBe(BRANCH_HYD.id);
   });
 
   it("gives no two key FAMILIES the same key, at their emptiest arguments", async () => {
