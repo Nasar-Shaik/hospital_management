@@ -12,12 +12,29 @@ export {
   listAdministrations,
   recordAdministration,
   getSchedule,
+  /**
+   * The slot view as a pure function (M3-S5B). The ward round calls this once per stay over data
+   * it batch-loaded, so the round and the per-encounter schedule are the SAME derivation rather
+   * than two that have to be kept in step.
+   */
+  slotsForStay,
+  isLive,
+  isOutstanding,
   type MedicationAdministration,
   type DoseSlotView,
   type DoseState,
 } from "./mar.service.js";
 
 export { MAR_STATUSES, type MarStatus } from "./mar.model.js";
+
+/**
+ * The dose slot's RESPONSE SCHEMA (M3-S5B).
+ *
+ * Part of the public interface deliberately: the ward round returns slots inside its own rows, and
+ * a second `z.object` describing the same thing in `admissions` would be a contract that drifts
+ * from this one silently — two shapes for one wire type, discovered by a client.
+ */
+export { doseSlot } from "./mar.contract.js";
 
 /** The ward worklist's batch read (M3-S3) — administrations for a whole page of stays. */
 export { listByEncounters } from "./mar.repository.js";

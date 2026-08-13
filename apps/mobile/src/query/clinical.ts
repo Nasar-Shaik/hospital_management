@@ -30,6 +30,7 @@ import type {
   Encounter,
   EncounterStatus,
   MedicationAdministration,
+  MedicationRoundRow,
   Order,
   Paged,
   Patient,
@@ -240,6 +241,35 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
             page: pageParam,
             limit: INPATIENT_PAGE,
             ...(ward ? { ward } : {}),
+          }),
+        initialPageParam: 1,
+        getNextPageParam: nextPage,
+      };
+    },
+
+    /**
+     * The medication round (M3-S5B) — one page of a ward with every dose expected on one day.
+     *
+     * ── THE DAY IS THE WARD'S, AND IT IS THE CALLER'S JOB TO SAY SO ─────────────
+     * `date` is `YYYY-MM-DD` computed from the BRANCH's zone (`formatDayKey(now, zone)`), not the
+     * handset's. At 23:30 in Delhi it is still yesterday afternoon in a New York ward, and the
+     * round belongs to the ward's day; a phone that decided otherwise would show the wrong day's
+     * doses at exactly the hour a night nurse is working. It is sent explicitly rather than left
+     * to the server's default so that it is also in the KEY — two days must be two cache entries.
+     *
+     * One request per page for the whole round. Assembling it from `wardWorklist` plus a schedule
+     * call per patient would be the N+1 S3 removed, and this endpoint exists so it stays removed.
+     */
+    medicationRound(filter: { ward?: string; date: string }): InfiniteRead<MedicationRoundRow> {
+      const filters = filterKey({ limit: INPATIENT_PAGE, ward: filter.ward, date: filter.date });
+      return {
+        queryKey: queryKeys.medicationRound(scope, filters),
+        queryFn: ({ pageParam }) =>
+          api.listMedicationRound({
+            page: pageParam,
+            limit: INPATIENT_PAGE,
+            date: filter.date,
+            ...(filter.ward ? { ward: filter.ward } : {}),
           }),
         initialPageParam: 1,
         getNextPageParam: nextPage,

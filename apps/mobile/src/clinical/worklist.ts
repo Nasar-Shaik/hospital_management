@@ -41,6 +41,27 @@ function bedSortKey(row: WorklistRow): string {
   return `${row.ward ?? ""}/${row.bedCode}`;
 }
 
+/**
+ * The wards the picker may offer.
+ *
+ * ── IT INCLUDES THE ONE ALREADY CHOSEN, AND THAT IS THE WHOLE POINT ─────────
+ * The names come from the rows the server has actually returned, so a ward with nobody in it never
+ * appears — correct for a worklist. But the rows are themselves FILTERED by the chosen ward, so
+ * deriving the list from them alone collapses it to one entry the moment a nurse picks a ward, and
+ * a picker with one option is a picker that gets hidden. That left the nurse on a single ward with
+ * no way back to "All wards" until they killed the app. The selection is unioned back in so the
+ * list can never shrink below "here is where you are, and here is the way out".
+ */
+export function wardOptions(
+  rows: readonly { ward?: string }[],
+  selected: string | undefined,
+): string[] {
+  const names = new Set<string>();
+  for (const row of rows) if (row.ward) names.add(row.ward);
+  if (selected) names.add(selected);
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
 export interface WorklistFlag {
   label: string;
   tone: ClinicalTone;

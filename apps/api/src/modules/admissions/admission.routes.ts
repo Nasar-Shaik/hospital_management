@@ -35,6 +35,7 @@ import * as controller from "./admission.controller.js";
 import {
   bedBoard,
   dischargeResult,
+  medicationRoundRow,
   outcomeResult,
   transferBedResult,
   wardNote,
@@ -44,6 +45,7 @@ import {
   addNoteSchema,
   addNursingNoteSchema,
   dischargeSchema,
+  medicationRoundQuerySchema,
   outcomeSchema,
   idParamSchema,
   listNotesQuerySchema,
@@ -86,6 +88,34 @@ export function admissionRouter(): Router {
     validate(worklistQuerySchema, "query"),
     responds(worklistRow.array(), { meta: true }),
     asyncHandler(controller.getWorklist),
+  );
+
+  /**
+   * The medication round (M3-S5B) — one page of the ward with every dose expected today.
+   *
+   * ── GATED ON `module.clinical.nursing`, NOT `module.ops.ipd` LIKE ITS NEIGHBOURS ──
+   * The only route in this router that is. It is a MAR surface: it returns dose slots, which is
+   * exactly what `/encounters/:id/medication-schedule` returns and exactly what the nursing flag
+   * gates there. Gating it on beds instead would let a hospital that never bought the medication
+   * record read the medication record through this door, one ward at a time — an entitlement
+   * bypass, and a silent one. A tenant with no beds and the nursing module simply has nobody
+   * admitted, which the empty page says honestly.
+   *
+   * `emr:read`, like `/ward-worklist` and the schedule endpoint it composes. It grants no new
+   * reach: every field here is already readable by anyone holding `emr:read`, through
+   * `/ward-worklist`, `/bed-board`, `/patients/:id/allergies` and one schedule call per patient.
+   * What it adds is that a twenty-bed round costs five queries instead of sixty-three. A stricter
+   * permission would deny the doctor reviewing the round a view they can already assemble with a
+   * loop, which is not a boundary — it is a speed bump with a clinical cost. The boundary that
+   * matters is on the WRITE, and that is `mar:administer` (M3-S5A), unchanged.
+   */
+  router.get(
+    "/medication-round",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_READ, { feature: FEATURE_FLAGS.CLINICAL_NURSING }),
+    validate(medicationRoundQuerySchema, "query"),
+    responds(medicationRoundRow.array(), { meta: true }),
+    asyncHandler(controller.getMedicationRound),
   );
 
   /**

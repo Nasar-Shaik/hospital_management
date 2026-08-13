@@ -305,43 +305,47 @@ export interface DoseSlotView {
 }
 
 /**
- * Every dose due on one ward day, with what has actually happened to each.
- *
- * ── THIS IS THE ORACLE THE WHOLE SLICE EXISTS TO PROVIDE ────────────────────
- * "Was the 2pm antibiotic given?" is the question the MAR was built to answer and could not, for
- * want of anything to hang the question on. A client asks this endpoint and gets the truth from
- * the server; it never decides locally what is due, and never uses the phone's clock to do it.
- *
- * ── NO N+1 ──────────────────────────────────────────────────────────────────
- * Two queries total, whatever the number of drugs: one for the encounter's live prescriptions and
- * one for its administrations. The slots themselves are arithmetic. That is what lets the nurse
- * worklist (S3/S5) ask this for a whole ward without a query per patient per drug.
+ * Only a live signed order produces slots. Exported so a caller batching a whole ward filters the
+ * same set this module would, rather than writing the rule out a second time.
  */
-export async function getSchedule(encounterId: string, date?: string): Promise<DoseSlotView[]> {
-  const { items } = await listPrescriptions({
-    encounterId,
-    currentOnly: true,
-    skip: 0,
-    limit: 100,
-  });
-  const live = items.filter((rx) => isAdministrable(rx.status) && rx.signedAt);
-  if (live.length === 0) return [];
+export function isLive(rx: Prescription): boolean {
+  return isAdministrable(rx.status) && rx.signedAt !== undefined;
+}
 
-  const zone = await wardZone(live[0]?.branchId);
-  const dayKey = date ?? dayKeyInZone(new Date(), zone);
-  const { from, before } = dayRangeInZone(dayKey, zone);
+/**
+ * The slot view for one stay, from data already in hand.
+ *
+ * ── ONE SCHEDULING ENGINE, AND THIS IS IT (M3-S5B) ──────────────────────────
+ * `getSchedule` below reads one encounter's prescriptions and administrations and calls this. The
+ * ward round (`admissions/medicationRound.ts`) reads a whole PAGE of both in two `$in` queries and
+ * calls this once per stay. They therefore cannot disagree — which matters more here than
+ * anywhere, because the round is the screen a nurse decides from and the schedule is the oracle
+ * the confirmation re-reads. A round that said "due" against a schedule that said "given" would
+ * send somebody to give a second dose.
+ *
+ * Pure: no database, no clock of its own. `now` is passed in so a page of thirty patients is
+ * assessed against ONE instant rather than thirty, and so a test can fix it.
+ */
+export function slotsForStay(input: {
+  prescriptions: readonly Prescription[];
+  administrations: readonly repo.MedicationAdministration[];
+  zone: string;
+  from: Date;
+  before: Date;
+  now: number;
+}): DoseSlotView[] {
+  const { prescriptions, administrations, zone, from, before, now } = input;
 
-  const given = await repo.listByEncounter(encounterId);
   const answered = new Map(
-    given
+    administrations
       .filter((g) => g.scheduledFor !== undefined && g.lineIndex !== undefined)
       .map((g) => [`${g.prescriptionId}:${String(g.lineIndex)}:${String(g.scheduledFor)}`, g]),
   );
 
-  const now = Date.now();
   const slots: DoseSlotView[] = [];
 
-  for (const rx of live) {
+  for (const rx of prescriptions) {
+    if (!isLive(rx)) continue;
     rx.lines.forEach((line, lineIndex) => {
       const course = courseOf(rx, line);
       if (!course) return;
@@ -378,4 +382,45 @@ export async function getSchedule(encounterId: string, date?: string): Promise<D
 
   slots.sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor));
   return slots;
+}
+
+/** A slot nobody has answered yet — the two derived states, and nothing else. */
+export const isOutstanding = (slot: DoseSlotView): boolean =>
+  slot.state === "due" || slot.state === "overdue";
+
+/**
+ * Every dose due on one ward day, with what has actually happened to each.
+ *
+ * ── THIS IS THE ORACLE THE WHOLE SLICE EXISTS TO PROVIDE ────────────────────
+ * "Was the 2pm antibiotic given?" is the question the MAR was built to answer and could not, for
+ * want of anything to hang the question on. A client asks this endpoint and gets the truth from
+ * the server; it never decides locally what is due, and never uses the phone's clock to do it.
+ *
+ * ── NO N+1 ──────────────────────────────────────────────────────────────────
+ * Two queries total, whatever the number of drugs: one for the encounter's live prescriptions and
+ * one for its administrations. The slots themselves are arithmetic. That is what lets the nurse
+ * worklist (S3/S5) ask this for a whole ward without a query per patient per drug.
+ */
+export async function getSchedule(encounterId: string, date?: string): Promise<DoseSlotView[]> {
+  const { items } = await listPrescriptions({
+    encounterId,
+    currentOnly: true,
+    skip: 0,
+    limit: 100,
+  });
+  const live = items.filter(isLive);
+  if (live.length === 0) return [];
+
+  const zone = await wardZone(live[0]?.branchId);
+  const dayKey = date ?? dayKeyInZone(new Date(), zone);
+  const { from, before } = dayRangeInZone(dayKey, zone);
+
+  return slotsForStay({
+    prescriptions: live,
+    administrations: await repo.listByEncounter(encounterId),
+    zone,
+    from,
+    before,
+    now: Date.now(),
+  });
 }

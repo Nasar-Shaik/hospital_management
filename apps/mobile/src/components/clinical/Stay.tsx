@@ -226,10 +226,20 @@ export function DoseSlotRow({
   slot,
   zone,
   onPress,
+  who,
 }: {
   slot: DoseSlot;
   zone: string;
   onPress?: () => void;
+  /**
+   * Who this dose belongs to, spoken FIRST (M3-S5B).
+   *
+   * On a chart the patient is settled — there is one, and the screen is about them. On the ward
+   * round there are thirty, and a screen reader landing on a dose row hears the drug with no way
+   * to know whose it is: the card header naming the patient is two swipes above and purely
+   * visual grouping. Absent on the chart, where repeating the name on every row would be noise.
+   */
+  who?: string;
 }): React.JSX.Element {
   const theme = useTheme();
   const at = parseInstant(slot.scheduledFor);
@@ -248,7 +258,7 @@ export function DoseSlotRow({
         : {})}
       style={[styles.entry, { borderTopColor: theme.colors.border }]}
       accessible
-      accessibilityLabel={`${slot.drugName}, ${slot.dose}, ${slot.route}${
+      accessibilityLabel={`${who ? `${who}. ` : ""}${slot.drugName}, ${slot.dose}, ${slot.route}${
         at ? `, due ${formatTime(at, { zone })}` : ""
       }. ${state}.`}
     >

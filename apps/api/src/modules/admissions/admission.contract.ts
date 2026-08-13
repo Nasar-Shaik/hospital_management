@@ -4,8 +4,10 @@
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves, type Returns } from "../../core/http/contract.js";
 import { ROOM_KINDS, WARD_KINDS, WARD_STATUSES } from "../wards/index.js";
+import { doseSlot } from "../mar/index.js";
 import { WARD_NOTE_TYPES } from "./wardNote.model.js";
 import type { WorklistRow } from "./worklist.js";
+import type { MedicationRoundRow } from "./medicationRound.js";
 import type { WardNote } from "./wardNote.repository.js";
 import type { BedBoard } from "./bedBoard.js";
 import type { dischargeWithSummary, recordOutcome, transferBed } from "./admission.service.js";
@@ -160,3 +162,41 @@ export const worklistRow = contract(
   }),
 );
 export type WorklistRowProof = Proves<Matches<typeof worklistRow, WorklistRow>>;
+
+/**
+ * One patient on the medication round (M3-S5B), with every dose expected of them today.
+ *
+ * ── `slots` IS THE MAR MODULE'S OWN `DoseSlot`, IMPORTED, NOT RESTATED ──────
+ * A second dose shape would be a second thing to keep in step with the schedule endpoint, and the
+ * two disagreeing is precisely the defect that ends in a duplicate dose. One type; one meaning of
+ * `state`; the confirmation screen already understands what the round hands it.
+ *
+ * ── AND IDENTITY IS ON THE ROW, UNLIKE THE WORKLIST ─────────────────────────
+ * `WorklistRow` above says identity is not repeated because `/bed-board` resolves it. That is
+ * right for a navigation list and wrong for a medication row: "give 1 g of ceftriaxone to bed
+ * A-01" with no name on it is the ambiguity the five rights exist to close, and an enrichment that
+ * can silently fail is not an acceptable place for the patient's name to live.
+ */
+export const medicationRoundRow = contract(
+  "MedicationRoundRow",
+  z.object({
+    encounterId: z.string(),
+    patientId: z.string(),
+    patientName: z.string(),
+    uhid: z.string(),
+    ward: z.string().optional(),
+    bedCode: z.string().optional(),
+    /** Active allergen CODES, HOSPITAL-WIDE. Empty means none recorded — never "none". */
+    allergens: z.array(z.string()),
+    severeAllergy: z.boolean(),
+    /** Every dose on the chosen ward day, earliest first, answered or not. */
+    slots: z.array(doseSlot),
+    /** Outstanding doses among `slots`. Server-computed, in the ward's timezone. */
+    dosesDue: z.number(),
+    /** Of those, the ones already past their round. A subset of `dosesDue`. */
+    dosesOverdue: z.number(),
+  }),
+);
+export type MedicationRoundRowProof = Proves<
+  Matches<typeof medicationRoundRow, MedicationRoundRow>
+>;

@@ -1221,6 +1221,35 @@ export interface DoseSlot {
 }
 
 /**
+ * One patient on the ward's medication round, with every dose expected of them that day.
+ *
+ * ── THE ROUND IS A NAVIGATOR, NOT A SECOND SOURCE OF TRUTH ──────────────────
+ * `slots` is the SAME `DoseSlot` the per-encounter schedule returns, derived by the same
+ * server-side function. Take a slot's `prescriptionId` + `lineIndex` + `scheduledFor` and hand
+ * that identity to the confirmation screen; do NOT carry `state`, the drug name or the dose across
+ * as fact, and never chart a dose straight from a row on this list. By the time a finger lands on
+ * it, another nurse may have answered it.
+ */
+export interface MedicationRoundRow {
+  encounterId: string;
+  patientId: string;
+  /** Resolved server-side. Unlike `WorklistRow`, a round row always identifies its patient. */
+  patientName: string;
+  uhid: string;
+  ward?: string;
+  bedCode?: string;
+  /** Active allergen CODES, hospital-wide. Empty means none RECORDED — never "no allergies". */
+  allergens: string[];
+  severeAllergy: boolean;
+  /** Every dose on the chosen ward day, earliest first, answered or not. */
+  slots: DoseSlot[];
+  /** Outstanding doses among `slots`, counted by the server in the ward's timezone. */
+  dosesDue: number;
+  /** A subset of `dosesDue`, never additional to it. */
+  dosesOverdue: number;
+}
+
+/**
  * What `HMS-MAR-001` carries — "somebody already answered this dose slot".
  *
  * ── THIS IS AN ANSWER, NOT A FAILURE, AND THE TYPE SAYS SO ──────────────────
@@ -4562,6 +4591,33 @@ export class ApiClient {
     }
     const qs = query.toString();
     return this.paged<WorklistRow>(`/api/v1/ward-worklist${qs ? `?${qs}` : ""}`);
+  }
+
+  /**
+   * One page of the ward's medication round — every dose expected on one clinical day, per
+   * patient, with identity and allergy context. Needs `emr:read` + `module.clinical.nursing`.
+   *
+   * ── THE ALTERNATIVE IS A REQUEST PER PATIENT ──────────────────────────────
+   * `/ward-worklist` says a patient has three doses due; only `/encounters/:id/
+   * medication-schedule` says which three. Assembling a round from those is one request per bed,
+   * which is the N+1 the worklist exists to avoid. This is five queries server-side, whatever the
+   * page size, and the slots it returns are derived by the same function the per-encounter
+   * schedule uses — so the two cannot disagree.
+   *
+   * `date` is `YYYY-MM-DD` **in the ward's timezone**, and that distinction is the point: at
+   * 23:30 in Delhi it is still yesterday afternoon in a New York ward, and the round belongs to
+   * the ward's day. Compute it from the branch's zone, never the device's. Omit it and the server
+   * resolves the ward's today itself.
+   */
+  listMedicationRound(
+    params: { ward?: string; date?: string; page?: number; limit?: number } = {},
+  ): Promise<Paged<MedicationRoundRow>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined) query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<MedicationRoundRow>(`/api/v1/medication-round${qs ? `?${qs}` : ""}`);
   }
 
   /* ── Bed inventory & board (Module B4) ───────────────────────────────────── */

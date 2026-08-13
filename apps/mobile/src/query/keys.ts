@@ -165,4 +165,22 @@ export const queryKeys = {
    */
   medicationSchedule: (scope: QueryScope, encounterId: string) =>
     scoped(scope, "encounter", encounterId, "medication-schedule"),
+
+  /**
+   * The medication round (`GET /medication-round`) — a ward's doses for one clinical DAY.
+   *
+   * ── THREE DIMENSIONS, AND EVERY ONE OF THEM HAS BITTEN SOMEBODY ─────────────
+   * The branch comes from `scoped`, as everywhere. The other two ride in `filters`:
+   *
+   *   WARD — "A Ward" at Hyderabad and "A Ward" at Chennai are different patients, and even within
+   *          one site a nurse switching ward must not see the previous ward's doses for a frame.
+   *   DATE — yesterday's round and today's are the same URL but for one parameter, and they differ
+   *          by exactly the thing being decided. Serving one for the other would show a nurse a
+   *          list of doses that were given eighteen hours ago as though they were outstanding.
+   *
+   * A SEPARATE key from `wardWorklist`, which is the same ward answered a different way (counts,
+   * no slots, no names). Same word in two keys would collide two response shapes.
+   */
+  medicationRound: (scope: QueryScope, filters?: string) =>
+    scoped(scope, "medication-round", filters ?? ""),
 } as const;

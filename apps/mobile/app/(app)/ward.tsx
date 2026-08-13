@@ -34,6 +34,7 @@ import { Card } from "../../src/components/Card";
 import { Pill } from "../../src/components/Pill";
 import { QueryGate } from "../../src/components/QueryGate";
 import { EmptyState } from "../../src/components/StateView";
+import { EVERY_WARD, WardPicker } from "../../src/components/clinical/WardPicker";
 import { useCapabilities } from "../../src/hooks/useStores";
 import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
 import { useTheme } from "../../src/hooks/useTheme";
@@ -45,12 +46,10 @@ import {
   observationsLabel,
   quietLabel,
   triageOrder,
+  wardOptions,
 } from "../../src/clinical/worklist";
 import { formatRelativeDay, formatTime, parseInstant } from "../../src/lib/time";
-import { radius, size, space, typography } from "../../src/theme/tokens";
-
-/** No ward chosen — the whole branch, which is what a small hospital wants anyway. */
-const EVERY_WARD = "__every__";
+import { size, space, typography } from "../../src/theme/tokens";
 
 function WardWorklist(): React.JSX.Element {
   const theme = useTheme();
@@ -82,12 +81,12 @@ function WardWorklist(): React.JSX.Element {
    * The ward names come from the rows already loaded, so the picker can only ever offer wards the
    * server has actually returned. It is a convenience over this page, not a directory — a ward
    * with nobody in it does not appear, which is correct for a worklist.
+   *
+   * The chosen ward is unioned back in by `wardOptions`, because the rows are filtered by it: the
+   * list otherwise collapsed to one entry the moment a ward was picked, the bar hid itself, and
+   * there was no way back to "All wards" (M3-S5B).
    */
-  const wards = useMemo(() => {
-    const names = new Set<string>();
-    for (const row of rows) if (row.ward) names.add(row.ward);
-    return [...names].sort((a, b) => a.localeCompare(b));
-  }, [rows]);
+  const wards = useMemo(() => wardOptions(rows, wardFilter), [rows, wardFilter]);
 
   const zone = zoneFor(undefined);
   const now = new Date();
@@ -120,23 +119,44 @@ function WardWorklist(): React.JSX.Element {
 
   return (
     <Screen padded={false}>
-      {wards.length > 1 ? (
-        <View style={styles.filters}>
-          <WardChip
-            label="All wards"
-            selected={ward === EVERY_WARD}
-            onPress={() => setWard(EVERY_WARD)}
-          />
-          {wards.map((name) => (
-            <WardChip
-              key={name}
-              label={name}
-              selected={ward === name}
-              onPress={() => setWard(name)}
-            />
-          ))}
-        </View>
-      ) : null}
+      <WardPicker wards={wards} selected={ward} onSelect={setWard} />
+
+      {/**
+       * ── THE WAY INTO THE DRUG ROUND (M3-S5B) ──────────────────────────────────
+       * The round is a different question about the same ward — "what is outstanding across all of
+       * them", rather than "who is here" — so it is a destination rather than a mode of this
+       * screen, and it inherits the ward already chosen. No count is shown on it: a number taken
+       * from the pages loaded so far would understate the ward's work, and a nurse who reads
+       * "2 due" and stops is the exact failure the round exists to prevent.
+       */}
+      <View style={styles.roundLink}>
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: "/round",
+              ...(wardFilter ? { params: { ward: wardFilter } } : {}),
+            })
+          }
+          accessibilityRole="button"
+          accessibilityLabel={
+            wardFilter
+              ? `Open the medication round for ${wardFilter}`
+              : "Open the medication round for every ward"
+          }
+          style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+        >
+          <Card>
+            <View style={styles.headline}>
+              <Text style={[typography.label, { color: theme.colors.fg }]}>Medication round</Text>
+              <Text style={[typography.caption, { color: theme.colors.brandStrong }]}>Open</Text>
+            </View>
+            <Text style={[typography.caption, { color: theme.colors.fgSubtle }]}>
+              Every dose due today {wardFilter ? `in ${wardFilter}` : "on this ward"}, in time
+              order.
+            </Text>
+          </Card>
+        </Pressable>
+      </View>
 
       <QueryGate
         loading={worklist.isPending && ready}
@@ -198,45 +218,6 @@ function WardWorklist(): React.JSX.Element {
         />
       </QueryGate>
     </Screen>
-  );
-}
-
-function WardChip({
-  label,
-  selected,
-  onPress,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-}): React.JSX.Element {
-  const theme = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      accessibilityLabel={`Show ${label}`}
-      style={[
-        styles.chip,
-        {
-          backgroundColor: theme.colors.bgElevated,
-          // Selection is carried by the BORDER and the label colour, and announced through
-          // `accessibilityState` — never by fill alone (§17).
-          borderColor: selected ? theme.colors.brandStrong : theme.colors.border,
-          borderWidth: selected ? 2 : 1,
-        },
-      ]}
-    >
-      <Text
-        style={[
-          typography.caption,
-          { color: selected ? theme.colors.brandStrong : theme.colors.fgSubtle },
-        ]}
-      >
-        {label}
-      </Text>
-    </Pressable>
   );
 }
 
@@ -332,20 +313,7 @@ function WorklistCard({
 }
 
 const styles = StyleSheet.create({
-  filters: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: space[1],
-    paddingHorizontal: space[4],
-    paddingTop: space[2],
-  },
-  chip: {
-    borderRadius: radius.full,
-    borderWidth: 1,
-    minHeight: size.touchTarget,
-    justifyContent: "center",
-    paddingHorizontal: space[4],
-  },
+  roundLink: { paddingHorizontal: space[4], paddingTop: space[2] },
   list: { padding: space[4], gap: space[2] },
   row: { minHeight: size.touchTarget },
   headline: {

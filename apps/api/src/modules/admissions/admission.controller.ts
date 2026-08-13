@@ -8,12 +8,14 @@ import type {
   AddNoteBody,
   AddNursingNoteBody,
   DischargeBody,
+  MedicationRoundQuery,
   OutcomeBody,
   ListNotesQuery,
   WorklistQuery,
   TransferBedBody,
 } from "./admission.schema.js";
 import { wardWorklist } from "./worklist.js";
+import { medicationRound } from "./medicationRound.js";
 import { ok } from "../../core/http/respond.js";
 
 /** The free-and-occupied bed board — the inventory joined to who is actually admitted. */
@@ -101,6 +103,28 @@ export const getWorklist: RequestHandler = async (req, res) => {
     limit: query.limit,
     skip: (query.page - 1) * query.limit,
     ...(query.ward ? { ward: query.ward } : {}),
+  });
+  ok(res, items, 200, { page: query.page, limit: query.limit, total });
+};
+
+/**
+ * One page of the medication round (M3-S5B) — the ward's doses for one clinical day.
+ *
+ * ── THE RESOLVED DAY IS NOT ECHOED, AND THAT IS DELIBERATE ──────────────────
+ * The service resolves `date` in the ward's zone when the caller names none, and it would be easy
+ * to hand that back — in `meta` (the paging envelope every list shares, which must not grow a
+ * field one endpoint sets) or in a header (which CORS does not expose, so a browser client could
+ * not read it). Either would be a channel nobody consumes, and an unread contract is worse than
+ * none: it reads as a guarantee. The mobile round names its day explicitly, computed from the
+ * BRANCH's zone, so it already knows which one it asked for.
+ */
+export const getMedicationRound: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as MedicationRoundQuery;
+  const { items, total } = await medicationRound({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+    ...(query.ward ? { ward: query.ward } : {}),
+    ...(query.date ? { date: query.date } : {}),
   });
   ok(res, items, 200, { page: query.page, limit: query.limit, total });
 };

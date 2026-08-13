@@ -26,6 +26,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+/** Only for the fan-out probe below — `mongoose.set("debug")` counts collection operations. */
+import mongoose from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -46,6 +48,10 @@ const { createUser, transitionStatus } = await import("./modules/users/index.js"
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedTariff } = await import("./seed/tariff.js");
+/** M3-S5B: the round is gated on the NURSING module, and that has to be provable. */
+const { setFeatureOverride, clearFeatureOverride } =
+  await import("./modules/entitlements/index.js");
+const { FEATURE_FLAGS } = await import("@medicore/permissions");
 
 const SLUG = "test-mar";
 /** A second hospital, for the cross-tenant probe (M3-S5A). Its own physical database. */
@@ -1355,6 +1361,441 @@ describe("the 409 carries what a client needs to reconcile", () => {
       nurseToken,
     ).expect(200);
     expect(rows.body.data).toHaveLength(1);
+  });
+});
+
+/* ── 11. the medication round (M3-S5B) ────────────────────────────────────── */
+
+describe("the medication round", () => {
+  /**
+   * ── WHAT THIS ENDPOINT HAS TO PROVE THAT ITS TWO NEIGHBOURS DO NOT ────────
+   * `/ward-worklist` says a patient has three doses due. `/encounters/:id/medication-schedule`
+   * says which three. This says which three, for every patient on the ward, in one request — and
+   * the load-bearing claim is that it says EXACTLY what the schedule endpoint says. They are one
+   * derivation (`slotsForStay`), and the test below compares them field for field rather than
+   * trusting that.
+   *
+   * A round that disagreed with the schedule would be the worst possible defect in this slice: the
+   * nurse decides from the round and the confirmation screen re-reads the schedule, so the two
+   * disagreeing means a dose charted against a slot the nurse never meant.
+   */
+  function round(query = "", token = nurseToken) {
+    return auth(request(app).get(`/api/v1/medication-round${query}`), token);
+  }
+
+  interface RoundRow {
+    encounterId: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    ward?: string;
+    bedCode?: string;
+    allergens: string[];
+    severeAllergy: boolean;
+    slots: {
+      prescriptionId: string;
+      lineIndex: number;
+      drugCode: string;
+      scheduledFor: string;
+      state: string;
+    }[];
+    dosesDue: number;
+    dosesOverdue: number;
+  }
+
+  const rowFor = async (enc: string, query = "", token = nurseToken): Promise<RoundRow> => {
+    const res = await round(query, token).expect(200);
+    return (res.body.data as RoundRow[]).find((r) => r.encounterId === enc) as RoundRow;
+  };
+
+  it("returns the ward's doses with the patient named on every row", async () => {
+    const enc = await admitToWard("Round Subject");
+    await signedRx(enc, [PARACETAMOL_TDS]);
+
+    const mine = await rowFor(enc);
+    expect(mine.patientName).toBe("Round Subject");
+    // Identity is on the ROW, not left to a bed-board join: a medication row identified only by
+    // its bed is the ambiguity the five rights exist to close.
+    expect(mine.uhid).toMatch(/\S/);
+    expect(mine.ward).toBe("General");
+    expect(mine.slots.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * ── ONE SCHEDULING ENGINE ─────────────────────────────────────────────────
+   * The round's slots must be indistinguishable from the per-encounter schedule's. Not "the same
+   * count", not "the same times" — the same objects.
+   */
+  it("agrees with the per-encounter schedule exactly, field for field", async () => {
+    const enc = await admitToWard("Round Agreement");
+    await signedRx(enc, [PARACETAMOL_TDS, ADRENALINE_STAT]);
+
+    const fromRound = (await rowFor(enc)).slots;
+    const fromSchedule = (await schedule(enc).expect(200)).body.data as unknown[];
+    expect(fromRound).toEqual(fromSchedule);
+  });
+
+  it("counts due and overdue as the server sees them, and overdue is a subset", async () => {
+    const enc = await admitToWard("Round Counts");
+    await signedRx(enc, [PARACETAMOL_TDS]);
+
+    const mine = await rowFor(enc);
+    const outstanding = mine.slots.filter((s) => s.state === "due" || s.state === "overdue");
+    expect(mine.dosesDue).toBe(outstanding.length);
+    expect(mine.dosesOverdue).toBe(mine.slots.filter((s) => s.state === "overdue").length);
+    expect(mine.dosesOverdue).toBeLessThanOrEqual(mine.dosesDue);
+  });
+
+  /**
+   * The identity that makes the round navigable. `drugCode` alone is NOT it: the same drug can be
+   * on a scheduled line and a PRN line, and the pair below is exactly that.
+   */
+  it("keeps two lines of the same drug distinct, and gives PRN no slot at all", async () => {
+    const enc = await admitToWard("Round Duplicate Drug");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS, PARACETAMOL_PRN]);
+
+    const mine = await rowFor(enc);
+    expect(mine.slots.every((s) => s.prescriptionId === rx)).toBe(true);
+    // Every slot belongs to line 0 — the scheduled one. The PRN line contributes none, because
+    // as-needed medication has no rounds and binding it to one would refuse the second dose.
+    expect([...new Set(mine.slots.map((s) => s.lineIndex))]).toEqual([0]);
+    expect(mine.slots.every((s) => s.drugCode === PARACETAMOL_TDS.drugCode)).toBe(true);
+  });
+
+  it("carries a distinct scheduled instant on every slot of a line", async () => {
+    const enc = await admitToWard("Round Slot Times");
+    await signedRx(enc, [PARACETAMOL_TDS]);
+
+    const times = (await rowFor(enc)).slots.map((s) => s.scheduledFor);
+    expect(new Set(times).size).toBe(times.length);
+  });
+
+  /**
+   * ── THE ROUND REFLECTS THE RECORD, IT DOES NOT REMEMBER ───────────────────
+   * Charting a dose changes what the next read says. This is the server half of "the round must
+   * not patch its own copy": there is nothing for the client to patch, because the truth is one
+   * request away and it moves.
+   */
+  it("shows a charted dose as given on the very next read", async () => {
+    const enc = await admitToWard("Round Charted");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+
+    const before = await rowFor(enc);
+    const target = before.slots.find((s) => s.state === "due" || s.state === "overdue");
+    expect(target).toBeTruthy();
+
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: (target as { scheduledFor: string }).scheduledFor,
+    }).expect(201);
+
+    const after = await rowFor(enc);
+    const same = after.slots.find(
+      (s) => s.scheduledFor === (target as { scheduledFor: string }).scheduledFor,
+    );
+    expect(same?.state).toBe("given");
+    expect(after.dosesDue).toBe(before.dosesDue - 1);
+  });
+
+  /**
+   * ── CONCURRENCY: THE ROUND IS NOT AN AUTHORITY ────────────────────────────
+   * Nurse A loads the round. Nurse B answers a dose. Nurse A's copy still says "due" — it is a
+   * snapshot, and snapshots go stale. What must NOT happen is nurse A charting a second dose off
+   * it: the database refuses, with the 409 that names who got there first.
+   */
+  it("lets a stale round reach the write, and the database refuses it", async () => {
+    const enc = await admitToWard("Round Concurrency");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+
+    // Nurse A's copy of the round.
+    const staleSlot = (await rowFor(enc)).slots.find(
+      (s) => s.state === "due" || s.state === "overdue",
+    ) as { scheduledFor: string };
+
+    // Nurse B answers it in the meantime.
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: staleSlot.scheduledFor,
+      },
+      nurse2Token,
+    ).expect(201);
+
+    // Nurse A acts on the stale row. Not a generic error — the answer, with the existing row.
+    const conflict = await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: staleSlot.scheduledFor,
+    }).expect(409);
+    expect(conflict.body.error.code).toBe("HMS-MAR-001");
+    expect(conflict.body.error.details.existing).toBeTruthy();
+
+    // …and a fresh read of the round already says so.
+    const fresh = await rowFor(enc);
+    expect(fresh.slots.find((s) => s.scheduledFor === staleSlot.scheduledFor)?.state).toBe("given");
+  });
+
+  it("shows a patient with no prescription as a row with no doses, not as an absence", async () => {
+    const enc = await admitToWard("Round No Drugs");
+    const mine = await rowFor(enc);
+    expect(mine).toBeTruthy();
+    expect(mine.slots).toEqual([]);
+    expect(mine.dosesDue).toBe(0);
+  });
+
+  it("carries the allergy context a nurse identifies the patient by", async () => {
+    const enc = await admitToWard("Round Allergy");
+    const chartRes = await auth(request(app).get(`/api/v1/encounters/${enc}`), nurseToken).expect(
+      200,
+    );
+    const patientId = chartRes.body.data.patientId as string;
+    await auth(request(app).post(`/api/v1/patients/${patientId}/allergies`), nurseToken)
+      .send({ allergen: "penicillins", severity: "severe" })
+      .expect(201);
+
+    const mine = await rowFor(enc);
+    expect(mine.allergens).toEqual(["penicillins"]);
+    expect(mine.severeAllergy).toBe(true);
+  });
+
+  /**
+   * ── THE ROUND APPLIES NO FILTER OF ITS OWN TO THE ALLERGY LIST ────────────
+   * The round's allergens must be exactly what the hospital-wide allergy endpoint returns — same
+   * set, same order, nothing dropped and nothing re-derived.
+   *
+   * ── AND A LIMITATION, STATED RATHER THAN PAPERED OVER (M3-S5B) ────────────
+   * This does NOT prove the branch part. I tried to write the scenario that would — an allergy
+   * recorded at the city site, read on a round at the suburban one — and the domain cannot
+   * currently produce it: `recordAllergy` stamps the allergy with the PATIENT's branch, and a
+   * patient is only reachable from the branch they were registered at, so every allergy row a test
+   * can create carries the same branch as the ward reading it. A branch filter here would
+   * therefore pass this test. The hospital-wide rule is defended structurally instead —
+   * `allergy.repository.ts` omits `scopeFilter`, the mobile key carries no branch segment, and
+   * both are pinned — and it stays unproven behaviourally until patients can move between sites.
+   */
+  it("passes the allergy list through exactly as the hospital-wide read returns it", async () => {
+    const enc = await admitToWard("Round Allergy Passthrough");
+    const chartRes = await auth(request(app).get(`/api/v1/encounters/${enc}`), nurseToken).expect(
+      200,
+    );
+    const patientId = chartRes.body.data.patientId as string;
+    for (const allergen of ["sulfonamides", "nsaids"]) {
+      await auth(request(app).post(`/api/v1/patients/${patientId}/allergies`), nurseToken)
+        .send({ allergen, severity: "mild" })
+        .expect(201);
+    }
+
+    const direct = (
+      await auth(request(app).get(`/api/v1/patients/${patientId}/allergies`), nurseToken).expect(
+        200,
+      )
+    ).body.data as { allergen: string; status: string }[];
+
+    expect((await rowFor(enc)).allergens).toEqual(
+      direct.filter((a) => a.status === "active").map((a) => a.allergen),
+    );
+  });
+
+  /* ── the ward, the day, and the page ─────────────────────────────────────── */
+
+  it("narrows to one ward by name, and says nothing is there when nothing is", async () => {
+    await admitToWard("Round Ward Filter");
+    expect((await round("?ward=General").expect(200)).body.data.length).toBeGreaterThan(0);
+
+    const none = await round("?ward=NoSuchWard").expect(200);
+    expect(none.body.data).toEqual([]);
+    expect(none.body.meta.total).toBe(0);
+  });
+
+  it("pages without losing or repeating a patient, and never truncates silently", async () => {
+    for (const name of ["Round Page A", "Round Page B"]) await admitToWard(name);
+
+    const total = (await round("?limit=1").expect(200)).body.meta.total as number;
+    expect(total).toBeGreaterThan(1);
+
+    const seen: string[] = [];
+    for (let page = 1; page <= total; page += 1) {
+      const res = await round(`?limit=1&page=${String(page)}`).expect(200);
+      // The page is short, and `meta.total` is what says so — a client that only counted rows
+      // would believe a one-row page was the whole ward.
+      expect(res.body.meta.total).toBe(total);
+      for (const r of res.body.data as RoundRow[]) seen.push(r.encounterId);
+    }
+    expect(new Set(seen).size).toBe(total);
+  });
+
+  /**
+   * ── THE CLINICAL DAY IS THE WARD'S ────────────────────────────────────────
+   * The process runs in Asia/Kolkata and the ward is America/New_York, 9.5 hours away. Asking for
+   * a specific ward day must produce that day's rounds in NEW YORK — 08:00, 14:00 and 20:00 there,
+   * whatever o'clock it is on the server.
+   */
+  it("resolves the requested day in the ward's timezone, not the server's", async () => {
+    const enc = await admitToWard("Round Ward Day");
+    await signedRx(enc, [PARACETAMOL_TDS]);
+
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: WARD_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    const mine = await rowFor(enc, `?date=${today}`);
+    const hours = mine.slots.map((s) =>
+      Number(
+        new Intl.DateTimeFormat("en-GB", {
+          timeZone: WARD_ZONE,
+          hour: "2-digit",
+          hour12: false,
+        }).format(new Date(s.scheduledFor)),
+      ),
+    );
+    expect(hours.length).toBeGreaterThan(0);
+    for (const hour of hours) expect([8, 14, 20]).toContain(hour);
+  });
+
+  it("defaults to the ward's today when the caller names no day", async () => {
+    const enc = await admitToWard("Round Default Day");
+    await signedRx(enc, [PARACETAMOL_TDS]);
+
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: WARD_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    expect((await rowFor(enc)).slots).toEqual((await rowFor(enc, `?date=${today}`)).slots);
+  });
+
+  it("refuses a date that is not a day", async () => {
+    const res = await round("?date=2026-06-11T08:00:00Z");
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+  });
+
+  /* ── who may see it, and where ───────────────────────────────────────────── */
+
+  it("shows nothing of another site's ward", async () => {
+    const enc = await admitToWard("Round Other Branch");
+    await signedRx(enc, [PARACETAMOL_TDS]);
+
+    expect((await rowFor(enc))?.encounterId).toBe(enc);
+    const theirs = (await round("", otherSiteNurseToken).expect(200)).body.data as RoundRow[];
+    expect(theirs.find((r) => r.encounterId === enc)).toBeUndefined();
+  });
+
+  it("refuses a role without emr:read", async () => {
+    const res = await round("", receptionToken);
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  /**
+   * ── THE DOCTOR MAY READ THE ROUND AND STILL MAY NOT CHART FROM IT ─────────
+   * The read is `emr:read`, the same gate as `/ward-worklist` and the schedule endpoint it
+   * composes: it grants no reach a doctor does not already have one request at a time. The WRITE
+   * is `mar:administer`, which the doctor does not hold — the boundary S5A established, restated
+   * here because S5B is the screen that puts the two next to each other.
+   */
+  it("lets a doctor read the round, and still refuses them the dose", async () => {
+    const enc = await admitToWard("Round Doctor");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+
+    await round("", doctorToken).expect(200);
+
+    const attempt = await chart(
+      enc,
+      { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode },
+      doctorToken,
+    );
+    expect(attempt.status).toBe(403);
+    expect(attempt.body.error.code).toBe("HMS-AUTH-005");
+  });
+
+  /**
+   * ── A MODULE THE HOSPITAL DID NOT BUY IS NOT AN EMPTY WARD ────────────────
+   * The round is gated on `module.clinical.nursing` — the MAR flag — and NOT on `module.ops.ipd`
+   * like the rest of this router. Gating it on beds would let a hospital without the medication
+   * record read the medication record through this door, one ward at a time.
+   */
+  it("answers HMS-PLAN-002 when the nursing module is not in the edition", async () => {
+    await setFeatureOverride({
+      tenantId,
+      flag: FEATURE_FLAGS.CLINICAL_NURSING,
+      enabled: false,
+      reason: "M3-S5B entitlement probe",
+    });
+    try {
+      const res = await round();
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe("HMS-PLAN-002");
+      // …and the sibling worklist, which is gated on BEDS, is unaffected. The two flags are
+      // genuinely different questions and this is what proves the round asks the right one.
+      await auth(request(app).get("/api/v1/ward-worklist"), nurseToken).expect(200);
+    } finally {
+      await clearFeatureOverride(tenantId, FEATURE_FLAGS.CLINICAL_NURSING);
+    }
+    await round().expect(200);
+  });
+
+  it("shows another hospital's ward not at all", async () => {
+    const theirs = (await round().expect(200)).body.data as RoundRow[];
+    expect(theirs.find((r) => r.encounterId === rivalEncounterId)).toBeUndefined();
+  });
+
+  /**
+   * ── THE N+1 CONTROL, COUNTED RATHER THAN ASSERTED ─────────────────────────
+   * The whole justification for this endpoint is that a twenty-bed round costs a fixed number of
+   * queries instead of one per patient. That is a claim about the DATABASE, and every other way of
+   * checking it — reading the code, counting HTTP requests — would pass a version that looped
+   * internally. So this counts mongoose operations across the request and compares a one-patient
+   * page against a four-patient page.
+   *
+   * Asserted as "does not GROW with the page", not as an exact number: pinning the exact count
+   * would fail on any unrelated repository change and teach the next person to raise the constant.
+   * Growth is the defect; the constant is an implementation detail.
+   */
+  it("costs no more database queries for four patients than for one", async () => {
+    const encounters: string[] = [];
+    for (const name of ["Fanout A", "Fanout B", "Fanout C", "Fanout D"]) {
+      const enc = await admitToWard(name);
+      await signedRx(enc, [PARACETAMOL_TDS, ADRENALINE_STAT]);
+      encounters.push(enc);
+    }
+
+    // Warm the entitlement and permission caches: the first request of a run does extra reads that
+    // have nothing to do with the page size, and counting them would compare two different things.
+    await round("?limit=4").expect(200);
+
+    const count = async (query: string): Promise<number> => {
+      let ops = 0;
+      mongoose.set("debug", () => {
+        ops += 1;
+      });
+      try {
+        await round(query).expect(200);
+      } finally {
+        mongoose.set("debug", false);
+      }
+      return ops;
+    };
+
+    const one = await count("?limit=1");
+    const four = await count("?limit=4");
+
+    // Guards the guard: a hook that silently stopped firing would make every assertion below pass.
+    expect(one).toBeGreaterThan(0);
+    expect(encounters).toHaveLength(4);
+    expect(
+      four,
+      `a page of four cost ${String(four)} queries against ${String(one)} for a page of one — ` +
+        `that is a fan-out, which is the exact defect this endpoint exists to remove`,
+    ).toBeLessThanOrEqual(one);
   });
 });
 

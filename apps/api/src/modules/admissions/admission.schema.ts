@@ -98,9 +98,33 @@ export const worklistQuerySchema = z
   })
   .strict();
 
+/**
+ * The medication round (M3-S5B). The worklist's query plus a clinical DAY.
+ *
+ * `date` is spelled and validated exactly as `GET /encounters/:id/medication-schedule` spells it —
+ * `YYYY-MM-DD`, resolved in the WARD's zone by the service, never the caller's. A second date
+ * dialect (an epoch, an instant, a `dayKey`) would be a permanent tax on every client and an
+ * invitation to send an instant and have the server pick the day out of it in the wrong zone.
+ *
+ * Omitting it is the ordinary case: the server resolves the ward's today, which is the only answer
+ * a phone cannot get wrong.
+ */
+export const medicationRoundQuerySchema = z
+  .object({
+    ward: z.string().trim().min(1).max(120).optional(),
+    date: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
 export const idParamSchema = z.object({ id: objectId }).strict();
 
 export type WorklistQuery = z.infer<typeof worklistQuerySchema>;
+export type MedicationRoundQuery = z.infer<typeof medicationRoundQuerySchema>;
 export type AddNoteBody = z.infer<typeof addNoteSchema>;
 export type AddNursingNoteBody = z.infer<typeof addNursingNoteSchema>;
 export type DischargeBody = z.infer<typeof dischargeSchema>;
