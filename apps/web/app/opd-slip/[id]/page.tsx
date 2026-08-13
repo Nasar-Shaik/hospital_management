@@ -13,6 +13,14 @@
  *
  * Optional strands (the bill, uploaded reports) are fetched softly: a doctor without `billing:read`
  * still gets a slip, just without the money section, rather than a blank page.
+ *
+ * ── THE SIGNATURE ATTESTS TO A CONSULTATION, SO IT WAITS FOR ONE ─────────────
+ * A visit is given its doctor at REGISTRATION — `doctorId` means "who is this patient waiting
+ * for". This sheet used to print that doctor's scanned signature from `doctorId` alone, so a
+ * patient who had paid the OP fee at the desk and was still in the waiting room could be handed
+ * a printed summary already signed by a doctor who had not met them. The slip now reads
+ * `encounter.seenAt` (the API's record of the first move to `in_progress`): before the doctor
+ * calls the patient in, this is a registration slip and says so, and no signature is printed.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
@@ -134,6 +142,8 @@ function Slip() {
 
   const accent = site?.accentColor ?? "#0d9488";
   const hospitalName = site?.displayName ?? site?.hospitalName ?? "Hospital";
+  /** The doctor has taken this patient in. Until then nothing on the sheet is a clinical finding. */
+  const consulted = Boolean(encounter?.seenAt);
   const rxLines = useMemo(() => prescriptions.flatMap((p) => p.lines), [prescriptions]);
   const rxNotes = useMemo(
     () => prescriptions.map((p) => p.notes).filter((n): n is string => Boolean(n)),
@@ -247,16 +257,25 @@ function Slip() {
           <Seal accent={accent} name={hospitalName} />
         </header>
 
-        {/* Title row */}
+        {/* Title row. The sheet names itself for what it actually is — a summary of a consultation
+            that happened, or the registration slip of one that has not yet. */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold tracking-wide text-gray-700 uppercase">
-            OPD Summary
+            {consulted ? "OPD Summary" : "OPD Registration Slip"}
           </h2>
           <div className="text-right text-xs text-gray-600">
             <div>{fmtDate(encounter.arrivedAt)}</div>
             {encounter.token !== undefined && <div>Token {encounter.token}</div>}
           </div>
         </div>
+
+        {!consulted && (
+          <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <strong className="font-semibold">Consultation pending.</strong> The doctor has not seen
+            this patient yet, so this sheet carries no findings and no doctor&apos;s signature.
+            Print it again after the consultation for the full summary.
+          </p>
+        )}
 
         {/* Patient & doctor */}
         <section className="mt-3 grid grid-cols-2 gap-4 rounded-lg bg-gray-50 p-3 text-sm">
@@ -279,10 +298,16 @@ function Slip() {
             </div>
           </div>
           <div className="text-right">
+            <div className="text-[10px] font-semibold tracking-wide text-gray-500 uppercase">
+              {consulted ? "Seen by" : "Waiting for"}
+            </div>
             <div className="font-semibold text-gray-900">Dr {doctor?.name ?? "—"}</div>
             <div className="text-xs text-gray-600">
               {doctor?.qualification ?? "Consulting doctor"}
             </div>
+            {consulted && encounter.seenAt && (
+              <div className="text-[10px] text-gray-500">{fmtDateTime(encounter.seenAt)}</div>
+            )}
           </div>
         </section>
 
@@ -418,16 +443,19 @@ function Slip() {
             Computer-generated OPD summary · printed {fmtDateTime(new Date().toISOString())}
           </p>
           <div className="text-center">
-            {/* The doctor's actual scanned signature when they have uploaded one; otherwise a blank
-                space for a wet signature. Either way the printed name sits under the line. */}
+            {/* The doctor's scanned signature — but ONLY once they have actually seen the patient.
+                Before that the block is a blank line: the sheet is still signable by hand if the
+                doctor wants to sign the copy in front of them, and the system asserts nothing. */}
             <div className="mb-1 flex h-10 items-end justify-center">
-              {doctor?.signature ? (
+              {consulted && doctor?.signature ? (
                 <img src={doctor.signature} alt="Signature" className="max-h-10 object-contain" />
               ) : null}
             </div>
             <div className="w-48 border-t border-gray-400 pt-1 text-xs text-gray-700">
               Dr {doctor?.name ?? "—"}
-              <div className="text-[10px] text-gray-500">Signature &amp; seal</div>
+              <div className="text-[10px] text-gray-500">
+                {consulted ? "Signature & seal" : "To be signed after consultation"}
+              </div>
             </div>
           </div>
         </footer>

@@ -32,6 +32,7 @@ import {
   consultationPaymentStates,
   encounterBilling,
   invoice,
+  invoiceSignatory,
   orderPaymentStates,
   orderSettlementInfos,
   orderSettlementResult,
@@ -261,6 +262,20 @@ export function billingRouter(): Router {
     validate(idParamSchema, "params"),
     responds(invoice),
     asyncHandler(controller.getInvoice),
+  );
+
+  /**
+   * The staff this bill records an act by, with their signatures — what the printed receipt puts
+   * over "Received by". `billing:read`, the same authority that can already print the receipt;
+   * it answers "who signed THIS bill", not "tell me about user X", so it opens no directory.
+   */
+  router.get(
+    "/invoices/:id/signatories",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(idParamSchema, "params"),
+    responds(invoiceSignatory.array()),
+    asyncHandler(controller.getInvoiceSignatories),
   );
 
   router.post(

@@ -7,7 +7,6 @@
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
 import { DUES_BUCKETS } from "../billing/index.js";
-import type { CollectionsReport } from "../billing/index.js";
 import type {
   DischargeRegisterReport as DischargeRegister,
   VisitReport,
@@ -15,6 +14,7 @@ import type {
 import type { StockRegisterRow } from "../medicines/index.js";
 import type { WalletRegister } from "../wallet/index.js";
 import type {
+  CollectionsReportNamed,
   DiagnosticsReportNamed,
   DoctorLoadNamedRow,
   DuesAgeingReportNamed,
@@ -136,11 +136,26 @@ export const collectionsReport = contract(
     count: z.number(),
     byMonth: z.array(z.object({ month: z.string(), amount: paise, count: z.number() })),
     byMethod: z.array(z.object({ method: z.string(), amount: paise, count: z.number() })),
+    /**
+     * Who took the money — one row per cashier, heaviest first. What a desk run by several people
+     * reconciles against. `collectedBy` is empty (and the name reads "Not recorded") for payments
+     * posted without a user, which are kept so the rows still sum to the total.
+     */
+    byCollector: z.array(
+      z.object({
+        collectedBy: z.string(),
+        collectorName: z.string(),
+        amount: paise,
+        count: z.number(),
+      }),
+    ),
     /** Bills settled FROM ADVANCE — reported apart, or the day's takings would be inflated. */
     settledFromAdvance: paise,
   }),
 );
-export type CollectionsReportProof = Proves<Matches<typeof collectionsReport, CollectionsReport>>;
+export type CollectionsReportProof = Proves<
+  Matches<typeof collectionsReport, CollectionsReportNamed>
+>;
 
 export const revenueLeakageReport = contract(
   "RevenueLeakageReport",

@@ -77,7 +77,12 @@ interface FormState {
   emergencyContactPhone: string;
   /** Doctors only: feature this person on the public website. */
   showOnPublicSite: boolean;
-  /** Doctors only: scanned signature as a data-URI image, for the OPD slip. */
+  /**
+   * A scanned signature, for the documents this person signs. NOT doctors-only: a doctor signs the
+   * OPD slip, and whoever takes the money signs the receipt — a cashier's signature on a payment
+   * is as much a signature as a clinician's on a prescription, and the desk is where the same
+   * document is signed by several different people across a shift.
+   */
   signature: string;
   /** Branch access (ADR-0015): true = every branch; false = only `branchIds`. */
   allBranches: boolean;
@@ -429,43 +434,44 @@ function StaffForm({
               </span>
             </label>
           )}
-          {hasSpecialty && (
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
-              <span className="text-sm font-medium text-[var(--color-fg)]">Signature</span>
-              <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
-                A scanned signature (PNG/JPG under ~200&nbsp;KB) — printed on this doctor&apos;s OPD
-                slips.
-              </span>
-              <div className="mt-2 flex items-center gap-3">
-                {form.signature.startsWith("data:image") ? (
-                  <img
-                    src={form.signature}
-                    alt="Doctor signature"
-                    className="h-12 rounded border border-[var(--color-border)] bg-white object-contain px-2"
-                  />
-                ) : (
-                  <span className="text-xs text-[var(--color-fg-subtle)]">None uploaded</span>
-                )}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="text-xs"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = "";
-                    if (!file) return;
-                    if (file.size > 200_000) {
-                      window.alert("That image is too large — please use one under 200 KB.");
-                      return;
-                    }
-                    const reader = new FileReader();
-                    reader.onload = () => set({ signature: String(reader.result) });
-                    reader.readAsDataURL(file);
-                  }}
+          {/* Offered to EVERY role, not just clinical ones: the front desk signs receipts, and a
+              receipt with a name and no signature is the document a patient disputes. */}
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+            <span className="text-sm font-medium text-[var(--color-fg)]">Signature</span>
+            <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
+              A scanned signature (PNG/JPG under ~200&nbsp;KB) — printed on the documents this
+              person signs: OPD slips for a doctor, payment receipts for whoever takes the money.
+              Optional; without one those documents print a blank line to sign by hand.
+            </span>
+            <div className="mt-2 flex items-center gap-3">
+              {form.signature.startsWith("data:image") ? (
+                <img
+                  src={form.signature}
+                  alt="Staff signature"
+                  className="h-12 rounded border border-[var(--color-border)] bg-white object-contain px-2"
                 />
-              </div>
+              ) : (
+                <span className="text-xs text-[var(--color-fg-subtle)]">None uploaded</span>
+              )}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="text-xs"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  if (file.size > 200_000) {
+                    window.alert("That image is too large — please use one under 200 KB.");
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => set({ signature: String(reader.result) });
+                  reader.readAsDataURL(file);
+                }}
+              />
             </div>
-          )}
+          </div>
           {isClinical && (
             <Field
               label="Qualification"

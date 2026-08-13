@@ -391,3 +391,76 @@ describe("the episode of care is the care story", () => {
     expect(timeline.body.data[0].id).toBe(enc.body.data.encounter.id);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 5. ARRIVING IS NOT BEING SEEN — the fact a signed document has to read
+ *
+ * ── WHY THE ENCOUNTER HAS TO ANSWER THIS ────────────────────────────────────
+ * A visit is given its doctor at REGISTRATION, so `doctorId` means "who is this patient waiting
+ * for". The OPD slip printed the doctor's scanned SIGNATURE off `doctorId` alone: a patient who
+ * had paid the OP fee and was still in the waiting room went home holding a summary signed by a
+ * doctor who had not met them.
+ *
+ * `seenAt` is the missing fact, derived in the repository from the encounter's own history so no
+ * client re-derives it. The state machine makes it exact — `in_progress` is reachable only from
+ * `arrived`/`in_queue`, and `closed`/`admitted` only THROUGH it — so its presence is equivalent
+ * to "a doctor has taken this patient in", and that equivalence is what group 4 above pins.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("an encounter records when the doctor actually saw the patient", () => {
+  async function freshVisit(name: string, phone: string): Promise<string> {
+    const patient = await auth(request(app).post("/api/v1/patients"), gov)
+      .send({ name, gender: "male", contact: { phone } })
+      .expect(201);
+    const enc = await auth(request(app).post("/api/v1/encounters"), gov)
+      .send({ patientId: patient.body.data.patient.id, departmentId: gov.doctorId })
+      .expect(201);
+    return enc.body.data.encounter.id as string;
+  }
+
+  it("is ABSENT while the patient is only waiting", async () => {
+    const id = await freshVisit("Waiting Warrier", "9000003001");
+
+    const res = await auth(request(app).get(`/api/v1/encounters/${id}`), gov).expect(200);
+    // The visit already knows its doctor — and that is exactly the trap. Waiting for someone is
+    // not being seen by them, and only one of those two facts belongs over a signature line.
+    expect(res.body.data.doctorId ?? res.body.data.departmentId).toBeTruthy();
+    expect(res.body.data.status).toBe("in_queue");
+    expect(res.body.data.seenAt).toBeUndefined();
+  });
+
+  it("appears the moment the doctor calls them in, and stays put afterwards", async () => {
+    const id = await freshVisit("Called Kurup", "9000003002");
+
+    const started = await auth(request(app).post(`/api/v1/encounters/${id}/start`), gov).expect(
+      200,
+    );
+    const seenAt = started.body.data.seenAt as string;
+    expect(seenAt).toBeTruthy();
+    expect(Number.isNaN(Date.parse(seenAt))).toBe(false);
+
+    // A later transition must not restamp it: the patient was seen when they were seen, and a
+    // slip printed after the lab results has to say so, not "seen just now".
+    const closed = await auth(request(app).post(`/api/v1/encounters/${id}/close`), gov);
+    if (closed.status === 200) expect(closed.body.data.seenAt).toBe(seenAt);
+  });
+
+  /**
+   * The equivalence the OPD slip depends on, asserted against the machine rather than assumed.
+   *
+   * If a waiting patient could ever reach `closed` or `admitted` directly, a visit could finish
+   * having never been `in_progress` — and `seenAt` would be absent on a completed consultation,
+   * silently stripping the signature off a slip that had earned it. The state machine forbids
+   * it; this test is what notices the day someone adds the edge.
+   */
+  it("cannot reach a finished state without going through the consultation", () => {
+    for (const notYetSeen of ["planned", "arrived", "in_queue"] as const) {
+      expect(canTransition(notYetSeen, "closed")).toBe(false);
+      expect(canTransition(notYetSeen, "admitted")).toBe(false);
+      expect(canTransition(notYetSeen, "awaiting_results")).toBe(false);
+    }
+    // And the one door in is the one `seenAt` is stamped from.
+    expect(canTransition("in_queue", "in_progress")).toBe(true);
+    expect(canTransition("arrived", "in_progress")).toBe(true);
+  });
+});

@@ -42,6 +42,22 @@ export interface Encounter {
   advice?: string;
   branchId?: string;
   arrivedAt: Date;
+  /**
+   * When the doctor called this patient in — the first move to `in_progress`.
+   *
+   * ── ARRIVING IS NOT BEING SEEN, AND A DOCUMENT MUST KNOW THE DIFFERENCE ─────
+   * A visit gets its doctor at registration, before anyone has examined anybody, so `doctorId`
+   * answers "who are they waiting for", never "who saw them". The OPD slip printed the doctor's
+   * scanned SIGNATURE off `doctorId` alone: a patient who had paid the OP fee and was still in
+   * the waiting room went home holding a sheet signed by a doctor who had not met them.
+   *
+   * `seenAt` is that missing fact, derived HERE from the encounter's own history so no client has
+   * to re-derive it and drift. Absent means the consultation has not started. The state machine
+   * makes that exact: `in_progress` is reachable only from `arrived`/`in_queue`, and `closed` and
+   * `admitted` are reachable only THROUGH it (`TRANSITIONS`), so `seenAt` is present precisely
+   * when a doctor has taken the patient in.
+   */
+  seenAt?: Date;
   closedAt?: Date;
   /** Present when `class` is `IP`. The bed is recorded, not reserved — see the model. */
   bed?: { ward: string; bedCode: string; tariffCode: string; bedId?: string };
@@ -55,7 +71,29 @@ export interface Encounter {
   createdAt: Date;
 }
 
+/**
+ * The moment the consultation started, or `undefined` if it has not.
+ *
+ * An IP encounter opened straight at `in_progress` (admission — there is no queue for a bed) has
+ * no transition to read, so it falls back to `arrivedAt`: the patient is unambiguously being
+ * treated, and the alternative would be to report a live inpatient as "not yet seen".
+ */
+function seenAtOf(doc: EncounterDoc): Date | undefined {
+  const called = (doc.history ?? []).find((h) => h.to === "in_progress");
+  if (called) return called.at;
+  return SEEN_STATUSES.has(doc.status) ? doc.arrivedAt : undefined;
+}
+
+/** The statuses only a started consultation can reach — see `TRANSITIONS` in the model. */
+const SEEN_STATUSES = new Set<EncounterStatus>([
+  "in_progress",
+  "awaiting_results",
+  "closed",
+  "admitted",
+]);
+
 function toEncounter(doc: EncounterDoc): Encounter {
+  const seenAt = seenAtOf(doc);
   return {
     id: doc._id.toString(),
     patientId: doc.patientId.toString(),
@@ -76,6 +114,7 @@ function toEncounter(doc: EncounterDoc): Encounter {
     ...(doc.diagnosis ? { diagnosis: doc.diagnosis } : {}),
     ...(doc.advice ? { advice: doc.advice } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(seenAt ? { seenAt } : {}),
     ...(doc.closedAt ? { closedAt: doc.closedAt } : {}),
     ...(doc.bed
       ? {

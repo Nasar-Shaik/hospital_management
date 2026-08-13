@@ -14,6 +14,7 @@ export {
   listWards,
   listRooms,
   listBeds,
+  countBeds,
   getWard,
   getRoom,
   getBed,

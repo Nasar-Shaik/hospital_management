@@ -434,6 +434,10 @@ const PROBES: Record<string, Probe> = {
     method: "get",
     url: "/api/v1/invoices/64b7f0000000000000000001",
   },
+  "GET /api/v1/invoices/:id/signatories": {
+    method: "get",
+    url: "/api/v1/invoices/64b7f0000000000000000001/signatories",
+  },
   "POST /api/v1/invoices/:id/payments": {
     method: "post",
     url: "/api/v1/invoices/64b7f0000000000000000001/payments",

@@ -422,15 +422,44 @@ export interface UsageLine {
   ratio: number | null;
   /** True from 80% — the nudge, not the wall. */
   warning: boolean;
-  /** True at 100% — the next creation will be refused. */
+  /** True at 100% — the next creation will be refused, IF this metric is enforced. */
   exceeded: boolean;
+  /**
+   * Does the API actually refuse the next one? False means the figure is COUNTED FOR GUIDANCE —
+   * no creation point stops you at it. A client must not draw it as a wall: a progress bar with
+   * a limit under it is read as one.
+   */
+  enforced: boolean;
+  /**
+   * False when the plan allows NONE of this (`limit: 0` — beds on a clinic edition). Distinct
+   * from "used it all up": nothing was consumed, the plan simply does not sell it.
+   */
+  included: boolean;
+}
+
+/**
+ * Everything an edition can grant. Absent means "not capped by this edition".
+ *
+ * NOT every entry has a live counter behind it, and the difference matters to a UI: `usage`
+ * carries the metered ones, and what is only here (storage) is an ALLOWANCE the plan grants,
+ * with nothing measuring consumption. Rendering it as a meter would show "0 GB used" over a
+ * hospital with a full disk.
+ */
+export interface EditionLimits {
+  maxUsers?: number;
+  maxDoctors?: number;
+  maxBranches?: number;
+  maxBeds?: number;
+  /** Never set by any edition — patients are people who walk in, not a thing a hospital buys. */
+  maxPatients?: number;
+  storageGb?: number;
 }
 
 export interface SubscriptionView {
   planCode: string | null;
   planName: string | null;
   features: string[];
-  limits: Record<string, number | null>;
+  limits: EditionLimits;
   usage: UsageLine[];
 }
 
@@ -1668,6 +1697,14 @@ export interface Encounter {
   advice?: string;
   branchId?: string;
   arrivedAt: string;
+  /**
+   * When the doctor called the patient in. ABSENT MEANS THE CONSULTATION HAS NOT STARTED.
+   *
+   * `doctorId` is who the patient is WAITING FOR — it is set at registration, before anyone has
+   * been examined. Any document that attests to a clinical act (an OPD slip carrying a doctor's
+   * signature) must read this, not `doctorId`.
+   */
+  seenAt?: string;
   /** Still-live orders (tests) on this visit. "Send for tests" needs at least one. */
   activeOrderCount: number;
   closedAt?: string;
@@ -1827,6 +1864,20 @@ export interface PaymentEntry {
   by?: string;
   /** Client-supplied idempotency key — the same key never takes the money twice. */
   requestId?: string;
+}
+
+/**
+ * A person a bill records an act by, as the printed receipt names them.
+ *
+ * `PaymentEntry.by` has always held the collector's user id; this is what turns it into a name
+ * and, when they have uploaded one, the scanned signature that goes over the receipt's line.
+ */
+export interface InvoiceSignatory {
+  userId: string;
+  name: string;
+  designation?: string;
+  /** A `data:image/...;base64,…` URI. Absent means a blank line to sign by hand. */
+  signature?: string;
 }
 
 /** Money handed back. Same shape as a payment, with a mandatory reason. */
@@ -2066,6 +2117,12 @@ export interface CollectionsReport {
   count: number;
   byMonth: { month: string; amount: number; count: number }[];
   byMethod: { method: string; amount: number; count: number }[];
+  /**
+   * Who took the money — one row per cashier, heaviest first. What a desk run by several people
+   * reconciles a drawer against. `collectedBy` is empty for payments posted without a user, and
+   * `collectorName` reads "Not recorded" there: the row is kept so the parts still sum to `total`.
+   */
+  byCollector: { collectedBy: string; collectorName: string; amount: number; count: number }[];
   /** Paise. Bills settled from advance in the period — shown apart so it is not double-counted. */
   settledFromAdvance: number;
 }
@@ -4989,6 +5046,14 @@ export class ApiClient {
   /** One bill by id — for a printable receipt. Needs `billing:read`. */
   getInvoice(invoiceId: string): Promise<Invoice> {
     return this.request<Invoice>("GET", `/api/v1/invoices/${invoiceId}`);
+  }
+
+  /**
+   * The staff this bill records an act by, with their signatures — what the receipt prints over
+   * "Received by". Answers "who signed THIS bill", not "tell me about user X". Needs `billing:read`.
+   */
+  listInvoiceSignatories(invoiceId: string): Promise<InvoiceSignatory[]> {
+    return this.request<InvoiceSignatory[]>("GET", `/api/v1/invoices/${invoiceId}/signatories`);
   }
 
   /** Dated charges for a visit — the day-wise money on the IP treatment sheet. Needs `billing:read`. */

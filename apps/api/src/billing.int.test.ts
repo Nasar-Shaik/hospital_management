@@ -652,3 +652,164 @@ describe("the money adds up under concurrency", () => {
     expect(before.body.data.total).toBe(50_000);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 7. A RECEIPT IS A SIGNED DOCUMENT — the bill knows who took the money
+ *
+ * ── THE FACT WAS ALWAYS RECORDED, AND NOTHING COULD READ IT ─────────────────
+ * `payments[].by` has carried the collector's user id since the first payment ever taken. The
+ * printed receipt showed an anonymous "Received by ______" over it, because a user id is not a
+ * name and there was no way to turn one into a name from the counter's own permission.
+ *
+ * That is only a cosmetic gap in a hospital with one cashier. With several across a shift it is
+ * the difference between a drawer that reconciles and a dispute nobody can settle: "who took my
+ * ₹500?" had no answer on the paper the patient was holding.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a bill can name the people who took the money", () => {
+  let invoiceId = "";
+  let cashierAId = "";
+  let cashierBId = "";
+  let tokenA = "";
+  let tokenB = "";
+
+  /** A 1×1 transparent PNG — a real data URI, small enough to live in a test. */
+  const SIGNATURE =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+  async function makeCashier(email: string, name: string, signature?: string): Promise<string> {
+    let id = "";
+    await runWithContext(
+      {
+        traceId: "cashier-setup",
+        tenantId: pvt.id,
+        tenantSlug: pvt.slug,
+        connection: pvt.connection,
+      },
+      async () => {
+        const user = await createUser({
+          email,
+          name,
+          status: "invited",
+          ...(signature ? { profile: { signature } } : {}),
+        });
+        await setPassword(user.id, PASSWORD, { mustChangePassword: false });
+        await assignRoleByCode(user.id, "FRONT_OFFICE", []);
+        await transitionStatus(user.id, "active");
+        id = user.id;
+      },
+    );
+    return id;
+  }
+
+  async function loginAs(email: string): Promise<string> {
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .set("Host", pvt.host)
+      .send({ email, password: PASSWORD })
+      .expect(200);
+    return res.body.data.accessToken as string;
+  }
+
+  beforeAll(async () => {
+    cashierAId = await makeCashier("priya@bill.test", "Priya Sharma", SIGNATURE);
+    cashierBId = await makeCashier("ravi@bill.test", "Ravi Kumar");
+    tokenA = await loginAs("priya@bill.test");
+    tokenB = await loginAs("ravi@bill.test");
+
+    const { encounterId, event } = await arrive(pvt, "Two Cashiers", "9000100090");
+    await asRelay(pvt, () => dispatchEventInline(event));
+    const invoice = await auth(
+      request(app).post(`/api/v1/encounters/${encounterId}/bill/finalize`),
+      pvt,
+    ).expect(200);
+    invoiceId = invoice.body.data.id as string;
+
+    // The shift changes halfway through the bill — the case the whole feature exists for.
+    await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set("Host", pvt.host)
+      .set("Authorization", `Bearer ${tokenA}`)
+      .send({ amount: 20_000, method: "cash" })
+      .expect(201);
+    await request(app)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set("Host", pvt.host)
+      .set("Authorization", `Bearer ${tokenB}`)
+      .send({ amount: 30_000, method: "cash" })
+      .expect(201);
+  }, 60_000);
+
+  it("stamps each payment with the cashier who actually took it", async () => {
+    const bill = await auth(request(app).get(`/api/v1/invoices/${invoiceId}`), pvt).expect(200);
+    const by = (bill.body.data.payments as { by?: string }[]).map((p) => p.by);
+    expect(by).toEqual([cashierAId, cashierBId]);
+  });
+
+  it("names both of them, with the signature of the one who uploaded it", async () => {
+    const res = await auth(
+      request(app).get(`/api/v1/invoices/${invoiceId}/signatories`),
+      pvt,
+    ).expect(200);
+
+    const byId = new Map(
+      (res.body.data as { userId: string; name: string; signature?: string }[]).map((s) => [
+        s.userId,
+        s,
+      ]),
+    );
+    expect(byId.get(cashierAId)?.name).toBe("Priya Sharma");
+    expect(byId.get(cashierAId)?.signature).toBe(SIGNATURE);
+
+    // The other cashier has not uploaded one. They are still NAMED — the hospital knows who took
+    // the money whether or not they have got round to scanning a signature, and the receipt
+    // prints a blank line rather than dropping the person.
+    expect(byId.get(cashierBId)?.name).toBe("Ravi Kumar");
+    expect(byId.get(cashierBId)?.signature).toBeUndefined();
+  });
+
+  /** It answers "who signed THIS bill" — it must not become a way to walk the staff directory. */
+  it("returns nobody for a bill nobody has paid", async () => {
+    const { encounterId, event } = await arrive(pvt, "Unpaid Nair", "9000100091");
+    await asRelay(pvt, () => dispatchEventInline(event));
+    const fresh = await auth(
+      request(app).post(`/api/v1/encounters/${encounterId}/bill/finalize`),
+      pvt,
+    ).expect(200);
+
+    const res = await auth(
+      request(app).get(`/api/v1/invoices/${fresh.body.data.id as string}/signatories`),
+      pvt,
+    ).expect(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  /**
+   * The reporting half of the same fact. A hospital-wide total cannot count a drawer; this is
+   * what "how much did Priya take today?" reads.
+   */
+  it("reports the takings per cashier, and the rows sum to the counter total", async () => {
+    const from = new Date(Date.now() - 86_400_000).toISOString();
+    const to = new Date(Date.now() + 86_400_000).toISOString();
+    const res = await auth(
+      request(app).get(`/api/v1/reports/collections?from=${from}&to=${to}`),
+      pvt,
+    ).expect(200);
+
+    const rows = res.body.data.byCollector as {
+      collectedBy: string;
+      collectorName: string;
+      amount: number;
+    }[];
+    const priya = rows.find((r) => r.collectedBy === cashierAId);
+    const ravi = rows.find((r) => r.collectedBy === cashierBId);
+    expect(priya?.collectorName).toBe("Priya Sharma");
+    expect(priya?.amount).toBe(20_000);
+    expect(ravi?.collectorName).toBe("Ravi Kumar");
+    expect(ravi?.amount).toBe(30_000);
+
+    // The breakdown must not lose money: every direct payment belongs to exactly one row.
+    const summed = rows.reduce((n, r) => n + r.amount, 0);
+    expect(summed).toBe(res.body.data.total);
+  });
+});

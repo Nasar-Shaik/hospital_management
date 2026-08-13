@@ -22,6 +22,7 @@ import { withTransaction } from "../../core/db/transaction.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
 import { getEncounter } from "../encounters/index.js";
 import { getBranch } from "../branches/index.js";
+import { getById as getUser } from "../users/index.js";
 import { getPolicy } from "../insurance/index.js";
 import {
   debitForInvoice as debitWalletForInvoice,
@@ -299,6 +300,58 @@ export const getCharges = repo.chargesForEncounter;
 export const listServices = repo.listServices;
 export const listInvoices = repo.listInvoices;
 export const getInvoice = repo.findInvoiceById;
+
+/** A person this bill records an act by, as the printed receipt names them. */
+export interface InvoiceSignatory {
+  userId: string;
+  name: string;
+  designation?: string;
+  /** A scanned signature, when they have uploaded one. Absent means a blank line to sign. */
+  signature?: string;
+}
+
+/**
+ * The people this bill records an act by — who took each payment and who handed money back —
+ * resolved to names and signatures for the printed receipt.
+ *
+ * ── WHY THIS IS ITS OWN ENDPOINT, AND NOT A FIELD ON THE INVOICE ────────────
+ * `payments[].by` has always carried the collector's USER ID, so the fact was recorded from the
+ * first day; there was simply nothing that could turn it into a name, and the receipt printed an
+ * anonymous "Received by ______" over a bill that knew exactly who had received it. Two things
+ * kept it off the invoice itself: a signature is a ~200 KB data URI that must not ride on every
+ * row of a paginated invoice list, and this is one round trip on the one page that prints.
+ *
+ * ── WHY IT IS NOT A USER LOOKUP ─────────────────────────────────────────────
+ * It answers "who signed THIS bill", not "tell me about user X". A cashier holding `billing:read`
+ * gets the names already printed on documents they can print anyway, and no way to walk the staff
+ * directory. Ids that no longer resolve (a deleted account) are dropped rather than guessed at.
+ */
+export async function invoiceSignatories(invoiceId: string): Promise<InvoiceSignatory[]> {
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  const ids = [
+    ...new Set(
+      [...invoice.payments.map((p) => p.by), ...invoice.refunds.map((r) => r.by)].filter(
+        (id): id is string => Boolean(id),
+      ),
+    ),
+  ];
+
+  const cards = await Promise.all(
+    ids.map(async (userId) => {
+      const user = await getUser(userId).catch(() => undefined);
+      if (!user) return undefined;
+      return {
+        userId,
+        name: user.name,
+        ...(user.profile?.designation ? { designation: user.profile.designation } : {}),
+        ...(user.profile?.signature ? { signature: user.profile.signature } : {}),
+      };
+    }),
+  );
+  return cards.filter((c): c is InvoiceSignatory => c !== undefined);
+}
 
 /** The collections register for a period — used by the reporting module. */
 export const collectionsReport = repo.collectionsReport;

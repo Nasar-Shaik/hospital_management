@@ -19,6 +19,7 @@ import type {
 } from "./billing.repository.js";
 import type {
   EncounterBilling,
+  InvoiceSignatory,
   OrderSettlementResult,
   consultationPaymentStatus,
   getRunningBill,
@@ -53,6 +54,23 @@ export const paymentEntry = contract(
     requestId: z.string().optional(),
   }),
 );
+
+/**
+ * A person this bill records an act by, as the printed receipt names them. Its `signature` is the
+ * same scanned data-URI the OPD slip prints for a doctor — every staff member may hold one, and
+ * a receipt is as much a signed document as a prescription is.
+ */
+export const invoiceSignatory = contract(
+  "InvoiceSignatory",
+  z.object({
+    userId: z.string(),
+    name: z.string(),
+    designation: z.string().optional(),
+    /** Absent means they have not uploaded one — the receipt prints a blank line to sign. */
+    signature: z.string().optional(),
+  }),
+);
+export type InvoiceSignatoryProof = Proves<Matches<typeof invoiceSignatory, InvoiceSignatory>>;
 
 export const refundEntry = contract(
   "RefundEntry",

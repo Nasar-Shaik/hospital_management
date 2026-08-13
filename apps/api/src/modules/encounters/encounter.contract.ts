@@ -47,6 +47,12 @@ export const encounter = contract(
     advice: z.string().optional(),
     branchId: z.string().optional(),
     arrivedAt: z.string(),
+    /**
+     * When the doctor called the patient in. ABSENT MEANS THE CONSULTATION HAS NOT STARTED —
+     * which is what the OPD slip reads to decide whether a doctor's signature belongs on the
+     * sheet. `doctorId` is who they are waiting for, and is set at registration.
+     */
+    seenAt: z.string().optional(),
     closedAt: z.string().optional(),
     /** Present when `class` is `IP`. The bed is recorded, not reserved. */
     bed: z

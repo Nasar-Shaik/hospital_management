@@ -340,6 +340,18 @@ export async function listBeds(wardId?: string): Promise<Bed[]> {
     .filter((b): b is Bed => b !== undefined);
 }
 
+/**
+ * How many beds this hospital has, across every site.
+ *
+ * Deliberately NOT `scopeFilter()`-ed, unlike its `listBeds` neighbour: a plan's bed allowance is
+ * bought by the HOSPITAL, so counting only the site the viewer happens to have selected would
+ * report a two-site hospital as using half of what it uses. The bed BOARD is per-site; the
+ * inventory a plan is measured against is not.
+ */
+export async function countBeds(): Promise<number> {
+  return getBedModel(getTenantDb()).countDocuments({});
+}
+
 /** One bed, resolved with its ward + room — the admit path reads this to validate and price a bed. */
 export async function findBedById(id: string): Promise<Bed | undefined> {
   if (!Types.ObjectId.isValid(id)) return undefined;

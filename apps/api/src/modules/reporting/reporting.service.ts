@@ -90,14 +90,38 @@ export interface DiagnosticsReportNamed extends Omit<DiagnosticsReport, "byPerfo
   byPerformer: { performedBy: string; performerName: string; performed: number }[];
 }
 
+/** Collections with each cashier named — "how much did each of my desk staff take?". */
+export interface CollectionsReportNamed extends Omit<CollectionsReport, "byCollector"> {
+  byCollector: { collectedBy: string; collectorName: string; amount: number; count: number }[];
+}
+
 export const pharmacyStockRegister = (range: DateRange): Promise<StockRegisterRow[]> =>
   stockRegister(range.from, range.to);
 
 export const patientVisits = (range: DateRange): Promise<VisitReport> =>
   visitReport(range.from, range.to);
 
-export const collections = (range: DateRange): Promise<CollectionsReport> =>
-  collectionsReport(range.from, range.to);
+/**
+ * Money received in a period, with each collector named — the drawer, per person.
+ *
+ * Composed exactly like the diagnostics register: billing owns the figures and does the grouping,
+ * this only turns the user ids into names. A payment recorded with no collector (an automated
+ * posting) keeps its row and is labelled, rather than being silently dropped from a total that
+ * has to reconcile.
+ */
+export async function collections(range: DateRange): Promise<CollectionsReportNamed> {
+  const report = await collectionsReport(range.from, range.to);
+  const names = await resolveNames(report.byCollector.map((c) => c.collectedBy).filter(Boolean));
+  return {
+    ...report,
+    byCollector: report.byCollector.map((c) => ({
+      collectedBy: c.collectedBy,
+      collectorName: c.collectedBy ? (names.get(c.collectedBy) ?? c.collectedBy) : "Not recorded",
+      amount: c.amount,
+      count: c.count,
+    })),
+  };
+}
 
 /**
  * Revenue leakage — care given but never billed — with each carrying visit named. Billing owns the

@@ -13,6 +13,8 @@ export type { Ward, Room, Bed } from "./ward.repository.js";
 export const listWards = repo.listWards;
 export const listRooms = repo.listRooms;
 export const listBeds = repo.listBeds;
+/** Every bed in the hospital, across sites — the meter behind a plan's bed allowance. */
+export const countBeds = repo.countBeds;
 export const getWard = repo.findWardById;
 export const getRoom = repo.findRoomById;
 export const getBed = repo.findBedById;

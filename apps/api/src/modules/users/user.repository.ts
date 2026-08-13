@@ -5,6 +5,7 @@
  * Every query runs on the request-scoped tenant connection, so a user lookup is
  * physically incapable of crossing hospitals.
  */
+import { Types } from "mongoose";
 import type { StaffProfile, UserDoc, UserStatus } from "./user.model.js";
 import { getUserModel } from "./user.model.js";
 import { getTenantDb } from "../../core/context/requestContext.js";
@@ -118,10 +119,25 @@ export async function update(userId: string, input: UpdateUserInput): Promise<Us
  * seat limit (Doc 07). Counted, never cached: a drifted counter that over-reports
  * would lock a hospital out of hiring.
  */
-export async function count(options: { excludeStatuses?: UserStatus[] } = {}): Promise<number> {
+export async function count(
+  options: { excludeStatuses?: UserStatus[]; ids?: string[] } = {},
+): Promise<number> {
   const query: Record<string, unknown> = {};
   if (options.excludeStatuses?.length) {
     query.status = { $nin: options.excludeStatuses };
+  }
+  /**
+   * Narrows the count to a named set — how "how many DOCTORS?" is answered without this module
+   * learning what a doctor is. RBAC supplies the ids that hold the role; this counts the ones
+   * that are still real accounts. An empty set counts zero rather than everything: `$in: []`
+   * matches nothing, which is the honest reading of "none of them hold that role".
+   */
+  if (options.ids) {
+    query._id = {
+      $in: options.ids
+        .filter((id) => Types.ObjectId.isValid(id))
+        .map((id) => new Types.ObjectId(id)),
+    };
   }
   return getUserModel(getTenantDb()).countDocuments(query);
 }

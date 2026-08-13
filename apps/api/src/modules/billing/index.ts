@@ -31,6 +31,8 @@ export {
   listInvoices,
   listServices,
   getInvoice,
+  invoiceSignatories,
+  type InvoiceSignatory,
   applyDiscount,
   recordRefund,
   setPayerSplit,

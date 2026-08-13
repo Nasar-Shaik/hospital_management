@@ -3,7 +3,7 @@
  */
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
-import { LIMIT_METRICS } from "./subscription.service.js";
+import { USAGE_METRICS } from "./subscription.service.js";
 import type { SubscriptionView, UsageLine } from "./subscription.service.js";
 import type { Plan } from "./subscription.repository.js";
 
@@ -24,17 +24,24 @@ export const editionLimits = contract(
 export const usageLine = contract(
   "UsageLine",
   z.object({
-    metric: z.enum(LIMIT_METRICS),
+    metric: z.enum(USAGE_METRICS),
     label: z.string(),
     used: z.number(),
-    /** `null` means unlimited (Enterprise/contractual) — distinct from 0. */
+    /** `null` means unlimited (Enterprise/contractual) — distinct from 0, which is "not included". */
     limit: z.number().nullable(),
     /** 0–1, or null when unlimited. */
     ratio: z.number().nullable(),
     /** True from 80% — the nudge, not the wall. */
     warning: z.boolean(),
-    /** True at 100% — the next creation will be refused. */
+    /** True at 100% — the next creation will be refused, IF this metric is enforced. */
     exceeded: z.boolean(),
+    /**
+     * Does hitting this limit stop anything? False means counted for guidance — no creation
+     * point refuses on it, so a client must not render it as a wall.
+     */
+    enforced: z.boolean(),
+    /** False when the plan allows none of this (`limit: 0`) — not the same as "used it all up". */
+    included: z.boolean(),
   }),
 );
 export type UsageLineProof = Proves<Matches<typeof usageLine, UsageLine>>;

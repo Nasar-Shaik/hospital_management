@@ -11,6 +11,7 @@ export { branchRouter } from "./branch.routes.js";
 
 export {
   listBranches,
+  countBranches,
   listMyBranches,
   getBranch,
   createBranch,

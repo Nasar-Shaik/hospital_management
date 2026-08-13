@@ -221,6 +221,12 @@ export const getInvoice: RequestHandler = async (req, res) => {
   ok(res, invoice);
 };
 
+/** Who signed this bill — the names and signatures the printed receipt puts over its line. */
+export const getInvoiceSignatories: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.invoiceSignatories(id));
+};
+
 export const recordPayment: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await billing.recordPayment(id, req.body as RecordPaymentBody), 201);

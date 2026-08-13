@@ -245,6 +245,20 @@ export interface CollectionsReport {
   byMonth: { month: string; amount: number; count: number }[];
   byMethod: { method: string; amount: number; count: number }[];
   /**
+   * Who took the money, heaviest first — one row per cashier who collected in the period.
+   *
+   * ── THE DRAWER IS RECONCILED PER PERSON, NOT PER DESK ───────────────────────
+   * A hospital running several front-desk staff across a shift needs "how much did each of them
+   * take?" to count a drawer, answer a dispute, or notice that a receipt was voided by the person
+   * who wrote it. Every payment has recorded its collector's id since the beginning; nothing ever
+   * grouped by it, so the question could only be answered by reading invoices one at a time.
+   *
+   * `collectedBy` is a user id — the reporting module resolves it to a name, exactly as it does
+   * for the diagnostics register's performers. Payments taken before a collector was recorded (or
+   * by the system, on an automated posting) group under an empty id and are named there.
+   */
+  byCollector: { collectedBy: string; amount: number; count: number }[];
+  /**
    * Paise. Bills SETTLED FROM ADVANCE in the period (`method: "wallet"`). Reported apart from
    * `total` on purpose — this money already crossed the counter when it was deposited, so counting
    * it here as well would inflate the day's takings. See the wallet register for the advance story.
@@ -268,6 +282,7 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
     total: { amount: number; count: number }[];
     byMonth: { _id: string; amount: number; count: number }[];
     byMethod: { _id: string; amount: number; count: number }[];
+    byCollector: { _id: string | null; amount: number; count: number }[];
     fromAdvance: { amount: number }[];
   }>([
     { $unwind: "$payments" },
@@ -304,6 +319,20 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
           },
           { $sort: { amount: -1 } },
         ],
+        // Direct collection only, like every figure above it: a wallet settlement was taken by
+        // whoever banked the ADVANCE, not by whoever happened to apply it, so crediting it to
+        // this cashier's drawer would make their count wrong in both directions.
+        byCollector: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
+          {
+            $group: {
+              _id: "$payments.by",
+              amount: { $sum: "$payments.amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+        ],
         fromAdvance: [
           { $match: { "payments.method": "wallet" } },
           { $group: { _id: null, amount: { $sum: "$payments.amount" } } },
@@ -317,6 +346,14 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
     count: f?.total[0]?.count ?? 0,
     byMonth: (f?.byMonth ?? []).map((r) => ({ month: r._id, amount: r.amount, count: r.count })),
     byMethod: (f?.byMethod ?? []).map((r) => ({ method: r._id, amount: r.amount, count: r.count })),
+    byCollector: (f?.byCollector ?? []).map((r) => ({
+      // `_id: null` is a payment recorded with no user — an automated posting, or a row from
+      // before collectors were stamped. It is kept, not dropped: money that came in with no name
+      // on it is exactly the row a reconciliation needs to see.
+      collectedBy: r._id ?? "",
+      amount: r.amount,
+      count: r.count,
+    })),
     settledFromAdvance: f?.fromAdvance[0]?.amount ?? 0,
   };
 }
@@ -1168,8 +1205,24 @@ export async function createPackage(input: CreatePackageInput): Promise<Package>
   return toPackage(doc.toObject() as PackageDoc);
 }
 
+/**
+ * ── THE CATALOGUE IS TENANT-WIDE, SO ITS READS MUST NOT BE BRANCH-FILTERED ───────────────────
+ * `createPackage` deliberately writes NO `branchId` — a package is priced config for the whole
+ * hospital, exactly like the tariff (`serviceItems`), whose reads above carry no `scopeFilter`
+ * either. These three reads used to apply one anyway, and the two halves only disagree when a
+ * caller has a branch selected: `scopeFilter()` then returns `{ branchId: <active> }`, no stored
+ * package carries that key, and every package in the hospital vanishes.
+ *
+ * The failure was silent and total in the direction that looks like data loss: the POST returned
+ * 201 with the saved package, and the list that came back a moment later was empty — so a hospital
+ * defining a maternity bundle was told it saved and then shown nothing. Enrolment (`findPackageByCode`)
+ * and editing (`updatePackage`) were dark the same way.
+ *
+ * Physical tenant isolation is unaffected: `getTenantDb()` is the wall, and it is a different
+ * database per hospital. Branch was never the wall here, and pretending it was hid the catalogue.
+ */
 export async function listPackages(includeInactive: boolean): Promise<Package[]> {
-  const q: Record<string, unknown> = { ...scopeFilter() };
+  const q: Record<string, unknown> = {};
   if (!includeInactive) q.active = true;
   const docs = await getPackageModel(getTenantDb()).find(q).sort({ name: 1 }).lean<PackageDoc[]>();
   return docs.map(toPackage);
@@ -1177,7 +1230,7 @@ export async function listPackages(includeInactive: boolean): Promise<Package[]>
 
 export async function findPackageByCode(code: string): Promise<Package | undefined> {
   const doc = await getPackageModel(getTenantDb())
-    .findOne({ code: code.toUpperCase(), ...scopeFilter() })
+    .findOne({ code: code.toUpperCase() })
     .lean<PackageDoc>();
   return doc ? toPackage(doc) : undefined;
 }
@@ -1199,11 +1252,7 @@ export async function updatePackage(
     ? { ...patch, includedCodes: patch.includedCodes.map((c) => c.toUpperCase()) }
     : patch;
   const doc = await getPackageModel(getTenantDb())
-    .findOneAndUpdate(
-      { _id: new Types.ObjectId(id), ...scopeFilter() },
-      { $set: set },
-      { new: true },
-    )
+    .findOneAndUpdate({ _id: new Types.ObjectId(id) }, { $set: set }, { new: true })
     .lean<PackageDoc>();
   return doc ? toPackage(doc) : undefined;
 }

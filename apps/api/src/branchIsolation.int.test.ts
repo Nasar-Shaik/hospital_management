@@ -1546,3 +1546,60 @@ describe("a patient registered at one branch is unreachable at the other (ADR-00
     expect(second.uhid).not.toBe(hyderabadUhid);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 19. A TENANT-WIDE CATALOGUE MUST NOT BE HIDDEN BY THE BRANCH FILTER
+ *
+ * Care packages are priced config for the whole hospital: `createPackage` writes no `branchId`,
+ * exactly like the tariff it was modelled on. The three reads applied `scopeFilter()` anyway,
+ * which returns `{ branchId: <active> }` the moment a caller selects a site — matching nothing,
+ * because no package carries the key. Every package in the hospital disappeared, and the POST
+ * that had just returned 201 made it look like the save had silently failed.
+ *
+ * This group is the falsification: restore `scopeFilter()` in `listPackages` and the first test
+ * goes red. It lives here rather than in the billing suite because branch scope is what broke it,
+ * and the billing suite never selects a branch — which is exactly why it stayed green.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a tenant-wide catalogue survives having a branch selected", () => {
+  const code = `MATERNITY_${Date.now().toString().slice(-6)}`;
+  let packageId = "";
+
+  it("is listed at the branch it was created at", async () => {
+    const created = await post("/api/v1/packages", tokenAdmin, branchA)
+      .send({
+        code,
+        name: "Normal delivery package",
+        price: 3_500_000,
+        includedCodes: ["CONSULT_GEN"],
+      })
+      .expect(201);
+    packageId = created.body.data.id as string;
+
+    const listed = await get("/api/v1/packages", tokenAdmin, branchA).expect(200);
+    expect((listed.body.data as { id: string }[]).map((p) => p.id)).toContain(packageId);
+  });
+
+  /** The catalogue is the hospital's, not the site's — a bundle defined at one site sells at both. */
+  it("is listed at the OTHER branch too", async () => {
+    const listed = await get("/api/v1/packages", tokenAdmin, branchB).expect(200);
+    expect((listed.body.data as { id: string }[]).map((p) => p.id)).toContain(packageId);
+  });
+
+  it("is listed with no branch selected", async () => {
+    const listed = await get("/api/v1/packages", tokenAdmin).expect(200);
+    expect((listed.body.data as { id: string }[]).map((p) => p.id)).toContain(packageId);
+  });
+
+  /** Editing and retiring went dark the same way — a 404 on a package the list had just shown. */
+  it("can be edited from a branch other than the one that created it", async () => {
+    const res = await request(app)
+      .patch(`/api/v1/packages/${packageId}`)
+      .set("Host", HOST)
+      .set("Authorization", `Bearer ${tokenAdmin}`)
+      .set("X-Active-Branch", branchB)
+      .send({ price: 4_000_000 })
+      .expect(200);
+    expect(res.body.data.price).toBe(4_000_000);
+  });
+});

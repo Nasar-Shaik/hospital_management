@@ -564,6 +564,26 @@ function ReportsPage() {
                   />
                 </Card>
               </div>
+              {/* The drawer, per person. The reason this table exists: a desk run by several
+                  people across a shift cannot be counted from one hospital-wide total. */}
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  Taken by
+                </h3>
+                <ReportTable
+                  headers={["Staff member", "Received", "Payments"]}
+                  rows={collections.byCollector.map((c) => [
+                    c.collectorName,
+                    rupees(c.amount),
+                    c.count,
+                  ])}
+                  empty="No payments."
+                />
+                <p className="px-4 pt-1 pb-3 text-xs text-[var(--color-fg-muted)]">
+                  Direct counter payments only, so these rows add up to “Collected at counter”. “Not
+                  recorded” is money posted without a signed-in collector.
+                </p>
+              </Card>
             </div>
           )}
 

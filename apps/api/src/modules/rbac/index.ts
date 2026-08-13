@@ -20,6 +20,7 @@ export {
   getRoleClaims,
   getUserBranchIds,
   getAuthorizationProfile,
+  listUserIdsWithRoleCode,
   // administration
   assignRoleByCode,
   revokeRoleByCode,

@@ -285,3 +285,21 @@ export async function setCustomDomain(
 
 export const getBySlug = repo.findBySlug;
 export const getById = repo.findById;
+
+/** A tenant with no explicit cap is single-site — the safe default for every existing hospital. */
+export const DEFAULT_MAX_BRANCHES = 1;
+
+/**
+ * How many sites this hospital may have. THE ONE ANSWER — the wall and the meter read it together.
+ *
+ * ── WHY IT IS A FUNCTION AND NOT TWO READS OF THE SAME FIELD ────────────────
+ * The cap is a PLATFORM control on the master record (`limits.maxBranches`, ADR-0015), set by an
+ * operator. An edition's `limits.maxBranches` is a catalogue figure that is never applied to a
+ * tenant — so a Subscription screen rendering the edition's number would print "2 branches" over
+ * a hospital the API will refuse at 1, or the reverse. The branch service enforces it and the
+ * subscription view displays it, and they now cannot disagree, because there is one function.
+ */
+export async function branchLimit(tenantId: string): Promise<number> {
+  const tenant = await repo.findById(tenantId);
+  return tenant?.maxBranches ?? DEFAULT_MAX_BRANCHES;
+}

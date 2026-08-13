@@ -1426,11 +1426,32 @@
               "required": ["method", "amount", "count"]
             }
           },
+          "byCollector": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "collectedBy": {
+                  "type": "string"
+                },
+                "collectorName": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": ["collectedBy", "collectorName", "amount", "count"]
+            }
+          },
           "settledFromAdvance": {
             "type": "integer"
           }
         },
-        "required": ["total", "count", "byMonth", "byMethod", "settledFromAdvance"]
+        "required": ["total", "count", "byMonth", "byMethod", "byCollector", "settledFromAdvance"]
       },
       "Consent": {
         "type": "object",
@@ -2482,6 +2503,9 @@
           "arrivedAt": {
             "type": "string"
           },
+          "seenAt": {
+            "type": "string"
+          },
           "closedAt": {
             "type": "string"
           },
@@ -3201,6 +3225,24 @@
           }
         },
         "required": ["code", "description", "category", "quantity", "listPrice", "amount"]
+      },
+      "InvoiceSignatory": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "designation": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "required": ["userId", "name"]
       },
       "LabTest": {
         "type": "object",
@@ -5846,7 +5888,7 @@
         "properties": {
           "metric": {
             "type": "string",
-            "enum": ["maxUsers"]
+            "enum": ["maxUsers", "maxDoctors", "maxBranches", "maxBeds"]
           },
           "label": {
             "type": "string"
@@ -5879,9 +5921,25 @@
           },
           "exceeded": {
             "type": "boolean"
+          },
+          "enforced": {
+            "type": "boolean"
+          },
+          "included": {
+            "type": "boolean"
           }
         },
-        "required": ["metric", "label", "used", "limit", "ratio", "warning", "exceeded"]
+        "required": [
+          "metric",
+          "label",
+          "used",
+          "limit",
+          "ratio",
+          "warning",
+          "exceeded",
+          "enforced",
+          "included"
+        ]
       },
       "UserRoles": {
         "type": "object",
@@ -14483,6 +14541,76 @@
                     },
                     "data": {
                       "$ref": "#/components/schemas/Invoice"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/invoices/{id}/signatories": {
+      "get": {
+        "operationId": "get_v1_invoices_id_signatories",
+        "tags": ["invoices"],
+        "summary": "GET /api/v1/invoices/{id}/signatories",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InvoiceSignatory"
+                      }
                     }
                   },
                   "required": ["success", "data"]

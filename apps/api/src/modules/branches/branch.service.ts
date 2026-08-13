@@ -8,14 +8,14 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
-import { getById as getTenant } from "../tenants/index.js";
+import { branchLimit } from "../tenants/index.js";
 import { getEffectiveBranchScope } from "../rbac/index.js";
 import * as repo from "./branch.repository.js";
 
 export type { Branch } from "./branch.repository.js";
 
-/** A tenant with no explicit cap is single-site — the safe default for every existing hospital. */
-const DEFAULT_MAX_BRANCHES = 1;
+/** How many sites exist right now — the meter on the Subscription screen counts these. */
+export const countBranches = repo.count;
 
 export const listBranches = repo.list;
 export const getBranch = repo.findById;
@@ -63,8 +63,9 @@ export async function createBranch(input: CreateBranchInput): Promise<repo.Branc
   const ctx = getContext();
 
   // ── the cap: a platform limit, read from master, enforced here ──────────────
-  const tenant = await getTenant(ctx.tenantId);
-  const maxBranches = tenant?.maxBranches ?? DEFAULT_MAX_BRANCHES;
+  // Through `branchLimit` so the Subscription screen's branch meter cannot show a different
+  // number from the one this line refuses on.
+  const maxBranches = await branchLimit(ctx.tenantId);
   const current = await repo.count();
   if (current >= maxBranches) {
     throw new AppError("HMS-PLAN-001", 402, "Plan limit reached", {

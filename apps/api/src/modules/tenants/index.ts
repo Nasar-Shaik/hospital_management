@@ -17,6 +17,9 @@ export {
   setCustomDomain,
   getBySlug,
   getById,
+  /** The ONE branch cap — read by the wall (branches) and the meter (subscriptions) alike. */
+  branchLimit,
+  DEFAULT_MAX_BRANCHES,
   InvalidTenantTransitionError,
   type ProvisionTenantInput,
   type ProvisionResult,

@@ -12,10 +12,23 @@
  *
  * This is DELIBERATELY separate from the OPD slip: that sheet is the clinical take-home (diagnosis,
  * Rx, advice); this one is the financial record of a single payment. Two documents, two jobs.
+ *
+ * ── THE PERSON WHO TOOK THE MONEY IS NAMED ──────────────────────────────────
+ * A receipt is a signed document: the patient's proof is not "the hospital took ₹500", it is "this
+ * named person at this counter took ₹500 from me". The invoice has always recorded the collector's
+ * user id on every payment; the sheet printed an anonymous "Received by ______" over it. It now
+ * names them on each payment line and prints their scanned signature over the line — which matters
+ * most where it is most easily disputed, a desk run by several people across a shift.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useParams } from "next/navigation";
-import { ApiClientError, type Invoice, type Patient, type PublicSite } from "@medicore/api-client";
+import {
+  ApiClientError,
+  type Invoice,
+  type InvoiceSignatory,
+  type Patient,
+  type PublicSite,
+} from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { rupees } from "../../../lib/money";
 
@@ -52,6 +65,7 @@ function Receipt() {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [patient, setPatient] = useState<Patient | null>(null);
   const [site, setSite] = useState<PublicSite | null>(null);
+  const [signatories, setSignatories] = useState<InvoiceSignatory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,12 +78,16 @@ function Receipt() {
       const inv = await api.getInvoice(id);
       setInvoice(inv);
 
-      const [pat, theSite] = await Promise.all([
+      const [pat, theSite, signed] = await Promise.all([
         soft(api.getPatient(inv.patientId), null as Patient | null),
         soft(api.getPublicSite(), null as PublicSite | null),
+        // Soft, like the rest: a receipt that cannot name the cashier is still a valid receipt
+        // with a blank line, and is far better than no receipt at all.
+        soft(api.listInvoiceSignatories(id), [] as InvoiceSignatory[]),
       ]);
       setPatient(pat);
       setSite(theSite);
+      setSignatories(signed);
     } catch (err) {
       setError(
         err instanceof ApiClientError && err.code === "HMS-GEN-404"
@@ -141,7 +159,11 @@ function Receipt() {
         ? { label: "PART PAID", color: "#d97706" }
         : { label: "DUE", color: "#dc2626" };
   // The receipt's date is when money last moved; fall back to when the bill was frozen.
-  const lastPaymentAt = invoice.payments.at(-1)?.at ?? invoice.finalizedAt;
+  const lastPayment = invoice.payments.at(-1);
+  const lastPaymentAt = lastPayment?.at ?? invoice.finalizedAt;
+  const staffById = new Map(signatories.map((s) => [s.userId, s]));
+  /** Whose signature belongs over the line: the person who took the money this receipt is for. */
+  const receivedBy = lastPayment?.by ? staffById.get(lastPayment.by) : undefined;
 
   return (
     <div className="rcpt-root min-h-screen bg-gray-100 py-8 text-gray-900">
@@ -294,18 +316,26 @@ function Receipt() {
           <section className="mt-5">
             <SectionLabel accent={accent}>Payments</SectionLabel>
             <ul className="mt-1 space-y-1 text-sm">
-              {invoice.payments.map((p, i) => (
-                <li key={i} className="flex items-center justify-between text-gray-700">
-                  <span>
-                    {methodLabel(p.method)}
-                    <span className="ml-2 text-xs text-gray-500">{fmtDateTime(p.at)}</span>
-                    {p.reference && (
-                      <span className="ml-2 font-mono text-xs text-gray-500">{p.reference}</span>
-                    )}
-                  </span>
-                  <span className="font-medium text-gray-900">{rupees(p.amount)}</span>
-                </li>
-              ))}
+              {invoice.payments.map((p, i) => {
+                const took = p.by ? staffById.get(p.by) : undefined;
+                return (
+                  <li key={i} className="flex items-start justify-between text-gray-700">
+                    <span>
+                      {methodLabel(p.method)}
+                      <span className="ml-2 text-xs text-gray-500">{fmtDateTime(p.at)}</span>
+                      {p.reference && (
+                        <span className="ml-2 font-mono text-xs text-gray-500">{p.reference}</span>
+                      )}
+                      {/* Which of the desk's people took THIS payment — the line that makes a
+                          multi-cashier drawer reconcilable from the patient's own copy. */}
+                      {took && (
+                        <span className="block text-xs text-gray-500">Taken by {took.name}</span>
+                      )}
+                    </span>
+                    <span className="font-medium text-gray-900">{rupees(p.amount)}</span>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         )}
@@ -316,10 +346,23 @@ function Receipt() {
             Computer-generated receipt · printed {fmtDateTime(new Date().toISOString())}
           </p>
           <div className="text-center">
-            <div className="mb-1 h-8" />
+            {/* The collector's scanned signature when they have uploaded one; otherwise the line
+                stays blank for a wet signature. Their NAME prints either way — the hospital knows
+                who took the money whether or not they have got round to uploading a signature. */}
+            <div className="mb-1 flex h-8 items-end justify-center">
+              {receivedBy?.signature ? (
+                <img
+                  src={receivedBy.signature}
+                  alt="Signature"
+                  className="max-h-8 object-contain"
+                />
+              ) : null}
+            </div>
             <div className="w-40 border-t border-gray-400 pt-1 text-xs text-gray-700">
-              Received by
-              <div className="text-[10px] text-gray-500">Signature &amp; seal</div>
+              {receivedBy?.name ?? "Received by"}
+              <div className="text-[10px] text-gray-500">
+                {receivedBy?.designation ?? "Signature & seal"}
+              </div>
             </div>
           </div>
         </footer>
