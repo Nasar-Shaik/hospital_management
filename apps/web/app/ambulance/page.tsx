@@ -22,6 +22,8 @@ import {
   type Patient,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { todayInZone } from "../../lib/day";
 import { Badge, Button, DataTable, Field, Modal, type Column } from "../../components/ui";
 import { ErrorAlert } from "../../components/ui";
 
@@ -69,7 +71,6 @@ const fmtTime = (iso: string) =>
 
 /** `<input type="datetime-local">` gives a zone-less local string; the API wants ISO. */
 const toIso = (local: string) => (local ? new Date(local).toISOString() : "");
-const todayStr = () => new Date().toISOString().slice(0, 10);
 
 /* ── Dispatch form ── */
 
@@ -405,9 +406,14 @@ function AmbulancePage() {
   const canDispatch = can("ambulance:dispatch");
   const canManage = can("ambulance:manage");
 
+  const { timezone } = useBranch();
   const [ambulances, setAmbulances] = useState<Ambulance[]>([]);
   const [trips, setTrips] = useState<AmbulanceTrip[]>([]);
-  const [date, setDate] = useState(todayStr());
+  /**
+   * "Today" is the SITE's today. Built from the browser's UTC offset, this board showed yesterday
+   * between midnight and 05:30 in India — precisely the night shift.
+   */
+  const [date, setDate] = useState(() => todayInZone(timezone));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
 

@@ -10,6 +10,13 @@
  *
  * The period is HALF-OPEN: the "To" date the user picks is a whole day, so the request's upper
  * bound is the start of the day after it — nothing that happens in that last day is lost.
+ *
+ * ── DATES ARE THE BRANCH'S, NOT THE BROWSER'S ───────────────────────────────
+ * Every day key and range boundary comes from `lib/day.ts`, resolved in the site's timezone. The
+ * month presets used to be built with `new Date(y, m, 1).toISOString().slice(0, 10)` — UTC applied
+ * to a local midnight — so in India "This month" asked for a range starting 31 July and every
+ * figure on this screen was a day out at both ends. Nothing looked wrong: the picker showed the
+ * right dates and only the request was shifted.
  */
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -27,6 +34,14 @@ import {
   type WalletRegister,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import {
+  dayRangeInZone,
+  endOfPreviousMonth,
+  startOfMonth,
+  startOfMonthsAgo,
+  todayInZone,
+} from "../../lib/day";
 import { Alert, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
@@ -76,19 +91,6 @@ const CLASS_LABEL: Record<string, string> = {
   TELE: "Telemedicine",
   HOME: "Home",
 };
-
-function iso(dateStr: string): string {
-  return new Date(`${dateStr}T00:00:00`).toISOString();
-}
-/** The day AFTER the chosen end date, at 00:00 — the half-open upper bound. */
-function isoNextDay(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString();
-}
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function ReportTable({
   headers,
@@ -159,9 +161,10 @@ function ReportsPage() {
   const initialTab: Tab =
     requested && TABS.some((t) => t.id === requested) ? (requested as Tab) : "stock";
 
-  const now = new Date();
-  const [fromStr, setFromStr] = useState(ymd(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [toStr, setToStr] = useState(ymd(now));
+  const { timezone } = useBranch();
+  const today = todayInZone(timezone);
+  const [fromStr, setFromStr] = useState(() => startOfMonth(today));
+  const [toStr, setToStr] = useState(() => today);
   const [tab, setTab] = useState<Tab>(initialTab);
 
   const [loading, setLoading] = useState(false);
@@ -178,9 +181,10 @@ function ReportsPage() {
   const [advances, setAdvances] = useState<WalletRegister | null>(null);
   const [discharges, setDischarges] = useState<DischargeRegister | null>(null);
 
+  // Half-open, in the branch's zone: `>= from 00:00` and `< the midnight after to`.
   const range: ReportRange = useMemo(
-    () => ({ from: iso(fromStr), to: isoNextDay(toStr) }),
-    [fromStr, toStr],
+    () => dayRangeInZone(fromStr, toStr, timezone),
+    [fromStr, toStr, timezone],
   );
 
   const load = useCallback(async () => {
@@ -243,12 +247,10 @@ function ReportsPage() {
     }
   }
 
+  /** `0` is this month to date; `n` is the whole month `n` months back. All in the branch's zone. */
   function applyPreset(months: number) {
-    const base = new Date();
-    const start = new Date(base.getFullYear(), base.getMonth() - months, 1);
-    const end = months === 0 ? base : new Date(base.getFullYear(), base.getMonth(), 0);
-    setFromStr(ymd(start));
-    setToStr(ymd(end));
+    setFromStr(startOfMonthsAgo(today, months));
+    setToStr(months === 0 ? today : endOfPreviousMonth(startOfMonth(today)));
   }
 
   return (

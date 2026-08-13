@@ -17,6 +17,8 @@ import {
   type MaintenanceType,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { addDays, todayInZone } from "../../lib/day";
 import { Badge, Button, Card, Field, ErrorAlert } from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
@@ -49,7 +51,6 @@ const MAINT_TYPES: { value: MaintenanceType; label: string }[] = [
   { value: "calibration", label: "Calibration" },
 ];
 
-const today = (): string => new Date().toISOString().slice(0, 10);
 function fmtDate(iso?: string): string {
   if (!iso) return "—";
   return new Date(iso + "T00:00:00").toLocaleDateString(undefined, {
@@ -59,14 +60,21 @@ function fmtDate(iso?: string): string {
   });
 }
 
-/** How the register flags an asset's service state from its stored next-due date. */
-function serviceFlag(asset: Asset): { label: string; tone: "danger" | "warning" } | null {
+/**
+ * How the register flags an asset's service state from its stored next-due date.
+ *
+ * `today` is passed in rather than read here: "is this overdue?" is answered against the SITE's
+ * calendar, and a module-level helper cannot reach the branch. Thirty days ahead is counted in
+ * whole days on the key, not by adding milliseconds — a DST day is 23 hours long and would drift.
+ */
+function serviceFlag(
+  asset: Asset,
+  today: string,
+): { label: string; tone: "danger" | "warning" } | null {
   if (!asset.nextServiceDue || asset.status === "retired") return null;
   const due = asset.nextServiceDue;
-  const now = today();
-  if (due <= now) return { label: "Service overdue", tone: "danger" };
-  const soon = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
-  if (due <= soon) return { label: "Service due soon", tone: "warning" };
+  if (due <= today) return { label: "Service overdue", tone: "danger" };
+  if (due <= addDays(today, 30)) return { label: "Service due soon", tone: "warning" };
   return null;
 }
 
@@ -306,10 +314,11 @@ function AssetForm({
 
 function MaintenancePanel({ asset, onLogged }: { asset: Asset; onLogged: () => void }) {
   const { api } = useAuth();
+  const { timezone } = useBranch();
   const [history, setHistory] = useState<AssetMaintenance[]>([]);
   const [loading, setLoading] = useState(true);
   const [type, setType] = useState<MaintenanceType>("preventive");
-  const [performedOn, setPerformedOn] = useState(today());
+  const [performedOn, setPerformedOn] = useState(() => todayInZone(timezone));
   const [performedBy, setPerformedBy] = useState("");
   const [cost, setCost] = useState("");
   const [notes, setNotes] = useState("");
@@ -444,6 +453,8 @@ type ModalState =
 
 function AssetsPage() {
   const { api } = useAuth();
+  const { timezone } = useBranch();
+  const today = todayInZone(timezone);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [statusFilter, setStatusFilter] = useState<"" | AssetStatus>("");
   const [categoryFilter, setCategoryFilter] = useState<"" | AssetCategory>("");
@@ -480,7 +491,7 @@ function AssetsPage() {
     }
   }
 
-  const dueCount = assets.filter((a) => serviceFlag(a)).length;
+  const dueCount = assets.filter((a) => serviceFlag(a, today)).length;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
@@ -549,7 +560,7 @@ function AssetsPage() {
         <div className="space-y-2">
           {assets.map((a) => {
             const st = statusMeta(a.status);
-            const flag = serviceFlag(a);
+            const flag = serviceFlag(a, today);
             return (
               <Card key={a.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 p-4">
                 <div className="min-w-40 flex-1">

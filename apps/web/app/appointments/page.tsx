@@ -29,11 +29,9 @@ import {
   type Slot,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { addDays, todayInZone } from "../../lib/day";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
-
-function toDateInput(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -139,11 +137,11 @@ function DoctorWeek({
    */
   let nextDay: string | undefined;
   for (let i = 1; i <= 28 && !nextDay; i += 1) {
-    const probe = new Date(`${day}T00:00:00`);
-    probe.setDate(probe.getDate() + i);
-    const key = toDateInput(probe);
+    // Calendar arithmetic on the KEY. Stepping a Date by `setDate` and re-reading it is a day
+    // out whenever the step crosses a DST boundary — a 23-hour day silently repeats itself.
+    const key = addDays(day, i);
     const blocked = leave.some((l) => key >= l.fromDate && key <= l.toDate);
-    if (worked.has(probe.getDay()) && !blocked) nextDay = key;
+    if (worked.has(new Date(`${key}T00:00:00Z`).getUTCDay()) && !blocked) nextDay = key;
   }
 
   return (
@@ -353,10 +351,12 @@ function ClinicHours({ doctorId, onSaved }: { doctorId: string; onSaved: () => v
 
 function Appointments() {
   const { api, can } = useAuth();
+  // The clinic's day, not the reader's — the server books slots in the branch's zone.
+  const { timezone } = useBranch();
 
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
   const [doctorId, setDoctorId] = useState("");
-  const [day, setDay] = useState(toDateInput(new Date()));
+  const [day, setDay] = useState(() => todayInZone(timezone));
 
   const [slots, setSlots] = useState<Slot[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);

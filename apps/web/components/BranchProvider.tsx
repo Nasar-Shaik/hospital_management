@@ -32,6 +32,7 @@ import type { Branch } from "@medicore/api-client";
 import { useAuth } from "./AuthProvider";
 import { getActiveBranchId, setActiveBranchId } from "../lib/activeBranch";
 import { branchScopeId, reconcileBranch } from "../lib/branchScope";
+import { resolveZone } from "../lib/day";
 import { currentHost } from "../lib/api";
 
 interface BranchContextValue {
@@ -50,6 +51,16 @@ interface BranchContextValue {
    * a change here discards that screen and everything reloads for the new branch.
    */
   scopeId: string;
+  /**
+   * The timezone a clinical or operational DAY is reckoned in — the active branch's, else the
+   * hospital's main site, else the platform default. Never the browser's.
+   *
+   * Resolved once, here, so no screen decides for itself: "today" on the theatre board and "today"
+   * on the ward have to be the same day, and a page that reached for `Intl` locally would make
+   * them the reader's day instead of the ward's. In All-branches mode there is no active site to
+   * borrow from, so the main branch stands in — a report spanning sites still needs ONE calendar.
+   */
+  timezone: string;
   /** Select a branch by id, or `null` for All. Persists, and re-scopes the app. */
   select: (branchId: string | null) => void;
 }
@@ -129,6 +140,11 @@ export function BranchProvider({ children }: { children: ReactNode }) {
       loading,
       hasChoice: branches.length > 1 || canAggregate,
       scopeId: branchScopeId({ tenant: currentHost(), branchId: activeId }),
+      timezone: resolveZone(
+        active?.timezone,
+        branches.find((b) => b.isMain)?.timezone,
+        branches[0]?.timezone,
+      ),
       select,
     };
   }, [branches, activeId, canAggregate, loading, select]);

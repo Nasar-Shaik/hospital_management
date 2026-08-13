@@ -11,19 +11,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { type IcdCode, type DiseaseRegisterRow } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { dayRangeInZone, startOfMonth, todayInZone } from "../../lib/day";
 import { Badge, Button, Card, Field, ErrorAlert } from "../../components/ui";
-
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-function iso(dateStr: string): string {
-  return new Date(`${dateStr}T00:00:00`).toISOString();
-}
-function isoNextDay(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString();
-}
 
 function Modal({
   title,
@@ -271,20 +261,22 @@ function MrdPage() {
 
 function DiseaseRegister() {
   const { api } = useAuth();
-  const now = new Date();
-  const [fromStr, setFromStr] = useState(ymd(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [toStr, setToStr] = useState(ymd(now));
+  // The register's period is the HOSPITAL's calendar, not the reader's — see `lib/day.ts`.
+  const { timezone } = useBranch();
+  const today = todayInZone(timezone);
+  const [fromStr, setFromStr] = useState(() => startOfMonth(today));
+  const [toStr, setToStr] = useState(() => today);
   const [rows, setRows] = useState<DiseaseRegisterRow[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
     api
-      .mrdDiseaseRegister({ from: iso(fromStr), to: isoNextDay(toStr) })
+      .mrdDiseaseRegister(dayRangeInZone(fromStr, toStr, timezone))
       .then(setRows)
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
-  }, [api, fromStr, toStr]);
+  }, [api, fromStr, toStr, timezone]);
   useEffect(load, [load]);
 
   const total = rows.reduce((s, r) => s + r.cases, 0);

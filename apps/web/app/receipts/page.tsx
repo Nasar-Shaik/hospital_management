@@ -13,19 +13,9 @@ import { type ReceiptRow, type ReportRange } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Badge, Card, DataTable, ErrorAlert, type Column } from "../../components/ui";
 import { rupees } from "../../lib/money";
+import { useBranch } from "../../components/BranchProvider";
+import { dayRangeInZone, todayInZone } from "../../lib/day";
 
-function iso(dateStr: string): string {
-  return new Date(`${dateStr}T00:00:00`).toISOString();
-}
-/** The day AFTER the chosen end date — the half-open upper bound `[from, to)`. */
-function isoNextDay(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString();
-}
-function ymd(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 function fmtDateTime(isoStr: string): string {
   return new Date(isoStr).toLocaleString("en-IN", {
     day: "numeric",
@@ -37,7 +27,9 @@ function fmtDateTime(isoStr: string): string {
 
 function Receipts() {
   const { api, can } = useAuth();
-  const today = ymd(new Date());
+  // The day's takings are the DESK's day — the same one the server reckons collections in.
+  const { timezone } = useBranch();
+  const today = todayInZone(timezone);
 
   const [fromStr, setFromStr] = useState(today);
   const [toStr, setToStr] = useState(today);
@@ -47,8 +39,8 @@ function Receipts() {
   const [error, setError] = useState<unknown>(null);
 
   const range: ReportRange = useMemo(
-    () => ({ from: iso(fromStr), to: isoNextDay(toStr) }),
-    [fromStr, toStr],
+    () => dayRangeInZone(fromStr, toStr, timezone),
+    [fromStr, toStr, timezone],
   );
 
   const load = useCallback(async () => {

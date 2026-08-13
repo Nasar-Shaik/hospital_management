@@ -23,6 +23,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClientError, type AuditEntry, type AuditIntegrity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { todayInZone } from "../../lib/day";
 import { Alert, Badge, Button, DataTable, PermissionGate, type Column } from "../../components/ui";
 
 const CATEGORIES = [
@@ -58,6 +60,7 @@ function changedFields(entry: AuditEntry): string {
 
 function AuditTrail() {
   const { api, can } = useAuth();
+  const { timezone } = useBranch();
 
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [category, setCategory] = useState("");
@@ -138,7 +141,8 @@ function AuditTrail() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`;
+      // Named for the hospital's day, so a file exported at 01:00 IST is not stamped yesterday.
+      a.download = `audit-${todayInZone(timezone)}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       if (truncated) {

@@ -34,17 +34,9 @@ import {
 import { rupees, toPaise } from "../../lib/money";
 import { idempotencyMessage, useIdempotencyKey } from "../../lib/idempotency";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { dayKeyInZone, todayInZone } from "../../lib/day";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
-
-/** An ISO instant → the `<input type="date">` value for its calendar day (local). */
-function dateInput(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function todayInput(): string {
-  return dateInput(new Date().toISOString());
-}
 
 /** A friendly "12 Jul" for telling a clerk which day a resumed visit lives on. */
 function dayLabel(iso: string): string {
@@ -322,8 +314,10 @@ function InvoiceRow({ invoice, onPaid }: { invoice: Invoice; onPaid: () => void 
 
 function Reception() {
   const { api, can } = useAuth();
+  // The desk's day. The server resolves it in the HOSPITAL's zone, so the picker must agree.
+  const { timezone } = useBranch();
 
-  const [day, setDay] = useState(todayInput());
+  const [day, setDay] = useState(() => todayInZone(timezone));
   const [register, setRegister] = useState<Encounter[]>([]);
   // OP-fee status per encounter, for the pay-before-queue gate. Empty until the register loads.
   const [consultPaid, setConsultPaid] = useState<Record<string, ConsultPayState>>({});
@@ -423,7 +417,7 @@ function Reception() {
       // still mid-treatment). If so, the day-filtered register below would show nothing for
       // today and the clerk would rightly ask "where did they go?". Jump the register to the
       // day the visit actually lives on, so the patient appears in the list right away.
-      const arrivedDay = dateInput(result.encounter.arrivedAt);
+      const arrivedDay = dayKeyInZone(new Date(result.encounter.arrivedAt), timezone);
       const onAnotherDay = result.resumed && arrivedDay !== day;
 
       setReason("");
