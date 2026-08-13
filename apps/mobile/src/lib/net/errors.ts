@@ -295,6 +295,30 @@ export function toUserMessage(error: unknown): UserFacingError {
         body: "This prescription conflicts with something on the patient's record. Review the alert and record a reason if you still intend to prescribe it.",
         severity: "blocking",
       };
+    case "HMS-MAR-001":
+      /**
+       * ── THE ONE ERROR IN THIS FILE THAT MUST NEVER OFFER A RETRY ────────────
+       * "Somebody already answered this dose slot" — possibly a different nurse, on a different
+       * device, under a different idempotency key. Only the unique index can know that (migration
+       * 0049), and `details.existing` carries the administration that holds it.
+       *
+       * Until M3-S5A this code was not in this switch at all, so it fell through to the generic
+       * "Something went wrong — please try again" with a RETRY affordance. On a duplicate dose that
+       * is the worst wording the app could produce: it tells a nurse whose colleague has already
+       * given the antibiotic to press the button again. `ERROR_CODES.md` says it plainly — "a
+       * client must never retry into it".
+       *
+       * `reload`, so the recovery is to see the truth. The administration screen does better still
+       * and renders `existing` directly ("given at 14:03"); this is the fallback for anywhere else
+       * the code can surface.
+       */
+      return {
+        ...base,
+        title: "Already given",
+        body: "This dose has already been recorded — possibly by someone else. Reload to see who gave it and when. Do not give it again.",
+        severity: "notice",
+        action: "reload",
+      };
 
     /* ── the server ────────────────────────────────────────────────────────── */
     case "HMS-GEN-404":

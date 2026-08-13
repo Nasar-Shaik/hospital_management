@@ -133,8 +133,40 @@ export function getIdempotencyModel(conn: Connection): Model<IdempotencyRecordDo
  */
 function canonical(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonical);
+
+  /**
+   * ── A DATE HAS NO OWN ENUMERABLE KEYS, AND THAT USED TO ERASE IT (M3-S5A) ──
+   * `Object.keys(new Date())` is `[]`, so the generic object branch below turned EVERY date in a
+   * validated body into `{}` — and two requests differing only by a date hashed identically.
+   *
+   * That is not a cosmetic bug. `validate()` runs before `idempotent()` and Zod's `z.coerce.date()`
+   * hands the middleware real `Date` objects, so it hit every date-bearing idempotent route:
+   * `scheduledFor` and `administeredAt` on a medication administration, `recordedAt` on a vitals
+   * reading. A client that reused one key across two different requests got the FIRST one's
+   * response replayed byte for byte, with `Idempotency-Replayed: true` — so a nurse charting the
+   * 18:00 dose under a stale key was shown the 12:00 dose's 201 and nothing was written for 18:00.
+   * A silently missed dose, reported as a success. The conflict detection (`HMS-REQ-002`) that
+   * exists precisely to catch that could never fire.
+   *
+   * Serialising by VALUE fixes it. Note the direction of the change: fingerprints become
+   * STRICTER, never looser, so the failure mode it introduces is a legitimate retry being called
+   * a conflict rather than a different request being called a replay. Only the second is unsafe.
+   */
+  if (value instanceof Date) return value.toISOString();
+
   if (value !== null && typeof value === "object") {
     const source = value as Record<string, unknown>;
+    /**
+     * Anything else whose identity does not live in its own enumerable keys would hit the same
+     * trap. Refusing loudly is the only safe answer: a fingerprint that silently drops part of the
+     * request is worse than no fingerprint at all, because the client believes it is protected.
+     */
+    if (Object.getPrototypeOf(source) !== Object.prototype && Object.keys(source).length === 0) {
+      throw new Error(
+        "idempotency fingerprint: a request body carried an opaque object with no enumerable " +
+          "keys, which cannot be hashed by value. Add a case to `canonical` for it.",
+      );
+    }
     return Object.fromEntries(
       Object.keys(source)
         .sort()

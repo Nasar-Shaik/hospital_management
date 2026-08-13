@@ -1220,6 +1220,46 @@ export interface DoseSlot {
   reason?: string;
 }
 
+/**
+ * What `HMS-MAR-001` carries — "somebody already answered this dose slot".
+ *
+ * ── THIS IS AN ANSWER, NOT A FAILURE, AND THE TYPE SAYS SO ──────────────────
+ * A key conflict (`HMS-REQ-002`) means *you* already sent this request. `HMS-MAR-001` means a
+ * possibly DIFFERENT nurse, on a different device, under a different key, already gave this dose —
+ * only the unique index can know that, and only the database can arbitrate it. `existing` is the
+ * administration holding the slot, and showing it is the whole point: a client that renders a
+ * generic "something went wrong, retry" here is inviting a second dose into a patient.
+ */
+export interface MarSlotTaken {
+  /** The slot that is taken, ISO. Render in the branch's zone. */
+  scheduledFor: string;
+  drugName: string;
+  /**
+   * Who holds it. Absent when the winning row sits in a branch this caller cannot read — the
+   * refusal still stands, the server simply cannot name it, and a client must say so rather than
+   * imply the dose was not given.
+   */
+  existing?: MedicationAdministration;
+}
+
+/**
+ * Reads the slot-taken payload off an error, or `undefined` if it is not one.
+ *
+ * Lives here rather than in each app because it is the WIRE contract: the shape of
+ * `details` is the API's promise, and two clients parsing it by hand is two chances to get the
+ * clinically important case wrong.
+ */
+export function marSlotTaken(error: unknown): MarSlotTaken | undefined {
+  if (!(error instanceof ApiClientError) || error.code !== "HMS-MAR-001") return undefined;
+  const details = error.details as Partial<MarSlotTaken> | undefined;
+  if (!details || typeof details.scheduledFor !== "string") return undefined;
+  return {
+    scheduledFor: details.scheduledFor,
+    drugName: typeof details.drugName === "string" ? details.drugName : "this medication",
+    ...(details.existing ? { existing: details.existing } : {}),
+  };
+}
+
 /* ── insurance (patient policies + claims) ── */
 
 export type PolicyType = "cashless" | "reimbursement" | "government" | "corporate";
@@ -3441,6 +3481,16 @@ export class ApiClient {
    * `scheduledFor` is optional: send the slot from `listMedicationSchedule` when charting a round,
    * omit it for a PRN dose. Omitting it on a scheduled drug does not opt out of the protection —
    * the server binds the nearest round itself.
+   *
+   * ── THE KEY MATTERS MORE HERE THAN ANYWHERE ELSE IN THIS CLIENT ───────────
+   * The route has carried `idempotent()` since M3-S1 and, until M3-S5A, this method sent no header
+   * — so the middleware could never fire for any caller. The unique index still stopped a second
+   * row for a SCHEDULED dose, which is the protection that matters most; but a PRN dose has no
+   * slot and is therefore unconstrained by design, and for those a retry after a lost response was
+   * a second dose in a patient with nothing anywhere to prevent it.
+   *
+   * Pass a key that is stable across the retries of ONE clinical decision, and a NEW key for a
+   * genuinely new one. Give, Hold and Refuse are three different decisions and must never share.
    */
   recordMedicationAdministration(
     encounterId: string,
@@ -3455,11 +3505,13 @@ export class ApiClient {
       reason?: string;
       note?: string;
     },
+    key?: string,
   ): Promise<MedicationAdministration> {
     return this.request<MedicationAdministration>(
       "POST",
       `/api/v1/encounters/${encounterId}/medication-administrations`,
       input,
+      { ...(key ? { idempotencyKey: key } : {}) },
     );
   }
 

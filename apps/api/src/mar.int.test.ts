@@ -48,12 +48,15 @@ const { setPassword } = await import("./modules/auth/index.js");
 const { seedTariff } = await import("./seed/tariff.js");
 
 const SLUG = "test-mar";
+/** A second hospital, for the cross-tenant probe (M3-S5A). Its own physical database. */
+const RIVAL_SLUG = "test-mar-rival";
 const PASSWORD = "V4lid!Password#2026";
 /** 9.5 hours from the pinned process zone, and DST-observing, which Kolkata is not. */
 const WARD_ZONE = "America/New_York";
 /** Dropped alongside the master: a tenant DB that survives a run carries the OLD plan and the
  *  old rows, which is how a suite starts failing for reasons that have nothing to do with it. */
 const TENANT_DB = `hms_${SLUG}`;
+const RIVAL_DB = `hms_${RIVAL_SLUG}`;
 
 const app = createApp(createLogger({ service: "mar-int-test" }));
 
@@ -77,10 +80,16 @@ function auth(req: request.Test, token: string): request.Test {
 }
 
 async function login(email: string): Promise<string> {
+  return loginAt(host, email);
+}
+
+/** Sign in at a named host — the rival hospital is a different host, not a different path. */
+async function loginAt(atHost: string, email: string): Promise<string> {
   const res = await request(app)
     .post("/api/v1/auth/login")
-    .set("Host", host)
+    .set("Host", atHost)
     .send({ email, password: PASSWORD });
+  if (res.status !== 200) throw new Error(`login ${email}: ${String(res.status)}`);
   return res.body.data.accessToken as string;
 }
 
@@ -106,7 +115,7 @@ async function makeUser(
 beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
-  await dropDatabases([process.env.MONGO_MASTER_DB as string, TENANT_DB]);
+  await dropDatabases([process.env.MONGO_MASTER_DB as string, TENANT_DB, RIVAL_DB]);
   await flushTestCache("mar");
 
   const t = await provisionTenant({
@@ -166,13 +175,85 @@ beforeAll(async () => {
   nurse2Token = await login(`nurse2@${SLUG}.test`);
   receptionToken = await login(`front@${SLUG}.test`);
   otherSiteNurseToken = await login(`nurse3@${SLUG}.test`);
-}, 120_000);
+
+  /**
+   * A whole second hospital with a real admitted patient (M3-S5A).
+   *
+   * Tenant isolation here is PHYSICAL — one database per hospital — so this exists to prove that
+   * a REAL encounter id from another tenant, not a fabricated one, is unreachable. A made-up id
+   * would pass the same assertions for the wrong reason.
+   */
+  const rival = await provisionTenant({
+    hospitalName: RIVAL_SLUG,
+    slug: RIVAL_SLUG,
+    planCode: "PLAN_HOSPITAL",
+    organizationType: "private_hospital",
+    maxBranches: 1,
+  });
+  rivalHost = `${RIVAL_SLUG}.medicore.test`;
+  const rivalConnection = await getTenantConnection({
+    id: rival.tenant.id,
+    databaseName: rival.tenant.databaseName,
+  });
+  await seedTariff(rival.tenant.id, RIVAL_SLUG, rivalConnection);
+  let rivalDoctorId = "";
+  await runWithContext(
+    {
+      traceId: "mar-setup-rival",
+      tenantId: rival.tenant.id,
+      tenantSlug: RIVAL_SLUG,
+      connection: rivalConnection,
+    },
+    async () => {
+      await seedRbac();
+      rivalDoctorId = await makeUser(`doc@${RIVAL_SLUG}.test`, "Dr Rival", "DOCTOR", []);
+      await makeUser(`front@${RIVAL_SLUG}.test`, "Desk Rival", "RECEPTIONIST", []);
+    },
+  );
+  rivalEncounterId = await admitAtRival(rivalDoctorId);
+}, 180_000);
+
+let rivalHost = "";
+let rivalEncounterId = "";
+
+/** An admitted patient at the OTHER hospital. Mirrors `admitPatient`, on the rival's host. */
+async function admitAtRival(departmentId: string): Promise<string> {
+  const desk = await loginAt(rivalHost, `front@${RIVAL_SLUG}.test`);
+  const doc = await loginAt(rivalHost, `doc@${RIVAL_SLUG}.test`);
+  const at = (r: request.Test, token: string) =>
+    r.set("Host", rivalHost).set("Authorization", `Bearer ${token}`);
+
+  const patient = await at(request(app).post("/api/v1/patients"), desk)
+    .send({
+      name: "Rival Patient",
+      gender: "female",
+      contact: { phone: `9${Math.floor(Math.random() * 1e9)}` },
+    })
+    .expect(201);
+
+  const enc = await at(request(app).post("/api/v1/encounters"), desk)
+    .send({ patientId: patient.body.data.patient.id, departmentId })
+    .expect(201);
+  const opId = enc.body.data.encounter.id as string;
+
+  await at(request(app).post(`/api/v1/encounters/${opId}/queue`), desk);
+  await at(request(app).post(`/api/v1/encounters/${opId}/start`), doc).expect(200);
+  const admitted = await at(request(app).post(`/api/v1/encounters/${opId}/admit`), doc)
+    .send({
+      ward: "General",
+      bedCode: `R-${Math.floor(Math.random() * 1e6)}`,
+      tariffCode: "BED_GEN",
+    })
+    .expect(201);
+
+  return admitted.body.data.inpatient.id as string;
+}
 
 afterAll(async () => {
   await closeAllTenantConnections();
   await closeMaster();
   await closeRedis();
-  await dropDatabases([process.env.MONGO_MASTER_DB as string, TENANT_DB]);
+  await dropDatabases([process.env.MONGO_MASTER_DB as string, TENANT_DB, RIVAL_DB]);
 }, 30_000);
 
 /* ── fixtures ──────────────────────────────────────────────────────────────── */
@@ -670,6 +751,36 @@ describe("authorization", () => {
     ).expect(201);
   });
 
+  /**
+   * ── THE PERMISSION SPLIT, IN THE DIRECTION THAT ACTUALLY TESTS IT ─────────
+   * A receptionist is refused by `emr:read` alone, so that case proves nothing about
+   * `mar:administer`. The DOCTOR is the discriminating role: they hold `emr:read` (they read the
+   * round below) and do NOT hold `mar:administer`, because giving a drug is the nurse's own act
+   * and its own responsibility.
+   *
+   * Added in M3-S5A after falsification: swapping the route's permission to `emr:read` broke
+   * nothing, which meant nothing was testing the permission at all. The RBAC matrix cannot catch
+   * a swap either — it reads the tags back off the shipped app, so it stays self-consistent.
+   */
+  it("refuses a DOCTOR — reading the round is emr:read, charting a dose is not", async () => {
+    const enc = await admitPatient("Doctor Charts");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+
+    await chart(
+      enc,
+      { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode },
+      doctorToken,
+      "authz-doctor-charts",
+    ).expect(403);
+
+    // …and no row was written by the attempt.
+    const rows = await auth(
+      request(app).get(`/api/v1/encounters/${enc}/medication-administrations`),
+      nurseToken,
+    ).expect(200);
+    expect(rows.body.data).toEqual([]);
+  });
+
   it("lets the doctor read the schedule — it is emr:read, not a nursing-only view", async () => {
     const enc = await admitPatient("Doctor Reads");
     await signedRx(enc, [PARACETAMOL_TDS]);
@@ -904,5 +1015,371 @@ describe("the ward worklist", () => {
 
   it("refuses a role with no clinical read", async () => {
     await worklist("", receptionToken).expect(403);
+  });
+});
+
+/* ── M3-S5A: the three outcomes, and one answer per slot ───────────────────── */
+
+/**
+ * S1 proved a slot holds at most one administration. S5A is the UI that answers one, so what needs
+ * proving here is the part the screen depends on: that HOLD and REFUSED are first-class answers,
+ * that they close the slot exactly as GIVEN does, and that the 409 carries enough for a nurse to
+ * be told who got there first.
+ *
+ * The unique index deliberately does NOT include `status` — which is what makes "held, then given"
+ * impossible. That is the single most important assertion in this block: without it a nurse could
+ * hold a dose for low blood pressure and a colleague could give it ten minutes later, with both
+ * events on the chart and neither contradicting the other.
+ */
+describe("held and refused are answers, not gaps", () => {
+  /** Charts an outcome against the first scheduled slot of a fresh TDS order. */
+  async function freshSlot(name: string): Promise<{ enc: string; rx: string; slot: string }> {
+    const enc = await admitPatient(name);
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slot = ((await schedule(enc).expect(200)).body.data as { scheduledFor: string }[])[0]
+      ?.scheduledFor as string;
+    return { enc, rx, slot };
+  }
+
+  const stateOf = async (enc: string, slot: string) => {
+    const res = await schedule(enc).expect(200);
+    return (res.body.data as { scheduledFor: string; state: string; reason?: string }[]).find(
+      (s) => s.scheduledFor === slot,
+    );
+  };
+
+  it("records a HELD dose with its reason, and the slot reads held", async () => {
+    const { enc, rx, slot } = await freshSlot("Held Dose");
+
+    const res = await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      lineIndex: 0,
+      scheduledFor: slot,
+      status: "held",
+      reason: "systolic 84",
+    }).expect(201);
+
+    expect(res.body.data).toMatchObject({ status: "held", reason: "systolic 84" });
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "held", reason: "systolic 84" });
+  });
+
+  /** A held dose with no reason is the blank the MAR exists to prevent. The server says so. */
+  it("refuses a held dose with no reason", async () => {
+    const { enc, rx, slot } = await freshSlot("Held No Reason");
+    const res = await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+      status: "held",
+    }).expect(400);
+    expect(Object.keys(res.body.error.details)).toContain("reason");
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "due" });
+  });
+
+  it("records a REFUSED dose, and does not demand a reason for it", async () => {
+    const { enc, rx, slot } = await freshSlot("Refused Dose");
+    const res = await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+      status: "refused",
+    }).expect(201);
+
+    expect(res.body.data.status).toBe("refused");
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "refused" });
+  });
+
+  it("writes exactly one row for each of the three outcomes", async () => {
+    for (const [name, body] of [
+      ["One Row Given", { status: "given" }],
+      ["One Row Held", { status: "held", reason: "nil by mouth" }],
+      ["One Row Refused", { status: "refused" }],
+    ] as [string, Record<string, string>][]) {
+      const { enc, rx, slot } = await freshSlot(name);
+      await chart(enc, {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        ...body,
+      }).expect(201);
+
+      const rows = await auth(
+        request(app).get(`/api/v1/encounters/${enc}/medication-administrations`),
+        nurseToken,
+      ).expect(200);
+      expect(rows.body.data).toHaveLength(1);
+    }
+  });
+
+  /**
+   * ── THE ONE-SLOT-ONE-ANSWER RULE, IN THE DIRECTION THAT MATTERS ───────────
+   * A nurse holds a dose because the blood pressure is 84. Ten minutes later a colleague opens the
+   * same slot and presses Give. If the index keyed on status this would succeed and the chart
+   * would hold both events, each looking authoritative. It does not, and this is what says so.
+   */
+  it("refuses a GIVE after the slot was HELD, and names the held record", async () => {
+    const { enc, rx, slot } = await freshSlot("Held Then Given");
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "held",
+        reason: "systolic 84",
+      },
+      nurseToken,
+      "s5a-held-then-given",
+    ).expect(201);
+
+    const clash = await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "given",
+      },
+      nurse2Token,
+      "s5a-second-nurse-give",
+    ).expect(409);
+
+    expect(clash.body.error.code).toBe("HMS-MAR-001");
+    expect(clash.body.error.details.existing).toMatchObject({
+      status: "held",
+      reason: "systolic 84",
+      administeredBy: nurseId,
+    });
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "held" });
+  });
+
+  it("refuses a GIVE after the slot was REFUSED", async () => {
+    const { enc, rx, slot } = await freshSlot("Refused Then Given");
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "refused",
+      },
+      nurseToken,
+      "s5a-refused-first",
+    ).expect(201);
+
+    const clash = await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "given",
+      },
+      nurse2Token,
+      "s5a-refused-then-give",
+    ).expect(409);
+
+    expect(clash.body.error.code).toBe("HMS-MAR-001");
+    expect(clash.body.error.details.existing).toMatchObject({ status: "refused" });
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "refused" });
+  });
+
+  it("refuses a second HOLD on a slot already given", async () => {
+    const { enc, rx, slot } = await freshSlot("Given Then Held");
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "given",
+      },
+      nurseToken,
+      "s5a-given-first",
+    ).expect(201);
+
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "held",
+        reason: "changed my mind",
+      },
+      nurse2Token,
+      "s5a-given-then-hold",
+    ).expect(409);
+  });
+});
+
+/* ── M3-S5A: the reconciliation contract the phone depends on ──────────────── */
+
+describe("the 409 carries what a client needs to reconcile", () => {
+  /**
+   * The mobile confirmation screen renders `details.existing` directly — "already given at 14:03".
+   * These fields are therefore a CONTRACT, not incidental debugging detail: without `status`,
+   * `administeredBy` and `administeredAt` the screen can only say "something went wrong", which is
+   * the wording `ERROR_CODES.md` exists to forbid.
+   */
+  it("names the slot, the drug, the outcome, the actor and the time", async () => {
+    const enc = await admitPatient("Oracle Payload");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slot = ((await schedule(enc).expect(200)).body.data as { scheduledFor: string }[])[0]
+      ?.scheduledFor as string;
+
+    await chart(
+      enc,
+      { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode, scheduledFor: slot },
+      nurseToken,
+      "s5a-oracle-first",
+    ).expect(201);
+
+    const clash = await chart(
+      enc,
+      { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode, scheduledFor: slot },
+      nurse2Token,
+      "s5a-oracle-second",
+    ).expect(409);
+
+    expect(clash.body.error.details).toMatchObject({
+      scheduledFor: slot,
+      drugName: PARACETAMOL_TDS.drugName,
+    });
+    expect(clash.body.error.details.existing).toMatchObject({
+      status: "given",
+      administeredBy: nurseId,
+      prescriptionId: rx,
+      lineIndex: 0,
+      scheduledFor: slot,
+    });
+    expect(clash.body.error.details.existing.administeredAt).toBeTruthy();
+  });
+
+  /**
+   * The schedule is the other half of the oracle: after a LOST response the phone re-reads it and
+   * asks "is this slot answered?". That question must be answerable without the 409 — a timeout
+   * never produces one.
+   */
+  it("answers the same question through the schedule, for a client that saw no response at all", async () => {
+    const enc = await admitPatient("Lost Response Oracle");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slot = ((await schedule(enc).expect(200)).body.data as { scheduledFor: string }[])[0]
+      ?.scheduledFor as string;
+
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "held",
+        reason: "asleep",
+      },
+      nurseToken,
+      "s5a-lost-response",
+    ).expect(201);
+
+    const after = (await schedule(enc).expect(200)).body.data as {
+      prescriptionId: string;
+      lineIndex: number;
+      scheduledFor: string;
+      state: string;
+      administrationId?: string;
+      administeredBy?: string;
+    }[];
+    // Found by the S1 triple — prescription, line and instant — never by drug name.
+    const answered = after.find(
+      (s) => s.prescriptionId === rx && s.lineIndex === 0 && s.scheduledFor === slot,
+    );
+    expect(answered).toMatchObject({ state: "held", administeredBy: nurseId });
+    expect(answered?.administrationId).toBeTruthy();
+  });
+
+  /** A key names ONE clinical decision. Reusing it for a different one is refused, not merged. */
+  it("refuses the same key used for a different outcome", async () => {
+    const enc = await admitPatient("Key Reuse");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slots = (await schedule(enc).expect(200)).body.data as { scheduledFor: string }[];
+    const first = slots[0]?.scheduledFor as string;
+    const second = slots[1]?.scheduledFor as string;
+
+    await chart(
+      enc,
+      { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode, scheduledFor: first },
+      nurseToken,
+      "s5a-one-decision",
+    ).expect(201);
+
+    // A DIFFERENT slot under the SAME key: the request bodies differ, so this is a client bug and
+    // the server refuses it rather than replaying the first — which would silently chart nothing
+    // while the nurse believed the second dose was recorded.
+    const clash = await chart(
+      enc,
+      { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode, scheduledFor: second },
+      nurseToken,
+      "s5a-one-decision",
+    ).expect(409);
+    expect(clash.body.error.code).toBe("HMS-REQ-002");
+    // Not a replay. Before the fingerprint fix this returned the FIRST dose's 201 with
+    // `Idempotency-Replayed: true`, and the 18:00 dose was silently never charted.
+    expect(clash.headers["idempotency-replayed"]).toBeUndefined();
+
+    const after = (await schedule(enc).expect(200)).body.data as {
+      scheduledFor: string;
+      state: string;
+    }[];
+    expect(after.find((s) => s.scheduledFor === second)?.state).not.toBe("given");
+  });
+
+  /** Replaying the SAME decision is safe and writes nothing — the other half of the same rule. */
+  it("replays the identical request without a second row", async () => {
+    const enc = await admitPatient("Replay Same");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slot = ((await schedule(enc).expect(200)).body.data as { scheduledFor: string }[])[0]
+      ?.scheduledFor as string;
+    const body = {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+      status: "refused",
+    };
+
+    const first = await chart(enc, body, nurseToken, "s5a-replay-refused").expect(201);
+    const again = await chart(enc, body, nurseToken, "s5a-replay-refused").expect(201);
+    expect(again.body.data.id).toBe(first.body.data.id);
+
+    const rows = await auth(
+      request(app).get(`/api/v1/encounters/${enc}/medication-administrations`),
+      nurseToken,
+    ).expect(200);
+    expect(rows.body.data).toHaveLength(1);
+  });
+});
+
+/* ── M3-S5A: tenant isolation ──────────────────────────────────────────────── */
+
+describe("another hospital's dose is unreachable", () => {
+  /**
+   * Isolation here is PHYSICAL — one database per hospital — so a real encounter id from the rival
+   * tenant is not filtered out of a query, it is simply not in the database being queried. The id
+   * is a genuine one (see `admitAtRival`), because a fabricated id would pass for the wrong reason.
+   */
+  it("refuses to chart against another tenant's encounter", async () => {
+    const res = await chart(rivalEncounterId, {
+      prescriptionId: "64b7f0000000000000000001",
+      drugCode: PARACETAMOL_TDS.drugCode,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("shows no schedule and no MAR for another tenant's encounter", async () => {
+    expect((await schedule(rivalEncounterId).expect(200)).body.data).toEqual([]);
+    const rows = await auth(
+      request(app).get(`/api/v1/encounters/${rivalEncounterId}/medication-administrations`),
+      nurseToken,
+    ).expect(200);
+    expect(rows.body.data).toEqual([]);
   });
 });

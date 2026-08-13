@@ -220,6 +220,17 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       q.outstandingResults().queryKey,
       q.order("o1").queryKey,
       q.prescriptions("p1").queryKey,
+      /**
+       * The nurse's reads (M2 J / M3). Added in M3-S5A after falsification: stripping the branch
+       * from `medicationSchedule` broke only the MAR suite's own key test, because this invariant —
+       * the one place that asks the question for EVERY clinical read — had never been extended
+       * past M2. A per-feature test catches a per-feature mistake; this catches the pattern.
+       */
+      q.bedBoard().queryKey,
+      q.wardNotes("e1").queryKey,
+      q.medications("e1").queryKey,
+      q.medicationSchedule("e1").queryKey,
+      q.wardWorklist().queryKey,
     ];
 
     for (const key of reads) {

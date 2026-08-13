@@ -7,7 +7,7 @@
  * stay, a running note and a medication record — and that is all this file is. A doctor moving
  * between an OPD patient and a ward patient should feel they changed context, not application.
  */
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { DoseSlot, Encounter, MedicationAdministration, WardNote } from "@medicore/api-client";
 import { Card } from "../Card";
 import { Pill } from "../Pill";
@@ -216,15 +216,36 @@ const styles = StyleSheet.create({
  * dose is DUE, where `DoseRow` leads with the time it was GIVEN. Collapsing them into one
  * component with a flag is how "due at 14:00" eventually renders where "given at 14:03" belongs.
  *
- * Read-only. Charting is S5 and needs an explicit confirmation step.
+ * ── PRESSABLE ONLY WHEN IT LEADS SOMEWHERE (M3-S5A) ─────────────────────────
+ * `onPress` is optional and the row is inert without it — a doctor reading the chart gets exactly
+ * what they got before. A nurse holding `mar:administer` gets a way in. The row itself never charts
+ * anything: a tap target on a scrolling list is how the wrong patient gets the wrong drug, so it
+ * opens a screen that names patient, drug, dose, route and time before anything is recorded.
  */
-export function DoseSlotRow({ slot, zone }: { slot: DoseSlot; zone: string }): React.JSX.Element {
+export function DoseSlotRow({
+  slot,
+  zone,
+  onPress,
+}: {
+  slot: DoseSlot;
+  zone: string;
+  onPress?: () => void;
+}): React.JSX.Element {
   const theme = useTheme();
   const at = parseInstant(slot.scheduledFor);
   const state = doseStateLabel(slot.state);
 
+  const Row = onPress ? Pressable : View;
+
   return (
-    <View
+    <Row
+      {...(onPress
+        ? {
+            onPress,
+            accessibilityRole: "button" as const,
+            accessibilityHint: "Opens this dose to record it",
+          }
+        : {})}
       style={[styles.entry, { borderTopColor: theme.colors.border }]}
       accessible
       accessibilityLabel={`${slot.drugName}, ${slot.dose}, ${slot.route}${
@@ -246,6 +267,6 @@ export function DoseSlotRow({ slot, zone }: { slot: DoseSlot; zone: string }): R
       {slot.reason ? (
         <Text style={[typography.caption, { color: theme.colors.warning }]}>{slot.reason}</Text>
       ) : null}
-    </View>
+    </Row>
   );
 }

@@ -60,6 +60,7 @@ import {
   summariseSlots,
 } from "../../src/clinical/ipd";
 import { latestReading } from "../../src/clinical/vitals";
+import { isOpen } from "../../src/clinical/marAdminister";
 import { sortForReview } from "../../src/clinical/results";
 import { buildTimeline } from "../../src/clinical/timeline";
 import { radius, size, space, typography } from "../../src/theme/tokens";
@@ -339,8 +340,17 @@ function ClinicalActions({ encounter }: { encounter: Encounter }): React.JSX.Ele
  */
 function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): React.JSX.Element {
   const theme = useTheme();
+  const router = useRouter();
   const { queries, ready } = useClinical();
   const { can } = useCapabilities();
+
+  /**
+   * Who may answer a dose (M3-S5A). UI gating only — the server enforces `mar:administer` on every
+   * request, so this decides whether to OFFER the action, never whether it is allowed. A closed
+   * stay offers nothing: charting against a discharged admission is almost always the wrong
+   * patient selected.
+   */
+  const canAdminister = can("mar:administer") && isStayOpen(encounter);
 
   const board = useQuery({ ...queries.bedBoard(), enabled: ready });
   const notes = useQuery({ ...queries.wardNotes(encounter.id), enabled: ready });
@@ -421,6 +431,27 @@ function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): Reac
                   key={`${slot.prescriptionId}:${String(slot.lineIndex)}:${slot.scheduledFor}`}
                   slot={slot}
                   zone={zone}
+                  {...(canAdminister && isOpen(slot)
+                    ? {
+                        /**
+                         * Only the slot's IDENTITY travels (M3-S5A) — prescription, line and
+                         * scheduled instant. Not the drug name, not the dose, not the state: the
+                         * confirmation screen re-reads all of that from the server, because a
+                         * params bundle is a claim made when this list rendered and another nurse
+                         * may have answered the dose since.
+                         */
+                        onPress: () =>
+                          router.push({
+                            pathname: "/administer/[encounterId]",
+                            params: {
+                              encounterId: encounter.id,
+                              prescriptionId: slot.prescriptionId,
+                              lineIndex: String(slot.lineIndex),
+                              scheduledFor: slot.scheduledFor,
+                            },
+                          }),
+                      }
+                    : {})}
                 />
               ))}
             </Card>

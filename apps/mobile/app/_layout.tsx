@@ -127,6 +127,12 @@ function Shell(): React.JSX.Element {
           name="vitals/[encounterId]"
           options={{ headerShown: true, title: "Observations", ...detailHeader(theme) }}
         />
+        {/* Answering one dose (M3-S5A). Reached only from a slot on the round, and it carries the
+            slot's identity — prescription, line and scheduled time — in its params. */}
+        <Stack.Screen
+          name="administer/[encounterId]"
+          options={{ headerShown: true, title: "Give medication", ...detailHeader(theme) }}
+        />
       </Stack>
       {/**
        * Both sit above the navigator, and the ORDER between them is the only thing that matters:

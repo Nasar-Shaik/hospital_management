@@ -40,6 +40,20 @@ import { attemptSign, type SignDeps, type SignOutcome } from "../clinical/signin
 import { attemptWardNote, type WardNoteDeps, type WardNoteOutcome } from "../clinical/wardNote";
 import { attemptVitals, type VitalsOutcome } from "../clinical/vitalsWrite";
 import {
+  attemptAdministration,
+  type AdministerOutcome,
+  type AdministerResult,
+  type SlotRef,
+} from "../clinical/marAdminister";
+
+/** What the confirm screen sends: the outcome, the drug it believes it is answering, and why. */
+export interface AdministerRequest {
+  status: AdministerOutcome;
+  /** From the slot, so the server can cross-check it against `lineIndex` and refuse a mismatch. */
+  drugCode: string;
+  reason?: string;
+}
+import {
   attemptDischarge,
   type DischargeDeps,
   type DischargeInput,
@@ -210,6 +224,51 @@ export function clinicalMutations(api: ApiClient, scope: QueryScope) {
             reload: () => api.listEncounterVitals(encounterId),
             before: context.before,
             ...(context.recordedBy ? { recordedBy: context.recordedBy } : {}),
+          }),
+        invalidates: branchPrefix,
+      };
+    },
+
+    /**
+     * Answering one scheduled dose (M3-S5A) — Give, Hold or Refuse.
+     *
+     * ── THE KEY IS PER DECISION, NOT PER DOSE ───────────────────────────────────
+     * Give / Hold / Refuse on the same slot are three DIFFERENT clinical actions, so they must
+     * never share an idempotency key: if they did, changing your mind after a lost response would
+     * replay the first decision and the record would say the opposite of what the nurse chose. The
+     * screen keys them by outcome for exactly that reason (`keyFor("give" | "hold" | "refuse")`).
+     *
+     * The invalidation matters more here than anywhere: a charted dose changes this slot, the
+     * visit's schedule, its MAR list, and the ward worklist's due counts — a row on a screen the
+     * nurse is not even on. The branch prefix catches all four.
+     */
+    administerDose(
+      encounterId: string,
+      context: { ref: SlotRef; key?: string },
+    ): Write<AdministerRequest, AdministerResult> {
+      return {
+        mutationFn: (request) =>
+          attemptAdministration({
+            record: () =>
+              api.recordMedicationAdministration(
+                encounterId,
+                {
+                  prescriptionId: context.ref.prescriptionId,
+                  // The line INDEX, always — never the drug code alone. One prescription may carry
+                  // the same drug on a scheduled line and a PRN line (S1), and the code would take
+                  // whichever came first.
+                  lineIndex: context.ref.lineIndex,
+                  drugCode: request.drugCode,
+                  status: request.status,
+                  // The slot, named explicitly. The server validates it against the schedule it
+                  // derives itself, so this is a claim being checked, not a value being trusted.
+                  scheduledFor: context.ref.scheduledFor,
+                  ...(request.reason ? { reason: request.reason } : {}),
+                },
+                context.key,
+              ),
+            reloadSchedule: () => api.listMedicationSchedule(encounterId),
+            ref: context.ref,
           }),
         invalidates: branchPrefix,
       };
