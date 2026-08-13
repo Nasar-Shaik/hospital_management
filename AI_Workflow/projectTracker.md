@@ -1,8 +1,8 @@
 # Project Tracker — MediCore HMS
 
 **The live list of what is done and what is left.** Read from the source tree and the quality
-gates on 2026-08-12, then reconciled against the written docs. Where a doc and the code disagreed,
-the code won and the difference is recorded in §8.
+gates on 2026-08-14, then reconciled against the written docs. Where a doc and the code disagreed,
+the code won and the difference is recorded in §10.
 
 > **Update rule.** Change a module's state in the same commit that changes the module. A tracker
 > updated afterwards is a tracker nobody trusts — which is exactly what happened to
@@ -22,16 +22,18 @@ the code won and the difference is recorded in §8.
 
 ## 1. Snapshot
 
-|                         |                                                                                                                            |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Branch**              | `feature/0.1`                                                                                                              |
-| **Phases complete**     | 2 of 10 (P0, P1) · P2 in progress ~35%                                                                                     |
-| **API modules in code** | 43 · 216 OpenAPI paths · 265 contract operations                                                                           |
-| **Web screens**         | 40                                                                                                                         |
-| **Mobile**              | M0 architecture approved · **M1 delivered 2026-08-12**, verified on a physical Android handset                             |
-| **Tests passing**       | 1,722 — 1,462 API integration · 181 mobile · 69 API unit · 10 web                                                          |
-| **Gates**               | `format` · `lint` 18/18 · `typecheck` 18/18 · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — all green |
-| **Next action**         | Close the three patient-safety gaps in §6 before widening scope. Mobile M2 awaits review approval.                         |
+|                       |                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**            | `feature/0.1` — **6 commits unpushed**                                                                                                                           |
+| **Phases complete**   | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                   |
+| **API**               | 43 modules · 224 OpenAPI paths · 273 contract operations                                                                                                         |
+| **Web**               | 46 screens                                                                                                                                                       |
+| **Mobile**            | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                     |
+| **Tests passing**     | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                          |
+| **Gates**             | `format` · `lint` 18/18 · `typecheck` 18/18 · `unit` · `integration` · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — all green at `375e4cf` |
+| **Manual validation** | 🔴 **None.** Mobile M2 0/61 · M3 0/45 · no web checklist exists. Everything since M1 is proven by tests only.                                                    |
+| **CI**                | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                          |
+| **Next action**       | **Stage A in §9 — validate on hardware before adding surface area.**                                                                                             |
 
 ---
 
@@ -43,28 +45,30 @@ the code won and the difference is recorded in §8.
 | `🟨` | Partial — real code exists; named gap in the note |
 | `⬜` | Not started — no module in `apps/api/src/modules` |
 
-Route counts are registered HTTP handlers, a proxy for **depth, not quality**. A low count on a
-`🟨` module usually means the write side is thin.
+Route counts are registered HTTP handlers per module directory, a proxy for **depth, not quality**.
+A low count on a `🟨` module usually means the write side is thin.
 
 ---
 
 ## 3. Phases
 
-| Phase | Scope                                                                                     | Status     |
-| ----- | ----------------------------------------------------------------------------------------- | ---------- |
-| P0    | Monorepo, CI, Docker Compose, design tokens, OpenAPI baseline                             | ✅ 100%    |
-| P1    | Foundation — master DB, tenant provisioning, connection manager, auth / JWT / MFA         | ✅ 100%    |
-| P2    | Core operations — masters, patients & MPI, doctors & schedules, appointments, queue, beds | 🟨 ~35%    |
-| P3    | Clinical — EMR, consultation, nursing, LIS, RIS, theatre, blood bank                      | ⬜ 0%      |
-| P4    | Financial — billing engine, pharmacy, inventory, insurance & claims, finance GL           | ⬜ 0%      |
-| P5    | Applications — mobile (staff / doctor / patient), communication, home healthcare          | 🟨 M1 only |
-| P6    | Analytics — reporting engine, read models, dashboards                                     | ⬜ 0%      |
-| P7    | Integrations — payments, comms, analysers, HL7 / FHIR / DICOM, ABDM / NHCX, SSO           | ⬜ 0%      |
-| P8    | AI suite — advisory, human-in-the-loop                                                    | ⬜ 0%      |
-| P9    | Hardening, compliance, disaster recovery, GA                                              | ⬜ 0%      |
+| Phase | Scope                                                                                     | Status               |
+| ----- | ----------------------------------------------------------------------------------------- | -------------------- |
+| P0    | Monorepo, CI, Docker Compose, design tokens, OpenAPI baseline                             | ✅ 100%              |
+| P1    | Foundation — master DB, tenant provisioning, connection manager, auth / JWT / MFA         | ✅ 100%              |
+| P2    | Core operations — masters, patients & MPI, doctors & schedules, appointments, queue, beds | 🟨 ~55%              |
+| P3    | Clinical — EMR, consultation, nursing, LIS, RIS, theatre, blood bank                      | 🟨 ~30%              |
+| P4    | Financial — billing engine, pharmacy, inventory, insurance & claims, finance GL           | 🟨 ~30%              |
+| P5    | Applications — mobile (staff / doctor / patient), communication, home healthcare          | 🟨 ~35%              |
+| P6    | Analytics — reporting engine, read models, dashboards                                     | 🟨 ~10%              |
+| P7    | Integrations — payments, comms, analysers, HL7 / FHIR / DICOM, ABDM / NHCX, SSO           | ⬜ 0%                |
+| P8    | AI suite — advisory, human-in-the-loop                                                    | ⬜ 0%                |
+| P9    | Hardening, compliance, disaster recovery, GA                                              | 🟨 runs continuously |
 
-P5 is not zero: the staff app's foundation shipped. The phase stays open — six staff milestones
-and the patient app remain.
+**P3 and P4 were both recorded as 0% and both were wrong.** Billing has 28 routes and a working
+receipt flow; the pharmacy has a medicine master and an append-only stock ledger; the clinical loop
+runs encounter → consultation note → prescription → dispense → order → result → MAR. They are thin,
+not absent, and calling them zero hid real gaps behind an easy number. See §10.
 
 ---
 
@@ -72,42 +76,64 @@ and the patient app remain.
 
 ### A · Platform & tenancy
 
-- [x] **A1 Tenant management** — registry, provisioning CLI, connection manager, custom domains
-- [x] **A3 Identity & auth** — argon2id, JWT, MFA, rotating refresh with reuse detection (13 routes)
-- [x] **A4 RBAC & permissions** — 144-permission catalogue, matrix suite as a release gate (8)
-- [x] **A5 Audit & activity logging** — append-only, hash-chained (3)
-- [x] **A5b Transactional outbox + relay** — ADR-0007
-- [x] **A6 Notification system** — outbox-driven (3)
+- [x] **A1 Tenant management** (17) — registry, provisioning CLI, connection manager, operator console
+- [x] **A3 Identity & auth** (13) — argon2id, JWT, MFA, rotating refresh with reuse detection
+- [x] **A4 RBAC & permissions** (8) — 144-permission catalogue, matrix suite as a release gate
+- [x] **A5 Audit & activity logging** (3) — append-only, hash-chained, tamper detection proven
+- [x] **A5b Transactional outbox + relay** — ADR-0007, leader-locked, DLQ
+- [x] **A6 Notification system** (3) — outbox-driven, one message per cause enforced by lease
+- [x] **A7 documents** (4) · **A8 branding** (site, 6) · **A9 API keys** (3) — MVP depth
 
 ### B · Organisation & facilities
 
-- [x] **B4 Wards, rooms, beds, bed board** (9) — _see the bed-inventory gap in §6_
-- [x] **B6 Ambulance** (6)
-- [x] **B7 Assets & maintenance** (5)
-- [x] **B10 Feedback & complaints** (5)
+- [x] **B1 Hospital profile** (2) · **B2–B3 Departments** (3) — hierarchy, cycle-guarded
+- [x] **B4 Wards, rooms, beds, bed board** (9) — ward → room → bed, tariff resolution most-specific-wins
+- [x] **B5 Operating theatre** (6) — registry + overlap-guarded bookings
+- [x] **B6 Ambulance** (6) · **B7 Assets & maintenance** (5) · **B10 Feedback & complaints** (5)
+- [x] **B13 Mortuary** (4)
 
 ### C · Patient
 
-- [x] **C1 Patient registration & master patient index** (7)
+- [x] **C1 Patient registration & MPI** (7) — UHID from an atomic counter, duplicate refusal, merge without delete
+- [x] **C3 Records, consent, discharge, death** (medicolegal 5, consents, death records) — **the terminal-states gap is closed**, see §6
+- [x] **C5 Wallet & packages** (4)
+- [x] **C7 MRD / HIM** (6)
+
+### D · Clinical
+
+- [x] **D2 Doctor management** — session roster, leave, and a doctor managing their **own** availability
+- [x] **D5 Nursing — the safe core.** Vitals (3), ward notes, and the **Medication Administration
+      Record** (3) hardened to a clinical-safety envelope: administration identity is
+      `prescriptionId + lineIndex + scheduledFor` (migration 0049 unique index), `HMS-MAR-001`
+      returns the existing row as an **answer** rather than a failure, and PRN is deliberately
+      unconstrained. The ±4h slot tolerance that was a duplicate-administration escape path is gone.
+- [x] **D6 Laboratory** — catalogue (4) + order-to-result pipeline (9) with the two-person rule
 
 ### E–F · Front office & financial
 
-- [x] **E1 Appointments, queue, token** (19) — with UI and clinic hours
-- [x] **F1 Billing** (27) — estimates, invoices, receipts, refunds; one code path, two hospital types
+- [x] **E1 Appointments, queue, token** (22) — clinic hours now resolve in the **branch** timezone
+- [x] **F1 Billing** (28) — estimates, invoices, receipts, refunds; packages visible, payee named
 
 ### G · Applications
 
 - [x] **Mobile M0** — architecture approved: tenancy, session, branch, navigation, security model
-- [x] **Mobile M1** — sign in, stay signed in, know your site, fail comprehensibly. Platform-free
-      core, 181 tests, no simulator required. Verified on hardware.
+- [x] **Mobile M1** — sign in, stay signed in, know your site, fail comprehensibly. Verified on hardware.
+- [x] **Mobile M2 — doctor.** My patients, timeline, vitals & results, clinical writes, inpatient
+      workflow, biometric screen lock. Forces a development build (`expo-local-authentication`).
+- [x] **Mobile M3 — nurse.** Ward worklist, patient chart, vitals capture, single-dose MAR
+      administration, medication round, hardening pass.
+- [x] **Web M3 parity** — see §8
 
 ### Cross-cutting engineering
 
-- [x] Multi-branch isolation — Phase 1 and 1.5, branch survives events and background work
+- [x] Multi-branch isolation — Phase 1 and 1.5; branch survives events and background work
 - [x] API contract pipeline — `openapi:check`, `contract:check`, `client:check`, all falsified
-- [x] `Idempotency-Key` — documented contract made real, 5 controls falsified
+- [x] `Idempotency-Key` — documented contract made real, 5 controls falsified, now consumed by web and mobile
 - [x] API v1 compatibility policy — including the three breakages a schema diff cannot show
 - [x] Deprecation / Sunset machinery — 12-month window enforced at startup
+- [x] **Branch timezone is validated, not trusted** — and clinical dates are reckoned in it, on both clients
+- [x] **Shared clinical primitives live in `@medicore/api-client`** — `marSlotTaken`, `attemptAdministration`,
+      `reconcileSlot`, `attemptVitals`, `reconcileVitals`. One engine, two apps, no fork.
 - [x] Local dev on a physical device — `dev:device-domains`, browser and handset work at once
 
 ---
@@ -116,87 +142,89 @@ and the patient app remain.
 
 ### 5.1 Finish P2 — core operations
 
-- [ ] **B1–B3** Organisation structure — departments and profile beyond branches
-- [ ] **B5** ICU / ER registries (theatre registry exists)
-- [ ] **B8** Partner masters — vendors, referrers
-- [ ] **B9** Facility ops — housekeeping, visitor management
-- [ ] **C2** Patient clinical profile — beyond vitals, allergies, drug safety
-- [ ] **C3** Records, consent, discharge, death — _blocked by the terminal-states gap, §6_
-- [ ] **C4** Referral (transfer exists)
+- [ ] **B8** Partner masters — vendors, referrers. _Blocks goods-receipt in Stage B._
+- [ ] **B9** Facility ops — housekeeping states beyond `blocked`, visitor management
+- [ ] **C2** Patient clinical profile — problem list across visits, immunisations, family history
+- [ ] **C4** Referral out (bed-to-bed transfer exists)
 - [ ] **C6** Online registration & digital forms
-- [ ] **D2** Doctor management — beyond core schedules
 
 ### 5.2 P3 — clinical
 
-- [ ] **D1** EMR — full clinical record (encounters exist, 14 routes)
-- [ ] **D3** Consultation workspace — currently structured notes only (2 routes)
-- [ ] **D5** Nursing — observations and care plans (MAR only, 2 routes)
-- [ ] **D6** Laboratory (LIS) — order-to-result (catalogue + orders exist, 13 routes)
-- [ ] **D7** Radiology (RIS)
-- [ ] **D8** Operation theatre — scheduling and notes (registry only, 6 routes)
-- [ ] **D9** Blood bank
-- [ ] **D10** Emergency & triage
-- [ ] **D11** Critical care — ICU / NICU / PICU
-- [ ] **D12** Dialysis
-- [ ] **D13** Physiotherapy & rehabilitation
-- [ ] **D14** Clinical dietetics
+- [ ] **D1** EMR depth — ICD code master + search, order sets, problem list (encounters: 14 routes)
+- [ ] **D3** Consultation workspace — structured note only (2 routes); templates, order sets
+- [ ] **D5** Nursing depth — **intake/output, wound care, care plan, handover, and the nurse's own
+      note permission.** The M3 audit named all five out of scope; they are the rest of a shift.
+- [ ] **D6** LIS depth — specimen collection/accession state, panels, delta checks
+- [ ] **D7** Radiology (RIS) · **D9** Blood bank · **D10** Emergency & triage
+- [ ] **D11** Critical care · **D12** Dialysis · **D13** Physiotherapy · **D14** Dietetics
 - [ ] **D4** Teleconsultation
+- [ ] **D8** Theatre depth — anaesthetist/team, pre-op checklist, utilisation
 
 ### 5.3 P4 — financial
 
-- [ ] **F5** Inventory & store — stock, batches, expiry. **The missing module under F4.**
-- [ ] **F4** Pharmacy — dispensing is thin (2 routes) and unsafe without F5
+- [ ] **F5** Inventory depth — **expiry is recorded and never read**; no batch chosen at dispense;
+      no expiry or low-stock alert; no goods-receipt or vendor. Master + ledger exist. _See §6._
+- [ ] **F4** Pharmacy — dispensing is 2 routes and unaware of batch or expiry
 - [ ] **F2** Insurance / TPA / claims — beyond MVP (7 routes)
-- [ ] **F3** Corporate & packages
-- [ ] **F6** Finance & accounting — general ledger
-- [ ] **F7** HR & payroll
+- [ ] **F3** Corporate & packages — enrolment exists, corporate billing does not
+- [ ] **F6** Finance & accounting — general ledger · **F7** HR & payroll
 
 ### 5.4 P5–P9 — applications and platform services
 
-- [ ] **G2–G3** Doctor and patient portals
-- [ ] **H1** Communication suite — staff chat, broadcast
+- [ ] **Mobile M4–M7** — see §7 · **M8 patient app** deferred to the final phase
+- [ ] **G2–G3** Doctor and patient portals (web)
+- [ ] **H1** Communication suite — staff chat, broadcast, the in-app notification inbox
 - [ ] **I1–I2** Reporting & dashboards — beyond current partial (6 routes)
-- [ ] **J1** AI suite
-- [ ] **K1** Security & compliance centre
-- [ ] **Integrations** — HL7 / FHIR, ABDM, NHCX, payments, analysers, SSO
+- [ ] **J1** AI suite · **K1** Security & compliance centre
+- [ ] **Integrations** — ABDM/NHCX first (India), then HL7/FHIR, payments, analysers, SSO
 - [ ] Home healthcare · occupational health
-- [ ] **A7 / A8 / A9** past MVP — documents, branding, API keys
-- [ ] **A2** Subscription & plans — beyond core edition enforcement
+- [ ] **A2** Subscription — SaaS invoicing/dunning (needs a payment gateway)
+- [ ] **A8** Custom-domain TLS routing — parked with the VPS/edge work
 
 ---
 
 ## 6. Gaps to close before widening scope
 
-Three are patient-safety defects sitting _underneath_ modules marked done. They are not new work —
-they are the cost of the demo slices that got the clinical loop clickable.
+**Five of the six gaps this file opened on 2026-08-12 are closed.** They are kept here with their
+resolution so the next audit does not re-investigate them.
 
-| #   | Gap                                                                                        | Why it matters                                                                                                                                                           |
-| --- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1   | **IPD terminal states** — LAMA, absconded and deceased all record as an ordinary discharge | A false statement in a medical record                                                                                                                                    |
-| 2   | **Pharmacy stock, batches, expiry** (F5)                                                   | The counter dispenses a drug the shelf may not hold                                                                                                                      |
-| 3   | **Bed inventory**                                                                          | Two patients can be recorded in the same bed                                                                                                                             |
-| 4   | **`Branch.timezone` is unvalidated** and unset on seeded branches                          | Must land **before** any time-dependent appointment work, or times render against a guess. Use the shape + `Intl` rule — `Intl.supportedValuesOf` rejects `Asia/Kolkata` |
-| 5   | **`resolveActiveBranch` accepts an INACTIVE branch**                                       | Validates membership but not status, so a retired site passes for a hospital-wide caller                                                                                 |
-| 6   | **RBAC matrix test isolation**                                                             | One token per role reused across ~1,181 requests; intermittently 401 where 403 is expected in the full run, passes standalone                                            |
+| #   | Gap                                                  | State                                                                                                                                                                                                                                                                                                                         |
+| --- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **IPD terminal states** — LAMA/absconded/deceased    | ✅ **Closed.** `DISCHARGE_DISPOSITIONS`, `endStayWithOutcome`, and an `outcome_note` in the ward record. The tracker's claim that they record as an ordinary discharge was already false when written.                                                                                                                        |
+| 2   | **Pharmacy stock, batches, expiry** (F5)             | 🟨 **Narrower than stated.** A medicine master and an append-only `stockMovements` ledger exist; batch and expiry are captured **on receipt**. What is missing: nothing ever **reads** expiry, no batch is chosen at dispense, and there is no alert. Dispensing not blocking on stock is a deliberate decision, not the gap. |
+| 3   | **Bed inventory** — two patients in one bed          | ✅ **Closed.** `one_open_stay_per_bed_per_branch` partial-unique index arbitrates occupancy; proven by the branch-isolation suite.                                                                                                                                                                                            |
+| 4   | **`Branch.timezone` unvalidated**                    | ✅ **Closed** (`c262612`) — shape + `Intl` rule, and both clients now reckon clinical dates in it.                                                                                                                                                                                                                            |
+| 5   | **`resolveActiveBranch` accepts an INACTIVE branch** | ✅ **Closed** (`dadbf66`).                                                                                                                                                                                                                                                                                                    |
+| 6   | **RBAC matrix test isolation**                       | ✅ **Not a code defect** (`b2253bd`) — Docker OOM on the dev host, ~7.75 GB across ~30 containers. Check for `Exited (137)` before blaming the suite.                                                                                                                                                                         |
 
-Also open, lower severity: allergy screening covers 15 demo drugs and is **not a formulary** — do
-not widen the drug list without widening the safety data.
+### Open risks, current
+
+| Risk                                                                                        | Severity                                                                    |
+| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Nothing has been validated on a device or in a browser by a human** — 106 checks unticked | 🔴 Highest. Everything since M1 rests on tests alone.                       |
+| **CI is billing-locked**; 6 commits unpushed                                                | 🔴 The work exists on one machine and has never been built anywhere else.   |
+| **F5 expiry is captured and never read**                                                    | 🟠 An expired batch can be dispensed with no signal.                        |
+| **A nurse cannot write a nursing note** — ward notes are gated `emr:write`                  | 🟠 The permission boundary is correct; the missing thing is a nursing note. |
+| **`administeredBy` shows an id, not a name** on the MAR                                     | 🟡 API-side name expansion.                                                 |
+| **Allergy screening covers 15 demo drugs and is not a formulary**                           | 🟠 Do not widen the drug list without widening the safety data.             |
+| **Vitals render in the reader's timezone, not the ward's**                                  | 🟡 Display only; the stored instant is correct.                             |
+| Integration suite is **environment-sensitive**, not flaky — the host swaps under load       | 🟡 Re-run before investigating; check Docker memory first.                  |
 
 ---
 
 ## 7. Mobile — staff app
 
-| Stage | Scope                                                                     | Status                     |
-| ----- | ------------------------------------------------------------------------- | -------------------------- |
-| M0    | Architecture — tenancy, session, branch, navigation, security             | ✅ Approved                |
-| M1    | Foundation — sign in, stay signed in, know your site, fail comprehensibly | ✅ Delivered 2026-08-12    |
-| M2    | Doctor — my patients, timeline, vitals & results, biometric gate          | ⬜ Next, awaiting approval |
-| M3    | Nurse — ward worklist, vitals capture, medication administration          | ⬜                         |
-| M4    | Alerts — device registration, push delivery, inbox                        | ⬜                         |
-| M5    | Reception & pharmacy — register, check in, take payment, dispense         | ⬜                         |
-| M6    | Lab & admin — worklist, result entry, approvals                           | ⬜                         |
-| M7    | Hardening — accessibility, offline reads, store release                   | ⬜                         |
-| M8    | **Patient app — deferred to the final major phase, lowest priority**      | ⬜ Deferred                |
+| Stage | Scope                                                                     | Status                                 |
+| ----- | ------------------------------------------------------------------------- | -------------------------------------- |
+| M0    | Architecture — tenancy, session, branch, navigation, security             | ✅ Approved                            |
+| M1    | Foundation — sign in, stay signed in, know your site, fail comprehensibly | ✅ 2026-08-12 · hardware-verified      |
+| M2    | Doctor — my patients, timeline, vitals & results, writes, biometric gate  | ✅ 2026-08-13 · **0/61 device checks** |
+| M3    | Nurse — ward worklist, vitals capture, medication administration, round   | ✅ 2026-08-13 · **0/45 device checks** |
+| M4    | Alerts — device registration, push delivery, inbox                        | ⬜ Next                                |
+| M5    | Reception & pharmacy — register, check in, take payment, dispense         | ⬜ _needs Stage B_                     |
+| M6    | Lab & admin — worklist, result entry, approvals                           | ⬜                                     |
+| M7    | Hardening — accessibility, offline reads, store release                   | ⬜                                     |
+| M8    | **Patient app — deferred to the final major phase, lowest priority**      | ⬜ Deferred                            |
 
 **M2 forces a development build.** `expo-local-authentication` does not run in Expo Go. That is
 also the point at which the Expo SDK 54 pin can be lifted — see `apps/mobile/README.md` for why it
@@ -204,25 +232,134 @@ must not be raised on its own.
 
 ---
 
-## 8. Where the code disagreed with the docs
+## 8. Web — clinical parity slices
 
-Recorded so the correction is not lost, and so the next audit knows what was already checked.
+Web is the **primary** clinical surface, not a mobile companion. These slices brought it up to the
+same safety envelope M3 established on mobile, reusing the same primitives.
 
-| Doc claim                                                      | Reality on 2026-08-12                         |
-| -------------------------------------------------------------- | --------------------------------------------- |
-| `00-PROGRESS-TRACKER.md`: F1 Billing `⬜`                      | 27 routes, working receipt flow               |
-| `00-PROGRESS-TRACKER.md`: E1 Appointments `⬜`                 | 19 routes, UI, clinic hours                   |
-| `00-PROGRESS-TRACKER.md`: C7 MRD, C5 Wallet, B13 Mortuary `⬜` | All three have modules and screens            |
-| `00-PROGRESS-TRACKER.md`: G1–G3 apps `⬜`                      | Mobile M1 shipped and runs on hardware        |
-| Activity log ends 2026-07-16                                   | `PROJECT-STATUS.md` audits through 2026-08-12 |
+| Slice | Scope                                                                                                               | Status |
+| ----- | ------------------------------------------------------------------------------------------------------------------- | ------ |
+| W1    | Branch-scoped screens are discarded on a branch switch                                                              | ✅     |
+| W2    | Clinical dates reckoned in the branch timezone, not the browser's                                                   | ✅     |
+| W3    | **MAR safety** — slot identity, `HMS-MAR-001` read as an answer, idempotency, reconciliation instead of "try again" | ✅     |
+| W4    | **Medication round** — a navigator, not a second administration engine. One write path.                             | ✅     |
+| D1+D2 | Ward identity resolved server-side; vitals writes idempotent and reconciled                                         | ✅     |
 
-The ledger in that file drifted because it was updated separately from the work. This file exists
-to be updated _with_ the work — see the update rule at the top.
+**No W5 is justified.** The closure audit compared 28 areas of M3 behaviour against web and found
+the safety envelope complete. The next web work is validation, not code.
 
 ---
 
-## 9. Change log for this file
+## 9. Next development strategy — stage by stage
 
-| Date       | Change                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------- |
-| 2026-08-12 | Created. Baseline reconciled against the source tree, the gates and `PROJECT-STATUS.md`. |
+Ordered by what makes the next stage cheaper or safer, not by what is most interesting.
+
+### Stage A · Prove what exists — **no new features** · S
+
+Everything built since M1 is proven by tests only. 61 + 45 device checks are unticked and web has
+no checklist at all. A defect found now costs one fix; the same defect found after M4 and M5 are
+built on top costs a redesign.
+
+1. Run `MOBILE_M2_DEVICE_CHECKLIST.md` on hardware → 61/61.
+2. Run `MOBILE_M3_DEVICE_CHECKLIST.md` on hardware → 45/45.
+3. **Write** `WEB_M3_BROWSER_CHECKLIST.md` — the ward, the round, the MAR confirmation, a branch
+   switch, a lost response — and run it.
+4. Resolve the push blocker (SSH unlock or `workflow` scope) and push the 6 commits.
+5. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.
+
+**Exit:** every checklist green, history pushed. **Do not start Stage B until this is done.**
+
+### Stage B · Make the shelf honest — F5 + F4 · M
+
+The last open item from the original safety list, and the narrowest it has ever been.
+
+1. Read expiry: flag expired and near-expiry stock on the master and in a report.
+2. Choose a batch at dispense; refuse an expired batch with an override that is recorded.
+3. Low-stock and expiry alerts through the existing outbox — no new delivery mechanism.
+4. **B8 partner masters** (vendors) as the minimum to make a goods-receipt real.
+
+**Why here:** it is a patient-safety gap, it is the shelf mobile M5 will sell from, and it is the
+one place where "marked done" and "safe" still differ.
+
+### Stage C · Finish the nurse's shift — D5 depth · M
+
+M3 gave a nurse a worklist, vitals and a medication record. A shift also has fluids and a handover.
+
+1. **A nursing note the nurse can actually write** — not `emr:write`.
+2. Intake / output charting.
+3. Nursing assessment + care plan.
+4. Handover — **derive it from what is already recorded**, do not build a parallel document.
+
+**Why here:** it converts M3 from "usable" to "a nurse could work a whole shift on it", and it needs
+no new client — both surfaces already exist.
+
+### Stage D · Mobile M4 alerts, then M5 · M
+
+M4 first: push is what makes the app worth opening unprompted, and the outbox that feeds it is
+already built and proven. M5 follows Stage B, because a dispensing screen with no batch is the
+same defect on a smaller screen.
+
+### Stage E · Widen the clinical floor — P3 breadth · L
+
+**D7 radiology** and **D10 emergency & triage** before D9/D11–D14: radiology is the second-largest
+order source after the lab and reuses the order pipeline wholesale, and triage is the front door of
+every hospital that buys the Hospital edition. Then **C2** problem list and **D1** ICD master —
+both are the same missing thing, a coded clinical vocabulary.
+
+### Stage F · Financial depth — P4 · L
+
+F2 claims, F3 corporate billing, F6 general ledger, F7 payroll. Deliberately after the clinical
+floor: billing already works for the cash and package cases, and every module added above generates
+charges that the GL must eventually reconcile — building the ledger before the charges exist means
+building it twice.
+
+### Stage G · Platform services — P6 → P7 → P8 · L
+
+Analytics (P6) once there is enough clinical data to be worth reading; then integrations (P7) with
+**ABDM/NHCX first** — it is a regulatory requirement in the target market, not a feature; then AI
+(P8) as advisory only, human-in-the-loop, on top of a record that is already trustworthy.
+
+### Standing · P9 hardening, continuously
+
+Rate limiting, the authorization probes for routes that lack one, DR drills, retention/archival.
+These do not wait for a phase — each stage adds its own.
+
+### The rule this ordering encodes
+
+> **Depth before breadth, and validation before both.** Every stage above closes something already
+> half-built before opening something new. The three worst defects this project has found —
+> duplicate administration, permissions granted to nobody, and identity resolved from a paginated
+> list — were all inside modules marked done.
+
+---
+
+## 10. Where the code disagreed with the docs
+
+Recorded so the correction is not lost, and so the next audit knows what was already checked.
+
+| Doc claim                                                                 | Reality                                                                             |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `00-PROGRESS-TRACKER.md`: F1 Billing `⬜`                                 | 28 routes, working receipt flow (2026-08-12)                                        |
+| `00-PROGRESS-TRACKER.md`: E1 Appointments `⬜`                            | 22 routes, UI, clinic hours (2026-08-12)                                            |
+| `00-PROGRESS-TRACKER.md`: C7 MRD, C5 Wallet, B13 Mortuary `⬜`            | All three have modules and screens (2026-08-12)                                     |
+| `00-PROGRESS-TRACKER.md`: G1–G3 apps `⬜`                                 | Mobile M1 shipped and runs on hardware (2026-08-12)                                 |
+| **This file §3: P3 and P4 at `0%`**                                       | **Both ~30%. The clinical loop and the billing loop both run.**                     |
+| **This file §6.1: terminal states record as a discharge**                 | **False — `DISCHARGE_DISPOSITIONS` + outcome notes exist.**                         |
+| **This file §6.3: two patients can share a bed**                          | **False — `one_open_stay_per_bed_per_branch` prevents it.**                         |
+| **This file §5.1: C3 blocked by the terminal-states gap**                 | **Not blocked; medicolegal, consent and death records exist.**                      |
+| **This file §6.2: "the counter dispenses a drug the shelf may not hold"** | **A deliberate decision, not a defect. The real gap is that expiry is never read.** |
+| M3 audit §11 B2: dose identity keyed on `drugCode`                        | Wrong — one prescription may carry the same drug twice. Shipped key is `lineIndex`. |
+| M0 phase table: "M3 backend needed: none"                                 | Four backend gaps, one a live clinical-safety defect                                |
+
+Three of this file's own six "gaps" were false when it was written on 2026-08-12 — they were
+inherited from `00-PROGRESS-TRACKER.md`'s prose rather than read from the code. A tracker that
+copies another tracker inherits its drift. **Read the code.**
+
+---
+
+## 11. Change log for this file
+
+| Date       | Change                                                                                                                                                                                                                  |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-12 | Created. Baseline reconciled against the source tree, the gates and `PROJECT-STATUS.md`.                                                                                                                                |
+| 2026-08-14 | Reconciled against 24 commits (mobile M2 + M3, web W1–W4 + closure, API nurse-safety work). Tests 1,722 → 3,661. Five of six §6 gaps closed, three of them found false. Added §8 web slices and §9 stage-wise strategy. |
