@@ -24,13 +24,11 @@ import {
   type WardNote,
   type TerminalOutcome,
   type BedBoard,
-  type Prescription,
-  type MedicationAdministration,
-  type MarStatus,
   type MannerOfDeath,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { MedicationRecord } from "../../components/MedicationRecord";
 import { rupees, toPaise } from "../../lib/money";
 
 function when(iso: string): string {
@@ -94,198 +92,6 @@ function Notes({ notes }: { notes: WardNote[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-/* ── Medication Administration Record (D5) ─────────────────────────────────── */
-
-const MAR_TONE: Record<MarStatus, "success" | "warning" | "neutral"> = {
-  given: "success",
-  held: "warning",
-  refused: "warning",
-  not_available: "neutral",
-};
-const MAR_LABEL: Record<MarStatus, string> = {
-  given: "Given",
-  held: "Held",
-  refused: "Refused",
-  not_available: "Not available",
-};
-
-/** The signed prescriptions in force, flattened to the drug lines a nurse gives against. */
-interface DrugLine {
-  prescriptionId: string;
-  /**
-   * WHICH line of the prescription. Sent with every administration because `drugCode` alone is
-   * ambiguous: a prescription may carry the same drug twice (a regular round and a PRN line), and
-   * the server refuses a code that matches more than one rather than charting an arbitrary one.
-   */
-  lineIndex: number;
-  drugCode: string;
-  drugName: string;
-  dose: string;
-  route: string;
-  frequency: string;
-}
-
-function MedicationRecord({
-  encounterId,
-  canAdminister,
-}: {
-  encounterId: string;
-  canAdminister: boolean;
-}) {
-  const { api } = useAuth();
-  const [lines, setLines] = useState<DrugLine[]>([]);
-  const [log, setLog] = useState<MedicationAdministration[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    Promise.all([
-      api.listPrescriptions({ encounterId, current: true }),
-      api.listMedicationAdministrations(encounterId),
-    ])
-      .then(([rx, mar]: [Prescription[], MedicationAdministration[]]) => {
-        // Only a live signed prescription is administrable.
-        const live = rx.filter(
-          (p) =>
-            p.status === "signed" || p.status === "partially_dispensed" || p.status === "dispensed",
-        );
-        setLines(
-          live.flatMap((p) =>
-            p.lines.map((l, lineIndex) => ({
-              prescriptionId: p.id,
-              lineIndex,
-              drugCode: l.drugCode,
-              drugName: l.drugName,
-              dose: l.dose,
-              route: l.route,
-              frequency: l.frequency,
-            })),
-          ),
-        );
-        setLog(mar);
-      })
-      .catch((e: unknown) =>
-        setError(e instanceof ApiClientError ? e.message : "Could not load medications."),
-      )
-      .finally(() => setLoading(false));
-  }, [api, encounterId]);
-  useEffect(load, [load]);
-
-  async function chart(line: DrugLine, status: MarStatus) {
-    let reason: string | undefined;
-    if (status === "held") {
-      const r = window.prompt("Why was the dose held?");
-      if (!r || !r.trim()) return;
-      reason = r.trim();
-    } else if (status === "refused") {
-      const r = window.prompt("Note (optional):") ?? "";
-      reason = r.trim() || undefined;
-    }
-    setBusy(`${line.prescriptionId}:${String(line.lineIndex)}`);
-    setError(null);
-    try {
-      await api.recordMedicationAdministration(encounterId, {
-        prescriptionId: line.prescriptionId,
-        lineIndex: line.lineIndex,
-        drugCode: line.drugCode,
-        status,
-        ...(reason ? { reason } : {}),
-      });
-      load();
-    } catch (e) {
-      setError(e instanceof ApiClientError ? e.message : "Could not chart the dose.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  if (loading) {
-    return <p className="text-xs text-[var(--color-fg-subtle)]">Loading…</p>;
-  }
-
-  return (
-    <div className="space-y-4">
-      {error && <Alert tone="danger">{error}</Alert>}
-
-      {/* Active drugs to give against */}
-      {lines.length === 0 ? (
-        <p className="text-xs text-[var(--color-fg-subtle)]">
-          No signed prescriptions for this stay.
-        </p>
-      ) : (
-        <ul className="space-y-1.5">
-          {lines.map((l) => {
-            const key = `${l.prescriptionId}:${String(l.lineIndex)}`;
-            return (
-              <li
-                key={key}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
-              >
-                <div>
-                  <span className="text-sm font-medium text-[var(--color-fg)]">{l.drugName}</span>
-                  <span className="ml-2 text-xs text-[var(--color-fg-subtle)]">
-                    {l.dose} · {l.route} · {l.frequency}
-                  </span>
-                </div>
-                {canAdminister && (
-                  <div className="flex gap-1.5">
-                    <button
-                      disabled={busy === key}
-                      onClick={() => void chart(l, "given")}
-                      className="rounded-md border border-[var(--color-success)]/40 px-2.5 py-1 text-xs font-medium text-[var(--color-success)] hover:bg-[var(--color-success-bg)] disabled:opacity-50"
-                    >
-                      Give
-                    </button>
-                    <button
-                      disabled={busy === key}
-                      onClick={() => void chart(l, "held")}
-                      className="rounded-md border border-[var(--color-border-strong)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-muted)] hover:border-[var(--color-warning)] disabled:opacity-50"
-                    >
-                      Hold
-                    </button>
-                    <button
-                      disabled={busy === key}
-                      onClick={() => void chart(l, "refused")}
-                      className="rounded-md border border-[var(--color-border-strong)] px-2.5 py-1 text-xs font-medium text-[var(--color-fg-muted)] hover:border-[var(--color-warning)] disabled:opacity-50"
-                    >
-                      Refused
-                    </button>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      {/* The record */}
-      {log.length > 0 && (
-        <div>
-          <div className="mb-1.5 text-xs font-semibold tracking-wide text-[var(--color-fg-muted)] uppercase">
-            Given
-          </div>
-          <ul className="space-y-1">
-            {log.map((m) => (
-              <li key={m.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="text-[var(--color-fg)]">
-                  {m.drugName} <span className="text-[var(--color-fg-subtle)]">{m.dose}</span>
-                </span>
-                <span className="flex items-center gap-2 text-[var(--color-fg-muted)]">
-                  {m.reason && <span className="text-[var(--color-fg-subtle)]">{m.reason}</span>}
-                  <span>{when(m.administeredAt)}</span>
-                  <Badge tone={MAR_TONE[m.status]}>{MAR_LABEL[m.status]}</Badge>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -1105,7 +911,11 @@ function Ward() {
                   </p>
                   <MedicationRecord
                     encounterId={selected.id}
+                    patientId={selected.patientId}
+                    patientName={nameOf(selected.patientId)}
+                    uhid={uhidOf(selected.patientId)}
                     canAdminister={can("mar:administer")}
+                    canReadAllergies={can("allergy:read")}
                   />
                 </Card>
               </PermissionGate>

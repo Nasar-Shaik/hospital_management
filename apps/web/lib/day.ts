@@ -117,6 +117,40 @@ export function todayInZone(zone: string, now: Date = new Date()): string {
   return dayKeyInZone(now, zone);
 }
 
+/**
+ * A clock time, in the branch's zone. `14:30`.
+ *
+ * ── WHY A SCHEDULED DOSE MUST NOT BE READ OFF THE BROWSER'S CLOCK ───────────
+ * `new Date(iso).toLocaleTimeString()` renders in the READER's zone, and the ward screen used it
+ * for medication times. A nurse on a laptop whose zone is wrong — or a regional supervisor
+ * genuinely in another zone — sees "08:00" against a dose the ward means at a different hour, and
+ * decides from that whether it is late. The instant is right; the hour on screen is not.
+ *
+ * 24-hour, always: `en-GB` with `hourCycle: "h23"`. Clinical times are written 0800 and 2000 on
+ * every drug chart in the building, and an am/pm rendering of a medication round is a misreading
+ * waiting to happen.
+ */
+export function timeInZone(at: Date, zone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: resolveZone(zone),
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(at);
+}
+
+/** A date and clock time in the branch's zone, for a log line. `13 Aug, 14:30`. */
+export function dateTimeInZone(at: Date, zone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: resolveZone(zone),
+    hourCycle: "h23",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(at);
+}
+
 /** How far a zone is from UTC at a given instant, in milliseconds. Positive east of Greenwich. */
 function offsetMsAt(at: Date, zone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {

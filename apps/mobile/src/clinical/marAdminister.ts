@@ -20,13 +20,35 @@
  * answer, no inference from timestamps or drug text and certainly not from the device clock. That
  * is a strictly stronger oracle and it is why this file looks different from `vitalsWrite.ts`.
  */
-import {
-  marSlotTaken,
-  type DoseSlot,
-  type MarStatus,
-  type MedicationAdministration,
+import { type DoseSlot, type MarStatus, type MedicationAdministration } from "@medicore/api-client";
+
+/**
+ * ── THE SPINE ITSELF NOW LIVES IN `@medicore/api-client` ────────────────────
+ * Slot identity and the attempt classifier were written here first, for S5A. They moved to the
+ * client package when the WEB ward screen needed exactly the same safety envelope (W3): which HTTP
+ * failures mean "nothing was written" is the API's promise, not this app's opinion, and a phone and
+ * a browser charting the same dose must reach the same verdict from the same response.
+ *
+ * Re-exported under the names this app has always used, so every call site and every S5A test
+ * reads unchanged — and those tests, still passing against the shared implementation, are what
+ * proves the move changed no behaviour.
+ *
+ * What stays here is what is genuinely THIS app's: the outcomes offered at the bedside, their
+ * wording, the review lines, and the confirm gate.
+ */
+import { isSlotOpen } from "@medicore/api-client";
+
+export {
+  attemptAdministration,
+  reconcileSlot,
+  findSlot,
+  sameSlot,
+  isSlotOpen as isOpen,
+  slotAnsweredAs as answeredAs,
+  type AdministerDeps,
+  type AdministerResult,
+  type SlotRef,
 } from "@medicore/api-client";
-import { ApiClientError } from "@medicore/api-client";
 
 /** The three outcomes S5A offers. A subset of `MarStatus` — see `OUTCOMES` for why. */
 export type AdministerOutcome = Extract<MarStatus, "given" | "held" | "refused">;
@@ -80,190 +102,6 @@ export const OUTCOMES: readonly OutcomeOption[] = [
 
 export const outcomeOption = (status: AdministerOutcome): OutcomeOption =>
   OUTCOMES.find((o) => o.status === status) as OutcomeOption;
-
-/**
- * Is this slot still open to an answer?
- *
- * ── `due` AND `overdue` ARE THE ONLY OPEN STATES ────────────────────────────
- * Both are DERIVED BY THE SERVER from the ward's clock; the other four are recorded facts. An
- * overdue dose is still very much giveable — that is the whole point of showing it — so lateness
- * gates nothing. Anything else means the slot is answered and the actions must be gone, not
- * disabled: a greyed-out "Give" invites a nurse to work out how to un-grey it.
- *
- * This is advisory only. The DATABASE refuses the second write whatever this returns, which is
- * what makes it safe for two nurses to have the same screen open at the same moment.
- */
-export function isOpen(slot: Pick<DoseSlot, "state">): boolean {
-  return slot.state === "due" || slot.state === "overdue";
-}
-
-/** The answer already on a slot, for rendering instead of the actions. */
-export function answeredAs(slot: DoseSlot): MarStatus | undefined {
-  return isOpen(slot) ? undefined : (slot.state as MarStatus);
-}
-
-/**
- * Finding one slot in the schedule, by the identity S1 established.
- *
- * ── THREE PARTS, AND ALL THREE ARE LOAD-BEARING ─────────────────────────────
- * `prescriptionId` + `lineIndex` + `scheduledFor`. Not `drugCode`: one prescription may legitimately
- * carry paracetamol QID on the round AND paracetamol SOS for breakthrough fever, and matching on
- * the code takes whichever comes first — charting the regular line when the nurse meant the PRN
- * one, or the 08:00 slot when they meant 14:00. `mar.model.ts` explains why the line POSITION is
- * safe as an identity: a signed prescription's lines are immutable, so the position cannot move.
- *
- * Not the drug NAME either, ever. Display text is for humans.
- */
-export interface SlotRef {
-  prescriptionId: string;
-  lineIndex: number;
-  scheduledFor: string;
-}
-
-export function sameSlot(slot: DoseSlot, ref: SlotRef): boolean {
-  return (
-    slot.prescriptionId === ref.prescriptionId &&
-    slot.lineIndex === ref.lineIndex &&
-    slot.scheduledFor === ref.scheduledFor
-  );
-}
-
-export function findSlot(
-  slots: readonly DoseSlot[] | undefined,
-  ref: SlotRef,
-): DoseSlot | undefined {
-  return slots?.find((slot) => sameSlot(slot, ref));
-}
-
-/* ── the write ─────────────────────────────────────────────────────────────── */
-
-export type AdministerResult =
-  /** The server wrote it. This is the only state that may be shown as done. */
-  | { outcome: "recorded"; entry: MedicationAdministration }
-  /**
-   * The slot was already answered — by us on a lost attempt, or by another nurse. NOT a failure:
-   * it is the answer, and `existing` (when the server could name it) says who and when.
-   */
-  | { outcome: "alreadyAnswered"; existing?: MedicationAdministration; drugName: string }
-  /** Nothing was written and re-sending will not help. Show it; do not offer a retry. */
-  | { outcome: "failed"; error: unknown }
-  /**
-   * We could not find out. The slot still reads open, so the dose is PROBABLY not charted — but
-   * "probably" is why this is its own state and not `failed`.
-   */
-  | { outcome: "unknown"; error: unknown };
-
-export interface AdministerDeps {
-  /** `POST …/medication-administrations`, with the intent key. Called AT MOST ONCE per attempt. */
-  record: () => Promise<MedicationAdministration>;
-  /** `GET …/medication-schedule` — the slot oracle, read only when the attempt was ambiguous. */
-  reloadSchedule: () => Promise<DoseSlot[]>;
-  /** Which slot this attempt answers. */
-  ref: SlotRef;
-}
-
-/**
- * Errors decided BEFORE anything could be written.
- *
- * `HMS-REQ-002` — this key was used for a different body — belongs here and is worth the note: the
- * request was refused outright, so nothing was charted under it, and reconciling would find
- * whatever the EARLIER request wrote and risk reporting it as this one.
- *
- * `HMS-REQ-004` (the same key is still in flight) is deliberately NOT here. That first attempt may
- * be committing right now, so the only honest answer comes from the slot.
- */
-function isDefinitelyNotWritten(error: unknown): boolean {
-  if (!(error instanceof ApiClientError)) return false;
-  return (
-    error.isUnauthenticated ||
-    error.isForbidden ||
-    error.code === "HMS-VAL-001" ||
-    error.code === "HMS-GEN-404" ||
-    error.code === "HMS-STATE-001" ||
-    error.code === "HMS-REQ-002"
-  );
-}
-
-/**
- * One attempt at answering a dose.
- *
- *     record
- *       ├─ 201                  → recorded
- *       ├─ 409 HMS-MAR-001      → alreadyAnswered   ← the slot's own answer, with `existing`
- *       ├─ 401/403/400/404/422  → failed (decided before the write)
- *       └─ anything else        → ask the slot      ← every timeout, every 5xx, HMS-REQ-004
- *
- *     ask the slot = re-read the schedule and look at THIS slot
- *       ├─ answered             → alreadyAnswered
- *       ├─ still due / overdue  → unknown           ← almost certainly not written, but not proven
- *       └─ reload failed / gone → unknown
- *
- * ── WHY THE AMBIGUOUS CASE IS `unknown` AND NOT `notSaved` ──────────────────
- * Vitals could say "not saved" and invite another press, because the cost of being wrong was one
- * duplicate row. Here the cost of being wrong is a second dose, so the app declines to say
- * anything it has not established. A nurse told "we could not confirm this" checks the chart; a
- * nurse told "not saved" gives it again. The wording is the safety feature.
- */
-export async function attemptAdministration(deps: AdministerDeps): Promise<AdministerResult> {
-  try {
-    return { outcome: "recorded", entry: await deps.record() };
-  } catch (error) {
-    const taken = marSlotTaken(error);
-    if (taken) {
-      return {
-        outcome: "alreadyAnswered",
-        drugName: taken.drugName,
-        ...(taken.existing ? { existing: taken.existing } : {}),
-      };
-    }
-    if (isDefinitelyNotWritten(error)) return { outcome: "failed", error };
-    return reconcileSlot(deps, error);
-  }
-}
-
-/**
- * "Is this dose charted?" — asked of the slot, which is the only thing that can answer it.
- *
- * Exported so a screen can ask on its own: a nurse who backgrounds the app mid-save and returns
- * must get the answer from this path rather than from a hopeful refetch nobody classifies.
- */
-export async function reconcileSlot(
-  deps: AdministerDeps,
-  error: unknown,
-): Promise<AdministerResult> {
-  let slots: DoseSlot[];
-  try {
-    slots = await deps.reloadSchedule();
-  } catch {
-    // The original failure is what the nurse is told about. The reload failing on top of it is our
-    // problem, and reporting it would replace a useful message with a confusing one.
-    return { outcome: "unknown", error };
-  }
-
-  const slot = findSlot(slots, deps.ref);
-  // The slot has vanished from today's schedule — the order was stopped, or the day rolled over in
-  // the ward's zone while the screen sat open. Nothing can be concluded about the dose from that.
-  if (!slot) return { outcome: "unknown", error };
-
-  if (isOpen(slot)) return { outcome: "unknown", error };
-
-  return {
-    outcome: "alreadyAnswered",
-    drugName: slot.drugName,
-    ...(slot.administrationId
-      ? {
-          existing: {
-            id: slot.administrationId,
-            status: slot.state as MarStatus,
-            drugName: slot.drugName,
-            ...(slot.administeredAt ? { administeredAt: slot.administeredAt } : {}),
-            ...(slot.administeredBy ? { administeredBy: slot.administeredBy } : {}),
-            ...(slot.reason ? { reason: slot.reason } : {}),
-          } as MedicationAdministration,
-        }
-      : {}),
-  };
-}
 
 /* ── words ─────────────────────────────────────────────────────────────────── */
 
@@ -341,7 +179,7 @@ export function canConfirm(input: {
   inFlight: boolean;
 }): boolean {
   const { slot, outcome, reason, inFlight } = input;
-  if (!slot || !isOpen(slot) || inFlight) return false;
+  if (!slot || !isSlotOpen(slot) || inFlight) return false;
   if (outcomeOption(outcome).reasonRequired && reason.trim() === "") return false;
   return true;
 }

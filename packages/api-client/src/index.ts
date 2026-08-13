@@ -1318,6 +1318,199 @@ export function marSlotTaken(error: unknown): MarSlotTaken | undefined {
   };
 }
 
+/**
+ * Which dose an attempt answers, by the identity M3-S1 established.
+ *
+ * ── THREE PARTS, AND ALL THREE ARE LOAD-BEARING ─────────────────────────────
+ * `prescriptionId` + `lineIndex` + `scheduledFor`. Not `drugCode`: one prescription may
+ * legitimately carry paracetamol QID on the round AND paracetamol SOS for breakthrough fever, and
+ * matching on the code takes whichever comes first — charting the regular line when the nurse
+ * meant the PRN one, or the 08:00 slot when they meant 14:00. A signed prescription's lines are
+ * immutable, so the line POSITION is safe as an identity (`mar.model.ts` explains why).
+ *
+ * Not the drug NAME either, ever. Display text is for humans.
+ */
+export interface SlotRef {
+  prescriptionId: string;
+  lineIndex: number;
+  scheduledFor: string;
+}
+
+export function sameSlot(slot: DoseSlot, ref: SlotRef): boolean {
+  return (
+    slot.prescriptionId === ref.prescriptionId &&
+    slot.lineIndex === ref.lineIndex &&
+    slot.scheduledFor === ref.scheduledFor
+  );
+}
+
+export function findSlot(
+  slots: readonly DoseSlot[] | undefined,
+  ref: SlotRef,
+): DoseSlot | undefined {
+  return slots?.find((slot) => sameSlot(slot, ref));
+}
+
+/**
+ * Is this slot still open to an answer?
+ *
+ * `due` and `overdue` are the only open states, and both are DERIVED BY THE SERVER from the ward's
+ * clock; the other four are recorded facts. An overdue dose is still very much giveable — that is
+ * the whole point of showing it — so lateness gates nothing.
+ *
+ * Advisory only. The DATABASE refuses the second write whatever this returns, which is what makes
+ * it safe for two nurses to have the same screen open at the same moment.
+ */
+export function isSlotOpen(slot: Pick<DoseSlot, "state">): boolean {
+  return slot.state === "due" || slot.state === "overdue";
+}
+
+/** The answer already on a slot, for rendering instead of the actions. */
+export function slotAnsweredAs(slot: DoseSlot): MarStatus | undefined {
+  return isSlotOpen(slot) ? undefined : (slot.state as MarStatus);
+}
+
+/**
+ * What one attempt at answering a dose came to.
+ *
+ * ── `unknown` IS NOT `failed`, AND THE DIFFERENCE IS THE POINT ──────────────
+ * A client that cannot establish what happened must say exactly that. A nurse told "we could not
+ * confirm this" checks the chart; a nurse told "not saved" gives the dose again.
+ */
+export type AdministerResult =
+  /** The server wrote it. The only state that may be shown as done. */
+  | { outcome: "recorded"; entry: MedicationAdministration }
+  /**
+   * The slot was already answered — by us on a lost attempt, or by another nurse. NOT a failure:
+   * it is the answer, and `existing` (when the server could name it) says who and when.
+   */
+  | { outcome: "alreadyAnswered"; existing?: MedicationAdministration; drugName: string }
+  /** Nothing was written and re-sending will not help. Show it; do not offer a retry. */
+  | { outcome: "failed"; error: unknown }
+  /**
+   * We could not find out. The slot still reads open, so the dose is PROBABLY not charted — but
+   * "probably" is why this is its own state and not `failed`.
+   */
+  | { outcome: "unknown"; error: unknown };
+
+export interface AdministerDeps {
+  /** `POST …/medication-administrations`, with the intent key. Called AT MOST ONCE per attempt. */
+  record: () => Promise<MedicationAdministration>;
+  /** `GET …/medication-schedule` — the slot oracle, read only when the attempt was ambiguous. */
+  reloadSchedule: () => Promise<DoseSlot[]>;
+  /** Which slot this attempt answers. */
+  ref: SlotRef;
+}
+
+/**
+ * Errors decided BEFORE anything could be written.
+ *
+ * `HMS-REQ-002` — this key was used for a different body — belongs here and is worth the note: the
+ * request was refused outright, so nothing was charted under it, and reconciling would find
+ * whatever the EARLIER request wrote and risk reporting it as this one.
+ *
+ * `HMS-REQ-004` (the same key is still in flight) is deliberately NOT here. That first attempt may
+ * be committing right now, so the only honest answer comes from the slot.
+ */
+function isDefinitelyNotWritten(error: unknown): boolean {
+  if (!(error instanceof ApiClientError)) return false;
+  return (
+    error.isUnauthenticated ||
+    error.isForbidden ||
+    error.code === "HMS-VAL-001" ||
+    error.code === "HMS-GEN-404" ||
+    error.code === "HMS-STATE-001" ||
+    error.code === "HMS-REQ-002"
+  );
+}
+
+/**
+ * One attempt at answering a dose — the safety spine every surface that charts a dose must use.
+ *
+ *     record
+ *       ├─ 201                  → recorded
+ *       ├─ 409 HMS-MAR-001      → alreadyAnswered   ← the slot's own answer, with `existing`
+ *       ├─ 401/403/400/404/422  → failed (decided before the write)
+ *       └─ anything else        → ask the slot      ← every timeout, every 5xx, HMS-REQ-004
+ *
+ *     ask the slot = re-read the schedule and look at THIS slot
+ *       ├─ answered             → alreadyAnswered
+ *       ├─ still due / overdue  → unknown           ← almost certainly not written, but not proven
+ *       └─ reload failed / gone → unknown
+ *
+ * ── WHY THIS LIVES IN THE CLIENT PACKAGE ────────────────────────────────────
+ * For the reason `marSlotTaken` above does, only more so. Which HTTP failures mean "nothing was
+ * written" is the API's promise, not a per-app opinion, and a second copy of this classification
+ * is a second chance to tell a nurse "not saved" about a dose that is already in the patient.
+ * Both the phone and the web browser chart doses; they must reach the same verdict from the same
+ * response, and the way to guarantee that is to have one implementation.
+ *
+ * Nothing here checks for duplicates. A client-side "has this been given?" test cannot be
+ * authoritative — between the check and the request another nurse's dose fits — and writing one
+ * would create a second, weaker answer to a question the unique index already answers exactly.
+ */
+export async function attemptAdministration(deps: AdministerDeps): Promise<AdministerResult> {
+  try {
+    return { outcome: "recorded", entry: await deps.record() };
+  } catch (error) {
+    const taken = marSlotTaken(error);
+    if (taken) {
+      return {
+        outcome: "alreadyAnswered",
+        drugName: taken.drugName,
+        ...(taken.existing ? { existing: taken.existing } : {}),
+      };
+    }
+    if (isDefinitelyNotWritten(error)) return { outcome: "failed", error };
+    return reconcileSlot(deps, error);
+  }
+}
+
+/**
+ * "Is this dose charted?" — asked of the slot, which is the only thing that can answer it.
+ *
+ * Exported so a screen can ask on its own: a nurse whose tab was suspended mid-save, or who
+ * reloaded the page, must get the answer from this path rather than from a hopeful refetch nobody
+ * classifies.
+ */
+export async function reconcileSlot(
+  deps: AdministerDeps,
+  error: unknown,
+): Promise<AdministerResult> {
+  let slots: DoseSlot[];
+  try {
+    slots = await deps.reloadSchedule();
+  } catch {
+    // The original failure is what the nurse is told about. The reload failing on top of it is our
+    // problem, and reporting it would replace a useful message with a confusing one.
+    return { outcome: "unknown", error };
+  }
+
+  const slot = findSlot(slots, deps.ref);
+  // The slot has vanished from today's schedule — the order was stopped, or the day rolled over in
+  // the ward's zone while the screen sat open. Nothing can be concluded about the dose from that.
+  if (!slot) return { outcome: "unknown", error };
+
+  if (isSlotOpen(slot)) return { outcome: "unknown", error };
+
+  return {
+    outcome: "alreadyAnswered",
+    drugName: slot.drugName,
+    ...(slot.administrationId
+      ? {
+          existing: {
+            id: slot.administrationId,
+            status: slot.state as MarStatus,
+            drugName: slot.drugName,
+            ...(slot.administeredAt ? { administeredAt: slot.administeredAt } : {}),
+            ...(slot.administeredBy ? { administeredBy: slot.administeredBy } : {}),
+            ...(slot.reason ? { reason: slot.reason } : {}),
+          } as MedicationAdministration,
+        }
+      : {}),
+  };
+}
+
 /* ── insurance (patient policies + claims) ── */
 
 export type PolicyType = "cashless" | "reimbursement" | "government" | "corporate";
