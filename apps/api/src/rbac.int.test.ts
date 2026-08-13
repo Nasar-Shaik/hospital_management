@@ -460,6 +460,11 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/encounters/64b7f0000000000000000001/notes",
     body: { text: "matrix probe" },
   },
+  "POST /api/v1/encounters/:id/nursing-notes": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/nursing-notes",
+    body: { text: "matrix probe" },
+  },
   "GET /api/v1/encounters/:id/notes": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/notes",

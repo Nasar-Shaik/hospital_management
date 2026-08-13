@@ -80,6 +80,8 @@ const SUITE_DB = {
    * reason, which is the one outcome worse than failing.
    */
   mar: 19,
+  /** Nursing documentation + allergy reach (M3-S2). Two branches and two tenants of its own. */
+  nursing: 20,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

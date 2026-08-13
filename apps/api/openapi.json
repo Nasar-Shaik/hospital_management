@@ -6097,7 +6097,7 @@
           },
           "type": {
             "type": "string",
-            "enum": ["progress", "discharge_summary", "outcome_note"]
+            "enum": ["progress", "discharge_summary", "outcome_note", "nursing"]
           },
           "text": {
             "type": "string"
@@ -11388,6 +11388,16 @@
               "minimum": 1,
               "maximum": 100,
               "default": 100
+            }
+          },
+          {
+            "name": "ward",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
             }
           }
         ],
@@ -17459,7 +17469,7 @@
             "required": false,
             "schema": {
               "type": "string",
-              "enum": ["progress", "discharge_summary", "outcome_note"]
+              "enum": ["progress", "discharge_summary", "outcome_note", "nursing"]
             }
           }
         ],
@@ -17514,6 +17524,114 @@
           }
         ],
         "x-permission": "emr:read",
+        "x-feature": "module.ops.ipd"
+      }
+    },
+    "/api/v1/encounters/{id}/nursing-notes": {
+      "post": {
+        "operationId": "post_v1_encounters_id_nursing_notes",
+        "tags": ["encounters"],
+        "summary": "POST /api/v1/encounters/{id}/nursing-notes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the nursing note this key already wrote. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 20000
+                  }
+                },
+                "required": ["text"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/WardNote"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "nursing:manage",
         "x-feature": "module.ops.ipd"
       }
     },

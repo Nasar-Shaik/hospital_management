@@ -312,12 +312,33 @@ export async function setVisitSummary(
  * makes `skip`-based paging correct rather than usually correct. It costs nothing: the tie-break
  * only decides rows that were already equal.
  */
-export async function listInpatients(filter: { limit: number; skip: number }): Promise<{
+/**
+ * Everyone in a bed right now, optionally narrowed to one ward.
+ *
+ * ── WHY THE WARD FILTER IS A NAME, NOT AN ID (M3-S2) ────────────────────────
+ * An admission records its bed as `{ ward, bedCode }` TEXT, not a reference to the bed catalogue
+ * — see the occupancy index in migration 0046, which keys on the ward name for the same reason.
+ * Filtering by a catalogue id would therefore match nothing on a hospital that admits with
+ * free-text beds, which is the legacy path the field exists to support.
+ *
+ * Additive and optional: no `ward` behaves exactly as before. A nurse works one ward and the
+ * worklist is unusable at a hospital with three hundred beds without this.
+ */
+export async function listInpatients(filter: {
+  limit: number;
+  skip: number;
+  ward?: string;
+}): Promise<{
   items: Encounter[];
   total: number;
 }> {
   const model = getEncounterModel(getTenantDb());
-  const query = { ...scopeFilter(), class: "IP", open: true };
+  const query = {
+    ...scopeFilter(),
+    class: "IP",
+    open: true,
+    ...(filter.ward ? { "bed.ward": filter.ward } : {}),
+  };
 
   const [docs, total] = await Promise.all([
     model

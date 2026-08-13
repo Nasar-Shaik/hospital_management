@@ -2,6 +2,17 @@
 
 **Date:** 2026-08-13 · **Status:** audit complete. **G1 and G2 are CLOSED by M3-S1**; G3–G6 remain.
 
+> **S2 amendment — the ±4h slot tolerance was a duplicate-administration escape path.** S1 bound an
+> administration to a dose slot only within half the neighbouring gap, capped at four hours, and
+> recorded anything further out with NO slot — reasoning that back-charting is not a slot event.
+> That left the exact defect S1 closed, displaced in time: a TDS line's smallest gap is 6h, so the
+> tolerance was 3h, and a night nurse charting the 20:00 dose at 02:00 bound nothing. Two nurses
+> could each do it and each get a `given` row. **Proved with a probe before changing anything.**
+> The cap was not the whole bug either — `min(...gaps)` measured the overnight stretch with the
+> daytime spacing, so widening the cap would only have moved the dead zone. The tolerance is now
+> gone entirely: the nearest dose wins, ties go to the earlier one, and `undefined` means only
+> "there are no scheduled doses near this at all" (PRN, or a finished course).
+>
 > **S1 amendment (recorded because the audit predicted the wrong key).** §11 B2 below proposed
 > `{tenantId, prescriptionId, drugCode, scheduledFor}` as the dose-slot identity. That is wrong.
 > `prescription.schema.ts` places no uniqueness rule on `lines`, so one prescription may carry the

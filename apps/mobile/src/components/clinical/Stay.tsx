@@ -100,6 +100,9 @@ const NOTE_TYPES: Record<
   progress: { label: "Progress note", tone: "neutral" },
   discharge_summary: { label: "Discharge summary", tone: "done" },
   outcome_note: { label: "Outcome", tone: "warning" },
+  // The bedside entry (M3-S2). Same chart, same feed — a doctor reading the stay sees the nursing
+  // entries in sequence with their own, which is the reason it is a type and not a second store.
+  nursing: { label: "Nursing note", tone: "neutral" },
 };
 
 /**

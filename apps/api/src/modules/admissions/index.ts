@@ -14,6 +14,7 @@ export { admissionRouter } from "./admission.routes.js";
 
 export {
   addNote,
+  addNursingNote,
   dischargeWithSummary,
   recordOutcome,
   notesFor,

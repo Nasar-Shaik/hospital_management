@@ -9,12 +9,19 @@
  * a grant that can never help them.
  *
  * ── THE PERMISSION SPLIT ────────────────────────────────────────────────────
- * `emr:write`  — write a ward note. Doctors and (later) nurses: the ward round is nursing
- *                work as much as medical, and NURSE already holds it.
+ * `emr:write`  — write a MEDICAL ward note, and reach the discharge/outcome documents that
+ *                share this router. Doctors.
+ * `nursing:manage` — write a NURSING note (M3-S2). A separate route, deliberately.
  * `emr:read`   — read the chart. Everyone clinical, including the pharmacist.
  * `admission:discharge` — end the stay. A clinical decision, DOCTOR only. Deliberately
  *                not `emr:write`: writing the summary and deciding the patient is well
  *                enough to leave are different acts, and only one of them is a judgement.
+ *
+ * ── A CORRECTION WORTH KEEPING ──────────────────────────────────────────────
+ * This header used to say `emr:write` was for "doctors and (later) nurses… and NURSE already
+ * holds it". **NURSE does not hold `emr:write`** — computed from `DEFAULT_ROLES`, not eyeballed.
+ * That sentence is most likely why nobody noticed a nurse could not write a single note for the
+ * whole life of the module: the comment asserted the capability existed, so nothing tested it.
  */
 import { Router } from "express";
 import { FEATURE_FLAGS, PERMISSIONS } from "@medicore/permissions";
@@ -34,6 +41,7 @@ import {
 } from "./admission.contract.js";
 import {
   addNoteSchema,
+  addNursingNoteSchema,
   dischargeSchema,
   outcomeSchema,
   idParamSchema,
@@ -83,6 +91,36 @@ export function admissionRouter(): Router {
     responds(wardNote, { status: 201 }),
     idempotent("Replays the ward note this key already wrote."),
     asyncHandler(controller.addNote),
+  );
+
+  /**
+   * ── THE NURSE'S OWN ENTRY (M3-S2) ───────────────────────────────────────────
+   * A nurse could not write any note at all before this: the sibling route above requires
+   * `emr:write`, which NURSE does not hold, and granting it would also open `discharge_summary`
+   * and `outcome_note` — a doctor's record and a statutory account of a death.
+   *
+   * `nursing:manage` instead. That permission was granted to NURSE and gated NOTHING until now,
+   * which is the same "a permission nobody's request reaches is a feature nobody has" trap the
+   * roster had. `authorize()` takes one permission and the RBAC matrix reads the tags back off
+   * the shipped app, so a second permission on the existing route is not expressible — a separate
+   * path is.
+   *
+   * Same collection, `type: "nursing"` set by the service. The DTO has no `type` field and is
+   * `.strict()`, so this endpoint cannot be talked into writing any other kind of note.
+   *
+   * `idempotent()` last, after `validate`, exactly as the ward note does: a note is append-only
+   * with no delete path, so a retry on ward wifi would otherwise leave two identical entries on a
+   * medico-legal record for ever.
+   */
+  router.post(
+    "/encounters/:id/nursing-notes",
+    authenticate(),
+    authorize(PERMISSIONS.NURSING_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(addNursingNoteSchema),
+    responds(wardNote, { status: 201 }),
+    idempotent("Replays the nursing note this key already wrote."),
+    asyncHandler(controller.addNursingNote),
   );
 
   router.get(

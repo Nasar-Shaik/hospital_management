@@ -2288,7 +2288,12 @@ export interface Bed {
   // The field was declared here and never sent, so every read of it was `undefined`.
 }
 
-export type WardNoteType = "progress" | "discharge_summary" | "outcome_note";
+/**
+ * `nursing` is the bedside entry — same collection and same chart as the medical notes, written
+ * through its own endpoint under its own permission. It appears in `listWardNotes` without a
+ * filter, which is the point: one chronological record, not two.
+ */
+export type WardNoteType = "progress" | "discharge_summary" | "outcome_note" | "nursing";
 
 export interface WardNote {
   id: string;
@@ -4415,7 +4420,9 @@ export class ApiClient {
    * now tells a caller whether there is more — a hospital with more than a hundred open stays
    * used to be silently truncated with nothing in the response to say so.
    */
-  listInpatients(params: { page?: number; limit?: number } = {}): Promise<Paged<Encounter>> {
+  listInpatients(
+    params: { page?: number; limit?: number; ward?: string } = {},
+  ): Promise<Paged<Encounter>> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined) query.set(key, String(value));
@@ -4512,6 +4519,25 @@ export class ApiClient {
     return this.request<WardNote>(
       "POST",
       `/api/v1/encounters/${encounterId}/notes`,
+      { text },
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
+  }
+
+  /**
+   * The nurse's bedside entry. Needs `nursing:manage` — NOT `emr:write`, which a nurse does not
+   * hold and which would also open discharge summaries and outcome notes.
+   *
+   * Lands in the same chart as `addWardNote`, with `type: "nursing"` set by the server. There is
+   * no way to ask this endpoint for another type; the body carries only text.
+   *
+   * Send the `key`, for the same reason its sibling insists on it: the record is append-only, so a
+   * retry after a lost response is otherwise a permanent duplicate on a medico-legal document.
+   */
+  addNursingNote(encounterId: string, text: string, key?: string): Promise<WardNote> {
+    return this.request<WardNote>(
+      "POST",
+      `/api/v1/encounters/${encounterId}/nursing-notes`,
       { text },
       { ...(key ? { idempotencyKey: key } : {}) },
     );

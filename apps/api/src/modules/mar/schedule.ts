@@ -239,46 +239,53 @@ function endOfCourse(course: Course, zone: string): number {
 }
 
 /**
- * The slot a dose charted at `administeredAt` belongs to, or `undefined` if it belongs to none.
+ * The slot a dose charted at `administeredAt` belongs to.
  *
  * ── WHY THE SERVER BINDS THE SLOT RATHER THAN THE CLIENT ────────────────────
  * The client may name a slot explicitly, and most will. But a client that names nothing must not
  * therefore escape the uniqueness rule — that would leave the defect open to exactly the caller
- * most likely to be an old build. So the server resolves the nearest slot itself, and the
- * duplicate protection applies whether or not anyone asked for it.
+ * most likely to be an old build. So the server resolves the slot itself, and the duplicate
+ * protection applies whether or not anyone asked for it.
  *
- * The tolerance is half the gap to the neighbouring dose, capped at four hours: charting at 13:00
- * against a TDS line means the 14:00 round (an hour early), not the 08:00 one (five hours late).
- * Outside any tolerance the dose binds to nothing and is recorded unconstrained — a genuine
- * back-charting of a paper round is not a slot event and must not be refused as a duplicate.
+ * ── THE NEAREST DOSE WINS. THERE IS NO TOLERANCE. (M3-S2) ───────────────────
+ * S1 bound only within half the neighbouring gap, capped at four hours, and recorded anything
+ * further out with NO slot — reasoning that a genuine back-charting is not a slot event. That was
+ * wrong, and it left a duplicate-administration escape path that S1 was written to close:
+ *
+ *     TDS rounds at 08:00 / 14:00 / 20:00 → the smallest gap is 6h → tolerance 3h.
+ *     A night nurse charting the 20:00 dose at 02:00 is 6 hours out. Nothing bound.
+ *     Two nurses could each do that, and each got a `given` row. Proved, not theorised.
+ *
+ * The cap was not the whole bug: `min(...gaps)` used the SMALLER neighbouring gap even when the
+ * administration lay across the LARGER one, so the overnight window was measured with the daytime
+ * spacing. Widening the cap would have moved the dead zone, not removed it.
+ *
+ * So the tolerance is gone. Every administration inside an active course answers SOME dose — that
+ * is what "scheduled medication" means — and the nearest one is the honest answer. The timeline is
+ * partitioned at the midpoints between consecutive doses, leaving no gap for a second `given` row
+ * to slip through. A nurse who means a different dose says so; `scheduledFor` is validated against
+ * the same schedule, so precision is always available and never guessed at.
+ *
+ * Ties go to the EARLIER dose. At 11:00 a TDS line is equidistant from 08:00 and 14:00, and
+ * catching up on the round you have missed is far commoner than charting one three hours early.
+ *
+ * `undefined` now means exactly one thing: **there are no scheduled doses near this administration
+ * at all** — a PRN line, or a course that had already ended. Both are correctly unconstrained,
+ * because in neither case is there a scheduled dose that could be given twice.
  */
 export function slotFor(doses: ScheduledDose[], administeredAt: Date): ScheduledDose | undefined {
-  if (doses.length === 0) return undefined;
-
   const t = administeredAt.getTime();
-  let nearest = doses[0] as ScheduledDose;
+  let nearest: ScheduledDose | undefined;
+  let best = Number.POSITIVE_INFINITY;
+
   for (const d of doses) {
-    if (Math.abs(d.scheduledFor.getTime() - t) < Math.abs(nearest.scheduledFor.getTime() - t)) {
+    const distance = Math.abs(d.scheduledFor.getTime() - t);
+    // Strictly less-than, walking a list sorted ascending, is what makes a tie keep the earlier.
+    if (distance < best) {
+      best = distance;
       nearest = d;
     }
   }
 
-  const index = doses.indexOf(nearest);
-  const gaps: number[] = [];
-  if (index > 0) {
-    gaps.push(
-      nearest.scheduledFor.getTime() - (doses[index - 1] as ScheduledDose).scheduledFor.getTime(),
-    );
-  }
-  if (index < doses.length - 1) {
-    gaps.push(
-      (doses[index + 1] as ScheduledDose).scheduledFor.getTime() - nearest.scheduledFor.getTime(),
-    );
-  }
-
-  const MAX_TOLERANCE = 4 * 60 * 60 * 1000;
-  // A lone dose (STAT, or a single round in the window) has no neighbour to halve — it gets the cap.
-  const tolerance = Math.min(MAX_TOLERANCE, gaps.length ? Math.min(...gaps) / 2 : MAX_TOLERANCE);
-
-  return Math.abs(nearest.scheduledFor.getTime() - t) <= tolerance ? nearest : undefined;
+  return nearest;
 }

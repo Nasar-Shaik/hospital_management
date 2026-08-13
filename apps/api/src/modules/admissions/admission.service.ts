@@ -59,6 +59,40 @@ export async function addNote(input: AddNoteInput): Promise<repo.WardNote> {
   });
 }
 
+/**
+ * The nurse's bedside entry (M3-S2).
+ *
+ * ── WHY THIS IS A SEPARATE FUNCTION AND A SEPARATE ROUTE ────────────────────
+ * A nurse could not write ANY note before this. `POST /encounters/:id/notes` requires
+ * `emr:write`, which NURSE does not hold — and granting it would also hand them
+ * `discharge_summary` and `outcome_note`, which are the doctor's records and, in the case of an
+ * outcome note, the statutory account of a death.
+ *
+ * `authorize()` takes exactly one permission and the RBAC matrix reads those tags back off the
+ * shipped app, so a second permission on the existing route is not expressible. A separate route
+ * with `nursing:manage` is: it removes the question rather than answering it, and it finally gives
+ * that permission something to gate — it was granted to NURSE and reached nothing.
+ *
+ * The note lands in the SAME collection with `type: "nursing"`, so the chart stays one record and
+ * `GET /encounters/:id/notes` shows the nursing entries beside the medical ones without any
+ * client change. The type is set HERE, never taken from the body, and the DTO has no `type` field
+ * at all — so this endpoint cannot be talked into writing a discharge summary.
+ */
+export async function addNursingNote(input: AddNoteInput): Promise<repo.WardNote> {
+  // Same `note` intent as its medical sibling: the rule is identical (an inpatient stay must be
+  // open) and the hint it selects is accurate for both. The intent picks a sentence, never a rule.
+  const encounter = await requireOpenAdmission(input.encounterId, "note");
+
+  return repo.create({
+    encounterId: encounter.id,
+    patientId: encounter.patientId,
+    episodeId: encounter.episodeId,
+    type: "nursing",
+    text: input.text,
+    ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+  });
+}
+
 export interface TransferBedInput {
   encounterId: string;
   bedId?: string;

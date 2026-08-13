@@ -269,13 +269,79 @@ describe("binding an administration to a slot", () => {
     expect(hourAt(bound?.scheduledFor as Date, NY)).toBe(14);
   });
 
-  it("a dose charted far from any round binds nothing — back-charting is not a slot event", () => {
-    // 04:30 NY: the nearest rounds are 22:00 (6.5h back) and 06:00 (1.5h on) — both outside the
-    // three-hour tolerance a six-hourly TDS gap allows.
-    expect(slotFor(tds(), new Date("2026-06-11T08:30:00Z"))).toBeUndefined();
+  it("an exact tie keeps the EARLIER dose — catching up beats charting early", () => {
+    // 11:00 NY is three hours from both the 08:00 and the 14:00 round.
+    const bound = slotFor(tds(), new Date("2026-06-11T15:00:00Z"));
+    expect(hourAt(bound?.scheduledFor as Date, NY)).toBe(8);
   });
 
-  it("binds nothing when there are no slots at all", () => {
+  it("binds nothing when there are no doses at all — PRN, or a finished course", () => {
     expect(slotFor([], new Date())).toBeUndefined();
+  });
+
+  /**
+   * ── THE S1 DEAD ZONE, NOW CLOSED (M3-S2) ──────────────────────────────────
+   * S1 bound only within half the smaller neighbouring gap, capped at 4h. For a TDS line that is
+   * 3 hours, so the overnight stretch between the 20:00 round and the next 08:00 one contained
+   * instants that bound NOTHING — and an unbound row carries no `scheduledFor`, so the unique
+   * index does not see it and TWO nurses could each chart the same 20:00 dose as `given`.
+   *
+   * That is precisely the defect S1 existed to close, displaced by six hours. These tests are the
+   * regression: every instant inside an active course must bind some dose.
+   */
+  describe("no instant inside an active course escapes a slot", () => {
+    const overnight = () => {
+      const at = new Date("2026-06-12T06:00:00Z"); // 02:00 NY — six hours after the 20:00 round
+      return {
+        at,
+        doses: dosesInRange(
+          "TDS",
+          0,
+          course({ signedAt: new Date("2026-06-08T12:00:00Z") }),
+          NY,
+          new Date(at.getTime() - 24 * 60 * 60 * 1000),
+          new Date(at.getTime() + 24 * 60 * 60 * 1000),
+        ),
+      };
+    };
+
+    it("the 02:00 back-chart binds the 20:00 round it is answering", () => {
+      const { at, doses } = overnight();
+      const bound = slotFor(doses, at);
+      expect(bound).toBeDefined();
+      expect(hourAt(bound?.scheduledFor as Date, NY)).toBe(20);
+    });
+
+    it("binds at four hours out, and at four hours and one minute out", () => {
+      // The old cap sat exactly here. Both must now bind — the boundary no longer exists.
+      const fourHours = slotFor(tds(), new Date("2026-06-11T16:00:00Z")); // 12:00 NY, 4h after 08:00
+      const justPast = slotFor(tds(), new Date("2026-06-11T16:01:00Z"));
+      expect(fourHours).toBeDefined();
+      expect(justPast).toBeDefined();
+      // Both are nearer the 14:00 round than the 08:00 one, and both bind rather than falling through.
+      expect(hourAt(fourHours?.scheduledFor as Date, NY)).toBe(14);
+      expect(hourAt(justPast?.scheduledFor as Date, NY)).toBe(14);
+    });
+
+    /**
+     * The sweep that actually matters: it must cross the OVERNIGHT stretch, because that is where
+     * the S1 dead zone lived. A sweep bounded by the first and last round of a single day walks
+     * only the daytime gaps and passes against the broken implementation.
+     */
+    it("sweeps two days, overnight included, and never returns undefined", () => {
+      const longCourse = course({ signedAt: new Date("2026-06-08T12:00:00Z") });
+      const from = new Date("2026-06-10T04:00:00Z");
+      const before = new Date("2026-06-13T04:00:00Z");
+      const doses = dosesInRange("TDS", 0, longCourse, NY, from, before);
+
+      const first = (doses[0] as { scheduledFor: Date }).scheduledFor.getTime();
+      const last = (doses[doses.length - 1] as { scheduledFor: Date }).scheduledFor.getTime();
+      for (let t = first; t <= last; t += 15 * 60 * 1000) {
+        expect(
+          slotFor(doses, new Date(t)),
+          `unbound at ${new Date(t).toISOString()}`,
+        ).toBeDefined();
+      }
+    });
   });
 });

@@ -71,6 +71,12 @@ export const listInpatientsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(100),
+    /**
+     * One ward, by NAME — an admission stores its bed as text, so the name is the key that
+     * actually matches (see `listInpatients`). Additive: omitting it lists the whole branch,
+     * exactly as before.
+     */
+    ward: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
 

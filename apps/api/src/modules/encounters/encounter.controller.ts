@@ -154,6 +154,7 @@ export const listInpatients: RequestHandler = async (req, res) => {
   const { items, total } = await encounters.listInpatients({
     limit: query.limit,
     skip: (query.page - 1) * query.limit,
+    ...(query.ward ? { ward: query.ward } : {}),
   });
 
   ok(res, items, 200, {

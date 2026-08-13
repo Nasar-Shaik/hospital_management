@@ -33,8 +33,19 @@ import { auditPlugin } from "../../core/db/plugins/auditPlugin.js";
  * risks explained before a patient left against advice, when an absence was discovered, or
  * the circumstances of a death. Statutorily it is the note that matters most, so the
  * outcome path writes it and cannot skip it.
+ * `nursing` — the bedside entry (M3-S2): what the nurse observed, did and handed over. A
+ * distinct TYPE rather than a distinct collection, so the chart stays one chronological
+ * record — a doctor reading the stay sees the nursing entries in the same feed, which is the
+ * whole point of a ward round. It has its own creation route and its own permission
+ * (`nursing:manage`), because writing a nursing entry and writing a discharge summary are
+ * different responsibilities held by different people.
  */
-export const WARD_NOTE_TYPES = ["progress", "discharge_summary", "outcome_note"] as const;
+export const WARD_NOTE_TYPES = [
+  "progress",
+  "discharge_summary",
+  "outcome_note",
+  "nursing",
+] as const;
 export type WardNoteType = (typeof WARD_NOTE_TYPES)[number];
 
 export interface WardNoteDoc {

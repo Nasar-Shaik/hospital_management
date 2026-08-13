@@ -6,6 +6,7 @@ import * as admissions from "./admission.service.js";
 import { bedBoard } from "./bedBoard.js";
 import type {
   AddNoteBody,
+  AddNursingNoteBody,
   DischargeBody,
   OutcomeBody,
   ListNotesQuery,
@@ -22,6 +23,12 @@ export const addNote: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   const body = req.body as AddNoteBody;
   ok(res, await admissions.addNote({ encounterId: id, text: body.text }), 201);
+};
+
+export const addNursingNote: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as AddNursingNoteBody;
+  ok(res, await admissions.addNursingNote({ encounterId: id, text: body.text }), 201);
 };
 
 export const listNotes: RequestHandler = async (req, res) => {

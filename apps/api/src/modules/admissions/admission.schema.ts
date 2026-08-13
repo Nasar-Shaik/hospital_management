@@ -2,6 +2,7 @@
  * Admission DTOs (Doc 09 §5/§6). `.strict()` — an unexpected field is a 400.
  */
 import { z } from "@medicore/validation";
+import { WARD_NOTE_TYPES } from "./wardNote.model.js";
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, "invalid id");
 
@@ -9,6 +10,22 @@ export const addNoteSchema = z
   .object({
     /** The ward round entry. Free text — a note is prose, and pretending otherwise
      * produces tick-boxes nobody reads and a narrative nobody wrote. */
+    text: z.string().min(1).max(20_000),
+  })
+  .strict();
+
+/**
+ * A nursing entry (M3-S2). Deliberately the same shape as `addNoteSchema`, and deliberately a
+ * SEPARATE constant: the two are free to diverge, and sharing one would mean a field added for
+ * the doctor's note silently appearing on the nurse's.
+ *
+ * `.strict()` with no `type` field is what makes the route un-repurposable — a client cannot ask
+ * this endpoint for a `discharge_summary`, because naming a type at all is a 400. The service
+ * then sets the type itself. Structure, not a check that could be edited away.
+ */
+export const addNursingNoteSchema = z
+  .object({
+    /** What was observed, done, or handed over. Prose, like every other clinical note. */
     text: z.string().min(1).max(20_000),
   })
   .strict();
@@ -40,9 +57,12 @@ export const outcomeSchema = z
   })
   .strict();
 
-export const listNotesQuerySchema = z
-  .object({ type: z.enum(["progress", "discharge_summary", "outcome_note"]).optional() })
-  .strict();
+/**
+ * `WARD_NOTE_TYPES` rather than a hand-copied list: the two had already been written out twice,
+ * and a filter that silently cannot name a type is how a whole class of note becomes invisible
+ * to the one screen built to find it.
+ */
+export const listNotesQuerySchema = z.object({ type: z.enum(WARD_NOTE_TYPES).optional() }).strict();
 
 /**
  * A bed-to-bed transfer (B4). Prefer a `bedId` from the catalogue; `ward`+`bedCode` is the legacy
@@ -69,6 +89,7 @@ export const transferBedSchema = z
 export const idParamSchema = z.object({ id: objectId }).strict();
 
 export type AddNoteBody = z.infer<typeof addNoteSchema>;
+export type AddNursingNoteBody = z.infer<typeof addNursingNoteSchema>;
 export type DischargeBody = z.infer<typeof dischargeSchema>;
 export type OutcomeBody = z.infer<typeof outcomeSchema>;
 export type ListNotesQuery = z.infer<typeof listNotesQuerySchema>;
