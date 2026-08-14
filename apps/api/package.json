@@ -16,6 +16,7 @@
     "seed:demo": "tsx --env-file-if-exists=.env src/scripts/seedDemo.ts",
     "dev:device-domains": "tsx --env-file-if-exists=.env src/scripts/devDeviceDomains.ts",
     "seed:clinical": "tsx --env-file-if-exists=.env src/scripts/seedClinical.ts",
+    "seed:validation": "tsx --env-file-if-exists=.env src/scripts/seedValidation.ts",
     "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts",
     "audit:chain": "tsx --env-file-if-exists=.env src/scripts/auditChain.ts",
     "operator": "tsx --env-file-if-exists=.env src/scripts/createOperator.ts",

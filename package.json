@@ -27,6 +27,7 @@
     "seed:migrate": "pnpm --filter @medicore/api migrate --",
     "seed:demo": "pnpm --filter @medicore/api seed:demo",
     "seed:clinical": "pnpm --filter @medicore/api seed:clinical --",
+    "seed:validation": "pnpm --filter @medicore/api seed:validation --",
     "openapi": "pnpm --filter @medicore/api openapi",
     "openapi:check": "pnpm --filter @medicore/api openapi:check",
     "contract:check": "pnpm --filter @medicore/api contract:check",

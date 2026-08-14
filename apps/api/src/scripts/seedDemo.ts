@@ -100,6 +100,29 @@ const STAFF: StaffSeed[] = [
     role: "DOCTOR",
     does: "the second doctor — for transferring a case",
   },
+  /**
+   * ── TWO NURSES, AND WHY THERE WERE NONE ─────────────────────────────────────
+   * This script has always promised "one of every role" and has never seeded the one role that
+   * gives medicine. `NURSE` holds `mar:administer`, `vitals:record` and `nursing:manage`, and
+   * until now nobody held any of them — the same "a permission nobody holds is a feature nobody
+   * has" trap that has bitten this codebase four times (see the activity log).
+   *
+   * TWO of them, following the two-doctor precedent above: the duplicate-administration safety
+   * rule can only be exercised by two nurses reaching for the same dose at once, and one account
+   * signed in twice is one identity, which is precisely what that test must not have.
+   */
+  {
+    key: "nurse",
+    name: "Asha (Ward)",
+    role: "NURSE",
+    does: "the ward round: vitals, medication administration, nursing notes",
+  },
+  {
+    key: "nurse2",
+    name: "Fatima (Ward, night)",
+    role: "NURSE",
+    does: "the second nurse — for the concurrent-dose safety test",
+  },
   {
     key: "labtech",
     name: "Kumar (Lab)",
@@ -156,6 +179,19 @@ async function seedHospital(h: DemoHospital): Promise<void> {
         slug: h.slug,
         planCode: "PLAN_HOSPITAL",
         organizationType: h.type,
+        /**
+         * The branch CAP is a per-tenant override and nothing reconciles it with the plan: a
+         * hospital provisioned on PLAN_HOSPITAL — whose catalogue limit is 3 sites — was still
+         * capped at `DEFAULT_MAX_BRANCHES` (1), because `provisionTenant` stamps no limit and
+         * `changePlan` never writes one. So the demo hospital was sold three sites and could
+         * not open a second, which also left `/branches` and the whole multi-branch feature
+         * with no data anybody could demo or test against.
+         *
+         * Asking for the plan's own number here fixes the demo. It does NOT fix the underlying
+         * mismatch, which lives in the plan/limit reconciliation and is recorded as a finding
+         * rather than patched from a seed script.
+         */
+        maxBranches: 3,
       })
     ).tenant;
 
