@@ -21,10 +21,48 @@
  * a permission with no route grants nothing, while a route with no permission is
  * a hole. Defining them up front means a future module wires authorization by
  * referencing a constant instead of redesigning RBAC.
+ *
+ * ── AND WHY THAT NEEDED A LEDGER (see `lifecycle` below) ─────────────────────
+ * "Safe" was doing a lot of work in that paragraph. A permission with no route
+ * grants nothing — but it is also INDISTINGUISHABLE from a shipped feature whose
+ * route nobody wired, and the roles page shows both to an administrator as a
+ * capability their staff have. That is not hypothetical: `nursing:manage` was
+ * granted to NURSE, had a complete backend route, and had no client caller for
+ * two milestones; a nurse could not write a note and the permission said she
+ * could. `lab:collect` looks identical from here and is genuinely M6 work.
+ *
+ * The two cases cannot be told apart by counting routes, so they are DECLARED.
+ * Anything without a `lifecycle` is asserted to be live now, and the gate in
+ * `apps/api/src/permissionLifecycle.test.ts` proves it against the shipped app.
  */
 
 export const PERMISSION_SCOPES = ["own", "branch", "tenant", "global"] as const;
 export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
+
+/**
+ * Why a permission is not enforced by a route.
+ *
+ * `future`     — reserved for a module that is not built. Grants nothing today, and MUST NOT
+ *                have a route: if it acquires one, the declaration is stale and the gate says so.
+ * `superseded` — the capability shipped under a DIFFERENT permission. The code stays because
+ *                codes are permanent (renaming un-grants it from every hospital's database), but
+ *                nothing should wire it. `reason` names the permission that replaced it.
+ * `service`    — enforced, but NOT by `authorize()` on a router: a service-layer check against
+ *                `ctx.permissions`, or a lookup table. Real authorization that a route census
+ *                cannot see. The gate verifies the claim rather than believing it.
+ */
+export type PermissionStatus = "future" | "superseded" | "service";
+
+export interface PermissionLifecycle {
+  status: PermissionStatus;
+  /** The owning module or milestone — "D6 LIS (M6)", "C4 Referral & Transfer". Never blank. */
+  module: string;
+  /**
+   * Why, in a sentence another engineer can act on. For `superseded`, name the replacing
+   * permission code; for `service`, name where the check lives.
+   */
+  reason: string;
+}
 
 export interface PermissionDefinition {
   /** `resource:action` — the stable identifier stored in the database. */
@@ -34,23 +72,59 @@ export interface PermissionDefinition {
   /** Widest scope this permission may be granted at. */
   scope?: PermissionScope;
   description: string;
+  /**
+   * Absent means ACTIVE: this permission is enforced by a route on the shipped app, and the gate
+   * fails if it is not. Present means it is deliberately not, for the declared reason.
+   */
+  lifecycle?: PermissionLifecycle;
 }
 
 function p(
   code: string,
   description: string,
   scope: PermissionScope = "tenant",
+  lifecycle?: PermissionLifecycle,
 ): PermissionDefinition {
   const [resource = "", action = ""] = code.split(":");
-  return { code, resource, action, scope, description };
+  return { code, resource, action, scope, description, ...(lifecycle ? { lifecycle } : {}) };
 }
+
+/** Reserved for a module that has not been built. */
+const future = (module: string, reason: string): PermissionLifecycle => ({
+  status: "future",
+  module,
+  reason,
+});
+
+/** The capability shipped under `replacedBy`. The code stays; nothing should wire it. */
+const supersededBy = (module: string, replacedBy: string, reason: string): PermissionLifecycle => ({
+  status: "superseded",
+  module,
+  reason: `superseded by \`${replacedBy}\` — ${reason}`,
+});
+
+/** Enforced somewhere other than a router. `where` must name the file that checks it. */
+const enforcedIn = (module: string, where: string, reason: string): PermissionLifecycle => ({
+  status: "service",
+  module,
+  reason: `checked in ${where} — ${reason}`,
+});
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Platform & administration (Doc 02 A1–A9)
  * ──────────────────────────────────────────────────────────────────────────── */
 
 const PLATFORM = {
-  TENANT_MANAGE: p("tenant:manage", "Configure this organization"),
+  TENANT_MANAGE: p(
+    "tenant:manage",
+    "Configure this organization",
+    "tenant",
+    supersededBy(
+      "A1 Organization",
+      "hospital:manage",
+      "the hospital profile is what a tenant admin actually configures",
+    ),
+  ),
   /**
    * VIEW the subscription and usage. Named `manage` for historical reasons
    * (Doc 02 A2) — it does NOT let a hospital change what it pays for.
@@ -65,7 +139,15 @@ const PLATFORM = {
 
   ROLE_MANAGE: p("role:manage", "Create and edit roles"),
   PERMISSION_VIEW: p("permission:view", "View the permission catalog"),
-  SESSION_REVOKE: p("session:revoke", "Sign another user out"),
+  SESSION_REVOKE: p(
+    "session:revoke",
+    "Sign another user out",
+    "tenant",
+    future(
+      "A3 Users & Sessions",
+      "signing another user out of their sessions is not implemented; today a role change invalidates their permission cache instead",
+    ),
+  ),
 
   AUDIT_VIEW: p("audit:view", "Read the audit trail"),
   AUDIT_EXPORT: p("audit:export", "Export the audit trail"),
@@ -79,16 +161,35 @@ const PLATFORM = {
   REPORT_VIEW: p("report:view", "View operational and financial reports"),
 
   NOTIFICATION_MANAGE: p("notification:manage", "Manage templates and channels"),
-  NOTIFICATION_SEND: p("notification:send", "Send notifications"),
+  NOTIFICATION_SEND: p(
+    "notification:send",
+    "Send notifications",
+    "tenant",
+    supersededBy(
+      "A6 Notifications",
+      "notification:manage",
+      "one permission covers templates and dispatch",
+    ),
+  ),
 
   FILE_UPLOAD: p("file:upload", "Upload documents"),
   FILE_READ: p("file:read", "Read documents"),
   FILE_DELETE: p("file:delete", "Delete documents"),
 
   BRANDING_MANAGE: p("branding:manage", "Edit branding and theme"),
-  DOMAIN_MANAGE: p("domain:manage", "Manage custom domains"),
+  DOMAIN_MANAGE: p(
+    "domain:manage",
+    "Manage custom domains",
+    "tenant",
+    future("A1 Organization", "custom domains are DNS/TLS provisioning work that has not started"),
+  ),
   APIKEY_MANAGE: p("apikey:manage", "Manage API keys"),
-  WEBHOOK_MANAGE: p("webhook:manage", "Manage webhooks"),
+  WEBHOOK_MANAGE: p(
+    "webhook:manage",
+    "Manage webhooks",
+    "tenant",
+    future("A9 Integrations", "outbound webhooks have no delivery, retry or signing machinery yet"),
+  ),
 } as const;
 
 /**
@@ -108,9 +209,30 @@ const PLATFORM = {
  * demo hospital cheerfully upgraded itself to Enterprise.)
  */
 const SUPERADMIN = {
-  SUPERADMIN_TENANT_MANAGE: p("superadmin:tenant:manage", "Provision and manage tenants", "global"),
-  TENANT_IMPERSONATE: p("tenant:impersonate", "Impersonate a tenant user (audited)", "global"),
-  TENANT_EXPORT: p("tenant:export", "Export a tenant's data", "global"),
+  SUPERADMIN_TENANT_MANAGE: p(
+    "superadmin:tenant:manage",
+    "Provision and manage tenants",
+    "global",
+    future(
+      "A0 Platform",
+      "the operator console provisions tenants through its own surface; no tenant-facing route exists",
+    ),
+  ),
+  TENANT_IMPERSONATE: p(
+    "tenant:impersonate",
+    "Impersonate a tenant user (audited)",
+    "global",
+    future(
+      "A0 Platform",
+      "support impersonation needs an audited session-mint flow that is not built",
+    ),
+  ),
+  TENANT_EXPORT: p(
+    "tenant:export",
+    "Export a tenant's data",
+    "global",
+    future("A0 Platform", "whole-tenant export is a data-portability feature that has not started"),
+  ),
   PLAN_MANAGE: p("plan:manage", "Change which edition a hospital is on", "global"),
   FEATUREFLAG_MANAGE: p("featureflag:manage", "Override a hospital's feature flags", "global"),
 } as const;
@@ -133,20 +255,54 @@ const ORGANIZATION = {
   AMBULANCE_MANAGE: p("ambulance:manage", "Manage the ambulance fleet"),
   AMBULANCE_DISPATCH: p("ambulance:dispatch", "Dispatch an ambulance", "branch"),
   ASSET_MANAGE: p("asset:manage", "Manage assets and maintenance"),
-  VENDOR_MANAGE: p("vendor:manage", "Manage vendors and insurers"),
+  VENDOR_MANAGE: p(
+    "vendor:manage",
+    "Manage vendors and insurers",
+    "tenant",
+    future("G3 Procurement", "vendors and insurer masters arrive with purchasing"),
+  ),
 
   FACILITYOPS_MANAGE: p(
     "facilityops:manage",
     "Housekeeping, laundry, cafeteria, parking",
     "branch",
+    future("G5 Facility Operations", "housekeeping, laundry, cafeteria and parking are not built"),
   ),
-  VISITOR_MANAGE: p("visitor:manage", "Visitor check-in and passes", "branch"),
-  HELPDESK_MANAGE: p("helpdesk:manage", "The hospital's own help desk", "branch"),
+  VISITOR_MANAGE: p(
+    "visitor:manage",
+    "Visitor check-in and passes",
+    "branch",
+    future("G6 Front Office", "visitor check-in and passes are not built"),
+  ),
+  HELPDESK_MANAGE: p(
+    "helpdesk:manage",
+    "The hospital's own help desk",
+    "branch",
+    future(
+      "G6 Front Office",
+      "the internal help desk is separate from patient feedback (complaint:manage) and is not built",
+    ),
+  ),
   FEEDBACK_MANAGE: p("feedback:manage", "Feedback and surveys"),
   COMPLAINT_MANAGE: p("complaint:manage", "Complaints and resolution"),
-  WASTE_MANAGE: p("waste:manage", "Biomedical waste"),
-  CSSD_MANAGE: p("cssd:manage", "Sterile supply"),
-  CSSD_RELEASE: p("cssd:release", "Release a sterilized batch"),
+  WASTE_MANAGE: p(
+    "waste:manage",
+    "Biomedical waste",
+    "tenant",
+    future("G7 Biomedical Waste", "waste tracking is not built"),
+  ),
+  CSSD_MANAGE: p(
+    "cssd:manage",
+    "Sterile supply",
+    "tenant",
+    future("G8 CSSD", "sterile supply is not built"),
+  ),
+  CSSD_RELEASE: p(
+    "cssd:release",
+    "Release a sterilized batch",
+    "tenant",
+    future("G8 CSSD", "sterile supply is not built"),
+  ),
   MORTUARY_MANAGE: p("mortuary:manage", "Mortuary register"),
   MORTUARY_RELEASE: p("mortuary:release", "Release a body"),
 } as const;
@@ -164,13 +320,56 @@ const PATIENT = {
   ADMISSION_CREATE: p("admission:create", "Admit a patient", "branch"),
   ADMISSION_DISCHARGE: p("admission:discharge", "Discharge a patient", "branch"),
 
-  RECORD_READ: p("record:read", "Read medical records", "branch"),
-  RECORD_WRITE: p("record:write", "Write medical records", "branch"),
+  RECORD_READ: p(
+    "record:read",
+    "Read medical records",
+    "branch",
+    supersededBy(
+      "C3 Medical Records",
+      "emr:read",
+      "clinical notes are emr:read; uploaded documents are file:read",
+    ),
+  ),
+  RECORD_WRITE: p(
+    "record:write",
+    "Write medical records",
+    "branch",
+    supersededBy(
+      "C3 Medical Records",
+      "emr:write",
+      "clinical notes are emr:write; uploaded documents are file:upload",
+    ),
+  ),
   CONSENT_MANAGE: p("consent:manage", "Capture consent", "branch"),
   DEATH_CERTIFY: p("death:certify", "Certify a death (licensed)", "branch"),
-  DISCHARGE_CREATE: p("discharge:create", "Write a discharge summary", "branch"),
-  REFERRAL_MANAGE: p("referral:manage", "Referrals in and out", "branch"),
-  TRANSFER_MANAGE: p("transfer:manage", "Patient transfers", "branch"),
+  DISCHARGE_CREATE: p(
+    "discharge:create",
+    "Write a discharge summary",
+    "branch",
+    supersededBy(
+      "C3 Medical Records",
+      "admission:discharge",
+      "the summary is written by the act that ends the stay, as a ward note",
+    ),
+  ),
+  REFERRAL_MANAGE: p(
+    "referral:manage",
+    "Referrals in and out",
+    "branch",
+    future(
+      "C4 Referral & Transfer",
+      "the referral register is not built; a referral is only an Order category today",
+    ),
+  ),
+  TRANSFER_MANAGE: p(
+    "transfer:manage",
+    "Patient transfers",
+    "branch",
+    future(
+      "C4 Referral & Transfer",
+      "inter-department and inter-branch transfers are not built; only bed transfer within a stay exists (bed:allocate)",
+    ),
+  ),
 
   WALLET_MANAGE: p("wallet:manage", "Patient wallet", "branch"),
   PACKAGE_ENROLL: p("package:enroll", "Enrol a patient in a package", "branch"),
@@ -184,8 +383,21 @@ const PATIENT = {
 const CLINICAL = {
   EMR_READ: p("emr:read", "Read the clinical chart", "branch"),
   EMR_WRITE: p("emr:write", "Write clinical notes", "branch"),
-  EMR_SIGN: p("emr:sign", "Sign a clinical record (licensed)", "branch"),
-  TEMPLATE_MANAGE: p("template:manage", "Clinical templates"),
+  EMR_SIGN: p(
+    "emr:sign",
+    "Sign a clinical record (licensed)",
+    "branch",
+    future(
+      "D1 EMR",
+      "countersigning a clinical note is not implemented; only prescriptions are signed (prescription:sign)",
+    ),
+  ),
+  TEMPLATE_MANAGE: p(
+    "template:manage",
+    "Clinical templates",
+    "tenant",
+    future("D1 EMR", "clinical note templates are not built"),
+  ),
 
   VITALS_RECORD: p("vitals:record", "Record vitals", "branch"),
   /**
@@ -233,10 +445,33 @@ const CLINICAL = {
    * it means for every appointment permission — the roster is per site.
    */
   DOCTOR_SELF_MANAGE: p("doctor:self-manage", "Manage own availability and leave", "branch"),
-  SCHEDULE_MANAGE: p("schedule:manage", "Manage doctor schedules", "branch"),
-  DOCTOR_PERFORMANCE_VIEW: p("doctor:performance:view", "Doctor performance and revenue"),
+  SCHEDULE_MANAGE: p(
+    "schedule:manage",
+    "Manage doctor schedules",
+    "branch",
+    supersededBy(
+      "D2 Doctor Management",
+      "doctor:manage",
+      "clinic hours and sessions are managed on the doctor, with doctor:self-manage for their own",
+    ),
+  ),
+  DOCTOR_PERFORMANCE_VIEW: p(
+    "doctor:performance:view",
+    "Doctor performance and revenue",
+    "tenant",
+    future("D2 Doctor Management", "per-doctor revenue and performance reporting is not built"),
+  ),
 
-  CONSULTATION_MANAGE: p("consultation:manage", "Conduct consultations", "own"),
+  CONSULTATION_MANAGE: p(
+    "consultation:manage",
+    "Conduct consultations",
+    "own",
+    supersededBy(
+      "D3 Consultation Workspace",
+      "emr:write",
+      "the consultation note is an EMR write; the queue is encounter:update",
+    ),
+  ),
   /**
    * ── `branch`, NOT `own` — AND THE DIFFERENCE IS NOT COSMETIC ────────────────
    * These were `own`, matching the intuition "a doctor sees the prescriptions they
@@ -284,43 +519,201 @@ const CLINICAL = {
   ORDER_RELEASE: p("order:release", "Release a verified result to the ordering doctor", "branch"),
   ORDER_CANCEL: p("order:cancel", "Cancel an order", "branch"),
 
-  TELECONSULT_HOST: p("teleconsult:host", "Host a video consultation", "own"),
-  TELECONSULT_JOIN: p("teleconsult:join", "Join a video consultation", "own"),
+  TELECONSULT_HOST: p(
+    "teleconsult:host",
+    "Host a video consultation",
+    "own",
+    future("D4 Tele-consultation", "video consultation is not built"),
+  ),
+  TELECONSULT_JOIN: p(
+    "teleconsult:join",
+    "Join a video consultation",
+    "own",
+    future("D4 Tele-consultation", "video consultation is not built"),
+  ),
 
   NURSING_MANAGE: p("nursing:manage", "Nursing care plans and notes", "branch"),
   MAR_ADMINISTER: p("mar:administer", "Administer medication (MAR)", "branch"),
 
-  LAB_ORDER: p("lab:order", "Order a lab test", "branch"),
-  LAB_COLLECT: p("lab:collect", "Collect a sample", "branch"),
-  LAB_RESULT: p("lab:result", "Enter a lab result", "branch"),
+  LAB_ORDER: p(
+    "lab:order",
+    "Order a lab test",
+    "branch",
+    supersededBy(
+      "D6 LIS",
+      "order:create",
+      "ADR-0013 makes the Order polymorphic — ordering is one permission across every category",
+    ),
+  ),
+  LAB_COLLECT: p(
+    "lab:collect",
+    "Collect a sample",
+    "branch",
+    future(
+      "D6 LIS (M6)",
+      "specimen collection — STATE_MACHINE_CATALOG §7 is written and explicitly not implemented; there is no specimen entity",
+    ),
+  ),
+  LAB_RESULT: p(
+    "lab:result",
+    "Enter a lab result",
+    "branch",
+    future(
+      "D6 LIS (M6)",
+      "structured lab result entry arrives with the LIS; today a technician enters results through the order worklist under order:perform",
+    ),
+  ),
   LAB_APPROVE: p("lab:approve", "Approve a lab result (pathologist)", "branch"),
 
-  RADIOLOGY_ORDER: p("radiology:order", "Order imaging", "branch"),
-  RADIOLOGY_REPORT: p("radiology:report", "Report on imaging", "branch"),
-  RADIOLOGY_SIGN: p("radiology:sign", "Sign a radiology report", "branch"),
+  RADIOLOGY_ORDER: p(
+    "radiology:order",
+    "Order imaging",
+    "branch",
+    supersededBy(
+      "D7 Radiology",
+      "order:create",
+      "ADR-0013 makes the Order polymorphic — ordering is one permission across every category",
+    ),
+  ),
+  RADIOLOGY_REPORT: p(
+    "radiology:report",
+    "Report on imaging",
+    "branch",
+    future(
+      "D7 Radiology (M6)",
+      "the radiology report arrives with the module; today results ride on the order worklist under order:perform",
+    ),
+  ),
+  RADIOLOGY_SIGN: p(
+    "radiology:sign",
+    "Sign a radiology report",
+    "branch",
+    enforcedIn(
+      "D7 Radiology",
+      "orders/order.authority.ts",
+      "verifying a radiology order needs order:verify AND this, so a radiologist cannot certify a blood culture",
+    ),
+  ),
 
-  OT_RECORD: p("ot:record", "Record a surgery", "branch"),
-  BLOODBANK_MANAGE: p("bloodbank:manage", "Blood bank stock"),
-  BLOODBANK_ISSUE: p("bloodbank:issue", "Issue blood", "branch"),
+  OT_RECORD: p(
+    "ot:record",
+    "Record a surgery",
+    "branch",
+    future(
+      "D8 Operation Theatre",
+      "the operation record is not built; theatres today are a bookable resource only",
+    ),
+  ),
+  BLOODBANK_MANAGE: p(
+    "bloodbank:manage",
+    "Blood bank stock",
+    "tenant",
+    future("D9 Blood Bank", "blood bank is not built"),
+  ),
+  BLOODBANK_ISSUE: p(
+    "bloodbank:issue",
+    "Issue blood",
+    "branch",
+    future("D9 Blood Bank", "blood bank is not built"),
+  ),
 
-  TRIAGE_PERFORM: p("triage:perform", "Triage an emergency patient", "branch"),
-  ED_BOARD_MANAGE: p("ed:board:manage", "Emergency board", "branch"),
-  MLC_MANAGE: p("mlc:manage", "Medico-legal cases", "branch"),
+  TRIAGE_PERFORM: p(
+    "triage:perform",
+    "Triage an emergency patient",
+    "branch",
+    future("D10 Emergency", "the ED triage workflow is not built"),
+  ),
+  ED_BOARD_MANAGE: p(
+    "ed:board:manage",
+    "Emergency board",
+    "branch",
+    future("D10 Emergency", "the emergency board is not built"),
+  ),
+  MLC_MANAGE: p(
+    "mlc:manage",
+    "Medico-legal cases",
+    "branch",
+    future(
+      "D10 Emergency",
+      "the medico-legal CASE register is not built; the medicolegal module today covers consent and death certification",
+    ),
+  ),
 
-  ICU_CHART: p("icu:chart", "Critical-care charting", "branch"),
-  ICU_SCORE: p("icu:score", "Critical-care scoring", "branch"),
-  ICU_BOARD_VIEW: p("icu:board:view", "ICU board", "branch"),
+  ICU_CHART: p(
+    "icu:chart",
+    "Critical-care charting",
+    "branch",
+    future("D11 Critical Care", "critical care is not built"),
+  ),
+  ICU_SCORE: p(
+    "icu:score",
+    "Critical-care scoring",
+    "branch",
+    future("D11 Critical Care", "critical care is not built"),
+  ),
+  ICU_BOARD_VIEW: p(
+    "icu:board:view",
+    "ICU board",
+    "branch",
+    future("D11 Critical Care", "critical care is not built"),
+  ),
 
-  DIALYSIS_MANAGE: p("dialysis:manage", "Dialysis unit"),
-  DIALYSIS_SCHEDULE: p("dialysis:schedule", "Schedule dialysis", "branch"),
-  DIALYSIS_RECORD: p("dialysis:record", "Record a dialysis session", "branch"),
+  DIALYSIS_MANAGE: p(
+    "dialysis:manage",
+    "Dialysis unit",
+    "tenant",
+    future("D12 Dialysis", "dialysis is not built"),
+  ),
+  DIALYSIS_SCHEDULE: p(
+    "dialysis:schedule",
+    "Schedule dialysis",
+    "branch",
+    future("D12 Dialysis", "dialysis is not built"),
+  ),
+  DIALYSIS_RECORD: p(
+    "dialysis:record",
+    "Record a dialysis session",
+    "branch",
+    future("D12 Dialysis", "dialysis is not built"),
+  ),
 
-  PHYSIO_MANAGE: p("physio:manage", "Physiotherapy unit"),
-  PHYSIO_ASSESS: p("physio:assess", "Physiotherapy assessment", "branch"),
-  PHYSIO_TREAT: p("physio:treat", "Physiotherapy treatment", "branch"),
+  PHYSIO_MANAGE: p(
+    "physio:manage",
+    "Physiotherapy unit",
+    "tenant",
+    future("D13 Physiotherapy", "physiotherapy is not built"),
+  ),
+  PHYSIO_ASSESS: p(
+    "physio:assess",
+    "Physiotherapy assessment",
+    "branch",
+    future("D13 Physiotherapy", "physiotherapy is not built"),
+  ),
+  PHYSIO_TREAT: p(
+    "physio:treat",
+    "Physiotherapy treatment",
+    "branch",
+    future("D13 Physiotherapy", "physiotherapy is not built"),
+  ),
 
-  DIET_ASSESS: p("diet:assess", "Nutrition assessment", "branch"),
-  DIET_PRESCRIBE: p("diet:prescribe", "Prescribe a therapeutic diet", "branch"),
+  DIET_ASSESS: p(
+    "diet:assess",
+    "Nutrition assessment",
+    "branch",
+    future(
+      "D14 Dietetics",
+      "nutrition assessment is not built; a diet Order carries the instruction today",
+    ),
+  ),
+  DIET_PRESCRIBE: p(
+    "diet:prescribe",
+    "Prescribe a therapeutic diet",
+    "branch",
+    future(
+      "D14 Dietetics",
+      "therapeutic diet prescribing is not built; a diet Order carries the instruction today",
+    ),
+  ),
 } as const;
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -344,7 +737,16 @@ const OPERATIONS = {
   APPOINTMENT_READ: p("appointment:read", "View appointments", "branch"),
   APPOINTMENT_UPDATE: p("appointment:update", "Reschedule an appointment", "branch"),
   APPOINTMENT_CANCEL: p("appointment:cancel", "Cancel an appointment", "branch"),
-  QUEUE_MANAGE: p("queue:manage", "Manage the queue and tokens", "branch"),
+  QUEUE_MANAGE: p(
+    "queue:manage",
+    "Manage the queue and tokens",
+    "branch",
+    supersededBy(
+      "E1 Appointments & Queue",
+      "encounter:update",
+      "the token queue is a state of the encounter, not a separate object",
+    ),
+  ),
 } as const;
 
 const FINANCE = {
@@ -361,13 +763,43 @@ const FINANCE = {
    */
   TARIFF_MANAGE: p("tariff:manage", "Manage the service tariff"),
 
-  INSURANCE_PREAUTH: p("insurance:preauth", "Request pre-authorization"),
+  INSURANCE_PREAUTH: p(
+    "insurance:preauth",
+    "Request pre-authorization",
+    "tenant",
+    future(
+      "F3 Insurance",
+      "a dedicated pre-authorization request flow is not split out — insurance.routes.ts says so; preauth is a claim TYPE today",
+    ),
+  ),
   INSURANCE_CLAIM: p("insurance:claim", "File a claim"),
   INSURANCE_RECONCILE: p("insurance:reconcile", "Reconcile a settlement"),
-  CORPORATE_BILL: p("corporate:bill", "Bill a corporate client"),
-  PACKAGE_MANAGE: p("package:manage", "Manage care packages"),
+  CORPORATE_BILL: p(
+    "corporate:bill",
+    "Bill a corporate client",
+    "tenant",
+    future("F3 Insurance", "corporate/TPA billing is not built"),
+  ),
+  PACKAGE_MANAGE: p(
+    "package:manage",
+    "Manage care packages",
+    "tenant",
+    supersededBy(
+      "F2 Billing",
+      "tariff:manage",
+      "a care package is priced from the tariff and administered with it",
+    ),
+  ),
 
-  PHARMACY_SELL: p("pharmacy:sell", "Sell at the pharmacy counter", "branch"),
+  PHARMACY_SELL: p(
+    "pharmacy:sell",
+    "Sell at the pharmacy counter",
+    "branch",
+    future(
+      "F4 Pharmacy",
+      "over-the-counter retail sale is not built; dispensing against a prescription is pharmacy:dispense",
+    ),
+  ),
   PHARMACY_DISPENSE: p("pharmacy:dispense", "Dispense against a prescription", "branch"),
   /**
    * Authorise dispensing on credit when an admitted patient's advance is exhausted — the
@@ -379,34 +811,133 @@ const FINANCE = {
     "pharmacy:credit-override",
     "Authorise an over-budget dispense (dispense on credit)",
     "branch",
+    enforcedIn(
+      "F4 Pharmacy",
+      "pharmacy/pharmacy.service.ts",
+      "an over-budget dispense is refused (HMS-PHM-003) unless the acknowledgement comes from a holder — it cannot gate the ROUTE, because the pharmacist who calls it is not the one authorising",
+    ),
   ),
   PHARMACY_STOCK: p("pharmacy:stock", "Pharmacy stock"),
-  PHARMACY_PURCHASE: p("pharmacy:purchase", "Pharmacy purchasing"),
+  PHARMACY_PURCHASE: p(
+    "pharmacy:purchase",
+    "Pharmacy purchasing",
+    "tenant",
+    future(
+      "F4 Pharmacy",
+      "pharmacy purchasing arrives with stock — PROJECT_MEMORY records that the pharmacy has no inventory",
+    ),
+  ),
 
-  INVENTORY_MANAGE: p("inventory:manage", "Manage inventory"),
-  INVENTORY_ISSUE: p("inventory:issue", "Issue stock", "branch"),
-  INVENTORY_AUDIT: p("inventory:audit", "Stock audit"),
-  INVENTORY_PURCHASE: p("inventory:purchase", "Purchasing"),
+  INVENTORY_MANAGE: p(
+    "inventory:manage",
+    "Manage inventory",
+    "tenant",
+    future("G1 Inventory", "general stores inventory is not built"),
+  ),
+  INVENTORY_ISSUE: p(
+    "inventory:issue",
+    "Issue stock",
+    "branch",
+    future("G1 Inventory", "general stores inventory is not built"),
+  ),
+  INVENTORY_AUDIT: p(
+    "inventory:audit",
+    "Stock audit",
+    "tenant",
+    future("G1 Inventory", "general stores inventory is not built"),
+  ),
+  INVENTORY_PURCHASE: p(
+    "inventory:purchase",
+    "Purchasing",
+    "tenant",
+    future("G3 Procurement", "purchasing is not built"),
+  ),
 
-  FINANCE_LEDGER: p("finance:ledger", "General ledger"),
-  FINANCE_EXPENSE: p("finance:expense", "Expenses"),
-  FINANCE_INCOME: p("finance:income", "Income"),
-  FINANCE_REPORT: p("finance:report", "Financial reports"),
-  FINANCE_CLOSE: p("finance:close", "Close a financial period"),
+  FINANCE_LEDGER: p(
+    "finance:ledger",
+    "General ledger",
+    "tenant",
+    future(
+      "G2 Finance",
+      "the general ledger is not built; billing is charges, invoices and payments only",
+    ),
+  ),
+  FINANCE_EXPENSE: p(
+    "finance:expense",
+    "Expenses",
+    "tenant",
+    future("G2 Finance", "expense management is not built"),
+  ),
+  FINANCE_INCOME: p(
+    "finance:income",
+    "Income",
+    "tenant",
+    future("G2 Finance", "income accounting is not built"),
+  ),
+  FINANCE_REPORT: p(
+    "finance:report",
+    "Financial reports",
+    "tenant",
+    future("G2 Finance", "financial reporting beyond the daily collection report is not built"),
+  ),
+  FINANCE_CLOSE: p(
+    "finance:close",
+    "Close a financial period",
+    "tenant",
+    future("G2 Finance", "period close is not built"),
+  ),
 
-  HR_EMPLOYEE: p("hr:employee", "Employee records"),
-  HR_ATTENDANCE: p("hr:attendance", "Attendance"),
-  HR_LEAVE: p("hr:leave", "Leave"),
-  HR_PAYROLL: p("hr:payroll", "Run payroll"),
-  PAYROLL_APPROVE: p("payroll:approve", "Approve payroll"),
-  HR_RECRUIT: p("hr:recruit", "Recruitment"),
+  HR_EMPLOYEE: p(
+    "hr:employee",
+    "Employee records",
+    "tenant",
+    future("G4 HR", "HR is not built; clinical staff are users, not employees"),
+  ),
+  HR_ATTENDANCE: p(
+    "hr:attendance",
+    "Attendance",
+    "tenant",
+    future("G4 HR", "staff attendance and rostering are not built; HR is a later milestone"),
+  ),
+  HR_LEAVE: p(
+    "hr:leave",
+    "Leave",
+    "tenant",
+    future("G4 HR", "HR is not built; a doctor's own leave is doctor:self-manage"),
+  ),
+  HR_PAYROLL: p("hr:payroll", "Run payroll", "tenant", future("G4 HR", "payroll is not built")),
+  PAYROLL_APPROVE: p(
+    "payroll:approve",
+    "Approve payroll",
+    "tenant",
+    future("G4 HR", "payroll is not built"),
+  ),
+  HR_RECRUIT: p("hr:recruit", "Recruitment", "tenant", future("G4 HR", "recruitment is not built")),
 } as const;
 
 /** Patient-portal identity. `own` scope only — a patient sees exactly their own record. */
 const SELF = {
-  SELF_MANAGE: p("self:manage", "Manage my own profile and bookings", "own"),
-  BOOKING_PUBLIC: p("booking:public", "Book an appointment online", "own"),
-  FORM_DESIGN: p("form:design", "Design digital forms"),
+  SELF_MANAGE: p(
+    "self:manage",
+    "Manage my own profile and bookings",
+    "own",
+    future(
+      "H1 Patient Portal",
+      "the patient portal is not built; PATIENT is a seeded role with no surface yet",
+    ),
+  ),
+  BOOKING_PUBLIC: p(
+    "booking:public",
+    "Book an appointment online",
+    "own",
+    future("H1 Patient Portal", "public online booking is not built; the public site is read-only"),
+  ),
+  FORM_DESIGN: p(
+    "form:design",
+    "Design digital forms",
+    "tenant",
+    future("A8 Forms", "the digital form designer is not built"),
+  ),
 } as const;
 
 export const PERMISSIONS = {
