@@ -19,6 +19,7 @@
  * and it weakens no production constraint: `dropIndex` here is the falsification instrument, and the
  * migration that owns the index puts it straight back.
  */
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 
@@ -37,6 +38,7 @@ const { verifyTenantSchema, schemaBlockedMessage, CLINICAL_SAFETY_INVARIANTS } =
   await import("./seed/schemaGuard.js");
 const { classify } = await import("./seed/deploymentGate.js");
 const { NON_CLINICAL_UNIQUE_INDEXES } = await import("./core/db/clinicalInvariants.js");
+const { SERVABLE_TENANT_STATUSES } = await import("./modules/tenants/tenant.model.js");
 
 const SLUG = "test-schemaguard";
 let db: Awaited<ReturnType<typeof getTenantConnection>>;
@@ -636,5 +638,63 @@ describe("6. every unique index is either a declared invariant or explicitly exe
     ).map((i) => i.rule);
 
     expect(undeclaredButRequired).toEqual([]);
+  });
+});
+
+/**
+ * 7. A NEW HOSPITAL IS NEVER SERVABLE BEFORE ITS SCHEMA EXISTS.
+ *
+ * ── THE QUESTION ────────────────────────────────────────────────────────────
+ * Every runtime guard in this system assumes a tenant's indexes are present or provably absent.
+ * That assumption has an obvious hole at the very beginning of a hospital's life: the registry row
+ * is written BEFORE the database is created and migrated, so if a request could resolve a tenant
+ * in that window it would reach a database with no collections at all.
+ *
+ * ── THE ANSWER, AND WHY IT IS ALREADY CORRECT ───────────────────────────────
+ * `repo.create` writes `status: "provisioning"`, and `SERVABLE_TENANT_STATUSES` is
+ * `["active", "trial"]` — so `resolveTenant` refuses the tenant for the whole window. The move to
+ * active is the LAST statement of `provisionTenant`, after migrations, the Main Branch and the
+ * code master. A migration that throws therefore leaves the hospital permanently unservable rather
+ * than half-open: fail-closed by construction, with no runtime migration and no self-healing.
+ *
+ * That is a correct design that nothing was pinning. These assertions exist so that moving the
+ * activation earlier — which would look like a harmless tidy-up — cannot pass review.
+ */
+describe("7. tenant provisioning cannot expose a hospital before its schema exists", () => {
+  it("does not serve a tenant that is still provisioning", () => {
+    expect(SERVABLE_TENANT_STATUSES).not.toContain("provisioning");
+    // The other end of the same rule: these two ARE served, so the list cannot simply be empty.
+    expect([...SERVABLE_TENANT_STATUSES].sort()).toEqual(["active", "trial"]);
+  });
+
+  /**
+   * A structural assertion, deliberately. The behavioural version would need a migration that
+   * fails on demand, and `provisionTenant` reads the module-level registry — so the property that
+   * actually protects the window is the ORDER of these two statements, and that is what is pinned.
+   */
+  it("activates the tenant only AFTER migrations have run", async () => {
+    const source = await readFile(
+      new URL("./modules/tenants/tenant.service.ts", import.meta.url),
+      "utf8",
+    );
+    const body = source.slice(source.indexOf("export async function provisionTenant"));
+    const migrated = body.indexOf("migrateTenantDb(");
+    const activated = body.indexOf("transitionStatus(tenant.id");
+
+    expect(migrated).toBeGreaterThan(-1);
+    expect(activated).toBeGreaterThan(-1);
+    expect(
+      activated,
+      "provisionTenant must migrate before it activates — otherwise a half-migrated hospital " +
+        "is servable and every runtime schema guard is answering for a database that is still " +
+        "being built.",
+    ).toBeGreaterThan(migrated);
+  });
+
+  /** The tenant this suite provisioned went all the way through, so it is servable AND converged. */
+  it("a fully provisioned tenant is both servable and schema-converged", async () => {
+    const verdict = await verifyTenantSchema(db, tenantMigrations);
+    expect(verdict.ok).toBe(true);
+    expect(SERVABLE_TENANT_STATUSES).toContain("active");
   });
 });
