@@ -50,21 +50,22 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 
 ## Financial
 
-| Code        | HTTP | Message                                                      | Recovery                                                 | Retry |
-| ----------- | ---- | ------------------------------------------------------------ | -------------------------------------------------------- | ----- |
-| HMS-BIL-001 | 422  | Bill already finalized                                       | Use credit-note reversal flow                            | no    |
-| HMS-BIL-002 | 422  | Discount exceeds your approval limit                         | Request approval (`details.approverRole`)                | no    |
-| HMS-PAY-001 | 402  | Payment failed at gateway                                    | Retry with same Idempotency-Key or other mode            | yes   |
-| HMS-PAY-002 | 409  | Payment already captured                                     | No action; original receipt in `details`                 | no    |
-| HMS-PAY-003 | 422  | Refund exceeds source payment                                | Correct amount                                           | no    |
-| HMS-WAL-001 | 422  | Insufficient wallet balance                                  | Top up or change payment mode                            | no    |
-| HMS-INS-001 | 422  | Pre-authorization required for this service                  | Initiate pre-auth (W7)                                   | no    |
-| HMS-INS-002 | 422  | Claim documents incomplete                                   | Attach `details.missing`                                 | no    |
-| HMS-PHM-001 | 409  | Insufficient stock (`details.available`)                     | Partial dispense or backorder                            | no    |
-| HMS-PHM-002 | 422  | Batch expired                                                | System blocks; pick valid batch                          | no    |
-| HMS-PHM-003 | 402  | Dispense exceeds the patient's advance (`details.shortfall`) | Doctor authorises on credit (`pharmacy:credit-override`) | no    |
-| HMS-INV-001 | 422  | GRN quantity exceeds PO                                      | Verify receipt; amend PO per policy                      | no    |
-| HMS-FIN-001 | 422  | Accounting period closed                                     | Post to open period / reopen with permission             | no    |
+| Code        | HTTP | Message                                                                                | Recovery                                                 | Retry         |
+| ----------- | ---- | -------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------- |
+| HMS-BIL-001 | 422  | Bill already finalized                                                                 | Use credit-note reversal flow                            | no            |
+| HMS-BIL-002 | 422  | Discount exceeds your approval limit                                                   | Request approval (`details.approverRole`)                | no            |
+| HMS-PAY-001 | 402  | Payment failed at gateway                                                              | Retry with same Idempotency-Key or other mode            | yes           |
+| HMS-PAY-002 | 409  | Payment already captured                                                               | No action; original receipt in `details`                 | no            |
+| HMS-PAY-003 | 422  | Refund exceeds source payment                                                          | Correct amount                                           | no            |
+| HMS-WAL-001 | 422  | Insufficient wallet balance                                                            | Top up or change payment mode                            | no            |
+| HMS-INS-001 | 422  | Pre-authorization required for this service                                            | Initiate pre-auth (W7)                                   | no            |
+| HMS-INS-002 | 422  | Claim documents incomplete                                                             | Attach `details.missing`                                 | no            |
+| HMS-PHM-001 | 409  | Insufficient stock (`details.available`)                                               | Partial dispense or backorder                            | no            |
+| HMS-PHM-002 | 422  | Batch expired                                                                          | System blocks; pick valid batch                          | no            |
+| HMS-PHM-003 | 402  | Dispense exceeds the patient's advance (`details.shortfall`)                           | Doctor authorises on credit (`pharmacy:credit-override`) | no            |
+| HMS-PHM-004 | 503  | Dispensing unavailable: this database cannot enforce the one-handover-per-request rule | Hand over on paper and escalate; respect `Retry-After`   | yes (backoff) |
+| HMS-INV-001 | 422  | GRN quantity exceeds PO                                                                | Verify receipt; amend PO per policy                      | no            |
+| HMS-FIN-001 | 422  | Accounting period closed                                                               | Post to open period / reopen with permission             | no            |
 
 ## Files & Integrations
 
@@ -129,3 +130,18 @@ makes the repair harder, because a unique index cannot be rebuilt over rows that
 
 `details.missing` names the rule that is absent and the migration that installs it. See
 `DEPLOYMENT_GATE.md` for how a tenant reaches this state and how it is repaired.
+
+### `HMS-PHM-004` is the same refusal, for the pharmacy counter
+
+`one_dispense_per_request_id` (migration 0015) is what arbitrates two clicks in flight at once —
+the `findByRequestId` read before it is a courtesy that catches the ordinary sequential retry and
+says so itself. Without the index both requests commit: **two handovers of the same drugs**, billed
+twice, from one intent.
+
+Same shape as `HMS-MAR-002` and for the same reasons: 503 rather than 4xx because the request is
+fine and will work once the schema is repaired, nothing is written, and `Retry-After` is set. The
+client should tell the pharmacist to hand over on paper and escalate — and the escalation is urgent
+because a unique index cannot be rebuilt over rows that already violate it.
+
+It is scoped to dispensing alone. A missing dispensing constraint says nothing about whether a
+nurse may chart a dose, and does not block one.

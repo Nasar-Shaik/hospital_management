@@ -33,6 +33,7 @@ const { getTenantConnection, closeAllTenantConnections } =
   await import("./core/db/connectionManager.js");
 const { closeMaster } = await import("./core/db/masterDb.js");
 const { closeRedis } = await import("./core/redis/redis.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
 const { runWithContext } = await import("./core/context/requestContext.js");
 const { createUser, transitionStatus } = await import("./modules/users/index.js");
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
@@ -56,6 +57,8 @@ interface Hospital {
   doctorToken: string;
   doctorId: string;
   pharmacistToken: string;
+  /** NURSE — charting and observations, which no other role in this harness may do. */
+  nurseToken: string;
   connection: Awaited<ReturnType<typeof getTenantConnection>>;
 }
 
@@ -129,6 +132,20 @@ async function setup(
       await transitionStatus(doc.id, "active");
       doctorId = doc.id;
 
+      /**
+       * A nurse, so the suite can prove what a dispensing refusal must NOT touch. Charting a dose
+       * and recording observations are NURSE permissions — neither the doctor nor the admin holds
+       * them — so without this the proportionality claim could only be asserted, not exercised.
+       */
+      const nurse = await createUser({
+        email: `nurse@${slug}.test`,
+        name: "Sister Fernandes",
+        status: "invited",
+      });
+      await setPassword(nurse.id, PASSWORD, { mustChangePassword: false });
+      await assignRoleByCode(nurse.id, "NURSE", []);
+      await transitionStatus(nurse.id, "active");
+
       const pharm = await createUser({
         email: `pharm@${slug}.test`,
         name: "Pharmacist Iqbal",
@@ -149,6 +166,7 @@ async function setup(
     token: await login({ host }, `admin@${slug}.test`),
     doctorToken: await login({ host }, `doc@${slug}.test`),
     pharmacistToken: await login({ host }, `pharm@${slug}.test`),
+    nurseToken: await login({ host }, `nurse@${slug}.test`),
     doctorId,
     connection,
   };
@@ -1016,5 +1034,243 @@ describe("the create response is the shape the contract promises", () => {
      */
     expect(dispensed).not.toHaveProperty("creditOverride");
     expect(Object.keys(dispensed)).not.toContain("creditOverride");
+  });
+});
+
+/**
+ * DISPENSING RUNTIME SCHEMA SAFETY — the counter refuses when the rule cannot be enforced.
+ *
+ * ── WHY DISPENSING NEEDS THIS EVEN THOUGH IT ALREADY PRE-CHECKS ─────────────
+ * Unlike the MAR, `dispense()` DOES read before it writes: `findByRequestId` catches the ordinary
+ * sequential retry. That read is a courtesy and says so itself — "two clicks can be in flight at
+ * once and this read would miss". The unique index from migration 0015 is what actually arbitrates
+ * the race, and measured on 2026-08-17 with it absent both inserts of one `requestId` are accepted:
+ * two handovers of the same drugs, billed twice, from one intent. Once that pair exists the index
+ * cannot be rebuilt over it.
+ *
+ * The suite drops a real index on its own throwaway tenant and puts it straight back. Readiness is
+ * cached for a minute, so every transition clears it — the documented way an operator's repair
+ * becomes visible before the TTL expires.
+ */
+describe("dispensing refuses when the database cannot enforce one-handover-per-request", () => {
+  const DISPENSE_INDEX = "one_dispense_per_request_id";
+
+  async function dropDispenseIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("dispenses").dropIndex(DISPENSE_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreDispenseIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("dispenses").createIndex(
+      { tenantId: 1, requestId: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { requestId: { $exists: true } },
+        background: true,
+        name: DISPENSE_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  /** A fresh signed prescription, via the suite's own arrive → draft → sign chain. */
+  let phone = 9100900000;
+  async function signedFor(h: Hospital): Promise<{ id: string; encounterId: string }> {
+    phone += 1;
+    const encounterId = await arrive(h, "Guard Subject", String(phone));
+    const rx = await draft(h, encounterId);
+    await sign(h, rx);
+    return { id: rx.id as string, encounterId };
+  }
+
+  it("hands over normally while every invariant it rests on is armed", async () => {
+    const { id } = await signedFor(pvt);
+
+    const res = await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }]);
+
+    expect(res.status).toBe(201);
+  });
+
+  /**
+   * ── THE REFUSAL ───────────────────────────────────────────────────────────
+   * Nothing is written: the check runs before the prescription is even read, so a refusal cannot
+   * leave a half-resolved handover or a decremented quantity behind.
+   */
+  it("answers 503 HMS-PHM-004 with Retry-After when the dispense index is gone", async () => {
+    const { id } = await signedFor(pvt);
+
+    await dropDispenseIndex(pvt);
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      ).send({ items: [{ lineIndex: 0, quantity: 5 }], requestId: "guard-refusal-0001" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-PHM-004");
+      expect(res.headers["retry-after"]).toBe("60");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0015-prescriptions");
+      // It must tell the pharmacist what to DO, not merely that something failed.
+      expect(String(res.body.error.message)).toMatch(/paper/i);
+
+      // NOTHING handed over, and the prescription untouched.
+      expect(
+        await pvt.connection
+          .collection("dispenses")
+          .countDocuments({ requestId: "guard-refusal-0001" }),
+      ).toBe(0);
+      const after = await auth(request(app).get(`/api/v1/prescriptions/${id}`), pvt).expect(200);
+      expect((after.body.data.lines as { dispensedQty: number }[])[0]?.dispensedQty).toBe(0);
+    } finally {
+      await restoreDispenseIndex(pvt);
+    }
+  });
+
+  it("hands over again the moment the index is restored", async () => {
+    const { id } = await signedFor(pvt);
+
+    await dropDispenseIndex(pvt);
+    const refused = await auth(
+      request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+      pvt,
+      pvt.pharmacistToken,
+    ).send({ items: [{ lineIndex: 0, quantity: 5 }] });
+    expect(refused.status).toBe(503);
+
+    await restoreDispenseIndex(pvt);
+    expect((await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }])).status).toBe(201);
+  });
+
+  /**
+   * The index is PARTIAL on `requestId`, so a handover without one is deliberately unconstrained —
+   * partial dispensing is legitimate and may happen many times. For those the Idempotency-Key
+   * claim is the only guard, which is why dispensing asks for both invariants and not just its own.
+   */
+  it("also refuses when the idempotency claim index is gone", async () => {
+    const { id } = await signedFor(pvt);
+
+    await pvt.connection.collection("idempotencyKeys").dropIndex("one_claim_per_idempotency_key");
+    forgetSchemaReadiness();
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      ).send({ items: [{ lineIndex: 0, quantity: 5 }] });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-PHM-004");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0048-idempotency-key-claims");
+    } finally {
+      await pvt.connection
+        .collection("idempotencyKeys")
+        .createIndex(
+          { tenantId: 1, userId: 1, key: 1 },
+          { unique: true, background: true, name: "one_claim_per_idempotency_key" },
+        );
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── PROPORTIONALITY ───────────────────────────────────────────────────────
+   * A missing dispensing constraint says nothing about whether a nurse may chart a dose. Charting
+   * rests on its own two invariants, both still armed here, so MAR must be untouched — as must the
+   * capabilities that depend on no uniqueness at all.
+   */
+  it("does not block medication charting, vitals, nursing notes or reads", async () => {
+    const { id } = await signedFor(pvt);
+    const encounterId = (
+      await auth(request(app).get(`/api/v1/prescriptions/${id}`), pvt).expect(200)
+    ).body.data.encounterId as string;
+
+    await dropDispenseIndex(pvt);
+    try {
+      await auth(
+        request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      )
+        .send({ items: [{ lineIndex: 0, quantity: 5 }] })
+        .expect(503);
+
+      // MAR is a different capability with different invariants, and both of its are armed.
+      await auth(
+        request(app).post(`/api/v1/encounters/${encounterId}/medication-administrations`),
+        pvt,
+        pvt.nurseToken,
+      )
+        .send({ prescriptionId: id, drugCode: "DRUG_PARA_500", status: "given" })
+        .expect(201);
+
+      // Vitals: migration 0025 creates NO unique index, so nothing here can ever block them.
+      await auth(request(app).post(`/api/v1/encounters/${encounterId}/vitals`), pvt, pvt.nurseToken)
+        .send({ systolic: 120, diastolic: 78, pulse: 70 })
+        .expect(201);
+
+      /**
+       * Nursing notes: `wardNotes`' only uniqueness is partial on discharge summaries, so a note
+       * has no correctness dependency on any constraint and must never be blocked by one.
+       *
+       * This encounter is OPD, and `addNursingNote` requires an OPEN ADMISSION — so the right
+       * proof here is not that the note succeeds but that it is refused for its OWN reason. A 422
+       * about the stay means the dispensing guard never saw it; a 503 would mean it did.
+       * (The success path is covered in `mar.int.test.ts`, which has an admitted patient.)
+       */
+      const note = await auth(
+        request(app).post(`/api/v1/encounters/${encounterId}/nursing-notes`),
+        pvt,
+        pvt.nurseToken,
+      ).send({ text: "Drugs handed over on paper; pharmacy system refusing, escalated." });
+
+      expect(note.status).not.toBe(503);
+      expect(note.body.error?.code).not.toBe("HMS-PHM-004");
+
+      // Reads stay legible precisely when a write is refused.
+      await auth(request(app).get(`/api/v1/prescriptions/${id}`), pvt).expect(200);
+    } finally {
+      await restoreDispenseIndex(pvt);
+    }
+  });
+
+  /**
+   * One hospital's schema says nothing about another's — the databases are physically separate
+   * (ADR-0005) and so are their indexes.
+   */
+  it("refuses only the tenant whose index is missing", async () => {
+    await dropDispenseIndex(pvt);
+    try {
+      const { id: mine } = await signedFor(pvt);
+      await auth(
+        request(app).post(`/api/v1/prescriptions/${mine}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      )
+        .send({ items: [{ lineIndex: 0, quantity: 5 }] })
+        .expect(503);
+
+      // The other hospital dispenses normally throughout.
+      const { id: theirs } = await signedFor(clinic);
+      expect((await dispense(clinic, theirs, [{ lineIndex: 0, quantity: 5 }])).status).toBe(201);
+    } finally {
+      await restoreDispenseIndex(pvt);
+    }
+  });
+
+  /** The guard sits in front of the existing protection; it must not replace or weaken it. */
+  it("leaves the existing duplicate-handover protection exactly as it was", async () => {
+    const { id } = await signedFor(pvt);
+    const key = "guard-duplicate-request-0001";
+
+    const first = await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }], key);
+    expect(first.status).toBe(201);
+
+    const second = await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }], key);
+    expect(second.status).toBe(200);
+    expect(second.body.data.duplicate).toBe(true);
+    expect(second.body.data.dispense.id).toBe(first.body.data.dispense.id);
   });
 });

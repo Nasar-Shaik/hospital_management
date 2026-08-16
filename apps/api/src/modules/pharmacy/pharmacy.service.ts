@@ -27,7 +27,9 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
@@ -82,6 +84,50 @@ export interface DispenseResult {
 }
 
 /**
+ * What a handover rests on, and why it is these two.
+ *
+ * `one_dispense_per_request_id` is what actually arbitrates a race. The `findByRequestId` read
+ * below is a courtesy that catches the ordinary sequential retry, and it says so itself — "two
+ * clicks can be in flight at once and this read would miss". Between that read and the insert
+ * there is room for a second request, so without the index BOTH commit: two handovers, stock
+ * decremented twice, and a patient who may be given the drugs twice.
+ *
+ * `idempotent-replay` is here for the same reason MAR needs it. The index is PARTIAL on
+ * `requestId`, deliberately — a dispense without one is a legitimate partial handover and may
+ * happen many times. For those the Idempotency-Key claim is the only thing standing between a
+ * retried request and a second handover.
+ */
+const DISPENSE_REQUIRES: readonly ClinicalCapability[] = ["dispensing", "idempotent-replay"];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * Checked first, before the prescription is even read, so a refusal cannot leave a partially
+ * resolved handover behind. Measured 2026-08-17: with the index absent two inserts of the same
+ * `requestId` are both accepted, and once that pair exists the index cannot be rebuilt over them.
+ */
+async function assertDispensingIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), DISPENSE_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-PHM-004",
+    503,
+    "Dispensing is unavailable on this system — hand over on paper and escalate",
+    {
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    60,
+  );
+}
+
+/**
  * Hands drugs over against a signed prescription.
  *
  * ── THE FOUR THINGS THAT MUST BE TRUE TOGETHER OR NOT AT ALL ────────────────
@@ -93,6 +139,8 @@ export interface DispenseResult {
  * screen while a queue builds behind the patient.
  */
 export async function dispense(input: DispenseInput): Promise<DispenseResult> {
+  await assertDispensingIsSafe();
+
   const ctx = getContext();
 
   /**
