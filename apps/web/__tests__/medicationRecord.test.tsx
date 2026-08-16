@@ -388,6 +388,118 @@ describe("3. a held dose", () => {
   });
 });
 
+/* ── 3b. the drug that was not on the ward ─────────────────────────────────── */
+
+/**
+ * ── A SUPPLY FAILURE IS NOT A CLINICAL DECISION ─────────────────────────────
+ * `not_available` has been a valid, persisted, audited `MAR_STATUS` since D5 and no client offered
+ * it, so the only way to chart a stock-out was HOLD with a reason — which files it in the
+ * clinical-decision column, where the next nurse reads `held` as "somebody decided to withhold
+ * this". These prove the outcome now reaches the server as itself.
+ */
+describe("3b. a dose that was not available", () => {
+  it("sends status not_available — not held, not refused", async () => {
+    const server = makeServer();
+    AUTH.api = server.client;
+    mount();
+
+    await openConfirm("Unavailable");
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(server.charts()).toHaveLength(1));
+    const body = server.charts()[0]?.body;
+    expect(body).toMatchObject({ status: "not_available" });
+    expect(body?.status).not.toBe("held");
+    expect(body?.status).not.toBe("refused");
+    // Same endpoint as every other outcome — this is an existing door, not a new one.
+    expect(server.charts()[0]?.url).toContain("/encounters/e1/medication-administrations");
+  });
+
+  /** The server demands a reason for `held` and for nothing else. The button must agree. */
+  it("can be confirmed with no reason typed", async () => {
+    const server = makeServer();
+    AUTH.api = server.client;
+    mount();
+
+    await openConfirm("Unavailable");
+    expect((confirmButton() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  /** Five rights, unchanged: the identity block is shown before this outcome as before any other. */
+  it("still goes through the confirmation, with the patient and drug named", async () => {
+    const server = makeServer();
+    AUTH.api = server.client;
+    mount();
+
+    const dialog = await openConfirm("Unavailable");
+    expect(dialog.textContent).toMatch(/Asha Rao/);
+    expect(dialog.textContent).toMatch(/UH-1001/);
+    expect(dialog.textContent).toMatch(/Paracetamol/);
+    expect(dialog.textContent).toMatch(/Not available/);
+    // Nothing has been written by opening it.
+    expect(server.charts()).toHaveLength(0);
+  });
+
+  /**
+   * ── THE HAZARD, AND WHY THE FIRST ATTEMPT MUST NOT RESOLVE ──────────────────
+   * A nurse presses Unavailable, the reply is lost, they find the drug after all and press Give.
+   * If the two shared a key the server would REPLAY the stock-out and the chart would say the drug
+   * was never given — the record saying the opposite of what the nurse chose.
+   *
+   * The first attempt is made to fail ambiguously on purpose: a SETTLED intent has its key retired
+   * anyway, so a version of this test that let Unavailable succeed passes even when the outcome is
+   * dropped from the key. It did, when first written — the falsification pass caught it.
+   */
+  it("carries its own idempotency key, distinct from a Give on the same slot", async () => {
+    const server = makeServer({
+      onChart: (_sent, attempt) =>
+        attempt === 1
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : Promise.resolve(
+              ok({ id: "m2", drugName: "Paracetamol", status: "given", administeredAt: SLOT_ISO }),
+            ),
+    });
+    AUTH.api = server.client;
+    mount();
+
+    // Unavailable ends unresolved — its key is deliberately retained for a retry OF THAT.
+    await openConfirm("Unavailable");
+    fireEvent.click(confirmButton());
+    await screen.findByRole("alert");
+
+    // The drug turns up. Giving it is a different decision and needs a different key.
+    await openConfirm("Give");
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(server.charts()).toHaveLength(2));
+
+    const [unavailable, give] = server.charts();
+    expect(unavailable?.body).toMatchObject({ status: "not_available" });
+    expect(give?.body).toMatchObject({ status: "given" });
+    expect(unavailable?.headers["idempotency-key"]).toBeTruthy();
+    expect(unavailable?.headers["idempotency-key"]).not.toBe(give?.headers["idempotency-key"]);
+  });
+
+  /**
+   * What the nurse reads back. The words are the outcome's own — never "held" or "given", and
+   * never the raw `not_available` enum.
+   */
+  it("confirms it in words, as not available and nothing else", async () => {
+    const server = makeServer();
+    AUTH.api = server.client;
+    mount();
+
+    await openConfirm("Unavailable");
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(document.body.textContent).toMatch(/Recorded:/));
+    const notice = screen.getByText(/^Recorded:/);
+    expect(notice.textContent).toMatch(/not available/i);
+    expect(notice.textContent).not.toMatch(/not_available/);
+    expect(notice.textContent).not.toMatch(/\bheld\b/i);
+    expect(notice.textContent).not.toMatch(/\bgiven\b/i);
+  });
+});
+
 /* ── 4. reconciliation ─────────────────────────────────────────────────────── */
 
 describe("4. a dose another nurse already charted", () => {

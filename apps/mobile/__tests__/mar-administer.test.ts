@@ -21,11 +21,13 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  ApiClient,
   ApiClientError,
   marSlotTaken,
   type DoseSlot,
   type MedicationAdministration,
 } from "@medicore/api-client";
+import { clinicalMutations } from "../src/query/mutations";
 import { queryKeys } from "../src/query/keys";
 import { toUserMessage } from "../src/lib/net/errors";
 import {
@@ -41,6 +43,7 @@ import {
   reviewLines,
   sameSlot,
   type AdministerDeps,
+  type AdministerOutcome,
   type SlotRef,
 } from "../src/clinical/marAdminister";
 
@@ -160,16 +163,29 @@ describe("slot state gates the actions", () => {
 /* ── 3. the three outcomes ─────────────────────────────────────────────────── */
 
 describe("outcomes", () => {
-  it("offers give, hold and refused", () => {
-    expect(OUTCOMES.map((o) => o.status)).toEqual(["given", "held", "refused"]);
+  /**
+   * ── THIS PAIR USED TO PIN THE OPPOSITE, AND THE PIN DID ITS JOB ─────────────
+   * S5A asserted "offers give, hold and refused" AND "deliberately does not offer not_available in
+   * this slice" — an explicit deferral, recorded so it stayed a decision rather than a drift. It is
+   * being taken up, not overridden: `not_available` has always been a real, persisted, audited
+   * `MAR_STATUS` that the app already DISPLAYS, and S5A's own note said what leaving it out costs —
+   * a nurse who cannot record it records HELD with a reason, filing a supply failure in the
+   * clinical-decision column, where the next nurse reads it as a decision about the patient.
+   *
+   * Inverted rather than deleted, and still exhaustive: a fifth status cannot be quietly added, and
+   * none of these four can be quietly dropped.
+   */
+  it("offers every outcome the record can hold, in bedside order", () => {
+    expect(OUTCOMES.map((o) => o.status)).toEqual(["given", "held", "refused", "not_available"]);
   });
 
-  /**
-   * `not_available` exists in `MAR_STATUSES` and is deliberately not offered in S5A. Pinned so the
-   * omission stays a decision somebody made rather than something that quietly drifted.
-   */
-  it("deliberately does not offer not_available in this slice", () => {
-    expect(OUTCOMES.map((o) => o.status)).not.toContain("not_available");
+  /** A stock-out is charted as a stock-out. The whole point — it must not land as `held`. */
+  it("records a stock-out as not_available, never as held or refused", () => {
+    const option = outcomeOption("not_available");
+    expect(option.status).toBe("not_available");
+    expect(option.recordAs).toBe("Not available");
+    expect(outcomeOption("held").status).toBe("held");
+    expect(outcomeOption("refused").status).toBe("refused");
   });
 
   /** The server refuses a held dose with no reason. Mirrored, not invented — and only for held. */
@@ -177,6 +193,13 @@ describe("outcomes", () => {
     expect(outcomeOption("held").reasonRequired).toBe(true);
     expect(outcomeOption("given").reasonRequired).toBe(false);
     expect(outcomeOption("refused").reasonRequired).toBe(false);
+    expect(outcomeOption("not_available").reasonRequired).toBe(false);
+  });
+
+  it("allows a stock-out with no reason — the server does not demand one", () => {
+    expect(
+      canConfirm({ slot: slot(), outcome: "not_available", reason: "", inFlight: false }),
+    ).toBe(true);
   });
 
   it("blocks confirming a hold with no reason, and allows it with one", () => {
@@ -610,6 +633,21 @@ describe("what the administration code may not contain", () => {
     expect(model).not.toMatch(/OVERDUE_AFTER|isOverdue|dueAt/);
   });
 
+  /**
+   * ── THE CHIPS ARE THE OUTCOME TABLE, NOT A HAND-WRITTEN LIST ───────────────
+   * `OUTCOMES` is proven exhaustive above, but that proves nothing about the screen if the screen
+   * enumerates its own chips. It did not — and this is what keeps it that way, because a
+   * hard-coded three would have made `not_available` unreachable again while every unit test above
+   * still passed. RN screens are not rendered here (the house rule), so the structure is asserted
+   * on the source, exactly as the clock and zone controls above are.
+   */
+  it("renders its outcome chips from OUTCOMES and sends the option's own status", () => {
+    expect(screen).toContain("OUTCOMES.map(");
+    expect(screen).toContain("onOutcome(o.status)");
+    // No literal status anywhere on the screen — that is the table's job, and only the table's.
+    expect(screen).not.toMatch(/status:\s*["'](given|held|refused|not_available)["']/);
+  });
+
   /** The screen renders a server instant in the branch zone, and never invents one. */
   it("sends no client-generated administration time", () => {
     expect(screen).not.toContain("administeredAt:");
@@ -724,5 +762,112 @@ describe("what the administration code may not contain", () => {
   it("reads allergies through the hospital-wide query", () => {
     expect(screen).toContain("queries.allergies(");
     expect(screen).not.toMatch(/allergies\([^)]*branch/i);
+  });
+});
+
+/* ── the request that leaves the phone (F-3) ───────────────────────────────── */
+
+/**
+ * ── THE WRITE PATH HAD NO WIRE TEST AT ALL ──────────────────────────────────
+ * Everything above proves the DECISIONS — the classifier, the slot identity, what the nurse is
+ * shown. Nothing proved which URL the phone actually calls or what it puts in the body; the screen
+ * scans check the source text, which is not the same thing.
+ *
+ * That gap is why `not_available` gets one here: exposing an outcome is only worth anything if the
+ * outcome reaches the server as itself. The real `ApiClient` over a stub fetch, so the assertion is
+ * about what leaves the device.
+ */
+describe("the administration request", () => {
+  interface Sent {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: Record<string, unknown> | undefined;
+  }
+
+  function server() {
+    const sent: Sent[] = [];
+    const fetchImpl = (async (url: string | URL, init?: RequestInit): Promise<Response> => {
+      const record: Sent = {
+        method: init?.method ?? "GET",
+        url: String(url),
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined,
+      };
+      sent.push(record);
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            id: "mar-1",
+            encounterId: "e1",
+            patientId: "p1",
+            prescriptionId: REF.prescriptionId,
+            lineIndex: REF.lineIndex,
+            drugCode: "DRUG_AMOX_500",
+            drugName: "Amoxicillin 500mg",
+            dose: "500 mg",
+            route: "oral",
+            status: (record.body?.status as string) ?? "given",
+            administeredAt: "2026-06-11T08:05:00.000Z",
+            administeredBy: "nurse-1",
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const api = new ApiClient({
+      baseUrl: "http://api.test",
+      tenantHost: "apollo.medicore.test",
+      fetchImpl,
+      getAccessToken: () => "access-1",
+      getActiveBranch: () => "branch-a",
+    });
+    return { sent, posts: () => sent.filter((s) => s.method === "POST"), api };
+  }
+
+  const chart = async (status: AdministerOutcome, key: string) => {
+    const s = server();
+    await clinicalMutations(s.api, scope)
+      .administerDose("e1", { ref: REF, key })
+      .mutationFn({ status, drugCode: "DRUG_AMOX_500" });
+    return s;
+  };
+
+  it("sends a stock-out as not_available, to the MAR endpoint, with the slot named", async () => {
+    const s = await chart("not_available", "k-unavailable");
+
+    expect(s.posts()).toHaveLength(1);
+    const post = s.posts()[0];
+    expect(post?.url).toBe("http://api.test/api/v1/encounters/e1/medication-administrations");
+    expect(post?.body).toMatchObject({
+      status: "not_available",
+      prescriptionId: REF.prescriptionId,
+      // The line INDEX, not the drug code alone — a prescription may carry the drug twice.
+      lineIndex: REF.lineIndex,
+      scheduledFor: REF.scheduledFor,
+    });
+    // It must arrive as itself, never folded into a clinical decision.
+    expect(post?.body?.status).not.toBe("held");
+    expect(post?.body?.status).not.toBe("refused");
+    // No reason invented on the nurse's behalf when they typed none.
+    expect(post?.body).not.toHaveProperty("reason");
+  });
+
+  it("carries the token, the tenant host and the active branch, like every clinical write", async () => {
+    const s = await chart("not_available", "k-unavailable-headers");
+    const post = s.posts()[0];
+
+    expect(post?.headers.authorization).toBe("Bearer access-1");
+    expect(post?.headers["x-active-branch"]).toBe("branch-a");
+    expect(post?.headers["idempotency-key"]).toBe("k-unavailable-headers");
+  });
+
+  it("still sends the other three outcomes exactly as before", async () => {
+    for (const status of ["given", "held", "refused"] as const) {
+      const s = await chart(status, `k-${status}`);
+      expect(s.posts()[0]?.body).toMatchObject({ status });
+    }
   });
 });

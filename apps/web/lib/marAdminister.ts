@@ -30,8 +30,13 @@ import {
   type SlotRef,
 } from "@medicore/api-client";
 
-/** The three outcomes the ward screen offers. `not_available` is out of scope — see `OUTCOMES`. */
-export type AdministerOutcome = Extract<MarStatus, "given" | "held" | "refused">;
+/**
+ * Every outcome the domain has — the ward screen now offers all of them.
+ *
+ * This was `Extract<MarStatus, "given" | "held" | "refused">`, and the alias is now the domain
+ * type itself: there is no outcome the record can hold that a nurse cannot record. See `OUTCOMES`.
+ */
+export type AdministerOutcome = MarStatus;
 
 export interface OutcomeOption {
   status: AdministerOutcome;
@@ -46,45 +51,73 @@ export interface OutcomeOption {
 }
 
 /**
- * The outcomes offered, in the order they appear.
- *
  * ── ONLY `held` REQUIRES A REASON, AND THAT IS THE SERVER'S RULE ────────────
- * `recordAdministration` refuses a held dose with no reason ("say why the dose was held") and does
- * not refuse a refused one. Mirrored here rather than decided here, so the button disables instead
- * of the nurse discovering it from a 422 after they have already left the bedside.
+ * `recordAdministration` refuses a held dose with no reason ("say why the dose was held") and
+ * refuses nothing else without one. Mirrored here rather than decided here, so the button disables
+ * instead of the nurse discovering it from a 400 after they have already left the bedside. In
+ * particular `not_available` does NOT require one — inventing a client-side requirement the server
+ * does not have would block a nurse from charting a true fact.
  *
- * ── THE SAME THREE THE PHONE OFFERS, AND THAT IS NOT A COINCIDENCE ──────────
- * `not_available` ("the drug was not on the ward") is a real domain status the backend has always
- * accepted, and neither surface offers it. The cost is the same on both: a nurse who cannot record
- * it records "held" with a reason, which quietly moves a stock failure into the clinical-decision
- * column. Reported, not fixed here — widening the domain surface is not this slice's call.
+ * ── `not_available` IS OFFERED NOW, AND THE OMISSION WAS COSTING SOMETHING ──
+ * "The drug was not on the ward to give" (`mar.model.ts`) has been a valid, persisted, audited
+ * status since D5 and no client ever offered it. That is not a neutral default: a nurse who cannot
+ * record it records HELD with a reason, which files a supply failure in the clinical-decision
+ * column — and `held` is read by the next nurse as "somebody decided to withhold this", which is a
+ * different fact about the patient. Only the nurse at the bedside can observe a stock-out, and the
+ * MAR has exactly one writer, so a status nobody could select was a status nobody could record.
+ *
+ * Nothing about `given`, `held` or `refused` changes.
  */
-export const OUTCOMES: readonly OutcomeOption[] = [
-  {
+const BY_STATUS: Record<MarStatus, OutcomeOption> = {
+  given: {
     status: "given",
     label: "Give",
     recordAs: "Given",
     reasonRequired: false,
     reasonPrompt: "Anything the next nurse should know. Optional.",
   },
-  {
+  held: {
     status: "held",
     label: "Hold",
     recordAs: "Held",
     reasonRequired: true,
     reasonPrompt: "Why is it being held? e.g. systolic 84, patient nil by mouth",
   },
-  {
+  refused: {
     status: "refused",
     label: "Refused",
     recordAs: "Refused",
     reasonRequired: false,
     reasonPrompt: "Anything the next nurse should know. Optional.",
   },
+  not_available: {
+    status: "not_available",
+    label: "Unavailable",
+    // The same words the chart, the round and the phone already print for this status.
+    recordAs: "Not available",
+    reasonRequired: false,
+    reasonPrompt: "Anything the next nurse should know — e.g. none in the ward stock. Optional.",
+  },
+};
+
+/**
+ * The outcomes offered, in the order they appear.
+ *
+ * Built from `BY_STATUS`, which is a `Record<MarStatus, …>`: adding a fifth `MAR_STATUS` server-side
+ * becomes a COMPILE ERROR here rather than another status the clients quietly never offer. That is
+ * the failure this step exists to close, so it is closed structurally.
+ *
+ * `not_available` sits last: it is the only one that is not a decision about the patient.
+ */
+export const OUTCOMES: readonly OutcomeOption[] = [
+  BY_STATUS.given,
+  BY_STATUS.held,
+  BY_STATUS.refused,
+  BY_STATUS.not_available,
 ];
 
-export const outcomeOption = (status: AdministerOutcome): OutcomeOption =>
-  OUTCOMES.find((o) => o.status === status) as OutcomeOption;
+/** Total, so no cast. The old `find(...) as OutcomeOption` would have returned `undefined`. */
+export const outcomeOption = (status: AdministerOutcome): OutcomeOption => BY_STATUS[status];
 
 /* ── what the nurse is asked to confirm ────────────────────────────────────── */
 
@@ -303,11 +336,17 @@ export function attemptNotice(
   }
 }
 
+/**
+ * The outcome as it reads inside a sentence: "Recorded: Paracetamol <word>." and "Paracetamol was
+ * already <word> at 08:00 by …".
+ *
+ * `not_available` returned "recorded as not available" here, which was fine in the second sentence
+ * and produced "Recorded: Paracetamol recorded as not available." in the first. Unreachable while
+ * no client could chart it; reachable now, so it says the same two words the chart, the round and
+ * the phone print.
+ */
 function statusWord(status: MarStatus): string {
-  if (status === "given") return "given";
-  if (status === "held") return "held";
-  if (status === "refused") return "refused";
-  return "recorded as not available";
+  return status === "not_available" ? "not available" : status;
 }
 
 function failureText(error: unknown): string {

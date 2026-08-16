@@ -1134,11 +1134,12 @@ describe("held and refused are answers, not gaps", () => {
     expect(await stateOf(enc, slot)).toMatchObject({ state: "refused" });
   });
 
-  it("writes exactly one row for each of the three outcomes", async () => {
+  it("writes exactly one row for each of the four outcomes", async () => {
     for (const [name, body] of [
       ["One Row Given", { status: "given" }],
       ["One Row Held", { status: "held", reason: "nil by mouth" }],
       ["One Row Refused", { status: "refused" }],
+      ["One Row Unavailable", { status: "not_available" }],
     ] as [string, Record<string, string>][]) {
       const { enc, rx, slot } = await freshSlot(name);
       await chart(enc, {
@@ -1154,6 +1155,211 @@ describe("held and refused are answers, not gaps", () => {
       ).expect(200);
       expect(rows.body.data).toHaveLength(1);
     }
+  });
+
+  /* ── `not_available`: a SUPPLY event, not a clinical decision (F-3) ───────── */
+
+  /**
+   * ── THE STATUS THE BACKEND ACCEPTED AND NOTHING EVER SENT ───────────────────
+   * `not_available` ("the drug was not on the ward to give", `mar.model.ts`) has been in
+   * `MAR_STATUSES` since D5, validated by the DTO and persisted by the model — and until now it had
+   * NO test and no client that offered it. Both surfaces recorded the omission in their own
+   * comments along with its cost: a nurse who cannot chart a stock-out charts HELD with a reason,
+   * which files a supply failure in the clinical-decision column, where the next nurse reads it as
+   * "somebody decided to withhold this" — a different fact about the patient.
+   *
+   * These pin the server half, so the clients have something true to rely on.
+   */
+  it("records a stock-out as not_available, and the slot reads it back", async () => {
+    const { enc, rx, slot } = await freshSlot("Not On The Ward");
+
+    const res = await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      lineIndex: 0,
+      scheduledFor: slot,
+      status: "not_available",
+    }).expect(201);
+
+    // The stored status is the one that was sent — not coerced to `held`, not defaulted to `given`.
+    expect(res.body.data).toMatchObject({
+      status: "not_available",
+      drugName: PARACETAMOL_TDS.drugName,
+      administeredBy: nurseId,
+    });
+    expect(res.body.data.status).not.toBe("held");
+    expect(res.body.data.status).not.toBe("given");
+
+    // And it survives the round trip — the schedule is the oracle every client re-reads.
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "not_available" });
+
+    // Persisted on the record itself, not only derived onto the slot.
+    const rows = await auth(
+      request(app).get(`/api/v1/encounters/${enc}/medication-administrations`),
+      nurseToken,
+    ).expect(200);
+    expect(rows.body.data).toHaveLength(1);
+    expect(rows.body.data[0].status).toBe("not_available");
+  });
+
+  /**
+   * The reason rule is `held`'s alone (`mar.service.ts`). Pinned from BOTH sides so neither client
+   * invents a requirement the server does not have — which would block a nurse charting a true
+   * fact — nor drops the one it does.
+   */
+  it("does not demand a reason for a stock-out, and keeps one when given", async () => {
+    const bare = await freshSlot("Unavailable No Reason");
+    await chart(bare.enc, {
+      prescriptionId: bare.rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: bare.slot,
+      status: "not_available",
+    }).expect(201);
+    expect(await stateOf(bare.enc, bare.slot)).toMatchObject({ state: "not_available" });
+
+    const noted = await freshSlot("Unavailable With Reason");
+    const res = await chart(noted.enc, {
+      prescriptionId: noted.rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: noted.slot,
+      status: "not_available",
+      reason: "none in ward stock, pharmacy notified",
+    }).expect(201);
+    expect(res.body.data.reason).toBe("none in ward stock, pharmacy notified");
+    expect(await stateOf(noted.enc, noted.slot)).toMatchObject({
+      state: "not_available",
+      reason: "none in ward stock, pharmacy notified",
+    });
+  });
+
+  /**
+   * The slot rule does not care WHICH answer arrived first — `status` is deliberately not in the
+   * unique index, so "unavailable then given" is as impossible as "held then given". If a nurse
+   * finds the drug after all, that is a new clinical event and not an edit of this one.
+   */
+  it("refuses a GIVE after the slot was charted not_available, and names the record", async () => {
+    const { enc, rx, slot } = await freshSlot("Unavailable Then Given");
+    await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "not_available",
+      },
+      nurseToken,
+      "s3-unavailable-first",
+    ).expect(201);
+
+    const clash = await chart(
+      enc,
+      {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+        status: "given",
+      },
+      nurse2Token,
+      "s3-unavailable-then-give",
+    ).expect(409);
+
+    expect(clash.body.error.code).toBe("HMS-MAR-001");
+    expect(clash.body.error.details.existing).toMatchObject({
+      status: "not_available",
+      administeredBy: nurseId,
+    });
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "not_available" });
+  });
+
+  /** The same key replays the same row. The mechanism is status-blind, and this says so. */
+  it("replays a retried stock-out rather than writing a second row", async () => {
+    const { enc, rx, slot } = await freshSlot("Unavailable Retry");
+    const body = {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+      status: "not_available",
+    };
+
+    const first = await chart(enc, body, nurseToken, "s3-unavailable-key").expect(201);
+    const again = await chart(enc, body, nurseToken, "s3-unavailable-key").expect(201);
+
+    expect(again.body.data.id).toBe(first.body.data.id);
+    const rows = await auth(
+      request(app).get(`/api/v1/encounters/${enc}/medication-administrations`),
+      nurseToken,
+    ).expect(200);
+    expect(rows.body.data).toHaveLength(1);
+  });
+
+  /**
+   * A stock-out ANSWERS the slot — it is a recorded fact, not an absence. A round that kept
+   * counting it would send somebody back to a dose already dealt with.
+   *
+   * Asserted against the SCHEDULE rather than `/ward-worklist`: the worklist pages over every
+   * admitted patient in the tenant, so a row lookup there silently returns 0 for a patient who
+   * fell onto page two and the test passes for the wrong reason (mine did, before this note). The
+   * two cannot disagree — one derivation, `slotsForStay` — and the worklist section above already
+   * pins that `dosesDue` equals the schedule's outstanding count exactly.
+   */
+  it("counts a stock-out as answered, not as a dose still outstanding", async () => {
+    const outstandingFor = async (encounterId: string): Promise<number> => {
+      const res = await schedule(encounterId).expect(200);
+      return (res.body.data as { state: string }[]).filter(
+        (s) => s.state === "due" || s.state === "overdue",
+      ).length;
+    };
+
+    const { enc, rx, slot } = await freshSlot("Unavailable Not Outstanding");
+    const before = await outstandingFor(enc);
+    expect(before).toBeGreaterThan(0);
+
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+      status: "not_available",
+    }).expect(201);
+
+    expect(await outstandingFor(enc)).toBe(before - 1);
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "not_available" });
+  });
+
+  /**
+   * The new outcome is not a new door. Same permission, same walls — asserted against the status
+   * itself rather than inferred from the `given` tests elsewhere in this file. All four refusals
+   * share one slot, because a refused write leaves it untouched.
+   */
+  it("is refused without mar:administer, across a branch, and across a hospital", async () => {
+    const { enc, rx, slot } = await freshSlot("Unavailable Refusals");
+    const body = {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+      status: "not_available",
+    };
+
+    // Reading the round is `emr:read`; charting a dose is not.
+    for (const token of [receptionToken, doctorToken]) {
+      await chart(enc, body, token).expect(403);
+    }
+
+    // The other site: the prescription is simply not reachable from where that nurse works.
+    await chart(enc, body, otherSiteNurseToken, "s3-unavailable-cross-branch").expect(404);
+
+    // The other hospital, through its own host and its own nurse — who really does hold
+    // `mar:administer` there, so the refusal is about REACH and not about permission. Tenancy is
+    // physical (one database per hospital), so this encounter id resolves to nothing at all.
+    const rivalNurse = await loginAt(rivalHost, `nurse@${RIVAL_SLUG}.test`);
+    const cross = await request(app)
+      .post(`/api/v1/encounters/${enc}/medication-administrations`)
+      .set("Host", rivalHost)
+      .set("Authorization", `Bearer ${rivalNurse}`)
+      .send(body);
+    expect([403, 404]).toContain(cross.status);
+
+    // Nothing landed, from any of the four directions.
+    expect(await stateOf(enc, slot)).toMatchObject({ state: "due" });
   });
 
   /**

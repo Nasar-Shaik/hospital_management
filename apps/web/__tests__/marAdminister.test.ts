@@ -86,10 +86,35 @@ describe("1. the outcomes offered", () => {
     expect(outcomeOption("held").reasonRequired).toBe(true);
     expect(outcomeOption("given").reasonRequired).toBe(false);
     expect(outcomeOption("refused").reasonRequired).toBe(false);
+    // `not_available` too: `recordAdministration` demands a reason for `held` and nothing else, and
+    // a client-side rule the server does not have would block a nurse charting a true fact.
+    expect(outcomeOption("not_available").reasonRequired).toBe(false);
   });
 
-  it("offers exactly the three bedside decisions", () => {
-    expect(OUTCOMES.map((o) => o.status)).toEqual(["given", "held", "refused"]);
+  /**
+   * ── THIS ASSERTION USED TO READ "exactly the three bedside decisions" ───────
+   * It pinned a deliberate S5A/W3 deferral: `not_available` was a real, persisted, audited
+   * `MAR_STATUS` that no client offered. The deferral was not free — both surfaces said so in
+   * their own comments — because a nurse who cannot record "not available" records HELD with a
+   * reason, filing a supply failure in the clinical-decision column.
+   *
+   * It is inverted rather than deleted: the list is still pinned, so a fifth status cannot be
+   * quietly added or one of these quietly dropped. `not_available` is LAST because it is the only
+   * one that is not a decision about the patient.
+   */
+  it("offers every outcome the record can hold, in bedside order", () => {
+    expect(OUTCOMES.map((o) => o.status)).toEqual(["given", "held", "refused", "not_available"]);
+  });
+
+  /** The word on the button is the word on the chart — see `MAR_LABEL` in `MedicationRecord`. */
+  it("records a stock-out as Not available, never as Held", () => {
+    expect(outcomeOption("not_available").recordAs).toBe("Not available");
+    expect(outcomeOption("not_available").status).toBe("not_available");
+    expect(outcomeOption("held").recordAs).toBe("Held");
+  });
+
+  it("lets a stock-out be confirmed with no reason typed", () => {
+    expect(canConfirm({ outcome: "not_available", reason: "", inFlight: false })).toBe(true);
   });
 
   it("blocks confirming a hold with no reason, and blanks do not count", () => {

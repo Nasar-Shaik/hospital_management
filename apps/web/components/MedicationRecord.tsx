@@ -79,10 +79,11 @@ type FocusState =
  * The identity one attempt is keyed on — the intent, not the click.
  *
  * A key that changes per click protects nothing (`lib/idempotency.ts` explains the bug at length).
- * Give, Hold and Refuse against the same slot are three DIFFERENT clinical decisions and must never
- * share a key, or the second would replay the first's response and the chart would say the wrong
- * thing. The slot is in the key too, so tomorrow's 08:00 dose is a new intent rather than a
- * duplicate of today's.
+ * Give, Hold, Refuse and Unavailable against the same slot are four DIFFERENT answers and must
+ * never share a key, or the second would replay the first's response and the chart would say the
+ * wrong thing. The OUTCOME is part of the key, so this holds for every entry in `OUTCOMES` without
+ * anybody maintaining a list. The slot is in it too, so tomorrow's 08:00 dose is a new intent
+ * rather than a duplicate of today's.
  */
 function intentOf(line: DrugLine, outcome: AdministerOutcome): string {
   return `${line.prescriptionId}:${String(line.lineIndex)}:${line.scheduledFor ?? "prn"}:${outcome}`;

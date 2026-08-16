@@ -139,11 +139,14 @@ describe("dose state is read, never derived", () => {
   });
 
   /**
-   * `not_available` is a state S5A deliberately does not OFFER as an action. It must still
-   * RENDER: another client may have recorded it, and a round that could not display it would show
-   * a dose as outstanding that the record says was answered.
+   * A stock-out ANSWERS the slot: it is a recorded fact, not an absence. A round that treated it
+   * as outstanding would send a nurse back to a dose somebody has already dealt with.
+   *
+   * This held before the app could record `not_available` (another client might have) and it holds
+   * now that it can. `isOutstanding` is `due`/`overdue` only, and nothing about that changed when
+   * the outcome was exposed — which is exactly what this asserts.
    */
-  it("renders not_available as answered even though the app cannot record it", () => {
+  it("renders not_available as answered, never as a dose still outstanding", () => {
     const answered = row({ slots: [slot({ state: "not_available" })] });
     expect(answered.dosesDue).toBe(0);
     expect(quietLabel(answered)).toBe("All doses answered");

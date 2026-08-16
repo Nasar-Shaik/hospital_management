@@ -125,11 +125,12 @@ function AdministerScreen(): React.JSX.Element {
   /**
    * One key per DECISION, not per dose.
    *
-   * Give, Hold and Refuse are three different clinical actions. Sharing a key across them would
-   * mean that changing your mind after a lost response replays the FIRST decision — the record
-   * would say the opposite of what the nurse chose, which is worse than either outcome alone.
-   * Keying by outcome also keeps each one stable across its own retries, which is what makes a
-   * lost response safe.
+   * Give, Hold, Refuse and Not-available are four different answers. Sharing a key across them
+   * would mean that changing your mind after a lost response replays the FIRST decision — the
+   * record would say the opposite of what the nurse chose, which is worse than either outcome
+   * alone. `keyFor(outcome)` is parameterised by the outcome itself, so this holds for every entry
+   * in `OUTCOMES` without a list to maintain. Keying by outcome also keeps each one stable across
+   * its own retries, which is what makes a lost response safe.
    */
   const keys = useIntentKeys();
 
