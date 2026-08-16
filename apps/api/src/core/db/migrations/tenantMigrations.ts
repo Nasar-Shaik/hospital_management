@@ -2023,6 +2023,71 @@ export const tenantMigrations: Migration[] = [
      */
     up: async (db) => {
       await db.createCollection("idempotencyKeys").catch(() => undefined);
+
+      /**
+       * ── PREFLIGHT: THIS ONE *CAN* FAIL ON EXISTING DATA (risk register D6) ────
+       * 0049 below can reason that it cannot — its key includes a field the same change
+       * introduced, so its partial filter covers zero historical rows. This migration has no such
+       * property. `idempotencyKeys` has existed since 0004 with a TTL and NO uniqueness, and the
+       * `idempotent()` middleware writes to it, so any tenant that served traffic before this
+       * migration landed may already hold two rows with the same identity.
+       *
+       * Without this check Mongo answers `Index build failed: <uuid>`, which names a collection
+       * most people have never heard of and no remedy at all. The runner correctly records
+       * nothing, so the tenant is not falsely converged — it just stops, two migrations behind,
+       * and whoever is paged has to work out why from a UUID. Observed on `hms_sunrise`,
+       * 2026-08-14.
+       *
+       * It REFUSES rather than pruning. Deleting rows to make a migration pass is a destructive
+       * operation (Constitution §3.9), and duplicate claims mean something already went wrong —
+       * an operator should see that rather than have it tidied away underneath them.
+       */
+      const collisions = await db
+        .collection("idempotencyKeys")
+        .aggregate([
+          {
+            $group: {
+              _id: { tenantId: "$tenantId", userId: "$userId", key: "$key" },
+              n: { $sum: 1 },
+            },
+          },
+          { $match: { n: { $gt: 1 } } },
+          { $count: "groups" },
+        ])
+        .toArray();
+
+      const groups = Number((collisions[0] as { groups?: number } | undefined)?.groups ?? 0);
+      if (groups > 0) {
+        throw new Error(
+          [
+            `0048 cannot build \`one_claim_per_idempotency_key\`: ${String(groups)} ` +
+              "(tenantId, userId, key) group(s) in `idempotencyKeys` already hold more than one " +
+              "claim, and the index is unique.",
+            "",
+            "These rows are a REPLAY CACHE, not a record. Every one carries `expiresAt` and the",
+            "TTL from 0004 removes it within 24 hours of being written, so neither remedy below",
+            "loses anything a hospital can see:",
+            "",
+            "  WAIT   let the TTL drain them, then re-run. Safest; up to 24 hours.",
+            "  PRUNE  keep one row per identity and delete the rest, then re-run:",
+            "",
+            "    db.idempotencyKeys.aggregate([",
+            "      { $sort: { completedAt: -1, claimedAt: -1 } },",
+            "      { $group: { _id: { tenantId: '$tenantId', userId: '$userId', key: '$key' },",
+            "                  ids: { $push: '$_id' } } },",
+            "      { $match: { 'ids.1': { $exists: true } } }",
+            "    ]).forEach(g => { g.ids.shift(); db.idempotencyKeys.deleteMany({ _id: { $in: g.ids } }); })",
+            "",
+            "The `$sort` puts the most recently COMPLETED claim first and `shift()` keeps it: that",
+            "is the row holding the stored response a retry replays, and dropping it would turn a",
+            "replay back into a second execution.",
+            "",
+            "Nothing has been recorded. This tenant is still behind and `pnpm seed:migrate` will",
+            "retry it once the collisions are gone.",
+          ].join("\n"),
+        );
+      }
+
       await db
         .collection("idempotencyKeys")
         .createIndex(

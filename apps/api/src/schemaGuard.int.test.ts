@@ -32,6 +32,7 @@ const { getTenantConnection, closeAllTenantConnections } =
 const { closeMaster } = await import("./core/db/masterDb.js");
 const { closeRedis } = await import("./core/redis/redis.js");
 const { tenantMigrations } = await import("./core/db/migrations/tenantMigrations.js");
+const { migrateTenantDb } = await import("./core/db/migrations/runner.js");
 const { verifyTenantSchema, schemaBlockedMessage, CLINICAL_SAFETY_INVARIANTS } =
   await import("./seed/schemaGuard.js");
 
@@ -239,5 +240,128 @@ describe("3. what this guard does NOT claim", () => {
     // there were.
     expect(verdict.ok).toBe(true);
     expect(Object.keys(verdict)).toEqual(["ok", "pending", "missing"]);
+  });
+});
+
+/**
+ * MIGRATION 0048 OVER A DATABASE THAT ALREADY HAS DUPLICATE CLAIMS — risk register D6.
+ *
+ * 0049 reasons explicitly about why it cannot fail on existing data: its key includes
+ * `scheduledFor`, a field the same change introduced, and the partial filter admits only rows that
+ * have it — so at creation the index covers zero historical documents. 0048 has no such property
+ * and never claimed one.
+ *
+ * `idempotencyKeys` has existed since 0004 with a TTL and NO uniqueness, and the `idempotent()`
+ * middleware writes to it. Any tenant that served traffic between that middleware shipping and
+ * 0048 landing can therefore hold two rows with the same `(tenantId, userId, key)`. Building a
+ * unique index over them fails, the runner records nothing, and the tenant stops there — two
+ * migrations behind, with a raw `E11000` naming a collection most people have never heard of.
+ *
+ * Observed on `hms_sunrise` on 2026-08-14, where a probe's replays had produced exactly this.
+ */
+describe("4. migration 0048 meets a database that already holds duplicate claims", () => {
+  const MIGRATION_ID = "0048-idempotency-key-claims";
+  const only0048 = tenantMigrations.filter((m) => m.id === MIGRATION_ID);
+
+  /** Puts the tenant back to "0048 has never run", with two colliding claims already stored. */
+  async function poison(): Promise<void> {
+    await db
+      .collection("idempotencyKeys")
+      .dropIndex("one_claim_per_idempotency_key")
+      .catch(() => undefined);
+    await db.collection("migrations").deleteOne({ _id: MIGRATION_ID });
+
+    const shared = { tenantId: "t-1", userId: "u-1", key: "receipt-1" };
+    await db.collection("idempotencyKeys").insertMany([
+      {
+        ...shared,
+        fingerprint: "f1",
+        operation: "POST /api/v1/invoices/1/payments",
+        state: "completed",
+        claimedAt: new Date(),
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+      {
+        ...shared,
+        fingerprint: "f2",
+        operation: "POST /api/v1/invoices/1/payments",
+        state: "in_progress",
+        claimedAt: new Date(),
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    ]);
+  }
+
+  async function clean(): Promise<void> {
+    await db.collection("idempotencyKeys").deleteMany({ key: "receipt-1" });
+    await db.collection("migrations").deleteOne({ _id: MIGRATION_ID });
+    await migrateTenantDb(db, only0048);
+  }
+
+  it("REFUSES with an answer rather than a raw duplicate-key error", async () => {
+    await poison();
+    try {
+      // It still fails — that is correct, the index genuinely cannot be built. What changes is
+      // whether the failure is readable: Mongo's own answer is `Index build failed: <uuid>`.
+      await expect(migrateTenantDb(db, only0048)).rejects.toThrow(/one_claim_per_idempotency_key/);
+
+      // The point of the preflight: the message has to be usable by whoever is holding the pager
+      // at 2am, which `E11000 duplicate key error collection: ... index: ...` is not.
+      let message = "";
+      await migrateTenantDb(db, only0048).catch((e: unknown) => {
+        message = e instanceof Error ? e.message : String(e);
+      });
+
+      expect(message).toContain("idempotencyKeys");
+      expect(message).toContain("1"); // one colliding group
+      // It must say what the rows ARE, because "delete some rows" is not an instruction anyone
+      // will follow on a production database without knowing that.
+      expect(message).toMatch(/24 hours|TTL|expire/i);
+      // And it must give a deterministic remediation, not "resolve the duplicates".
+      expect(message).toContain("aggregate");
+    } finally {
+      await clean();
+    }
+  });
+
+  it("records NOTHING when it refuses, so the tenant is not left falsely converged", async () => {
+    await poison();
+    try {
+      await migrateTenantDb(db, only0048).catch(() => undefined);
+
+      const record = await db.collection("migrations").findOne({ _id: MIGRATION_ID });
+      expect(record, "a refused migration must not be recorded as applied").toBeNull();
+
+      // And the guard must agree — this is the state that has to stay visible.
+      const verdict = await verifyTenantSchema(db, tenantMigrations);
+      expect(verdict.ok).toBe(false);
+    } finally {
+      await clean();
+    }
+  });
+
+  it("applies cleanly once the duplicates are gone", async () => {
+    await poison();
+    // The remediation, performed: keep one row per identity and drop the rest.
+    await db.collection("idempotencyKeys").deleteOne({ key: "receipt-1", state: "in_progress" });
+
+    const applied = await migrateTenantDb(db, only0048);
+    expect(applied).toEqual([MIGRATION_ID]);
+
+    const verdict = await verifyTenantSchema(db, tenantMigrations);
+    expect(verdict.ok).toBe(true);
+
+    await db.collection("idempotencyKeys").deleteMany({ key: "receipt-1" });
+  });
+
+  it("is a no-op on a database with no duplicates — the ordinary case is untouched", async () => {
+    await db.collection("migrations").deleteOne({ _id: MIGRATION_ID });
+    await db
+      .collection("idempotencyKeys")
+      .dropIndex("one_claim_per_idempotency_key")
+      .catch(() => undefined);
+
+    const applied = await migrateTenantDb(db, only0048);
+    expect(applied).toEqual([MIGRATION_ID]);
   });
 });
