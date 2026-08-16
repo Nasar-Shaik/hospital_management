@@ -54,10 +54,29 @@ function LoginForm() {
    * that message replaces this one rather than sitting in a stack of two alerts.
    */
   const reason = params.get("reason");
-  const expired = reason === "expired";
-  // A timeout is a security sign-out, not an error — the person walked away. It reads differently
-  // from an ordinary expired session ("we ended it on purpose"), so it gets its own line.
-  const timedOut = reason === "timeout";
+
+  /**
+   * Why they are looking at this form, if we know — at most one line, and the most specific one.
+   *
+   * Ordered by how much the reader needs it. Someone who just replaced a temporary password is
+   * mid-task and needs to know their new password is the one to use now; a timeout is a security
+   * sign-out ("you walked away") and reads differently from an ordinary expiry ("we ended it").
+   * Collapsing them into one "your session ended" would be true and useless.
+   */
+  const notice: { tone: "success" | "info"; text: string } | null =
+    reason === "password-changed"
+      ? {
+          tone: "success",
+          text: "Your password was changed and every device was signed out. Sign in with your new password.",
+        }
+      : reason === "timeout"
+        ? {
+            tone: "info",
+            text: "You were signed out after a period of inactivity. Please sign in again.",
+          }
+        : reason === "expired"
+          ? { tone: "info", text: "Your session ended. Please sign in again." }
+          : null;
 
   const destination = params.get("next") ?? "/dashboard";
 
@@ -175,19 +194,11 @@ function LoginForm() {
             </div>
           ) : (
             !mfaToken &&
-            (timedOut ? (
+            notice && (
               <div className="mb-4">
-                <Alert tone="info">
-                  You were signed out after a period of inactivity. Please sign in again.
-                </Alert>
+                <Alert tone={notice.tone}>{notice.text}</Alert>
               </div>
-            ) : (
-              expired && (
-                <div className="mb-4">
-                  <Alert tone="info">Your session ended. Please sign in again.</Alert>
-                </div>
-              )
-            ))
+            )
           )}
 
           {mfaToken ? (

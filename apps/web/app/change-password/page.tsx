@@ -3,19 +3,32 @@
 /**
  * Change password.
  *
- * A successful change ends EVERY session, including this one — every existing
- * token was minted under the old secret. So we send the user straight back to the
- * login screen rather than leaving them on a page whose next click will fail.
+ * A successful change ends EVERY session, including this one — every existing token was minted
+ * under the old secret. So we send the user straight back to the login screen rather than leaving
+ * them on a page whose next click will fail.
+ *
+ * ── LEAVING IS `endSession`, NOT A `router.replace` ─────────────────────────
+ * This page used to show a "redirecting…" card and navigate on a 2.5s timer, and the effect on a
+ * new hire with a temporary password was that it appeared not to redirect at all. Two reasons,
+ * both from the same omission — the client never cleared its own session:
+ *
+ *   1. `user` stayed in state and the in-memory access token stayed usable, so /dashboard rendered
+ *      perfectly well. The sign-out only surfaced later, on the first request that 401'd, which is
+ *      why it looked like "it redirects when I click something else".
+ *   2. Any surviving cookie makes the route guard bounce /login straight back to /dashboard — it
+ *      sees a cookie's presence, never its validity (middleware.ts).
+ *
+ * `endSession` drops the token and the user in the same tick, and `?reason=` is the guard's hatch
+ * as well as the login form's cue to say something true. There is no interstitial: the message
+ * belongs on the page they are going to, not on one they are leaving.
  */
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { ApiClientError } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Button, Card, Field } from "../../components/ui";
 
 function ChangePassword() {
-  const router = useRouter();
-  const { api, user } = useAuth();
+  const { api, user, endSession } = useAuth();
 
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -23,7 +36,6 @@ function ChangePassword() {
   const [errors, setErrors] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -38,9 +50,9 @@ function ChangePassword() {
     setBusy(true);
     try {
       await api.changePassword(current, next);
-      setDone(true);
-      // Give them a moment to read why they are being signed out.
-      setTimeout(() => router.replace("/login"), 2500);
+      // Straight out, in this tick. See the header for what waiting used to cost.
+      endSession("/login?reason=password-changed");
+      return;
     } catch (err) {
       if (err instanceof ApiClientError) {
         if (err.code === "HMS-AUTH-001") {
@@ -56,16 +68,6 @@ function ChangePassword() {
     } finally {
       setBusy(false);
     }
-  }
-
-  if (done) {
-    return (
-      <div className="mx-auto max-w-md">
-        <Alert tone="success" title="Password changed">
-          For your security, every device has been signed out. Redirecting you to sign in again…
-        </Alert>
-      </div>
-    );
   }
 
   return (

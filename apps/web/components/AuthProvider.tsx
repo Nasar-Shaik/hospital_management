@@ -58,6 +58,14 @@ interface AuthContextValue extends AuthState {
   completeMfa: (mfaToken: string, code: string) => Promise<void>;
   /** Ends the session server-side and clears the client. `redirectTo` overrides the default /login. */
   logout: (opts?: { redirectTo?: string }) => Promise<void>;
+  /**
+   * Drops THIS tab's session locally and leaves, without asking the server to end it.
+   *
+   * For the case where the server has already ended it and the client is catching up — a
+   * password change revokes every session, this one included. Forgetting to call it leaves the
+   * app *believing* it is signed in (see `logout` for what "believing" costs).
+   */
+  endSession: (redirectTo?: string) => void;
   /** Does the user hold this permission? UI gating only — never a security boundary. */
   can: (permission: string) => boolean;
   refreshUser: () => Promise<void>;
@@ -247,6 +255,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api, adopt],
   );
 
+  /**
+   * The client half of signing out: forget the token, forget the user, go.
+   *
+   * Split out from `logout` because it is the whole of what some callers need. A password change
+   * revokes every session SERVER-side; the tab that did it is already signed out and simply does
+   * not know yet. Clearing state is not a formality there — while `user` is still set the app
+   * renders as signed in, and the in-memory access token keeps working until it expires, so the
+   * sign-out only becomes visible on some later request's 401. That was the "it redirects, but
+   * only when I click something else" bug.
+   */
+  const endSession = useCallback(
+    (redirectTo = "/login") => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      accessToken.current = undefined;
+      // Dev-only: drop THIS tab's stored session so a reload does not revive it.
+      setDevRefreshToken(undefined);
+      setState({ user: null, permissions: [], loading: false });
+      router.replace(redirectTo);
+    },
+    [router],
+  );
+
   const logout = useCallback(
     async (opts?: { redirectTo?: string }) => {
       try {
@@ -256,15 +286,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // on screen because the network blipped is the worst possible outcome.
         if (!(err instanceof ApiClientError)) throw err;
       } finally {
-        if (refreshTimer.current) clearTimeout(refreshTimer.current);
-        accessToken.current = undefined;
-        // Dev-only: drop THIS tab's stored session so a reload does not revive it.
-        setDevRefreshToken(undefined);
-        setState({ user: null, permissions: [], loading: false });
-        router.replace(opts?.redirectTo ?? "/login");
+        endSession(opts?.redirectTo);
       }
     },
-    [api, router],
+    [api, endSession],
   );
 
   const refreshUser = useCallback(async () => {
@@ -278,8 +303,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AuthContextValue>(
-    () => ({ ...state, login, completeMfa, logout, can, refreshUser, api }),
-    [state, login, completeMfa, logout, can, refreshUser, api],
+    () => ({ ...state, login, completeMfa, logout, endSession, can, refreshUser, api }),
+    [state, login, completeMfa, logout, endSession, can, refreshUser, api],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
