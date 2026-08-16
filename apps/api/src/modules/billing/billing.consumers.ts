@@ -16,8 +16,8 @@
  * through the modules that own care.
  */
 import { createLogger } from "@medicore/logger";
-import { env } from "../../config/env.js";
 import { calendarDaysStarted } from "../../core/time/day.js";
+import { branchZone } from "../branches/index.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { onPatientsMerged } from "../../core/events/patientMerge.js";
 import type { DomainEvent, ModuleConsumers } from "../../core/events/consumers.js";
@@ -390,7 +390,25 @@ async function chargeBedDays(input: {
   until: Date;
   branchId?: string;
 }): Promise<void> {
-  const nights = calendarDaysStarted(input.admittedAt, input.until, env.DEFAULT_TIMEZONE);
+  /**
+   * ── THE NIGHT IS THE SITE'S NIGHT, NOT THE HEAD OFFICE'S (D3) ─────────────
+   * "One calendar day started" only means anything against a particular calendar, and this used
+   * `env.DEFAULT_TIMEZONE` while already holding the `branchId` it uses for the charge itself. A
+   * ward in another zone therefore had its midnights imported from head office: a twelve-hour
+   * evening stay that crosses the ward's midnight but not the default's was billed one night
+   * instead of two, on every such admission, always in the direction of undercharging.
+   *
+   * `calendarDaysStarted` itself was never wrong — it counts day KEYS, so a 23-hour DST day
+   * cannot round a stay down. It was being handed the wrong calendar.
+   *
+   * Nothing moves for a site whose zone IS the hospital default, which is every single-site
+   * hospital: `branchZone` returns the same string and the arithmetic is identical.
+   */
+  const nights = calendarDaysStarted(
+    input.admittedAt,
+    input.until,
+    await branchZone(input.branchId),
+  );
 
   for (let night = 1; night <= nights; night++) {
     await postCharge({

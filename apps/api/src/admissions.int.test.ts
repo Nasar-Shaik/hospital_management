@@ -390,6 +390,98 @@ describe("admission opens a second encounter in the same care story", () => {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("the bed is billed by the day, and every day is its own charge", () => {
+  /**
+   * ── THE NIGHT IS THE SITE'S NIGHT (risk register D3 / runbook GAP-2) ──────
+   * `calendarDaysStarted` has always been right — it counts day KEYS, so a 23-hour DST day
+   * cannot round a stay down, and its unit tests cover that. What was wrong is the calendar it
+   * was handed: `env.DEFAULT_TIMEZONE`, on a function that already receives `branchId` and uses
+   * it for the charge itself.
+   *
+   * So a hospital whose second site sits in another zone bills that site's beds against the head
+   * office's midnight. This stay is twelve hours long and straddles a midnight in New York but
+   * not in Kolkata, which is the whole of the difference: two nights or one, on every evening
+   * admission, forever, in the direction of undercharging.
+   *
+   * Nothing changes for a site whose zone IS the hospital default, which is every single-site
+   * hospital — `branchZone` returns the same string and the arithmetic is identical.
+   */
+  it("counts the nights in the BRANCH's zone, not the hospital default's", async () => {
+    const opId = await inConsultation(pvt, "Zone Bill Patient", "9200200009");
+    const res = await admit(pvt, opId);
+    const ip = res.body.data.inpatient;
+
+    /**
+     * The second site, inserted directly and only NOW.
+     *
+     * Directly, because the plan caps how many branches may be CREATED and the other groups here
+     * depend on the main one staying put — the same shortcut `fillWard` takes. And only now,
+     * because a hospital with two active sites and no branch selected can no longer have one
+     * guessed for it: `writeBranchId()` correctly refuses rather than picking, so admitting after
+     * this insert fails with a 400 that has nothing to do with what is under test.
+     */
+    const annexeId = new Types.ObjectId();
+    await pvt.connection.collection("branches").insertOne({
+      _id: annexeId,
+      tenantId: pvt.id,
+      name: "Annexe",
+      code: "ANX",
+      status: "active",
+      isMain: false,
+      timezone: "America/New_York",
+      // `tenantScopePlugin` appends `isDeleted: false` to every query, and a field that is
+      // ABSENT does not match `false`. A raw insert that omits it is invisible to the model.
+      isDeleted: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    try {
+      /**
+       * Twelve hours, deliberately placed across New York's midnight and inside Kolkata's day:
+       *
+       *   admitted   2026-06-01T02:00Z → 31 May 22:00 in New York · 1 June 07:30 in Kolkata
+       *   discharged 2026-06-01T14:00Z →  1 June 10:00 in New York · 1 June 19:30 in Kolkata
+       *
+       * New York touches two calendar days, Kolkata one. The bed was unsellable on both of the
+       * ward's own days, so two is the correct answer AT THAT SITE.
+       */
+      const admittedAt = new Date("2026-06-01T02:00:00.000Z");
+      const dischargedAt = new Date("2026-06-01T14:00:00.000Z");
+
+      await asRelay(pvt, () =>
+        dispatchEventInline({
+          eventId: `evt-dis-zone-${ip.id as string}`,
+          name: "encounter.patient.discharged",
+          version: 1,
+          tenantId: pvt.id,
+          occurredAt: new Date().toISOString(),
+          // The site rides on the ENVELOPE, not in the payload — `bedContextOf` reads
+          // `event.branchId`, which is how every consumer learns where something happened.
+          branchId: annexeId.toHexString(),
+          payload: {
+            encounterId: ip.id,
+            episodeId: ip.episodeId,
+            patientId: ip.patientId,
+            admittedAt: admittedAt.toISOString(),
+            dischargedAt: dischargedAt.toISOString(),
+            tariffCode: "BED_GEN",
+          },
+        }),
+      );
+    } finally {
+      // Removed as soon as it has done its job: a second active site makes `writeBranchId()`
+      // refuse to guess, so leaving it behind fails every admission in the groups after this one.
+      await pvt.connection.collection("branches").deleteOne({ _id: annexeId });
+    }
+
+    const bill = await billOf(pvt, ip.id as string);
+    const beds = bill.lines.filter((l: { category: string }) => l.category === "bed");
+    expect(
+      beds,
+      "the annexe's stay was billed against the head office's midnight — one night short",
+    ).toHaveLength(2);
+  });
+
   it("admitting charges the FIRST night immediately", async () => {
     const opId = await inConsultation(pvt, "Bed Bill Patient", "9200200001");
     const res = await admit(pvt, opId);
