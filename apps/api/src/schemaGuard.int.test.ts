@@ -36,6 +36,7 @@ const { migrateTenantDb } = await import("./core/db/migrations/runner.js");
 const { verifyTenantSchema, schemaBlockedMessage, CLINICAL_SAFETY_INVARIANTS } =
   await import("./seed/schemaGuard.js");
 const { classify } = await import("./seed/deploymentGate.js");
+const { NON_CLINICAL_UNIQUE_INDEXES } = await import("./core/db/clinicalInvariants.js");
 
 const SLUG = "test-schemaguard";
 let db: Awaited<ReturnType<typeof getTenantConnection>>;
@@ -527,5 +528,113 @@ describe("5. the deployment gate, against a real tenant database", () => {
     const verdict = await verifyTenantSchema(db, tenantMigrations);
     expect(verdict.ok).toBe(true);
     expect(classify(verdict, SLUG).code).toBe("ready");
+  });
+});
+
+/**
+ * 6. THE REGISTRATION GAP — a future sole arbiter cannot be added without being classified.
+ *
+ * ── THE HOLE THIS CLOSES ────────────────────────────────────────────────────
+ * `CLINICAL_SAFETY_INVARIANTS` protects what somebody remembered to declare. Until now nothing
+ * stopped a migration from adding a unique index that IS a clinical sole arbiter and never
+ * appearing there: no guard would exist, silently, and no test would notice. Every runtime slice
+ * so far was found by a human reading write paths, which does not scale to the next developer.
+ *
+ * The control reads the indexes off a REAL freshly provisioned tenant rather than parsing the
+ * migration source, so it cannot be fooled by formatting, by an index created outside
+ * `tenantMigrations`, or by one created and then dropped. It fails in both directions: an
+ * unclassified index is a gap, and a stale exemption is a list rotting into a rubber stamp.
+ */
+describe("6. every unique index is either a declared invariant or explicitly exempt", () => {
+  interface LiveIndex {
+    collection: string;
+    name: string;
+    key: Record<string, unknown>;
+    unique?: boolean;
+    partialFilterExpression?: unknown;
+  }
+
+  async function uniqueIndexes(): Promise<LiveIndex[]> {
+    const collections = await db.db!.listCollections().toArray();
+    const found: LiveIndex[] = [];
+    for (const { name } of collections) {
+      const indexes = (await db.collection(name).indexes()) as Omit<LiveIndex, "collection">[];
+      for (const index of indexes) {
+        if (index.unique) found.push({ ...index, collection: name });
+      }
+    }
+    return found;
+  }
+
+  /** Same shape test the runtime inspector uses: these fields, in this order, unique. */
+  function isDeclared(index: LiveIndex): boolean {
+    return CLINICAL_SAFETY_INVARIANTS.some((invariant) => {
+      if (invariant.collection !== index.collection) return false;
+      const actual = Object.entries(index.key);
+      const expected = Object.entries(invariant.key);
+      if (actual.length !== expected.length) return false;
+      if (!actual.every(([field, dir], i) => expected[i]?.[0] === field && Number(dir) === 1)) {
+        return false;
+      }
+      return (
+        JSON.stringify(index.partialFilterExpression ?? null) ===
+        JSON.stringify(invariant.partialFilterExpression ?? null)
+      );
+    });
+  }
+
+  const isExempt = (index: LiveIndex): boolean =>
+    NON_CLINICAL_UNIQUE_INDEXES.some(
+      (e) => e.collection === index.collection && e.index === index.name,
+    );
+
+  it("finds a realistic number of unique indexes (a scan over nothing proves nothing)", async () => {
+    const live = await uniqueIndexes();
+    expect(live.length).toBeGreaterThan(30);
+  });
+
+  /**
+   * THE GATE. A new unique index on a clinical collection stops CI until somebody has decided,
+   * in writing, whether it is a sole arbiter — which is exactly the decision that was previously
+   * left to whoever happened to read the migration.
+   */
+  it("classifies EVERY unique index — nothing is silently unprotected", async () => {
+    const live = await uniqueIndexes();
+    const unclassified = live
+      .filter((index) => !isDeclared(index) && !isExempt(index))
+      .map((index) => `${index.collection}.${index.name} ${JSON.stringify(index.key)}`);
+
+    expect(
+      unclassified,
+      "Add this index to CLINICAL_SAFETY_INVARIANTS if a clinical rule rests on it, or to " +
+        "NON_CLINICAL_UNIQUE_INDEXES with the reason it does not.",
+    ).toEqual([]);
+  });
+
+  /** The other direction: an exemption for an index that no longer exists is a stale claim. */
+  it("has no stale exemptions — every exempt index still exists", async () => {
+    const live = await uniqueIndexes();
+    const names = new Set(live.map((i) => `${i.collection}.${i.name}`));
+    const stale = NON_CLINICAL_UNIQUE_INDEXES.filter(
+      (e) => !names.has(`${e.collection}.${e.index}`),
+    ).map((e) => `${e.collection}.${e.index}`);
+
+    expect(stale).toEqual([]);
+  });
+
+  it("every exemption carries a reason somebody can argue with", () => {
+    const thin = NON_CLINICAL_UNIQUE_INDEXES.filter((e) => e.reason.trim().length < 25);
+    expect(thin.map((e) => e.index)).toEqual([]);
+  });
+
+  /** The eight declared invariants are all actually present on a converged tenant. */
+  it("every declared invariant matches a real unique index", async () => {
+    const live = await uniqueIndexes();
+    const undeclaredButRequired = CLINICAL_SAFETY_INVARIANTS.filter(
+      (invariant) =>
+        !live.some((index) => index.collection === invariant.collection && isDeclared(index)),
+    ).map((i) => i.rule);
+
+    expect(undeclaredButRequired).toEqual([]);
   });
 });

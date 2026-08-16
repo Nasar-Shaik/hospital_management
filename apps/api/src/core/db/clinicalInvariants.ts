@@ -163,6 +163,317 @@ export const CLINICAL_SAFETY_INVARIANTS: readonly SafetyInvariant[] = [
   },
 ] as const;
 
+/**
+ * ── THE REGISTRATION GAP, AND THE LIST THAT CLOSES IT ───────────────────────
+ * `CLINICAL_SAFETY_INVARIANTS` protects what somebody remembered to declare. Nothing stopped a
+ * future migration from adding a unique index that IS a clinical sole arbiter and never appearing
+ * here — the guard would simply not exist, silently, and no test would notice.
+ *
+ * So every unique index a migrated tenant actually carries must be accounted for: either declared
+ * above, or listed here with a reason it is not a CLINICAL safety constraint. `registrationGap`
+ * (schemaGuard.int.test.ts) reads the real indexes off a freshly provisioned tenant and fails if
+ * anything is in neither list — and fails the other way too, if an entry here no longer matches a
+ * real index, so the list cannot rot into a rubber stamp.
+ *
+ * ── WHAT "NOT CLINICAL" MEANS HERE ──────────────────────────────────────────
+ * Not "unimportant". It means a duplicate would be VISIBLE and CORRECTABLE by a human rather than
+ * silently producing a second dose, a second needle, two patients in one bed or two people behind
+ * one hospital number. A duplicate ward name is a mess somebody renames; a duplicate charted dose
+ * is a fact that cannot be withdrawn.
+ */
+export interface ExemptUniqueIndex {
+  collection: string;
+  /** The index name, which is what the gate reads off the database. */
+  index: string;
+  /** Why losing this is not a clinical runtime-safety failure. */
+  reason: string;
+  /**
+   * Set when the index IS shaped like a clinical arbiter and is a candidate for a future runtime
+   * guard, but is not protected today. Recorded so the follow-up is in the code rather than in
+   * somebody's memory — the gate treats it exactly like any other exemption.
+   */
+  candidate?: true;
+}
+
+export const NON_CLINICAL_UNIQUE_INDEXES: readonly ExemptUniqueIndex[] = [
+  /* ── catalogue and configuration: a duplicate is a mess, not a harm ─────── */
+  {
+    collection: "departments",
+    index: "one_department_code_per_tenant",
+    reason: "a duplicate department code is a configuration error an admin can see and rename",
+  },
+  {
+    collection: "icdCodes",
+    index: "one_icd_code_per_tenant",
+    reason: "reference data; a duplicate ICD row is visible in the picker and editable",
+  },
+  {
+    collection: "labTests",
+    index: "one_lab_test_code_per_tenant",
+    reason: "catalogue data; a duplicate test definition is visible and editable",
+  },
+  {
+    collection: "medicines",
+    index: "one_medicine_per_code",
+    reason: "formulary data; a duplicate medicine is visible in the picker and editable",
+  },
+  {
+    collection: "serviceItems",
+    index: "tenantId_1_code_1",
+    reason: "tariff data; a duplicate service line is visible on the price list",
+  },
+  {
+    collection: "servicePackages",
+    index: "one_package_code_per_tenant",
+    reason: "tariff data; a duplicate package is visible and editable",
+  },
+  {
+    collection: "theatres",
+    index: "one_theatre_code_per_tenant",
+    reason: "catalogue data; a duplicate theatre is visible on the OT list",
+  },
+  {
+    collection: "wards",
+    index: "one_ward_name_per_branch",
+    reason: "catalogue data; a duplicate ward name is visible on the bed board and renameable",
+  },
+  {
+    collection: "rooms",
+    index: "one_room_name_per_ward",
+    reason: "catalogue data; a duplicate room name is visible on the bed board and renameable",
+  },
+  {
+    collection: "hospitalProfile",
+    index: "one_profile_per_tenant",
+    reason: "one settings document; a duplicate is a configuration fault, not a clinical one",
+  },
+  {
+    collection: "siteSettings",
+    index: "one_site_per_tenant",
+    reason: "public-website settings; nothing clinical depends on it",
+  },
+  {
+    collection: "notificationTemplates",
+    index: "tenantId_1_key_1",
+    reason: "message templates; a duplicate template renders the same message twice at most",
+  },
+
+  /* ── identity and authorization: security, audited elsewhere ────────────── */
+  {
+    collection: "users",
+    index: "tenantId_1_email_1",
+    reason: "account identity; duplicate logins are an auth concern, covered by the auth suite",
+  },
+  { collection: "roles", index: "tenantId_1_code_1", reason: "RBAC catalogue, seeded and audited" },
+  {
+    collection: "permissions",
+    index: "tenantId_1_code_1",
+    reason: "RBAC catalogue, seeded from code and audited by the permission-lifecycle gate",
+  },
+  {
+    collection: "rolePermissions",
+    index: "tenantId_1_roleId_1_permissionId_1",
+    reason: "RBAC join row; a duplicate grants nothing extra",
+  },
+  {
+    collection: "userRoles",
+    index: "tenantId_1_userId_1_roleId_1",
+    reason: "RBAC join row; a duplicate grants nothing extra",
+  },
+  {
+    collection: "sessions",
+    index: "tenantId_1_family_1",
+    reason: "refresh-token family; reuse detection is proven by the auth suite",
+  },
+  {
+    collection: "refreshTokens",
+    index: "tenantId_1_tokenHash_1",
+    reason: "token storage; collisions are a cryptographic concern, not a clinical one",
+  },
+  {
+    collection: "passwordResetTokens",
+    index: "one_reset_token_per_hash",
+    reason: "token storage; single-use is enforced by consuming the row",
+  },
+  {
+    collection: "mfaSecrets",
+    index: "tenantId_1_userId_1",
+    reason: "one secret per user; a duplicate is an auth fault, covered by the auth suite",
+  },
+
+  /* ── messaging and eventing: a duplicate is noise ───────────────────────── */
+  {
+    collection: "notifications",
+    index: "one_message_per_cause",
+    reason: "dedupe key; losing it sends a message twice, which is noise rather than harm",
+  },
+  {
+    collection: "outboxEvents",
+    index: "eventId_1",
+    reason: "consumers are required to be idempotent (ADR-0007); redelivery is designed for",
+  },
+
+  /* ── money: real, but a different domain from patient harm ──────────────── */
+  {
+    collection: "invoices",
+    index: "one_invoice_per_number",
+    reason:
+      "a duplicate invoice number is a finance-audit problem, visible on the register and " +
+      "correctable by a credit note — no clinical act depends on it",
+    candidate: true,
+  },
+  {
+    collection: "walletAccounts",
+    index: "one_wallet_per_patient",
+    reason: "a second wallet splits a balance; visible on the ledger and reconcilable",
+    candidate: true,
+  },
+  {
+    collection: "stockMovements",
+    index: "one_stock_move_per_dispense_line",
+    reason:
+      "protects the stock ledger from double-decrementing a dispense line. The DISPENSE itself " +
+      "is already runtime-guarded (HMS-PHM-004), which is the act that reaches the patient; this " +
+      "index protects the count behind it",
+    candidate: true,
+  },
+
+  /* ── scheduling: a clash is visible on the board before anyone is touched ─ */
+  {
+    collection: "doctorSchedules",
+    index: "one_schedule_per_doctor_weekday_branch",
+    reason: "clinic template; a duplicate weekday row is visible in the schedule editor",
+  },
+  {
+    collection: "doctorAvailability",
+    index: "one_roster_row_per_doctor_weekday_branch",
+    reason: "roster row; a duplicate is visible in the availability editor",
+  },
+  {
+    collection: "otBookings",
+    index: "one_booking_per_theatre_start",
+    reason:
+      "two operations booked into one theatre at one time. Shaped exactly like bed occupancy, " +
+      "and the strongest candidate for the next runtime guard — but a theatre list is read by a " +
+      "human before anybody is wheeled in, and the clash is visible on it, which is not true of " +
+      "a bed the ward believes is empty",
+    candidate: true,
+  },
+
+  /* ── statutory records: one per encounter, written once, by a human ─────── */
+  {
+    collection: "deathRecords",
+    index: "one_death_record_per_encounter",
+    reason:
+      "one death record per encounter. Written deliberately once by a doctor against a closed " +
+      "stay, with no retry path and no concurrency to arbitrate — a second is not a race",
+    candidate: true,
+  },
+  {
+    collection: "mortuaryRegister",
+    index: "one_body_per_encounter",
+    reason: "one register entry per encounter; a duplicate is visible on the register",
+    candidate: true,
+  },
+  {
+    collection: "encounterCodings",
+    index: "one_coding_per_encounter",
+    reason: "billing/statistics coding; a duplicate is visible to the coder and correctable",
+  },
+  {
+    collection: "consultationNotes",
+    index: "one_note_per_encounter",
+    reason:
+      "one structured note per visit. Written and re-saved by one doctor on one screen; the " +
+      "service upserts rather than inserting, so a duplicate is not a race it can lose",
+  },
+  {
+    collection: "allergies",
+    index: "one_active_allergy_per_allergen",
+    reason:
+      "a duplicate active allergy row would make the prescribing check fire TWICE for the same " +
+      "allergen, which is noisy but fails safe — it never makes a screen miss",
+  },
+
+  /* ── catalogue, continued ───────────────────────────────────────────────── */
+  {
+    collection: "branches",
+    index: "one_code_per_tenant",
+    reason: "site catalogue; a duplicate branch code is visible in the switcher and renameable",
+  },
+  {
+    collection: "beds",
+    index: "one_bed_code_per_ward",
+    reason:
+      "the bed CATALOGUE, not occupancy. Who is IN a bed is `one_open_stay_per_bed_per_branch`, " +
+      "which is declared and runtime-guarded; a duplicate catalogue row is visible on the board",
+  },
+  {
+    collection: "ambulances",
+    index: "one_ambulance_code_per_tenant",
+    reason: "fleet catalogue; a duplicate vehicle code is visible on the dispatch list",
+  },
+  {
+    collection: "assets",
+    index: "one_asset_tag_per_tenant",
+    reason: "asset register; a duplicate tag is an inventory error, not a clinical one",
+  },
+
+  /* ── security and audit ─────────────────────────────────────────────────── */
+  {
+    collection: "apiKeys",
+    index: "one_key_per_hash",
+    reason: "integration credential storage; collisions are cryptographic, not clinical",
+  },
+  {
+    collection: "credentials",
+    index: "tenantId_1_userId_1",
+    reason: "one password record per user; an auth concern covered by the auth suite",
+  },
+  {
+    collection: "auditLogs",
+    index: "tenantId_1_seq_1",
+    reason:
+      "the tamper-evident audit chain's sequence. A gap or duplicate is an INTEGRITY finding the " +
+      "anchor verification reports directly, which is a stronger control than a 503 would be",
+  },
+  {
+    collection: "auditAnchors",
+    index: "tenantId_1_index_1",
+    reason: "audit-chain anchor sequence; verified by the audit anchor check, not by a write guard",
+  },
+
+  /* ── scheduling and money that ARE arbiter-shaped ───────────────────────── */
+  {
+    collection: "appointments",
+    index: "one_doctor_one_slot",
+    reason:
+      "double-booking one doctor at one instant. Arbiter-shaped and a genuine candidate — but a " +
+      "clash surfaces immediately as two people in a waiting room, before anyone is touched, and " +
+      "the booking desk re-reads the slot list constantly. Ranked below the clinical five",
+    candidate: true,
+  },
+  {
+    collection: "ambulanceTrips",
+    index: "one_trip_per_ambulance_start",
+    reason:
+      "one vehicle, one departure. Occupancy-shaped like a bed, but dispatch is a human reading " +
+      "a board and a clash is visible before the ambulance moves",
+    candidate: true,
+  },
+  {
+    collection: "charges",
+    index: "one_charge_per_cause",
+    reason:
+      "THE STRONGEST NON-CLINICAL CANDIDATE. `{sourceId, code}` is what stops an at-least-once " +
+      "billing event posting the same bed-day twice — the same shape as the pharmacy order, and " +
+      "consumers redeliver by design. It is money rather than patient harm, and a duplicate " +
+      "charge is visible on the bill and reversible by a credit note, which is why it is exempt " +
+      "and not guarded. It is the first thing to revisit if this list is ever revisited",
+    candidate: true,
+  },
+] as const;
+
 /** The invariants a given set of capabilities rests on. */
 export function invariantsFor(
   capabilities: readonly ClinicalCapability[],
