@@ -28,10 +28,8 @@
  * stays acyclic: admissions → encounters, mar, allergies, vitals, and nothing depends on
  * admissions.
  */
-import { env } from "../../config/env.js";
 import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
-import { zoneOrDefault } from "../../core/time/zone.js";
-import { getBranch } from "../branches/index.js";
+import { branchZone } from "../branches/index.js";
 import { listInpatients, type Encounter } from "../encounters/index.js";
 import { activeForPatients, type Allergy } from "../allergies/index.js";
 import { listForEncounters, isDispensable } from "../prescriptions/index.js";
@@ -113,7 +111,7 @@ export async function wardWorklist(filter: {
    * One zone for the page. Every row on it belongs to the caller's active branch — that is what
    * `listInpatients` scoping guarantees — so resolving per row would be the same lookup repeated.
    */
-  const zone = await wardZone(encounters[0]?.branchId);
+  const zone = await branchZone(encounters[0]?.branchId);
   const dayKey = dayKeyInZone(new Date(), zone);
   const { from, before } = dayRangeInZone(dayKey, zone);
   const now = Date.now();
@@ -217,13 +215,6 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
     else out.set(k, [row]);
   }
   return out;
-}
-
-/** The ward's clock. Never the process zone, never the phone's (M0 §21 item C). */
-async function wardZone(branchId?: string): Promise<string> {
-  if (!branchId) return env.DEFAULT_TIMEZONE;
-  const branch = await getBranch(branchId).catch(() => undefined);
-  return zoneOrDefault(branch?.timezone, env.DEFAULT_TIMEZONE);
 }
 
 export type { Allergy, Encounter };

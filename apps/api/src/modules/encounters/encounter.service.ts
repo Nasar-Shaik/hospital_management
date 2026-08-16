@@ -26,6 +26,8 @@ import { EVENTS } from "../../core/events/eventCatalog.js";
 import { getPatient, namesByIds } from "../patients/index.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
 import { getBed } from "../wards/index.js";
+import { branchZone } from "../branches/index.js";
+import { dayRangeInZone } from "../../core/time/day.js";
 import * as repo from "./encounter.repository.js";
 import {
   canTransition,
@@ -969,7 +971,40 @@ export async function recordVisitSummary(
   return updated;
 }
 
-export const listEncounters = repo.list;
+/**
+ * The front desk's list, and — when a day is asked for — the day it is a register OF.
+ *
+ * ── THE DAY IS THE BRANCH'S, NOT THE HOSPITAL DEFAULT'S (risk register D2) ──
+ * `date` is `YYYY-MM-DD` rather than an instant because a receptionist thinks in days, so turning
+ * it into a half-open range of instants needs a zone. That zone used to be `env.DEFAULT_TIMEZONE`,
+ * which was correct while a hospital was one site and silently wrong once it was not: a clerk at a
+ * site nine hours away asked for "today" and was answered in the head office's today. Near either
+ * midnight those are different days, and the register quietly omits the visits in the gap.
+ *
+ * The MAR, the medication round, the ward worklist and the clinic's own opening hours were all
+ * moved to the branch's zone. This is the same rule, applied to the same kind of boundary, through
+ * the same helper.
+ *
+ * ── WHY THE ACTIVE BRANCH IS THE RIGHT SOURCE ───────────────────────────────
+ * It is already what scopes the rows: the register shows the site you are working at, so the day
+ * it covers should be that site's day. With no branch selected — the aggregate view — there is no
+ * single clock to answer with, and `branchZone` falls back to the hospital default, which is both
+ * the previous behaviour and the only honest answer for "all sites at once".
+ *
+ * Resolved here rather than in the controller: it is an async lookup and a domain rule, and the
+ * controller is HTTP only (Doc 09 §11).
+ */
+export async function listEncounters(
+  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & { date?: string },
+): Promise<{ items: repo.Encounter[]; total: number }> {
+  const { date, ...rest } = filter;
+  if (!date) return repo.list(rest);
+
+  const zone = await branchZone(getContext().activeBranchId);
+  const { from, before } = dayRangeInZone(date, zone);
+  return repo.list({ ...rest, arrivedFrom: from, arrivedBefore: before });
+}
+
 export const getOpenEncounterFor = repo.findOpenForPatient;
 
 /**

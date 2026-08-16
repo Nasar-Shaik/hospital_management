@@ -44,6 +44,7 @@ const { runWithContext } = await import("./core/context/requestContext.js");
 const { createUser, transitionStatus } = await import("./modules/users/index.js");
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
+const { getEncounterModel } = await import("./modules/encounters/encounter.model.js");
 
 const SLUG = "test-appttz";
 const DB = `hms_${SLUG}`;
@@ -294,5 +295,106 @@ describe("booking and leave agree with the clinic's calendar", () => {
       .query({ doctorId, date: clinicNoon(monday) })
       .expect(200);
     expect(res.body.data).toEqual([]);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE FRONT DESK'S REGISTER — risk register D2 / runbook GAP-1
+ *
+ * `GET /encounters?date=YYYY-MM-DD` is the register for one day, and `date` is a DATE rather than
+ * an instant precisely because a receptionist thinks in days. Turning that day into a half-open
+ * range of instants needs a zone, and the controller used `env.DEFAULT_TIMEZONE`.
+ *
+ * That was right when a hospital was one site. The MAR, the medication round, the ward worklist
+ * and the clinic's own opening hours were all moved to the BRANCH's zone; this was not, so a
+ * clerk at a site in another zone asks for "today" and is answered in the hospital default's
+ * today. Near a midnight the two are different days and the register shows the wrong set of
+ * visits — the ones it omits being the interesting half.
+ *
+ * The suite's process zone is pinned to Asia/Kolkata and this clinic is America/New_York, so the
+ * gap is nine and a half hours: no rounding, offset or clock skew can make a broken
+ * implementation pass.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the register's day is the BRANCH's day, not the hospital default's", () => {
+  /** A visit that arrived late in the clinic's evening — the far side of the process zone's midnight. */
+  const ARRIVED_AT = new Date("2026-08-17T02:00:00.000Z");
+
+  /** The `YYYY-MM-DD` a given instant falls on, in a given zone. */
+  function dayKeyIn(instant: Date, zone: string): string {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(instant);
+  }
+
+  let encounterId = "";
+  let clinicDay = "";
+  let defaultDay = "";
+
+  beforeAll(async () => {
+    clinicDay = dayKeyIn(ARRIVED_AT, CLINIC_ZONE);
+    defaultDay = dayKeyIn(ARRIVED_AT, "Asia/Kolkata");
+
+    const created = await auth(request(app).post("/api/v1/encounters")).send({
+      patientId,
+      doctorId,
+      reason: "late evening walk-in",
+    });
+    expect([200, 201]).toContain(created.status);
+    encounterId = created.body.data.encounter.id as string;
+
+    /**
+     * Backdated in the database because `arrivedAt` is server-set to "now" — correctly, it is
+     * when the patient actually walked in. The register's zone is what is under test, not the
+     * clock, so the arrival is placed at a known instant rather than the suite waiting for one.
+     */
+    const connection = await getTenantConnection({
+      id: tenant.id,
+      databaseName: tenant.databaseName,
+    });
+    // `tenantScopePlugin` stamps every query from the request context, so even a setup write
+    // has to run inside one.
+    await runWithContext(
+      { traceId: "appttz-register", tenantId: tenant.id, tenantSlug: SLUG, connection },
+      async () => {
+        await getEncounterModel(connection).updateOne(
+          { _id: encounterId },
+          { $set: { arrivedAt: ARRIVED_AT } },
+        );
+      },
+    );
+  }, 60_000);
+
+  it("the two zones genuinely disagree about which day this is", () => {
+    // The premise, asserted rather than assumed. If these ever coincide the two rows below would
+    // both pass against a broken implementation and prove nothing.
+    expect(clinicDay).not.toBe(defaultDay);
+    expect(clinicDay).toBe("2026-08-16");
+    expect(defaultDay).toBe("2026-08-17");
+  });
+
+  it("FINDS the visit on the day it happened AT THE CLINIC", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters"))
+      .query({ date: clinicDay })
+      .expect(200);
+
+    expect(
+      (res.body.data as { id: string }[]).some((e) => e.id === encounterId),
+      `the register for ${clinicDay} at the clinic did not contain a visit that arrived that evening`,
+    ).toBe(true);
+  });
+
+  it("does NOT find it on the hospital default's day", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters"))
+      .query({ date: defaultDay })
+      .expect(200);
+
+    expect(
+      (res.body.data as { id: string }[]).some((e) => e.id === encounterId),
+      `the register for ${defaultDay} returned a visit that, at the clinic, happened the day before`,
+    ).toBe(false);
   });
 });

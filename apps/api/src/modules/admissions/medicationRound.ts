@@ -34,10 +34,8 @@
  * the ambiguity the five rights exist to close. So the name and UHID are resolved here, in the
  * same batch, and a round row is never rendered without them.
  */
-import { env } from "../../config/env.js";
 import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
-import { zoneOrDefault } from "../../core/time/zone.js";
-import { getBranch } from "../branches/index.js";
+import { branchZone } from "../branches/index.js";
 import { listInpatients } from "../encounters/index.js";
 import { activeForPatients } from "../allergies/index.js";
 import { namesByIds } from "../patients/index.js";
@@ -109,7 +107,7 @@ export async function medicationRound(filter: MedicationRoundFilter): Promise<Me
 
   // The zone still has to be resolved for an empty page: the caller is told which day it asked
   // about, and "no patients" must not come back dated by the process clock.
-  const zone = await wardZone(encounters[0]?.branchId);
+  const zone = await branchZone(encounters[0]?.branchId);
   const date = filter.date ?? dayKeyInZone(new Date(), zone);
   if (encounters.length === 0) return { items: [], total, date };
 
@@ -173,11 +171,4 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
     else out.set(k, [row]);
   }
   return out;
-}
-
-/** The ward's clock. Never the process zone, never the phone's (M0 §21 item C). */
-async function wardZone(branchId?: string): Promise<string> {
-  if (!branchId) return env.DEFAULT_TIMEZONE;
-  const branch = await getBranch(branchId).catch(() => undefined);
-  return zoneOrDefault(branch?.timezone, env.DEFAULT_TIMEZONE);
 }

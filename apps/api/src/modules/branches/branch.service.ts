@@ -7,6 +7,8 @@
  * one creation point, exactly like every other edition limit (HMS-PLAN-001).
  */
 import { AppError } from "../../core/errors/appError.js";
+import { env } from "../../config/env.js";
+import { zoneOrDefault } from "../../core/time/zone.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { branchLimit } from "../tenants/index.js";
 import { getEffectiveBranchScope } from "../rbac/index.js";
@@ -115,4 +117,34 @@ export async function updateBranch(id: string, patch: UpdateBranchInput): Promis
   const updated = await repo.update(id, patch);
   if (!updated) throw new AppError("HMS-GEN-404", 404, "Branch not found", { id });
   return updated;
+}
+
+/**
+ * The zone a site's clock runs in — the only correct source for ANY clinical day boundary.
+ *
+ * ── WHY THIS LIVES HERE, AND WHY IT IS SHARED ───────────────────────────────
+ * This function existed as three byte-identical private copies (`wardZone`) in `mar.service`,
+ * `medicationRound` and `worklist`, and the reception register needed a fourth. Four private
+ * copies of the rule that decides which day a clinical event belongs to is exactly the
+ * duplicate-implementation risk the governance layer exists to catch (risk A1): they agree today
+ * and nothing makes them agree tomorrow, and the symptom of a divergence is a dose or a visit
+ * filed under the wrong date rather than an error anyone sees.
+ *
+ * It belongs to `branches` because the timezone is branch DATA and this module owns that store.
+ * Callers already import `getBranch` from here, so no new dependency edge is created.
+ *
+ * ── THE FALLBACK IS DELIBERATE, AND IT IS NOT AN ERROR PATH ─────────────────
+ * No branch means no site was selected — the aggregate view, or a record written before branches
+ * existed. There is no single correct clock for "all sites", so the hospital default is the
+ * honest answer rather than a guess at one of them.
+ *
+ * `zoneOrDefault` then absorbs a branch whose stored zone this runtime cannot format in. The edge
+ * validates new zones and refuses bad ones; this keeps one bad legacy row from turning every day
+ * boundary at that site into a 500. Wrong by at most a day boundary beats a ward that cannot
+ * discharge anybody — see `core/time/zone.ts`.
+ */
+export async function branchZone(branchId?: string): Promise<string> {
+  if (!branchId) return env.DEFAULT_TIMEZONE;
+  const branch = await repo.findById(branchId).catch(() => undefined);
+  return zoneOrDefault(branch?.timezone, env.DEFAULT_TIMEZONE);
 }

@@ -15,10 +15,8 @@
  * unique, and the database refuses the second one. See `schedule.ts`.
  */
 import { AppError } from "../../core/errors/appError.js";
-import { env } from "../../config/env.js";
 import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
-import { zoneOrDefault } from "../../core/time/zone.js";
-import { getBranch } from "../branches/index.js";
+import { branchZone } from "../branches/index.js";
 import {
   getPrescription,
   isDispensable,
@@ -38,13 +36,6 @@ export const listAdministrations = repo.listByEncounter;
 /** A dose is shown as overdue an hour after its round. A display aid, never a stored status. */
 const OVERDUE_AFTER_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** The zone the ward's clock runs in. Never the process zone, never the phone's (M0 §21 item C). */
-async function wardZone(branchId?: string): Promise<string> {
-  if (!branchId) return env.DEFAULT_TIMEZONE;
-  const branch = await getBranch(branchId).catch(() => undefined);
-  return zoneOrDefault(branch?.timezone, env.DEFAULT_TIMEZONE);
-}
 
 /** Only a live signed order may be administered — `dispensed` is still in force to give against. */
 function isAdministrable(status: Prescription["status"]): boolean {
@@ -178,7 +169,7 @@ export async function recordAdministration(
     });
   }
 
-  const zone = await wardZone(prescription.branchId);
+  const zone = await branchZone(prescription.branchId);
   const scheduledFor = resolveSlot(prescription, line, lineIndex, zone, administeredAt, input);
 
   const result = await repo.record({
@@ -411,7 +402,7 @@ export async function getSchedule(encounterId: string, date?: string): Promise<D
   const live = items.filter(isLive);
   if (live.length === 0) return [];
 
-  const zone = await wardZone(live[0]?.branchId);
+  const zone = await branchZone(live[0]?.branchId);
   const dayKey = date ?? dayKeyInZone(new Date(), zone);
   const { from, before } = dayRangeInZone(dayKey, zone);
 

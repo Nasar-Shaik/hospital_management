@@ -14,6 +14,7 @@ export {
   countBranches,
   listMyBranches,
   getBranch,
+  branchZone,
   createBranch,
   updateBranch,
   type Branch,
