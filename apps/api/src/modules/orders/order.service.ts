@@ -30,7 +30,7 @@ import {
   recordOrderPlaced,
   recordOrderCancelled,
 } from "../encounters/index.js";
-import { getPatient } from "../patients/index.js";
+import { getPatient, namesByIds } from "../patients/index.js";
 import { notify } from "../notifications/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getById as getTenant } from "../tenants/index.js";
@@ -512,7 +512,46 @@ export const cancelOrder = (id: string, reason: string): Promise<repo.Order> =>
   transition(id, "cancelled", { reason, alsoSet: { cancelReason: reason } });
 
 export const getOrder = (id: string): Promise<repo.Order | undefined> => repo.findById(id);
-export const listOrders = repo.list;
+/** A worklist row: the order, plus who it is for. */
+export interface OrderRow extends repo.Order {
+  /** `Unknown patient` when the record cannot be read — never silently blank. */
+  patientName: string;
+  /** Empty only when the patient record itself carries none. */
+  uhid: string;
+}
+
+/**
+ * A page of orders, each carrying its patient's identity.
+ *
+ * ── WHY IDENTITY IS RESOLVED HERE AND NOT BY THE CALLER ─────────────────────
+ * The web worklist used to fetch "the first 100 patients in the hospital" and look each order's
+ * patient up in that array. Two silent truncations sat on top of each other: an order past the
+ * 100th row never appeared, and an order whose patient was not among the first 100 patients
+ * rendered as "—". Both failed toward *less* work being visible, which on a lab queue means a
+ * sample nobody runs, and neither said anything was missing.
+ *
+ * `InpatientRow` already carries its name for the same reason, and says so: "a client must never
+ * reconstruct it from a patient list." This is that rule applied to the second list that was
+ * doing it. One extra query per page, however long the page.
+ */
+export async function listOrders(
+  filter: repo.ListOrdersFilter,
+): Promise<{ items: OrderRow[]; total: number }> {
+  const { items, total } = await repo.list(filter);
+  if (items.length === 0) return { items: [], total };
+
+  const named = await namesByIds([...new Set(items.map((o) => o.patientId))]);
+  const byId = new Map(named.map((p) => [p.id, p]));
+
+  return {
+    items: items.map((o) => {
+      const p = byId.get(o.patientId);
+      return { ...o, patientName: p?.name ?? "Unknown patient", uhid: p?.uhid ?? "" };
+    }),
+    total,
+  };
+}
+
 export const isWaitingOnResults = repo.isWaitingOnResults;
 
 /** The diagnostics register for a period — used by the reporting module. */

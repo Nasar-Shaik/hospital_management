@@ -20,6 +20,7 @@ import {
   type Encounter,
   type Invoice,
   type Order,
+  type OrderRow,
   type DocumentMeta,
   type DocumentCategory,
   type Patient,
@@ -172,7 +173,7 @@ function Profile() {
           meta: { page: 1, limit: 0 },
         }),
         soft(api.listOrders({ patientId: id, limit: 200 }), {
-          items: [] as Order[],
+          items: [] as OrderRow[],
           meta: { page: 1, limit: 0 },
         }),
         soft(api.listPrescriptions({ patientId: id }), [] as Prescription[]),

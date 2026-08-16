@@ -33,6 +33,7 @@ import {
   type Prescription,
   type PublicSite,
   type Order,
+  type OrderRow,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
 import { rupees } from "../../../lib/money";
@@ -109,7 +110,7 @@ function Slip() {
           ? soft(api.getDoctor(enc.doctorId), null as DoctorCard | null)
           : Promise.resolve(null),
         soft(api.listOrders({ encounterId: id, limit: 100 }), {
-          items: [] as Order[],
+          items: [] as OrderRow[],
           meta: { page: 1, limit: 0 },
         }),
         soft(api.listPrescriptions({ encounterId: id, current: true }), [] as Prescription[]),

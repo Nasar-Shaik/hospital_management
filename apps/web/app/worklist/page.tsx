@@ -23,11 +23,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiClientError,
-  type Order,
+  type OrderRow,
   type OrderCategory,
   type OrderPriority,
   type OrderResultValue,
-  type Patient,
   type Analyte,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
@@ -98,7 +97,7 @@ const FLAG_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = 
   critical_high: "danger",
 };
 
-function ResultForm({ order, onDone }: { order: Order; onDone: () => void }) {
+function ResultForm({ order, onDone }: { order: OrderRow; onDone: () => void }) {
   const { api } = useAuth();
   const [summary, setSummary] = useState("");
   const [critical, setCritical] = useState(false);
@@ -304,9 +303,17 @@ function Worklist() {
   // work persists across days regardless of when it was ordered, while "completed" is a dated
   // history. Keeping them apart is what lets the Completed tab be date-filtered without hiding a
   // two-day-old sample that still needs running.
-  const [active, setActive] = useState<Order[]>([]);
-  const [done, setDone] = useState<Order[]>([]);
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [active, setActive] = useState<OrderRow[]>([]);
+  const [done, setDone] = useState<OrderRow[]>([]);
+  /**
+   * How many outstanding orders EXIST, against however many we hold.
+   *
+   * The queue is capped at 100 rows per request and had no pagination and no total, so on a busy
+   * day order 101 simply was not on the screen and nothing said so. A worklist that silently
+   * stops short is a sample nobody runs — this is the one truncation that must never be quiet.
+   */
+  const [activeTotal, setActiveTotal] = useState(0);
+  const [pages, setPages] = useState(1);
   const [entering, setEntering] = useState<string | null>(null);
 
   const [payment, setPayment] = useState<Record<string, "paid" | "unpaid" | "unbilled" | "free">>(
@@ -329,37 +336,28 @@ function Worklist() {
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
 
-  useEffect(() => {
-    /**
-     * 100 is the server's cap. Asking for more is a 400, not a bigger page.
-     *
-     * The failure is SURFACED rather than swallowed: an earlier `.catch(() => undefined)`
-     * here turned that 400 into an empty dropdown with no error, which reads as "this
-     * hospital has no patients" — a lie that took a browser session to disbelieve.
-     */
-    void api
-      .listPatients({ limit: 100 })
-      .then((page) => setPatients(page.items))
-      .catch((err: unknown) =>
-        setError(err instanceof ApiClientError ? err.message : "Could not load patients."),
-      );
-  }, [api]);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // The active queue (sickest first, then oldest — the server sorts) and the released history.
-      const [activePage, donePage] = await Promise.all([
-        api.listOrders({ category, outstanding: true, limit: 100 }),
-        api.listOrders({ category, status: "released", limit: 100 }),
-      ]);
-      setActive(activePage.items);
+      // `pages` grows with "Show more", so the queue is re-fetched whole rather than appended —
+      // a page boundary that shifts under a re-sort would otherwise drop or double a row.
+      const outstanding = await Promise.all(
+        Array.from({ length: pages }, (_, i) =>
+          api.listOrders({ category, outstanding: true, limit: 100, page: i + 1 }),
+        ),
+      );
+      const donePage = await api.listOrders({ category, status: "released", limit: 100 });
+
+      const activeItems = outstanding.flatMap((p) => p.items);
+      setActive(activeItems);
+      setActiveTotal(outstanding[0]?.meta.total ?? activeItems.length);
       setDone(donePage.items);
       setError(null);
 
       // Payment status is advisory — the worklist still works if billing refuses (a technician who
       // cannot reach it just sees no badge), so a failure here never blanks the list.
-      const ids = [...activePage.items, ...donePage.items].map((o) => o.id);
+      const ids = [...activeItems, ...donePage.items].map((o) => o.id);
       api
         .orderPaymentStatus(ids)
         .then(setPayment)
@@ -368,7 +366,7 @@ function Worklist() {
       // For admitted patients, whether the test can be settled from the advance and the balance to
       // draw it against. Advisory too — a failure just falls back to the "pay at billing" message.
       api
-        .orderSettlementInfo(activePage.items.map((o) => o.id))
+        .orderSettlementInfo(activeItems.map((o) => o.id))
         .then(setSettlement)
         .catch(() => setSettlement({}));
 
@@ -376,9 +374,7 @@ function Worklist() {
       // upload path) is only offered once there is a document to stand behind it. Reports are read
       // per patient; failures here just leave the set empty (the tech can still Enter result).
       const inProgressPatients = [
-        ...new Set(
-          activePage.items.filter((o) => o.status === "in_progress").map((o) => o.patientId),
-        ),
+        ...new Set(activeItems.filter((o) => o.status === "in_progress").map((o) => o.patientId)),
       ];
       Promise.all(inProgressPatients.map((pid) => api.listReports(pid).catch(() => [])))
         .then((lists) => setReported(new Set(lists.flat().map((r) => r.orderId))))
@@ -388,14 +384,37 @@ function Worklist() {
     } finally {
       setLoading(false);
     }
-  }, [api, category]);
+  }, [api, category, pages]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const matchesSearch = (o: Order): boolean =>
-    search.trim() === "" || o.name.toLowerCase().includes(search.trim().toLowerCase());
+  // A different department is a different queue — start it at one page.
+  useEffect(() => {
+    setPages(1);
+  }, [category]);
+
+  /**
+   * The search a technician (or a doctor scanning their own orders) actually needs.
+   *
+   * It used to match `o.name` ALONE — the TEST name. So typing a patient's name into the box
+   * marked "search" returned nothing, and there was no way to narrow the queue to one person at
+   * all. Manual testing reported it as "we are getting placed investigation orders, currently all
+   * coming with a large list, can we have filter by patients?" The box was never the problem; it
+   * was searching the wrong column.
+   *
+   * Patient name and UHID are on the row now (server-resolved), so all three match.
+   */
+  const matchesSearch = (o: OrderRow): boolean => {
+    const q = search.trim().toLowerCase();
+    if (q === "") return true;
+    return (
+      o.name.toLowerCase().includes(q) ||
+      o.patientName.toLowerCase().includes(q) ||
+      o.uhid.toLowerCase().includes(q)
+    );
+  };
 
   const since = completedSince(datePreset);
   const pending = active.filter((o) => TAB_OF[o.status] === "pending" && matchesSearch(o));
@@ -414,14 +433,14 @@ function Worklist() {
   );
   const completed = [...completedActive, ...completedReleased];
 
-  const tabs: { key: WorkTab; label: string; orders: Order[] }[] = [
+  const tabs: { key: WorkTab; label: string; orders: OrderRow[] }[] = [
     { key: "pending", label: "Pending", orders: pending },
     { key: "inprogress", label: "In progress", orders: inprogress },
     { key: "completed", label: "Completed", orders: completed },
   ];
   const orders = tabs.find((t) => t.key === tab)?.orders ?? [];
 
-  async function act(order: Order, action: string) {
+  async function act(order: OrderRow, action: string) {
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -486,7 +505,7 @@ function Worklist() {
    * money to change hands at a counter. The balance may go negative (the ward settles the shortfall
    * later) — that is the point: an inpatient's test is not held.
    */
-  async function settleFromAdvance(order: Order) {
+  async function settleFromAdvance(order: OrderRow) {
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -510,7 +529,7 @@ function Worklist() {
    * scanned in goes straight to the ordering doctor's patient record (report.model.ts). The
    * file is read as base64 in the browser and posted as JSON.
    */
-  async function uploadReport(order: Order, file: File) {
+  async function uploadReport(order: OrderRow, file: File) {
     setError(null);
     setNotice(null);
     setUploading(order.id);
@@ -540,9 +559,6 @@ function Worklist() {
       setUploading(null);
     }
   }
-
-  const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
-  const uhidOf = (id: string): string => patients.find((p) => p.id === id)?.uhid ?? "";
 
   return (
     <div className="space-y-6">
@@ -619,11 +635,31 @@ function Worklist() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Filter by test…"
-            className="w-40 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+            placeholder="Patient, UHID or test…"
+            className="w-56 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
           />
         </div>
       </div>
+
+      {/*
+        The cap, said out loud. The queue asks for 100 rows at a time; when the department has
+        more than that, the rows we are NOT showing are the ones most likely to be forgotten, so
+        the count and the way to reach them both belong on the screen.
+      */}
+      {activeTotal > active.length && (
+        <Alert tone="warning">
+          Showing {active.length} of {activeTotal} outstanding {category} orders. Search narrows the
+          whole queue by patient, UHID or test —{" "}
+          <button
+            type="button"
+            onClick={() => setPages((p) => p + 1)}
+            className="font-medium underline"
+          >
+            or show the next 100
+          </button>
+          .
+        </Alert>
+      )}
 
       <Card className="p-5">
         {loading ? (
@@ -651,8 +687,7 @@ function Worklist() {
                       <PaymentBadge state={payment[o.id]} />
                     </div>
                     <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-                      {nameOf(o.patientId)}{" "}
-                      <span className="font-mono text-xs">{uhidOf(o.patientId)}</span>
+                      {o.patientName} <span className="font-mono text-xs">{o.uhid}</span>
                       <span className="mx-1.5 text-[var(--color-fg-subtle)]">·</span>
                       <span className="text-xs">ordered {time(o.orderedAt)}</span>
                     </p>

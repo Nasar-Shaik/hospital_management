@@ -24,6 +24,7 @@ import {
   type EncounterBilling,
   type EncounterCharge,
   type Order,
+  type OrderRow,
   type Patient,
   type Prescription,
   type PublicSite,
@@ -137,7 +138,7 @@ function Sheet() {
         soft(api.listWardNotes(id), [] as WardNote[]),
         soft(api.listEncounterVitals(id), [] as VitalsReading[]),
         soft(api.listOrders({ encounterId: id, limit: 100 }), {
-          items: [] as Order[],
+          items: [] as OrderRow[],
           meta: { page: 1, limit: 0 },
         }),
         soft(api.listPrescriptions({ encounterId: id }), [] as Prescription[]),

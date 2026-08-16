@@ -4274,6 +4274,134 @@
         },
         "required": ["code", "label", "value"]
       },
+      "OrderRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "encounterId": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "episodeId": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["lab", "radiology", "pharmacy", "procedure", "referral", "admission", "diet"]
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["routine", "urgent", "stat", "emergency"]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "accepted",
+              "in_progress",
+              "completed",
+              "verified",
+              "released",
+              "cancelled"
+            ]
+          },
+          "notes": {
+            "type": "string"
+          },
+          "orderedBy": {
+            "type": "string"
+          },
+          "orderedAt": {
+            "type": "string"
+          },
+          "departmentId": {
+            "type": "string"
+          },
+          "performedBy": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string"
+          },
+          "verifiedBy": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "type": "string"
+          },
+          "releasedAt": {
+            "type": "string"
+          },
+          "result": {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OrderResultValue"
+                }
+              },
+              "critical": {
+                "type": "boolean"
+              }
+            }
+          },
+          "cancelReason": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "branchId": {
+            "type": "string"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderHistoryEntry"
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "patientName": {
+            "type": "string"
+          },
+          "uhid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "encounterId",
+          "patientId",
+          "episodeId",
+          "category",
+          "code",
+          "name",
+          "priority",
+          "status",
+          "orderedBy",
+          "orderedAt",
+          "history",
+          "createdAt",
+          "patientName",
+          "uhid"
+        ]
+      },
       "OrderSettlementInfo": {
         "type": "object",
         "properties": {
@@ -12811,7 +12939,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/Order"
+                        "$ref": "#/components/schemas/OrderRow"
                       }
                     },
                     "meta": {

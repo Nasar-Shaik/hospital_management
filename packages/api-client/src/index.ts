@@ -2151,6 +2151,20 @@ export interface OrderResultValue {
   flag?: string;
 }
 
+/**
+ * A worklist row — an `Order` that knows whose it is.
+ *
+ * Only the LIST carries the patient's name; a single order is fetched by someone who already
+ * knows. Resolved server-side because a client joining against a page of patients blanks
+ * everyone that page did not reach — see `listOrders`.
+ */
+export interface OrderRow extends Order {
+  /** `Unknown patient` when the record cannot be read — never silently blank. */
+  patientName: string;
+  /** Empty only when the patient record itself carries none. */
+  uhid: string;
+}
+
 export interface Order {
   id: string;
   encounterId: string;
@@ -4733,7 +4747,13 @@ export class ApiClient {
     });
   }
 
-  /** `{ category: "lab", outstanding: true }` IS the lab's worklist. */
+  /**
+   * `{ category: "lab", outstanding: true }` IS the lab's worklist.
+   *
+   * Rows carry `patientName` and `uhid`, resolved server-side. Do NOT reconstruct identity by
+   * fetching a page of patients and joining — that silently blanks every patient the page did not
+   * reach, and the worklist did exactly that until it was found in manual testing.
+   */
   listOrders(
     params: {
       category?: OrderCategory;
@@ -4745,13 +4765,13 @@ export class ApiClient {
       page?: number;
       limit?: number;
     } = {},
-  ): Promise<Paged<Order>> {
+  ): Promise<Paged<OrderRow>> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== "") query.set(key, String(value));
     }
     const qs = query.toString();
-    return this.paged<Order>(`/api/v1/orders${qs ? `?${qs}` : ""}`);
+    return this.paged<OrderRow>(`/api/v1/orders${qs ? `?${qs}` : ""}`);
   }
 
   getOrder(id: string): Promise<Order> {

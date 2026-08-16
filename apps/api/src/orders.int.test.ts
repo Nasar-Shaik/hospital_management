@@ -555,6 +555,53 @@ describe("the department worklist", () => {
       ids.indexOf(routine.body.data.order.id as string),
     );
   });
+
+  /**
+   * ── EVERY ROW NAMES ITS PATIENT ─────────────────────────────────────────────
+   * The web worklist used to fetch "the first 100 patients in this hospital" and look each
+   * order's patient up in that array. Two silent truncations stacked: an order past row 100 was
+   * absent, and an order whose patient was not among those 100 patients rendered as "—". Both
+   * failed toward LESS work being visible, which on a lab queue is a sample nobody runs.
+   *
+   * `InpatientRow` already carries its identity for exactly this reason and says so: "a client
+   * must never reconstruct it from a patient list." These tests hold the orders list to the same
+   * rule, so no future screen can be tempted to join it client-side again.
+   */
+  it("carries the patient's name and UHID on every row", async () => {
+    const encounterId = await encounterWithDoctor("Named On The Row", "9000000060");
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+
+    const list = await as(
+      "tech",
+      request(app).get("/api/v1/orders?category=lab&outstanding=true"),
+    ).expect(200);
+
+    const rows = list.body.data as { encounterId: string; patientName: string; uhid: string }[];
+    const row = rows.find((o) => o.encounterId === encounterId);
+
+    expect(row?.patientName).toBe("Named On The Row");
+    // A UHID is what a technician matches against the label on the sample tube.
+    expect(row?.uhid).toMatch(/\S/);
+  });
+
+  it("never leaves the name BLANK — an unreadable patient is said, not omitted", async () => {
+    /**
+     * The important half. A blank name on a worklist row reads as "no patient", and the fix for
+     * the join was worthless if it merely moved the silence to the server. Every row carries a
+     * string; when the record cannot be read it says so in words.
+     */
+    const list = await as(
+      "tech",
+      request(app).get("/api/v1/orders?category=lab&outstanding=true"),
+    ).expect(200);
+
+    for (const row of list.body.data as { patientName: string }[]) {
+      expect(typeof row.patientName).toBe("string");
+      expect(row.patientName.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
 import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./order.controller.js";
-import { order, placeOrderResult } from "./order.contract.js";
+import { order, orderRow, placeOrderResult } from "./order.contract.js";
 import {
   cancelOrderSchema,
   completeOrderSchema,
@@ -59,7 +59,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
     validate(listOrdersQuerySchema, "query"),
-    responds(order.array(), { meta: true }),
+    responds(orderRow.array(), { meta: true }),
     asyncHandler(controller.listOrders),
   );
 
