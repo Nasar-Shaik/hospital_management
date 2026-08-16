@@ -147,9 +147,20 @@ function MrdPage() {
     <div className="mx-auto max-w-4xl space-y-8 p-6">
       <div>
         <h1 className="text-xl font-semibold text-[var(--color-fg)]">Medical records</h1>
+        {/*
+          This page had to be explained to the person testing it — "why this page and what to add
+          as add code?" — so it now explains itself. Naming what an ICD-10 code IS costs two lines
+          and saves the reader guessing that "Add code" means something to do with billing.
+        */}
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          The ICD-10 code master and the disease register. Visits are coded from the patient&apos;s
-          Coding tab.
+          ICD-10 is the standard list of diagnosis codes — <span className="font-mono">J18.9</span>{" "}
+          is &ldquo;Pneumonia, unspecified organism&rdquo;. Doctors tag a visit&apos;s diagnosis
+          with one from the patient&apos;s <span className="font-medium">Coding</span> tab; this
+          page keeps the list they choose from, and counts the cases.
+        </p>
+        <p className="mt-1.5 text-sm text-[var(--color-fg-muted)]">
+          Those counts are what the monthly morbidity and notifiable-disease returns are written
+          from, and what an insurer expects on a claim.
         </p>
       </div>
 
@@ -157,7 +168,13 @@ function MrdPage() {
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-[var(--color-fg)]">ICD-10 code master</h2>
+          <div>
+            <h2 className="text-sm font-semibold text-[var(--color-fg)]">ICD-10 code master</h2>
+            <p className="mt-0.5 text-xs text-[var(--color-fg-subtle)]">
+              What the Coding tab offers. Retire what this hospital never uses; add what its
+              specialties need.
+            </p>
+          </div>
           {canManage && (
             <Button
               onClick={() => {
@@ -184,7 +201,20 @@ function MrdPage() {
         ) : codes.length === 0 ? (
           <Card className="p-8 text-center">
             <p className="text-sm text-[var(--color-fg-muted)]">
-              {search ? "No codes match." : "No codes yet. Add the ones this hospital uses."}
+              {search ? (
+                "No codes match."
+              ) : (
+                /*
+                 * An empty master should now be impossible — every hospital is seeded with a
+                 * starter set at provisioning, and `seed:migrate --all` backfills the ones
+                 * created before that existed. So this reads as a diagnosis, not a shrug.
+                 */
+                <>
+                  No codes in the master. A starter set is normally seeded when the hospital is
+                  created — run <span className="font-mono">pnpm seed:migrate --all</span>, or add
+                  the codes this hospital uses.
+                </>
+              )}
             </p>
           </Card>
         ) : (

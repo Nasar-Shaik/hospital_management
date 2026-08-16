@@ -14,6 +14,7 @@ import { migrateTenantDb } from "../../core/db/migrations/runner.js";
 import { tenantMigrations } from "../../core/db/migrations/tenantMigrations.js";
 import { AppError } from "../../core/errors/appError.js";
 import { tenantDatabaseName } from "../../config/env.js";
+import { seedIcdCodes } from "../../seed/icdCodes.js";
 import { seedMainBranch } from "../../seed/mainBranch.js";
 import * as repo from "./tenant.repository.js";
 import type { TenantRegistryEntry } from "./tenant.repository.js";
@@ -177,6 +178,20 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
    * directly so this import does not close a cycle back through the branches module.
    */
   await seedMainBranch(tenant.id, tenant.slug, db);
+
+  /**
+   * ── AND IT IS NOT PROVISIONED WITHOUT A CODE MASTER EITHER ──────────────────
+   * `icdCodes` shipped empty, and that turned a whole module into a blank page: Medical Records
+   * opened on an empty list beside an "Add code" button, the doctor's Coding tab had nothing to
+   * pick, and the disease register — the morbidity return a hospital files, and the codes an
+   * insurer wants on a claim — could only ever report zero. Nobody hand-types ICD-10; a feature
+   * that must be populated before it does anything is a feature nobody turns on.
+   *
+   * Seeded HERE for the reason the comment above gives: the CLI already seeds the tariff and the
+   * templates and the operator console does not, which is the exact split that trap describes.
+   * `$setOnInsert`, so what a hospital curates is never overwritten.
+   */
+  await seedIcdCodes(tenant.id, tenant.slug, db);
 
   const activated = await transitionStatus(tenant.id, input.trial ? "trial" : "active");
 

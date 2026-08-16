@@ -41,6 +41,10 @@ Then sign in (see **Logins** at the bottom). That's it — you don't need anythi
 > twice. A safety probe against that database reported seven failures that were all the _absence_ of
 > the mechanism, not a fault in it. They vanished the moment the migrations ran.
 >
+> It also backfills reference data added since the hospital was created — including the **ICD-10
+> starter set**, without which Medical Records is a blank page and the disease register reports
+> zero. Insert-only, so a code master a hospital has curated is never overwritten.
+>
 > Run it after every `seed:demo`, and before any testing you intend to believe.
 
 ---

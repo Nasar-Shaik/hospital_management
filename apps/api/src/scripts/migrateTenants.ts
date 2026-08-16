@@ -26,6 +26,7 @@ import { migrateTenant, getBySlug, type TenantRegistryEntry } from "../modules/t
 import { seedRbac } from "../modules/rbac/index.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
+import { seedIcdCodes } from "../seed/icdCodes.js";
 import { seedFormulary } from "../seed/formulary.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedMainBranch } from "../seed/mainBranch.js";
@@ -72,6 +73,7 @@ interface Outcome {
   templatesAdded: number;
   tariffAdded: number;
   formularyAdded: number;
+  icdAdded: number;
   siteSeeded: boolean;
   mainBranchBackfilled?: number;
   error?: string;
@@ -119,6 +121,10 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
   // The Main Branch (ADR-0015). Idempotent: creates one for a tenant provisioned before branches
   // existed, and adopts its pre-branch operational rows into it. A no-op on the second run.
   const mainBranch = await seedMainBranch(tenant.id, tenant.slug, connection);
+  // The ICD-10 starter set. Backfills every hospital provisioned before it existed — which, until
+  // this release, was all of them: the code master shipped empty, so Medical Records was a blank
+  // page and the disease register could only report zero. Insert-only, so a curated master is safe.
+  const icdAdded = await seedIcdCodes(tenant.id, tenant.slug, connection);
 
   return {
     slug: tenant.slug,
@@ -128,6 +134,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     templatesAdded,
     tariffAdded,
     formularyAdded,
+    icdAdded,
     siteSeeded,
     mainBranchBackfilled: Object.values(mainBranch.backfilled).reduce((a, b) => a + b, 0),
   };
@@ -260,6 +267,7 @@ async function main(): Promise<void> {
         templatesAdded: 0,
         tariffAdded: 0,
         formularyAdded: 0,
+        icdAdded: 0,
         siteSeeded: false,
         error: err instanceof Error ? err.message : String(err),
       });
