@@ -132,6 +132,7 @@ function Profile() {
   const canRecordVitals = can("vitals:record");
   const canManageConsent = can("consent:manage");
   const canEnrollPackage = can("package:enroll");
+  const canCancelOrder = can("order:cancel");
   const canCode = can("mrd:code");
   const canReadDocs = can("file:read");
   const canUploadDocs = can("file:upload");
@@ -388,7 +389,14 @@ function Profile() {
           />
         )}
         {tab === "tests" && (
-          <Tests orders={orders} reportByOrder={reportByOrder} who={who} api={api} />
+          <Tests
+            orders={orders}
+            reportByOrder={reportByOrder}
+            who={who}
+            api={api}
+            canCancel={canCancelOrder}
+            onChanged={() => void load()}
+          />
         )}
         {tab === "prescriptions" && <Prescriptions prescriptions={prescriptions} who={who} />}
         {tab === "bills" && (
@@ -558,16 +566,120 @@ function Visits({ encounters, who }: { encounters: Encounter[]; who: (id?: strin
   );
 }
 
+/**
+ * The states an order can still be called back from.
+ *
+ * Mirrors the server's transition table (`order.model.ts`): `placed` and `accepted` may be
+ * cancelled, `in_progress` may NOT — once the sample is in the analyser the reagent is spent and
+ * the work exists whether or not anyone still wants it. The list is duplicated here only to decide
+ * what to DRAW; the server refuses regardless of what this file believes.
+ */
+const CANCELLABLE = ["placed", "accepted"];
+
+/**
+ * Calling an order back before the department starts it.
+ *
+ * ── WHY THE REASON IS A FIELD AND NOT A `window.prompt` ─────────────────────
+ * It is stored on the order as `cancelReason` and read downstream: billing reverses the charge,
+ * and the lab sees why the sample it was about to run has gone. The server requires at least
+ * three characters, so a prompt that cheerfully accepts "x" only produces a validation error the
+ * user cannot connect to anything. The field states the rule and enforces it before asking.
+ */
+function CancelOrder({
+  order,
+  api,
+  onChanged,
+}: {
+  order: Order;
+  api: ReturnType<typeof useAuth>["api"];
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-danger)] hover:underline"
+      >
+        Cancel order
+      </button>
+    );
+  }
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.cancelOrder(order.id, reason.trim());
+      onChanged();
+    } catch (err) {
+      setError(
+        err instanceof ApiClientError
+          ? // The likeliest 422 by far: the department picked the work up between this page
+            // loading and the doctor deciding. Say that, rather than echoing a state name.
+            err.message
+          : "Could not cancel this order.",
+      );
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        autoFocus
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Why is this being cancelled?"
+        maxLength={500}
+        className="w-56 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-fg)]"
+      />
+      {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          disabled={busy || reason.trim().length < 3}
+          onClick={() => void confirm()}
+          className="rounded-md bg-[var(--color-danger)] px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40"
+        >
+          {busy ? "Cancelling…" : "Cancel order"}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setOpen(false);
+            setReason("");
+            setError(null);
+          }}
+          className="text-xs text-[var(--color-fg-muted)] hover:underline"
+        >
+          Keep it
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Tests({
   orders,
   reportByOrder,
   who,
   api,
+  canCancel,
+  onChanged,
 }: {
   orders: Order[];
   reportByOrder: Map<string, ReportMeta>;
   who: (id?: string) => string;
   api: ReturnType<typeof useAuth>["api"];
+  canCancel: boolean;
+  onChanged: () => void;
 }) {
   if (orders.length === 0) return <Empty>No tests ordered.</Empty>;
   const sorted = [...orders].sort(
@@ -601,7 +713,25 @@ function Tests({
             </Td>
             <Td>Dr {who(o.orderedBy)}</Td>
             <Td>
-              <Badge tone={ORDER_TONE[o.status] ?? "neutral"}>{o.status.replace("_", " ")}</Badge>
+              <div className="space-y-1.5">
+                <Badge tone={ORDER_TONE[o.status] ?? "neutral"}>{o.status.replace("_", " ")}</Badge>
+                {canCancel && CANCELLABLE.includes(o.status) && (
+                  <CancelOrder order={o} api={api} onChanged={onChanged} />
+                )}
+                {/*
+                 * Said out loud, because the button was there a moment ago and is now gone. The
+                 * doctor has not lost a permission — the department has started the work, and the
+                 * state machine deliberately has no `in_progress → cancelled` edge.
+                 */}
+                {canCancel && o.status === "in_progress" && (
+                  <p className="text-xs text-[var(--color-fg-subtle)]">
+                    Being run — too late to cancel
+                  </p>
+                )}
+                {o.status === "cancelled" && o.cancelReason && (
+                  <p className="text-xs text-[var(--color-fg-subtle)]">{o.cancelReason}</p>
+                )}
+              </div>
             </Td>
             <Td>
               {o.result?.summary ? (
