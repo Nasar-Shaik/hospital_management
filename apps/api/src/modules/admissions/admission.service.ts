@@ -140,6 +140,20 @@ export async function transferBed(
 }
 
 /**
+ * "This admission already has a discharge summary" — the ONE answer, whichever guard found out.
+ *
+ * The pre-read and the unique index detect the same fact at different moments, so they must not
+ * produce different answers: a client that has to distinguish them is a client that will get one
+ * of them wrong.
+ */
+function alreadySummarised(encounterId: string): AppError {
+  return new AppError("HMS-STATE-001", 422, "This admission already has a discharge summary", {
+    encounterId,
+    hint: "one admission, one summary — a correction is a new note on the next encounter",
+  });
+}
+
+/**
  * The patient goes home, with the summary in their hand.
  *
  * ── THE SUMMARY IS WRITTEN BEFORE THE STAY IS CLOSED, AND THAT ORDER MATTERS ─
@@ -161,24 +175,41 @@ export async function dischargeWithSummary(
   const encounter = await requireOpenAdmission(input.encounterId, "discharge");
 
   const existing = await repo.findDischargeSummary(encounter.id);
-  if (existing) {
-    throw new AppError("HMS-STATE-001", 422, "This admission already has a discharge summary", {
-      encounterId: encounter.id,
-      hint: "one admission, one summary — a correction is a new note on the next encounter",
-    });
-  }
+  if (existing) throw alreadySummarised(encounter.id);
 
-  const summary = await repo.create({
-    encounterId: encounter.id,
-    patientId: encounter.patientId,
-    episodeId: encounter.episodeId,
-    type: "discharge_summary",
-    text: input.text,
-    ...(input.diagnosis ? { diagnosis: input.diagnosis } : {}),
-    ...(input.advice ? { advice: input.advice } : {}),
-    ...(input.followUpOn ? { followUpOn: input.followUpOn } : {}),
-    ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
-  });
+  let summary: repo.WardNote;
+  try {
+    summary = await repo.create({
+      encounterId: encounter.id,
+      patientId: encounter.patientId,
+      episodeId: encounter.episodeId,
+      type: "discharge_summary",
+      text: input.text,
+      ...(input.diagnosis ? { diagnosis: input.diagnosis } : {}),
+      ...(input.advice ? { advice: input.advice } : {}),
+      ...(input.followUpOn ? { followUpOn: input.followUpOn } : {}),
+      ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+    });
+  } catch (err) {
+    /**
+     * ── THE READ ABOVE LOSES THE RACE; THIS IS WHERE IT IS ACTUALLY DECIDED ───
+     * `findDischargeSummary` catches the ordinary sequential retry, and that is the case it
+     * exists for. It cannot catch two submissions in flight at once — both read "no summary" and
+     * both write — so `one_discharge_summary_per_admission` (migration 0016) is the real arbiter,
+     * exactly as the unique index is in the MAR, dispensing and ordering paths.
+     *
+     * Without this branch that arbitration surfaced as a raw duplicate-key error, which the error
+     * handler renders as **500 "Something went wrong"**. Two doctors ending the same stay at once
+     * therefore produced one discharge and one server error, on a perfectly healthy hospital —
+     * and a 500 is the one answer a client cannot interpret: mobile's `attemptDischarge`
+     * reconciles it correctly by re-reading, but the web ward screen shows the raw failure to
+     * somebody whose patient is, in fact, already discharged.
+     *
+     * The index winning means precisely what the read above means, so it gets the same answer.
+     */
+    if (!repo.isDuplicateKey(err)) throw err;
+    throw alreadySummarised(encounter.id);
+  }
 
   // Now the stay ends: the encounter closes with disposition `discharged` and
   // `patient.discharged` fires, which is what posts every bed-day not yet billed.

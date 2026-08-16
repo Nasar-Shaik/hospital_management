@@ -1495,3 +1495,70 @@ describe("bed assignment refuses when the database cannot enforce one stay per b
     }
   });
 });
+
+/**
+ * TWO DOCTORS ENDING THE SAME STAY AT ONCE.
+ *
+ * ── WHY THE PRE-READ IS NOT THE ARBITER ─────────────────────────────────────
+ * `dischargeWithSummary` reads `findDischargeSummary` before it writes, and that read catches the
+ * ordinary sequential retry — which is the case it exists for. It cannot catch two submissions in
+ * flight together: both read "no summary" and both write. `one_discharge_summary_per_admission`
+ * (migration 0016) is what actually decides, exactly as the unique index does in the MAR,
+ * dispensing and ordering paths. Measured against Mongo 7 on 2026-08-17: with the index absent
+ * both summaries are ACCEPTED, and recreating it over the pair is then REFUSED (11000).
+ *
+ * The defect this closes is on a HEALTHY hospital, not a drifted one. Nothing caught the
+ * duplicate-key error, so the index winning surfaced as `500 Something went wrong` — the one
+ * answer a client cannot act on. The sequential guard and the index now give the same 422.
+ */
+describe("a stay cannot end with two discharge summaries", () => {
+  it("answers the same 422 whichever guard catches it, and never a 500", async () => {
+    const opId = await inConsultation(pvt, "Race Discharge", "9500600001");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "RC-01", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    const body = { text: "Recovered. Home.", diagnosis: "Pneumonia" };
+    const send = () =>
+      auth(request(app).post(`/api/v1/encounters/${ipId}/discharge`), pvt, pvt.doctorToken).send(
+        body,
+      );
+
+    /**
+     * Fired together on purpose. Whether the two actually interleave is up to the scheduler, so
+     * this asserts the property that must hold EITHER WAY — one discharge, one refusal, and the
+     * refusal is the same 422 in both cases. Before the fix the interleaved outcome was a 500.
+     */
+    const [a, b] = await Promise.all([send(), send()]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+
+    expect(statuses).toEqual([201, 422]);
+    const refused = a.status === 422 ? a : b;
+    expect(refused.body.error.code).toBe("HMS-STATE-001");
+    expect(String(refused.body.error.message)).toMatch(/already has a discharge summary/i);
+
+    // Exactly one summary exists, whichever way the race fell.
+    expect(
+      await pvt.connection
+        .collection("wardNotes")
+        .countDocuments({ encounterId: new Types.ObjectId(ipId), type: "discharge_summary" }),
+    ).toBe(1);
+  });
+
+  it("still refuses a plain sequential retry with the same answer", async () => {
+    const opId = await inConsultation(pvt, "Retry Discharge", "9500600002");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "RC-02", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await discharge(pvt, ipId);
+
+    const again = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/discharge`),
+      pvt,
+      pvt.doctorToken,
+    ).send({ text: "Recovered. Home.", diagnosis: "Pneumonia" });
+
+    // The stay is closed, so `requireOpenAdmission` answers first — still a 422, never a 500.
+    expect(again.status).toBe(422);
+    expect(again.body.error.code).toBe("HMS-STATE-001");
+  });
+});
