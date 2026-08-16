@@ -1016,6 +1016,64 @@ action** — you attempt, and you observe the rejection.
 
 ---
 
+## 16A. CLINICAL SCHEMA REFUSAL — the 503 nobody has ever seen in the field
+
+Five clinical writes now refuse when the database cannot enforce the rule they rest on. These are
+the only errors in the product a **clinician** is expected to act on procedurally — they say _chart
+on paper_, _hand over on paper_, _order on paper_, _allocate on the board_, _register on paper_ —
+so they need to be seen by a real person on a real screen at least once before a pilot.
+
+### Setting it up, and putting it back
+
+You are dropping a real index on a real tenant. **Use the validation ward tenant only**, and put it
+back inside the same session. `forgetSchemaReadiness` is not reachable from outside the process, so
+the 60-second cache means a repair can take up to a minute to become visible — that wait is itself
+part of DRIFT-06.
+
+```
+# DROP (one of):
+db.medicationAdministrations.dropIndex("one_administration_per_dose_slot")   # MAR
+db.dispenses.dropIndex("one_dispense_per_request_id")                       # dispensing
+db.orders.dropIndex("one_order_per_request_id")                             # ordering
+db.encounters.dropIndex("one_open_stay_per_bed_per_branch")                 # bed assignment
+db.encounters.dropIndex("one_open_encounter_per_patient")                   # starting a visit
+
+# RESTORE: re-run the tenant migration, which is idempotent:
+pnpm seed:migrate -- --tenant <slug>
+```
+
+Then confirm with the deployment gate (ENV-03) that the tenant is converged again **before moving
+on**. A validation session that leaves a ward drifted is worse than one that never ran.
+
+| ID           | Attempt                                                                            | Expected                                                                                                               | Notes                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| **DRIFT-01** | Drop the MAR dose-slot index, then **chart a dose**                                | `503 HMS-MAR-002`, header `Retry-After: 60`, message names **paper**                                                   | The nurse must be able to tell this from "no signal". Photograph the screen.                       |
+| **DRIFT-02** | Same drop — **record observations** and **write a nursing note**                   | Both still succeed                                                                                                     | Proportionality. If either is blocked it is a **P0** over-block, not a nice-to-have.               |
+| **DRIFT-03** | Drop the dispense index, then **hand over drugs**                                  | `503 HMS-PHM-004`; MAR charting still works                                                                            | Two capabilities, one tenant, independent.                                                         |
+| **DRIFT-04** | Drop the order index, then **place a test**                                        | `503 HMS-ORD-001`; the lab can still **accept / start / complete / verify / release** work already on the bench        | The state machine is deliberately unguarded — samples must not be stranded mid-analysis.           |
+| **DRIFT-05** | Drop the bed-occupancy index, then **admit** and then **transfer a bed**           | Both `503 HMS-ADM-003`; **discharge still works**; bed board still loads                                               | Discharge is deliberately unguarded — a ward that can neither admit nor discharge simply fills up. |
+| **DRIFT-06** | Drop the open-encounter index, then **register an arrival**                        | `503 HMS-ENC-001`; patients already in the queue can still be **called in and closed**                                 | Also check the appointment desk's **check-in**, which reaches the same guard.                      |
+| **DRIFT-07** | **Recovery** — restore any dropped index, wait up to 60 s, retry the same action   | Succeeds. No restart, no cache flush, no redeploy                                                                      | The 60 s is the readiness TTL. If it needs a restart, that is a **P1** finding.                    |
+| **DRIFT-08** | **Second hospital** — with one tenant drifted, do the same clinical act in another | Works normally throughout                                                                                              | Tenant isolation (ADR-0005). A cross-tenant block would be **P0**.                                 |
+| **DRIFT-09** | **Nothing was written** — after any DRIFT refusal, re-read the chart / worklist    | No dose, no dispense, no order, no admission, no encounter. The OP encounter in DRIFT-05 is still open, not `admitted` | This is the property the whole design rests on: a refusal leaves nothing to reconcile.             |
+| **DRIFT-10** | **Mobile** — repeat DRIFT-01 on the handset                                        | The dose is **not** shown as given. See below.                                                                         | The one row most likely to find a real defect.                                                     |
+| **DRIFT-11** | **Server log** — while any DRIFT test runs, watch the API log                      | One `error` line per refusal carrying `code`, `status`, `tenant`, `traceId` and the missing rule + migration           | An operator must be able to act without asking a clinician to read a screen.                       |
+| **DRIFT-12** | **PHI check** on the same log lines                                                | No patient name, UHID, encounter id, prescription id or drug in the refusal line                                       | Asserted by `errorContract.test.ts`; confirm it in a real log once.                                |
+
+### What "correct" looks like on mobile (DRIFT-10)
+
+The phone classifies a 503 as **`unknown`** — it re-reads the slot, sees it is still due, and
+reports that it could not confirm. That is **safe**: it never shows the dose as given. Record what
+the nurse actually sees, and judge it against one question:
+
+> _Would a nurse holding this phone know the dose was NOT recorded, and know to chart on paper?_
+
+If the answer is "she would know it failed but not what to do", record it as a **P2 UX finding**
+against the classifier, not as a safety failure — the write provably did not happen. Do **not**
+work around it in the field.
+
+---
+
 ## 17. DEVICE MATRIX
 
 | Surface                      | Needed for                           | Genuinely requires hardware?                                                                                                               |
