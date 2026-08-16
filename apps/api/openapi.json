@@ -19237,7 +19237,7 @@
             "bearerAuth": []
           }
         ],
-        "x-permission": "emr:read"
+        "x-permission": "vitals:read"
       }
     },
     "/api/v1/patients/{patientId}/vitals": {

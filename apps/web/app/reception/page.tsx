@@ -30,10 +30,12 @@ import {
   type EncounterStatus,
   type DoctorRef,
   type Patient,
+  type VitalsReading,
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
 import { idempotencyMessage, useIdempotencyKey } from "../../lib/idempotency";
 import { useAuth } from "../../components/AuthProvider";
+import { VitalsPanel } from "../../components/Vitals";
 import { useBranch } from "../../components/BranchProvider";
 import { dayKeyInZone, todayInZone } from "../../lib/day";
 import { Alert, Badge, Button, Card, ErrorAlert, PermissionGate } from "../../components/ui";
@@ -89,6 +91,57 @@ const PAYMENT_METHODS = ["cash", "card", "upi", "netbanking"] as const;
  * second, separate act (and permission — money crossing the counter). That separation is what makes
  * the lab's pay-before-run check meaningful: a test runs once ITS bill is paid.
  */
+/**
+ * Height, weight, BP and temperature, taken at the desk.
+ *
+ * ── WHY THE FRONT DESK MEASURES AT ALL ──────────────────────────────────────
+ * "While registering patient we need to enter basic details like height, weight, from this 2 we
+ * need to calculate BMI on op slip and temp, BP … so that those are available in doctor login
+ * patient details so that doctor will get to know more about patient."
+ *
+ * Until now `vitals:record` was held by NURSE alone, and there is no nurse at the front door — so
+ * in practice nothing was measured before the consultation at all. In an Indian OPD the weighing
+ * scale is beside the counter; this is that reality, granted deliberately (see the RECEPTIONIST
+ * role, which explains the decision and its limits).
+ *
+ * It reuses the ward's `VitalsPanel` rather than growing a second form: that component already
+ * carries the idempotency key that stops a double-click charting twice, and the reconciliation
+ * that resolves "did my save land?" against the chart instead of guessing. A simpler desk form
+ * would be a second answer to both questions.
+ *
+ * BMI is not entered — the API derives it, and only when height and weight are on the SAME
+ * reading, so a height carried forward from an old visit can never be paired with today's weight.
+ */
+function VitalsRowPanel({ encounterId }: { encounterId: string }) {
+  const { api, can, user } = useAuth();
+  const [readings, setReadings] = useState<VitalsReading[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api
+      .listEncounterVitals(encounterId)
+      .then(setReadings)
+      // Advisory: a desk that cannot READ them can still take them, and says so rather than
+      // showing an empty chart that reads as "nothing was measured".
+      .catch(() => setError("Could not load this visit's observations."));
+  }, [api, encounterId]);
+
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-4">
+      {error && <p className="mb-2 text-xs text-[var(--color-danger)]">{error}</p>}
+      <VitalsPanel
+        api={api}
+        encounterId={encounterId}
+        readings={readings}
+        canRecord={can("vitals:record")}
+        onSaved={(r) => setReadings((prev) => [...prev, r])}
+        emptyHint="Nothing measured yet. Height and weight give the doctor a BMI; BP and temperature travel with the visit."
+        {...(user?.id ? { recordedBy: user.id } : {})}
+      />
+    </div>
+  );
+}
+
 function BillPanel({ encounterId, onChange }: { encounterId: string; onChange?: () => void }) {
   const { api, can } = useAuth();
   const [billing, setBilling] = useState<EncounterBilling | null>(null);
@@ -332,6 +385,7 @@ function Reception() {
   const [express, setExpress] = useState(false);
 
   const [openBill, setOpenBill] = useState<string | null>(null);
+  const [openVitals, setOpenVitals] = useState<string | null>(null);
   // Holds the raw thrown value, so ErrorAlert can surface its trace reference for support.
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -756,6 +810,14 @@ function Reception() {
                                 {next.label}
                               </Button>
                             ))}
+                          <PermissionGate can={can} permission="vitals:record">
+                            <Button
+                              variant="ghost"
+                              onClick={() => setOpenVitals(openVitals === e.id ? null : e.id)}
+                            >
+                              {openVitals === e.id ? "Hide vitals" : "Vitals"}
+                            </Button>
+                          </PermissionGate>
                           <PermissionGate can={can} permission="billing:read">
                             <Button
                               variant="ghost"
@@ -775,6 +837,13 @@ function Reception() {
                         </div>
                       </td>
                     </tr>
+                    {openVitals === e.id && (
+                      <tr>
+                        <td colSpan={7} className="pb-3">
+                          <VitalsRowPanel encounterId={e.id} />
+                        </td>
+                      </tr>
+                    )}
                     {openBill === e.id && (
                       <tr>
                         <td colSpan={7} className="pb-3">

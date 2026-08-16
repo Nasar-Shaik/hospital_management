@@ -189,6 +189,17 @@ const CLINICAL = {
 
   VITALS_RECORD: p("vitals:record", "Record vitals", "branch"),
   /**
+   * Read the observations charted ON A VISIT — split out of `emr:read`.
+   *
+   * `emr:read` means "read the clinical chart", and it still gates the patient's vitals TREND
+   * across visits, which is clinical history. This is the narrower thing: the readings taken on
+   * the visit in front of you. It exists because the front desk now takes height, weight, BP and
+   * temperature at registration, and a desk that may WRITE a measurement but not read it back
+   * cannot print it on the OP slip it hands the patient — while granting the desk `emr:read` to
+   * fix that would open every consultation note in the hospital.
+   */
+  VITALS_READ: p("vitals:read", "Read charted observations", "branch"),
+  /**
    * Reading a patient's allergies is TENANT-wide, not branch-scoped — and the difference
    * is a safety property, not a preference. An allergy recorded when the patient was seen
    * at one branch must be visible when they are prescribed for at another, or the check
@@ -707,6 +718,7 @@ export const DEFAULT_ROLES = [
       PATIENT.MRD_CODE,
       PATIENT.REFERRAL_MANAGE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       CLINICAL.EMR_WRITE,
       CLINICAL.EMR_SIGN,
       CLINICAL.ALLERGY_READ,
@@ -757,6 +769,7 @@ export const DEFAULT_ROLES = [
       // The nurse at the bedside witnesses and records the consent the doctor explained.
       PATIENT.CONSENT_MANAGE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       CLINICAL.VITALS_RECORD,
       CLINICAL.ALLERGY_READ,
       CLINICAL.ALLERGY_MANAGE,
@@ -796,6 +809,24 @@ export const DEFAULT_ROLES = [
       OPERATIONS.APPOINTMENT_UPDATE,
       OPERATIONS.APPOINTMENT_CANCEL,
       OPERATIONS.QUEUE_MANAGE,
+      /**
+       * ── THE DESK MEASURES THE PATIENT ───────────────────────────────────────
+       * Height, weight, BP and temperature are taken at registration, so the doctor meets a
+       * patient they already know something about and the OP slip carries a BMI.
+       *
+       * This is a policy decision, and it was made deliberately: the previous comment on
+       * `vitals.routes.ts` said "the desk books and takes money, it does not measure patients"
+       * and left the grant alone. In an Indian OPD the desk does measure patients — the weighing
+       * scale is next to the counter — and the alternative was that nothing was measured at all,
+       * because the NURSE role was the only holder and there is no nurse at the front door.
+       *
+       * `vitals:read` and NOT `emr:read`: the desk sees the observations it took on today's
+       * visit, never the consultation note or the patient's history. The flags those readings
+       * carry are adult reference ranges and advisory only (see the vitals service) — nothing
+       * here makes the desk a clinical decision-maker.
+       */
+      CLINICAL.VITALS_RECORD,
+      CLINICAL.VITALS_READ,
       ORGANIZATION.VISITOR_MANAGE,
       ORGANIZATION.HELPDESK_MANAGE,
       FINANCE.BILLING_READ,
@@ -842,6 +873,9 @@ export const DEFAULT_ROLES = [
       OPERATIONS.APPOINTMENT_UPDATE,
       OPERATIONS.APPOINTMENT_CANCEL,
       OPERATIONS.QUEUE_MANAGE,
+      // The desk measures the patient — see RECEPTIONIST, whose grant this role is the union of.
+      CLINICAL.VITALS_RECORD,
+      CLINICAL.VITALS_READ,
       ORGANIZATION.VISITOR_MANAGE,
       ORGANIZATION.HELPDESK_MANAGE,
       PLATFORM.FILE_UPLOAD,
@@ -874,6 +908,7 @@ export const DEFAULT_ROLES = [
       FINANCE.BILLING_READ,
       FINANCE.PAYMENT_COLLECT,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       // A pharmacist about to hand over a drug is the LAST person who can catch an
       // allergy the prescriber missed. They read the list; they do not edit it.
       CLINICAL.ALLERGY_READ,
@@ -911,6 +946,7 @@ export const DEFAULT_ROLES = [
       CLINICAL.ORDER_VERIFY,
       CLINICAL.ORDER_RELEASE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
     ),
   },
   {
@@ -927,6 +963,7 @@ export const DEFAULT_ROLES = [
       CLINICAL.ORDER_VERIFY,
       CLINICAL.ORDER_RELEASE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       PLATFORM.FILE_UPLOAD,
     ),
   },

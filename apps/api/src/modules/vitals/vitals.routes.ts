@@ -6,16 +6,24 @@
  * blood pressure must be able to chart it; a hospital that cannot is not a hospital.
  *
  * ── THE PERMISSION SPLIT ────────────────────────────────────────────────────
- * `vitals:record` — chart a reading. The NURSE role holds it, and in the seeded catalogue it is
- *                   the ONLY role that does. Reception does not: the desk books and takes money,
- *                   it does not measure patients. Nor, today, does DOCTOR — this header used to
- *                   claim otherwise, and M3-S4's integration suite proved the claim false (a
- *                   doctor charting a BP gets a 403). Whether to grant it is a hospital's policy
- *                   decision and the catalogue is editable per tenant, so it is left alone here
- *                   rather than widened by a comment nobody checked.
- * `emr:read`      — read the chart. It is clinical PHI, so it sits behind the clinical read
- *                   permission rather than `encounter:read`: a receptionist can see THAT a visit
- *                   exists without being shown the patient's blood pressure.
+ * `vitals:record` — chart a reading. NURSE, and now the front desk (RECEPTIONIST / FRONT_OFFICE).
+ *                   This header used to say "the desk books and takes money, it does not measure
+ *                   patients", and left the grant alone as a hospital's policy decision. That
+ *                   decision has since been made the other way, on purpose: in an Indian OPD the
+ *                   weighing scale is beside the counter, and while NURSE was the sole holder
+ *                   nothing was measured at all, because there is no nurse at the front door.
+ *                   DOCTOR still does not hold it — M3-S4's suite proved a doctor charting a BP
+ *                   gets a 403 — and that remains a hospital's call rather than a comment's.
+ *
+ * `vitals:read`   — read the observations ON A VISIT. Split out of `emr:read` when the desk
+ *                   started taking them: a desk that may WRITE a measurement but not read it back
+ *                   cannot print it on the OP slip it hands the patient, and granting `emr:read`
+ *                   to fix that would open every consultation note in the hospital. Every role
+ *                   that held `emr:read` holds this too, so nobody lost a read.
+ *
+ * `emr:read`      — the TREND across visits, below. That is clinical history rather than today's
+ *                   intake, and it stays where it was: a receptionist can see THAT a visit exists,
+ *                   and what was measured on it, without being shown the patient's chart.
  */
 import { Router } from "express";
 import { PERMISSIONS } from "@medicore/permissions";
@@ -51,7 +59,7 @@ export function vitalsRouter(): Router {
   router.get(
     "/encounters/:encounterId/vitals",
     authenticate(),
-    authorize(PERMISSIONS.EMR_READ),
+    authorize(PERMISSIONS.VITALS_READ),
     validate(encounterIdParamSchema, "params"),
     responds(assessedVitals.array()),
     asyncHandler(controller.listForEncounter),

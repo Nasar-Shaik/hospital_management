@@ -299,10 +299,67 @@ describe("authorization", () => {
     await chart(enc, { pulse: 80 }, doctorToken).expect(403);
   });
 
-  /** The desk books and takes money. It does not measure patients. */
-  it("refuses a receptionist", async () => {
+  /**
+   * ── THE DESK NOW MEASURES THE PATIENT, DELIBERATELY ───────────────────────
+   * This test asserted the opposite ("the desk books and takes money, it does not measure
+   * patients") and was correct about the code at the time. The policy has since been changed on
+   * purpose, not weakened by accident: while NURSE was the sole holder of `vitals:record`, and
+   * there is no nurse at the front door, NOTHING was measured before the consultation at all. In
+   * an Indian OPD the weighing scale is beside the counter.
+   *
+   * Rewritten rather than deleted, so the reversal is visible in the history of the file that
+   * held the old rule. What the desk may do is now stated positively, and the two tests below
+   * fence what it still may NOT.
+   */
+  it("lets the front desk chart the intake observations", async () => {
     const enc = await admit("Front Desk Obs");
-    await chart(enc, { pulse: 72 }, receptionToken).expect(403);
+    const res = await chart(
+      enc,
+      { pulse: 72, systolic: 124, diastolic: 82, heightCm: 170, weightKg: 68 },
+      receptionToken,
+    ).expect(201);
+
+    // BMI is DERIVED, never entered: 68 / 1.70² = 23.5. The desk types two numbers it can
+    // actually measure, and the arithmetic nobody should do by hand is the server's.
+    expect(res.body.data.bmi).toBe(23.5);
+  });
+
+  it("lets the desk read back the observations it just took", async () => {
+    /**
+     * Not a formality. A desk that may WRITE a measurement but not read it cannot print it on the
+     * OP slip it hands the patient — which was the whole point of taking it. This is why
+     * `vitals:read` was split out of `emr:read`.
+     */
+    const enc = await admit("Desk Reads Back");
+    await chart(enc, { heightCm: 160, weightKg: 55 }, receptionToken).expect(201);
+
+    const res = await readChart(enc, receptionToken).expect(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].bmi).toBe(21.5);
+  });
+
+  it("still refuses the desk the patient's TREND across visits", async () => {
+    /**
+     * The line that survived the policy change, and the reason the split is worth having. Today's
+     * intake is the desk's business; the patient's clinical history is not. That read stays behind
+     * `emr:read`, which the front desk does not hold.
+     */
+    const enc = await admit("Desk Trend Denied");
+    await chart(enc, { pulse: 70 }, receptionToken).expect(201);
+
+    const encounter = await request(app)
+      .get(`/api/v1/encounters/${enc}`)
+      .set("Host", main.host)
+      .set("Authorization", `Bearer ${nurseToken}`)
+      .set("X-Active-Branch", siteA)
+      .expect(200);
+
+    await request(app)
+      .get(`/api/v1/patients/${encounter.body.data.patientId as string}/vitals`)
+      .set("Host", main.host)
+      .set("Authorization", `Bearer ${receptionToken}`)
+      .set("X-Active-Branch", siteA)
+      .expect(403);
   });
 
   it("refuses an unauthenticated request outright", async () => {
@@ -317,10 +374,13 @@ describe("authorization", () => {
   /**
    * The UI hides the save control without the permission; this is the reason that is only a
    * convenience. A request built by hand reaches the same refusal.
+   *
+   * The probe is the DOCTOR now that the desk holds the grant — the claim is about the server
+   * refusing whoever lacks the permission, and it needs a caller who actually lacks it.
    */
   it("refuses the write even when the caller skips the app entirely", async () => {
     const enc = await admit("Bypass Obs");
-    const res = await chart(enc, { pulse: 72 }, receptionToken);
+    const res = await chart(enc, { pulse: 72 }, doctorToken);
     expect(res.status).toBe(403);
     expect((await readChart(enc)).body.data).toHaveLength(0);
   });

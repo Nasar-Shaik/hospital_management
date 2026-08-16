@@ -45,6 +45,12 @@ Then sign in (see **Logins** at the bottom). That's it — you don't need anythi
 > starter set**, without which Medical Records is a blank page and the disease register reports
 > zero. Insert-only, so a code master a hospital has curated is never overwritten.
 >
+> And it re-seeds **roles and permissions**. That matters on any release that adds one: until it
+> runs, a role holds yesterday's grants. `vitals:read` (split out of `emr:read` so the front desk
+> can read back the observations it takes) is the current example — deploy the API, then run this,
+> or a nurse reading a visit's observations gets a 403 in the gap. No client needs rebuilding;
+> the permission is checked server-side against the role, never baked into an app.
+>
 > Run it after every `seed:demo`, and before any testing you intend to believe.
 
 ---

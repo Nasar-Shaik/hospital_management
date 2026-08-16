@@ -429,6 +429,11 @@ const PROBES: Record<string, Probe> = {
     method: "post",
     url: "/api/v1/encounters/64b7f0000000000000000001/bill/finalize",
   },
+  /**
+   * The cash counter's queue — visits with charges on no bill yet. `billing:read`, the same
+   * authority as the invoice list: it answers the same question one step earlier.
+   */
+  "GET /api/v1/billing/pending": { method: "get", url: "/api/v1/billing/pending" },
   "GET /api/v1/invoices": { method: "get", url: "/api/v1/invoices" },
   "GET /api/v1/invoices/:id": {
     method: "get",

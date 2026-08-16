@@ -28,6 +28,7 @@ import {
   ApiClientError,
   type EncounterBilling,
   type DoctorCard,
+  type VitalsReading,
   type Encounter,
   type Patient,
   type Prescription,
@@ -83,6 +84,7 @@ function Slip() {
   const [encounter, setEncounter] = useState<Encounter | null>(null);
   const [patient, setPatient] = useState<Patient | null>(null);
   const [doctor, setDoctor] = useState<DoctorCard | null>(null);
+  const [vitals, setVitals] = useState<VitalsReading[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [billing, setBilling] = useState<EncounterBilling | null>(null);
@@ -104,7 +106,7 @@ function Slip() {
       }
       setEncounter(enc);
 
-      const [pat, doc, ords, rx, theBill, theSite] = await Promise.all([
+      const [pat, doc, ords, rx, theBill, theSite, obs] = await Promise.all([
         api.getPatient(enc.patientId),
         enc.doctorId
           ? soft(api.getDoctor(enc.doctorId), null as DoctorCard | null)
@@ -116,6 +118,9 @@ function Slip() {
         soft(api.listPrescriptions({ encounterId: id, current: true }), [] as Prescription[]),
         soft(api.getEncounterBilling(id), null as EncounterBilling | null),
         soft(api.getPublicSite(), null as PublicSite | null),
+        // The observations taken at the desk. Soft like every other strand: a viewer without
+        // `vitals:read` gets a slip with no vitals block rather than no slip.
+        soft(api.listEncounterVitals(id), [] as VitalsReading[]),
       ]);
 
       setPatient(pat);
@@ -124,6 +129,7 @@ function Slip() {
       setPrescriptions(rx);
       setBilling(theBill);
       setSite(theSite);
+      setVitals(obs);
     } catch (err) {
       setError(
         err instanceof ApiClientError && err.code === "HMS-GEN-404"
@@ -203,6 +209,9 @@ function Slip() {
   const billNumbers = (billing?.invoices ?? [])
     .map((i) => i.number)
     .filter((n): n is string => Boolean(n));
+
+  // The visit's newest reading — a slip is a snapshot, not a chart.
+  const latestVitals = vitals.length > 0 ? vitals[vitals.length - 1] : undefined;
 
   return (
     <div className="opd-root min-h-screen bg-gray-100 py-8 text-gray-900">
@@ -311,6 +320,30 @@ function Slip() {
             )}
           </div>
         </section>
+
+        {/*
+          ── OBSERVATIONS, AND THE BMI THE DESK DOES NOT HAVE TO WORK OUT ────────
+          Taken at registration and printed here so the doctor meets a patient they already know
+          something about, and so the patient carries their own figures home. BMI is DERIVED by
+          the API and only when height and weight are on the same reading — never computed here
+          from two dates.
+
+          The newest reading, not a history: a slip is a snapshot of this visit, and the trend
+          belongs on the patient's chart.
+        */}
+        {latestVitals && (
+          <section className="mt-4">
+            <SectionLabel accent={accent}>Observations</SectionLabel>
+            <div className="mt-1.5 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+              {vitalItems(latestVitals).map((v) => (
+                <span key={v.label} className="text-gray-900">
+                  <span className="text-xs text-gray-500">{v.label}</span>{" "}
+                  <span className="font-medium">{v.value}</span>
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Clinical narrative */}
         <div className="mt-4 space-y-3 text-sm">
@@ -486,6 +519,30 @@ function SectionLabel({ accent, children }: { accent: string; children: ReactNod
       {children}
     </h3>
   );
+}
+
+/**
+ * The observations worth putting on a printed sheet, in the order a clinician reads them.
+ *
+ * Only what was actually measured — an absent figure is omitted rather than printed as a dash,
+ * because a dash on a paper slip reads as "measured and normal" to the next person holding it.
+ */
+function vitalItems(r: VitalsReading): { label: string; value: string }[] {
+  const items: { label: string; value: string }[] = [];
+  if (r.systolic !== undefined && r.diastolic !== undefined) {
+    items.push({ label: "BP", value: `${r.systolic}/${r.diastolic} mmHg` });
+  }
+  if (r.pulse !== undefined) items.push({ label: "Pulse", value: `${r.pulse}/min` });
+  if (r.temperature !== undefined) items.push({ label: "Temp", value: `${r.temperature} °C` });
+  if (r.spo2 !== undefined) items.push({ label: "SpO₂", value: `${r.spo2}%` });
+  if (r.respiratoryRate !== undefined) {
+    items.push({ label: "Resp", value: `${r.respiratoryRate}/min` });
+  }
+  if (r.heightCm !== undefined) items.push({ label: "Height", value: `${r.heightCm} cm` });
+  if (r.weightKg !== undefined) items.push({ label: "Weight", value: `${r.weightKg} kg` });
+  // Derived by the API from height and weight on THIS reading — see the vitals service.
+  if (r.bmi !== undefined) items.push({ label: "BMI", value: String(r.bmi) });
+  return items;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
