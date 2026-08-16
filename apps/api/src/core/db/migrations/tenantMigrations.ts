@@ -2021,12 +2021,18 @@ export const tenantMigrations: Migration[] = [
      * a stored response lives 24 hours from the answer (Doc 03 §7), and nothing has to run a
      * cleanup job.
      */
-    up: async (db) => {
-      await db.createCollection("idempotencyKeys").catch(() => undefined);
-
+    /**
+     * ── PREFLIGHT: THIS ONE *CAN* FAIL ON EXISTING DATA (risk register D6) ────
+     *
+     * It lives here, as a read-only function, rather than as a throw inside `up`. Two callers need
+     * the same answer and only one of them may act: `migrateTenantDb` runs it immediately before
+     * `up`, so the refusal below is exactly the refusal a real convergence would hit; and
+     * `migrate --check` runs it to say "this tenant is behind AND converging it will fail" during
+     * the deploy window rather than at 02:00, without writing anything.
+     */
+    preflight: async (db) => {
       /**
-       * ── PREFLIGHT: THIS ONE *CAN* FAIL ON EXISTING DATA (risk register D6) ────
-       * 0049 below can reason that it cannot — its key includes a field the same change
+       * 0049 below can reason that it cannot fail — its key includes a field the same change
        * introduced, so its partial filter covers zero historical rows. This migration has no such
        * property. `idempotencyKeys` has existed since 0004 with a TTL and NO uniqueness, and the
        * `idempotent()` middleware writes to it, so any tenant that served traffic before this
@@ -2057,37 +2063,40 @@ export const tenantMigrations: Migration[] = [
         .toArray();
 
       const groups = Number((collisions[0] as { groups?: number } | undefined)?.groups ?? 0);
-      if (groups > 0) {
-        throw new Error(
-          [
-            `0048 cannot build \`one_claim_per_idempotency_key\`: ${String(groups)} ` +
-              "(tenantId, userId, key) group(s) in `idempotencyKeys` already hold more than one " +
-              "claim, and the index is unique.",
-            "",
-            "These rows are a REPLAY CACHE, not a record. Every one carries `expiresAt` and the",
-            "TTL from 0004 removes it within 24 hours of being written, so neither remedy below",
-            "loses anything a hospital can see:",
-            "",
-            "  WAIT   let the TTL drain them, then re-run. Safest; up to 24 hours.",
-            "  PRUNE  keep one row per identity and delete the rest, then re-run:",
-            "",
-            "    db.idempotencyKeys.aggregate([",
-            "      { $sort: { completedAt: -1, claimedAt: -1 } },",
-            "      { $group: { _id: { tenantId: '$tenantId', userId: '$userId', key: '$key' },",
-            "                  ids: { $push: '$_id' } } },",
-            "      { $match: { 'ids.1': { $exists: true } } }",
-            "    ]).forEach(g => { g.ids.shift(); db.idempotencyKeys.deleteMany({ _id: { $in: g.ids } }); })",
-            "",
-            "The `$sort` puts the most recently COMPLETED claim first and `shift()` keeps it: that",
-            "is the row holding the stored response a retry replays, and dropping it would turn a",
-            "replay back into a second execution.",
-            "",
-            "Nothing has been recorded. This tenant is still behind and `pnpm seed:migrate` will",
-            "retry it once the collisions are gone.",
-          ].join("\n"),
-        );
-      }
+      if (groups === 0) return null;
 
+      return [
+        `0048 cannot build \`one_claim_per_idempotency_key\`: ${String(groups)} ` +
+          "(tenantId, userId, key) group(s) in `idempotencyKeys` already hold more than one " +
+          "claim, and the index is unique.",
+        "",
+        "These rows are a REPLAY CACHE, not a record. Every one carries `expiresAt` and the",
+        "TTL from 0004 removes it within 24 hours of being written, so neither remedy below",
+        "loses anything a hospital can see:",
+        "",
+        "  WAIT   let the TTL drain them, then re-run. Safest; up to 24 hours.",
+        "  PRUNE  keep one row per identity and delete the rest, then re-run:",
+        "",
+        "    db.idempotencyKeys.aggregate([",
+        "      { $sort: { completedAt: -1, claimedAt: -1 } },",
+        "      { $group: { _id: { tenantId: '$tenantId', userId: '$userId', key: '$key' },",
+        "                  ids: { $push: '$_id' } } },",
+        "      { $match: { 'ids.1': { $exists: true } } }",
+        "    ]).forEach(g => { g.ids.shift(); db.idempotencyKeys.deleteMany({ _id: { $in: g.ids } }); })",
+        "",
+        "The `$sort` puts the most recently COMPLETED claim first and `shift()` keeps it: that",
+        "is the row holding the stored response a retry replays, and dropping it would turn a",
+        "replay back into a second execution.",
+        "",
+        "Nothing has been recorded. This tenant is still behind and `pnpm seed:migrate` will",
+        "retry it once the collisions are gone.",
+      ].join("\n");
+    },
+    up: async (db) => {
+      await db.createCollection("idempotencyKeys").catch(() => undefined);
+
+      // The uniqueness itself. `preflight` above has already refused if existing rows would make
+      // this build fail, so by here the only remaining failure is an infrastructure one.
       await db
         .collection("idempotencyKeys")
         .createIndex(

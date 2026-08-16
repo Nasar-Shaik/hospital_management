@@ -16,6 +16,9 @@
  *   pnpm --filter @medicore/api migrate -- --all
  *   pnpm --filter @medicore/api migrate -- --slug demo
  *   pnpm --filter @medicore/api migrate -- --check          # read-only; writes nothing
+ *   pnpm --filter @medicore/api migrate -- --check --json   # one document on stdout, for a deploy step
+ *
+ * `--check` is the RELEASE GATE (DEPLOYMENT_GATE.md). Exit 0 READY · 1 NOT_READY · 2 ERROR.
  */
 import { createLogger } from "@medicore/logger";
 import { runWithContext } from "../core/context/requestContext.js";
@@ -32,37 +35,76 @@ import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedMainBranch } from "../seed/mainBranch.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
 import { tenantMigrations } from "../core/db/migrations/tenantMigrations.js";
-import { verifyTenantSchema } from "../seed/schemaGuard.js";
+import {
+  checkTenant,
+  malformed,
+  report,
+  validateTarget,
+  EXIT_CODE,
+  type FleetReport,
+  type TenantReadiness,
+} from "../seed/deploymentGate.js";
 
-const logger = createLogger({ service: "migrate-cli" });
+// In `--json` the report IS the output: pino writes to stdout too, and two JSON dialects on one
+// stream is not machine-readable, it is a parsing puzzle. Decided before the logger is built.
+const asJson = process.argv.includes("--json");
+const logger = createLogger({ service: "migrate-cli", ...(asJson ? { level: "silent" } : {}) });
 
 function arg(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
   return index !== -1 ? process.argv[index + 1] : undefined;
 }
 
-/** Reads the registry directly — the fleet job is a platform operation. */
-async function allTenants(): Promise<TenantRegistryEntry[]> {
+/**
+ * Reads the registry directly — the fleet job is a platform operation.
+ *
+ * Returns the RAW documents. Coercing them here is how a row missing `databaseName` became the
+ * string `"undefined"` and then a real, empty database of that name; validation belongs to the
+ * caller, which can report a bad row instead of inventing a plausible-looking one.
+ */
+async function allTenantRows(): Promise<Record<string, unknown>[]> {
   const master = await getMasterConnection();
   const docs = await master
     .collection("tenants")
     .find({ status: { $nin: ["purged", "terminated"] } })
     .toArray();
-
-  return docs.map((d) => ({
-    id: String(d._id),
-    hospitalName: String(d.hospitalName),
-    slug: String(d.slug),
-    databaseName: String(d.databaseName),
-    status: d.status as TenantRegistryEntry["status"],
-    ...(d.dbUri ? { dbUri: String(d.dbUri) } : {}),
-  }));
+  return docs.map((d) => ({ ...d, id: String(d._id) }));
 }
 
 async function requireTenant(slug: string): Promise<TenantRegistryEntry> {
   const tenant = await getBySlug(slug);
   if (!tenant) throw new Error(`no tenant with slug "${slug}"`);
   return tenant;
+}
+
+/**
+ * The convergence targets — same rows, same validation, but a malformed one is REFUSED rather
+ * than reported. `--check` may safely inspect a database named `undefined`; `--all` would create
+ * one and run forty-nine migrations into it. The read path can tolerate a bad row, the write path
+ * cannot.
+ */
+async function migratableTenants(): Promise<TenantRegistryEntry[]> {
+  const targets: TenantRegistryEntry[] = [];
+  for (const row of await allTenantRows()) {
+    const validated = validateTarget(row);
+    if (!validated.ok) {
+      logger.error(
+        { slug: validated.slug, problems: validated.problems },
+        "SKIPPED — this registry row is not safe to migrate. Fix it, then re-run.",
+      );
+      process.exitCode = EXIT_CODE.ERROR;
+      continue;
+    }
+    targets.push({
+      id: validated.target.id,
+      hospitalName: String(row.hospitalName ?? validated.target.slug),
+      slug: validated.target.slug,
+      databaseName: validated.target.databaseName,
+      status: row.status as TenantRegistryEntry["status"],
+      ...(validated.target.dbUri ? { dbUri: validated.target.dbUri } : {}),
+    });
+  }
+  return targets;
 }
 
 interface Outcome {
@@ -153,78 +195,87 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
  * number would mean standing up the whole observability layer as a side effect of a defect fix,
  * and that layer is scheduled work with its own design (P9).
  *
- * So this is the answer within the architecture that exists. The fleet loop is already here, the
- * per-tenant verdict is already written (`verifyTenantSchema`, which checks the canonical
- * `pendingCount` AND that the clinical invariants are actually armed in the database), and an exit
- * code is something a deploy step or a cron can read. What was missing was only a way to ASK
- * without also mutating — before this, finding out whether a tenant was behind meant running a
- * migration against it.
+ * So this is the answer within the architecture that exists: the fleet loop, the per-tenant
+ * verdict (`verifyTenantSchema`), and an exit code a deploy step can read. The judgement of what
+ * each verdict MEANS lives in `deploymentGate.ts` rather than here, because logic inside a script
+ * is logic no test can reach — and this one decides whether a release ships.
  *
  * This does not close T2. A gauge scraped every minute tells you at 03:00 that a tenant drifted;
- * a command tells you when someone runs it. It removes the specific failure that actually
- * happened — a stale tenant discovered through a clinical failure — and the register keeps the
- * rest open.
+ * a command tells you when someone runs it.
  */
-async function checkFleet(targets: TenantRegistryEntry[]): Promise<void> {
-  let behind = 0;
+async function checkFleet(rows: Record<string, unknown>[], asJson: boolean): Promise<void> {
+  const results: TenantReadiness[] = [];
+
   /**
-   * Tenants whose migrations are all RECORDED but whose constraints are gone — dropped by hand, or
-   * restored from a backup taken before them. `migrate --all` skips a recorded migration and
-   * reports success without touching the database, so telling this group to run it would send them
-   * away believing they had fixed an unenforceable schema. They need the record cleared first.
+   * Sequential, deliberately. The fleet is four tenants and the whole walk costs ~20ms, so a
+   * worker pool would be machinery bought with complexity and paid for in nothing. `checkTenant`
+   * is independent per tenant and returns a value rather than mutating shared state, so bounded
+   * concurrency is a `map` with a semaphore on the day the fleet is large enough to want one.
    */
-  const drifted: string[] = [];
-
-  for (const tenant of targets) {
-    try {
-      const connection = await getTenantConnection({
-        id: tenant.id,
-        databaseName: tenant.databaseName,
-        ...(tenant.dbUri ? { dbUri: tenant.dbUri } : {}),
-      });
-      const verdict = await verifyTenantSchema(connection, tenantMigrations);
-
-      if (verdict.ok) {
-        logger.info({ slug: tenant.slug }, "converged");
-        continue;
-      }
-
-      behind += 1;
-      if (verdict.pending.length === 0) drifted.push(tenant.slug);
-      logger.error(
-        {
-          slug: tenant.slug,
-          pending: verdict.pending,
-          // Named, not counted: "1 missing" sends the reader back to the database, and the whole
-          // point of a check is to hand over an answer rather than the next investigation.
-          missing: verdict.missing.map((m) => ({ rule: m.invariant.rule, found: m.found })),
-        },
-        "NOT CONVERGED",
-      );
-    } catch (err) {
-      // A tenant that cannot even be inspected is not "fine" — it is the loudest possible answer.
-      behind += 1;
-      logger.error(
-        { slug: tenant.slug, err: err instanceof Error ? err.message : String(err) },
-        "could not be inspected",
-      );
+  for (const row of rows) {
+    const validated = validateTarget(row);
+    if (!validated.ok) {
+      results.push(malformed(validated.slug, validated.problems));
+      continue;
     }
+    results.push(
+      await checkTenant(
+        validated.target,
+        (t) =>
+          getTenantConnection({
+            id: t.id,
+            databaseName: t.databaseName,
+            ...(t.dbUri ? { dbUri: t.dbUri } : {}),
+          }),
+        tenantMigrations,
+      ),
+    );
   }
 
-  if (behind > 0) {
-    logger.error(
-      { behind, total: targets.length, drifted },
-      drifted.length > 0
-        ? "fleet is NOT converged. Tenants in `drifted` have the migration RECORDED but the " +
-            "constraint absent, so `migrate --all` will skip them and report success without " +
-            "changing anything — clear the record for the named migration on those first. The " +
-            "rest converge with `migrate --all`. Then check again."
-        : "fleet is NOT converged — run `migrate --all`, then check again",
-    );
-    process.exitCode = 1;
+  emit(report(results, tenantMigrations), asJson);
+}
+
+/**
+ * ── THE MACHINE-READABLE FORM IS THE POINT ──────────────────────────────────
+ * A deploy step should not have to grep log lines to find out whether it may proceed. In `--json`
+ * the logger is silenced (pino writes to stdout too) so stdout holds EXACTLY one document and
+ * `jq -e '.verdict == "READY"'` is the whole integration.
+ */
+function emit(result: FleetReport, asJson: boolean): void {
+  process.exitCode = EXIT_CODE[result.verdict];
+
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
-  logger.info({ total: targets.length }, "fleet converged — every tenant, schema armed");
+
+  for (const tenant of result.tenants) {
+    const line = {
+      slug: tenant.slug,
+      code: tenant.code,
+      ...(tenant.notes.length ? { notes: tenant.notes } : {}),
+    };
+    if (tenant.ready) logger.info(line, "ready");
+    else logger.error({ ...line, detail: tenant.detail, remedy: tenant.remedy }, tenant.code);
+  }
+
+  const counts = {
+    total: result.total,
+    ready: result.ready,
+    notReady: result.notReady,
+    errored: result.errored,
+  };
+  if (result.verdict === "READY") {
+    logger.info(counts, "READY — every tenant is on this release's schema, and it is armed");
+  } else if (result.verdict === "NOT_READY") {
+    logger.error(counts, "NOT_READY — do not roll out. Each tenant above carries its own remedy.");
+  } else {
+    logger.error(
+      counts,
+      "ERROR — the fleet could not be fully inspected, so nothing is known about the tenants " +
+        "that failed. This is NOT a schema finding; do not converge on the strength of it.",
+    );
+  }
 }
 
 async function main(): Promise<void> {
@@ -233,13 +284,56 @@ async function main(): Promise<void> {
   const check = process.argv.includes("--check");
 
   if (!slug && !all && !check) {
-    console.error("Usage: migrate --all | --slug <slug> | --check");
+    console.error("Usage: migrate --all | --slug <slug> | --check [--json]");
     process.exit(1);
   }
 
   if (check) {
     // Read-only: no plan sync, no seeding, no migration. Asking must never change the answer.
-    await checkFleet(slug ? [await requireTenant(slug)] : await allTenants());
+    let rows: Record<string, unknown>[];
+    if (slug) {
+      const tenant = await getBySlug(slug);
+      if (!tenant) {
+        // Named a tenant that does not exist. NOT a schema finding — the gate was pointed at
+        // nothing, and answering READY (vacuously true of an empty set) would be the worst
+        // possible outcome for a deploy step that typoed a slug.
+        emit(
+          report(
+            [
+              malformed(slug, [
+                `no tenant with slug "${slug}" in the registry — nothing was checked`,
+              ]),
+            ],
+            tenantMigrations,
+          ),
+          asJson,
+        );
+        return;
+      }
+      rows = [{ ...tenant, id: tenant.id }];
+    } else {
+      rows = await allTenantRows();
+    }
+
+    /**
+     * ── AN EMPTY FLEET IS NOT A PASS ────────────────────────────────────────
+     * "Every tenant is ready" is vacuously true of zero tenants, so the natural implementation
+     * exits 0 on an unreachable-but-connected master, a wrong `MONGO_MASTER_DB`, or a registry
+     * that has not been seeded. A release gate whose happiest answer is "I found nothing to
+     * check" is worse than no gate.
+     */
+    if (rows.length === 0) {
+      emit(
+        report(
+          [malformed("(fleet)", ["the registry returned no tenants — nothing was checked"])],
+          tenantMigrations,
+        ),
+        asJson,
+      );
+      return;
+    }
+
+    await checkFleet(rows, asJson);
     return;
   }
 
@@ -249,7 +343,7 @@ async function main(): Promise<void> {
   const plans = await seedPlans();
   logger.info({ plans }, "plan catalog synced");
 
-  const targets = slug ? [await requireTenant(slug)] : await allTenants();
+  const targets = slug ? [await requireTenant(slug)] : await migratableTenants();
 
   logger.info({ tenants: targets.length }, "converging tenants");
 

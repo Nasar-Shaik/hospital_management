@@ -41,7 +41,12 @@
  * refuses to certify an environment where somebody forgot.
  */
 import type { Connection } from "mongoose";
-import { pendingCount, type Migration } from "../core/db/migrations/runner.js";
+import {
+  analyseHistory,
+  readHistory,
+  type HistoryAnalysis,
+  type Migration,
+} from "../core/db/migrations/runner.js";
 
 /**
  * A storage constraint that a clinical rule rests on.
@@ -105,6 +110,18 @@ export interface SchemaVerdict {
   /** Migration ids the canonical runner still considers outstanding. */
   pending: string[];
   missing: MissingInvariant[];
+  /**
+   * The rest of what the tenant's history says — records this release does not recognise, and
+   * records that cannot have arisen from running these migrations in order. `pending` alone cannot
+   * express either. See `analyseHistory`.
+   */
+  history: HistoryAnalysis;
+  /**
+   * The outstanding migration that would REFUSE to run, and why. Populated only when a pending
+   * migration declares a `preflight` and that preflight is currently unsatisfied — so a caller can
+   * say "behind, and converging will fail" before the deploy window rather than during it.
+   */
+  blockedBy?: { migration: string; reason: string };
 }
 
 /** Mongo reports index keys in definition order; compare as ordered pairs, not as a set. */
@@ -129,20 +146,23 @@ export async function verifyTenantSchema(
   migrations: Migration[],
   invariants: readonly SafetyInvariant[] = CLINICAL_SAFETY_INVARIANTS,
 ): Promise<SchemaVerdict> {
-  const outstanding = await pendingCount(db, migrations);
-  const pending: string[] = [];
-  if (outstanding > 0) {
-    // Name them rather than counting them: "2 pending" sends the reader to the runner, and the
-    // whole point of this check is to hand over an answer instead of a next investigation.
-    const applied = new Set(
-      (
-        await db
-          .collection<{ _id: string }>("migrations")
-          .find({}, { projection: { _id: 1 } })
-          .toArray()
-      ).map((r) => r._id),
-    );
-    pending.push(...migrations.filter((m) => !applied.has(m.id)).map((m) => m.id));
+  // One read of the history, judged completely. `pendingCount` asked the same database the same
+  // question and answered only part of it; `analyseHistory` names the pending ids rather than
+  // counting them (the whole point of a check is to hand over an answer, not the next
+  // investigation) and additionally reports what the set difference cannot see.
+  const history = analyseHistory(await readHistory(db), migrations);
+  const pending = history.pending;
+
+  /**
+   * Ask the FIRST outstanding migration whether it could actually run. Only the first: they apply
+   * in order, so a later one's preflight would be answering about a database state that does not
+   * exist yet, and a confident wrong prediction is worse than no prediction.
+   */
+  let blockedBy: SchemaVerdict["blockedBy"];
+  const next = migrations.find((m) => m.id === pending[0]);
+  if (next?.preflight) {
+    const reason = await next.preflight(db);
+    if (reason !== null) blockedBy = { migration: next.id, reason };
   }
 
   const missing: MissingInvariant[] = [];
@@ -179,7 +199,21 @@ export async function verifyTenantSchema(
     });
   }
 
-  return { ok: pending.length === 0 && missing.length === 0, pending, missing };
+  return {
+    // `ahead` is deliberately absent from this condition. A tenant carrying migrations from a NEWER
+    // release is on an EXPANDED schema, which expand→migrate→contract guarantees the older code can
+    // serve (RELEASE_MANAGEMENT §6 — rollback is redeploying the previous image against exactly
+    // this state). Failing it would make every rollback impossible, which is the opposite of safe.
+    ok:
+      pending.length === 0 &&
+      missing.length === 0 &&
+      history.inconsistent.length === 0 &&
+      blockedBy === undefined,
+    pending,
+    missing,
+    history,
+    ...(blockedBy ? { blockedBy } : {}),
+  };
 }
 
 /** The refusal, written for somebody who has to fix it and does not want to read this file. */
@@ -192,12 +226,28 @@ export function schemaBlockedMessage(slug: string, verdict: SchemaVerdict): stri
     "",
   ];
 
+  if (verdict.history.inconsistent.length > 0) {
+    lines.push("  Migration history is INCONSISTENT — this state cannot arise from a normal run:");
+    for (const finding of verdict.history.inconsistent) lines.push(`    · ${finding}`);
+    lines.push("");
+  }
+
   if (verdict.pending.length > 0) {
     lines.push(
       `  Not schema-converged — ${String(verdict.pending.length)} migration(s) outstanding:`,
     );
     for (const id of verdict.pending) lines.push(`    · ${id}`);
     lines.push("");
+  }
+
+  if (verdict.blockedBy) {
+    lines.push(
+      `  And converging will FAIL — \`${verdict.blockedBy.migration}\` refuses on the data ` +
+        "already here:",
+      "",
+      ...verdict.blockedBy.reason.split("\n").map((line) => `    ${line}`),
+      "",
+    );
   }
 
   for (const { invariant, found } of verdict.missing) {
@@ -216,19 +266,42 @@ export function schemaBlockedMessage(slug: string, verdict: SchemaVerdict): stri
   }
 
   /**
-   * ── TWO FAILURE MODES, TWO DIFFERENT REMEDIES ───────────────────────────────
-   * They must not share one instruction, because the obvious instruction is wrong for one of them.
+   * ── FOUR FAILURE MODES, FOUR DIFFERENT REMEDIES ─────────────────────────────
+   * They must not share one instruction, because the obvious instruction — "run `seed:migrate`" —
+   * is wrong for three of them.
    *
    * `migrateTenantDb` skips any migration already listed in `migrations`. So when a constraint is
    * gone but its record remains — dropped by hand, or restored from a backup taken before it —
    * `seed:migrate` re-runs NOTHING, prints "tenant converged", and leaves the database exactly as
    * unsafe as it found it. Verified on 2026-08-14: `migrationsApplied: []`, index still absent.
    * Telling somebody to run it would send them away believing they had fixed this.
+   *
+   * On an inconsistent history it is worse than useless: it would apply an outstanding migration
+   * AFTER one that already ran past it. And when a preflight refuses, it will simply refuse again
+   * — the data has to be dealt with first.
    */
   const drifted = verdict.missing.length > 0 && verdict.pending.length === 0;
 
   lines.push("  Remediation:", "");
-  if (drifted) {
+  if (verdict.history.inconsistent.length > 0) {
+    lines.push(
+      "  Do NOT run `seed:migrate` against this tenant. An outstanding migration would be applied",
+      "  after one that has already run past it, and a renumbered record means the id this release",
+      "  ships is not the id this database holds.",
+      "",
+      "  Establish first WHERE this history came from — a partial restore, a hand-edited",
+      "  `migrations` collection, or a database that was migrated by a different build. The record",
+      "  is the only account of what has been applied, so repairing it by guesswork replaces a",
+      "  known-bad state with an unknown one.",
+    );
+  } else if (verdict.blockedBy) {
+    lines.push(
+      `  Converging is blocked by \`${verdict.blockedBy.migration}\`, not by the schema. Deal with`,
+      "  the data it names above, then:",
+      "",
+      `      pnpm seed:migrate --slug ${slug}`,
+    );
+  } else if (drifted) {
     lines.push(
       "  The migration is RECORDED as applied but the constraint is not in the database, so",
       "  `seed:migrate` will skip it and report success without changing anything. Clear the",

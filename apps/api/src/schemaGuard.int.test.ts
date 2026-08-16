@@ -35,6 +35,7 @@ const { tenantMigrations } = await import("./core/db/migrations/tenantMigrations
 const { migrateTenantDb } = await import("./core/db/migrations/runner.js");
 const { verifyTenantSchema, schemaBlockedMessage, CLINICAL_SAFETY_INVARIANTS } =
   await import("./seed/schemaGuard.js");
+const { classify } = await import("./seed/deploymentGate.js");
 
 const SLUG = "test-schemaguard";
 let db: Awaited<ReturnType<typeof getTenantConnection>>;
@@ -239,7 +240,7 @@ describe("3. what this guard does NOT claim", () => {
     // path by which it could know about another tenant, and it must never be described as if
     // there were.
     expect(verdict.ok).toBe(true);
-    expect(Object.keys(verdict)).toEqual(["ok", "pending", "missing"]);
+    expect(Object.keys(verdict)).toEqual(["ok", "pending", "missing", "history"]);
   });
 });
 
@@ -363,5 +364,168 @@ describe("4. migration 0048 meets a database that already holds duplicate claims
 
     const applied = await migrateTenantDb(db, only0048);
     expect(applied).toEqual([MIGRATION_ID]);
+  });
+});
+
+/**
+ * THE DEPLOYMENT GATE, AGAINST A REAL DATABASE — the half that cannot be faked.
+ *
+ * `deploymentGate.test.ts` proves every judgement the gate makes about VALUES, in milliseconds and
+ * without Docker. What it cannot prove is the claim the whole control rests on: that the answer is
+ * read out of MongoDB rather than out of a record. These four are here for exactly that, and each
+ * one is a state that `pendingCount` alone reports as converged or as ordinary lag.
+ */
+describe("5. the deployment gate, against a real tenant database", () => {
+  /** Everything an inspection could conceivably disturb, in one comparable value. */
+  async function snapshot(): Promise<string> {
+    const names = (await db.db!.listCollections().toArray()).map((c) => c.name).sort();
+    const state: Record<string, unknown> = {};
+    for (const name of names) {
+      state[name] = {
+        count: await db.collection(name).countDocuments(),
+        indexes: (await db.collection(name).indexes())
+          .map((ix) => JSON.stringify({ key: ix.key, unique: ix.unique ?? false }))
+          .sort(),
+      };
+    }
+    return JSON.stringify({ names, state });
+  }
+
+  /**
+   * ── THE PROPERTY THAT MAKES IT SAFE TO RUN IN A DEPLOY PIPELINE ───────────
+   * A check that migrates while it looks cannot be run twice, cannot be run against production
+   * during business hours, and cannot be trusted once — the first run would change the thing the
+   * second run reports on. Asserted over collections, document counts AND index definitions,
+   * because "it writes nothing" is a claim about all three.
+   */
+  it("inspects without mutating — every collection, count and index is identical afterwards", async () => {
+    const before = await snapshot();
+
+    await verifyTenantSchema(db, tenantMigrations);
+    await verifyTenantSchema(db, tenantMigrations);
+
+    expect(await snapshot()).toBe(before);
+  });
+
+  it("a tenant migrated by a NEWER release is READY, and the extra id is reported", async () => {
+    // The rollback shape: this build is older than the schema. Expand→migrate→contract makes that
+    // servable (RELEASE_MANAGEMENT §6), so failing it would make every rollback impossible.
+    await db.collection("migrations").insertOne({
+      _id: "0099-from-a-future-release",
+      description: "inserted by schemaGuard.int.test",
+      appliedAt: new Date(),
+    } as never);
+    try {
+      const verdict = await verifyTenantSchema(db, tenantMigrations);
+
+      expect(verdict.ok).toBe(true);
+      expect(verdict.history.ahead).toEqual(["0099-from-a-future-release"]);
+      expect(classify(verdict, SLUG).code).toBe("ready");
+      expect(classify(verdict, SLUG).notes.join(" ")).toMatch(/NEWER schema/);
+    } finally {
+      await db.collection("migrations").deleteOne({ _id: "0099-from-a-future-release" as never });
+    }
+  });
+
+  /**
+   * The state that reads as ordinary lag and is not. `migrateTenantDb` would apply 0047 NOW, after
+   * 0048 and 0049 have already run past it — so "run `migrate --all`" is the wrong instruction and
+   * the gate must not give it.
+   */
+  it("a GAP is `history_inconsistent`, and is NOT told to converge", async () => {
+    await db.collection("migrations").deleteOne({ _id: "0047-ledger-branch-from-parent" as never });
+    try {
+      const verdict = await verifyTenantSchema(db, tenantMigrations);
+
+      expect(verdict.ok).toBe(false);
+      expect(verdict.pending).toEqual(["0047-ledger-branch-from-parent"]);
+      expect(verdict.history.inconsistent.join(" ")).toMatch(/out of order/);
+
+      const readiness = classify(verdict, SLUG);
+      expect(readiness.code).toBe("history_inconsistent");
+      expect(readiness.remedy).toMatch(/Do NOT converge/);
+      // The distinction is the whole point: a plain `behind` WOULD be told to run this.
+      expect(readiness.remedy).not.toMatch(/pnpm seed:migrate/);
+    } finally {
+      await db.collection("migrations").insertOne({
+        _id: "0047-ledger-branch-from-parent",
+        description: "restored by schemaGuard.int.test",
+        appliedAt: new Date(),
+      } as never);
+    }
+  });
+
+  /**
+   * ── PREDICTING A FAILURE WITHOUT CAUSING ONE ──────────────────────────────
+   * Before this, `--check` said "behind: 0048" and the operator found out it could not run by
+   * running it — at whatever hour the deploy was scheduled for. The preflight is the migration's
+   * own, called read-only, so the prediction and the real refusal cannot drift apart.
+   */
+  it("predicts that converging will FAIL, read-only, when 0048 would refuse", async () => {
+    const MIGRATION_ID = "0048-idempotency-key-claims";
+    const DOSE_SLOT = "0049-one-administration-per-dose-slot";
+    await db
+      .collection("idempotencyKeys")
+      .dropIndex("one_claim_per_idempotency_key")
+      .catch(() => undefined);
+    /**
+     * BOTH records go, not just 0048's. Removing 0048 alone leaves 0049 recorded above it, which
+     * is a genuine GAP — and `history_inconsistent` rightly outranks a blocked preflight, so the
+     * fixture would be testing the wrong thing while appearing to test this one. (It did, first
+     * time round.) The honest shape of "0048 is next and it will refuse" is: nothing after it has
+     * run either.
+     */
+    await db
+      .collection("migrations")
+      .deleteMany({ _id: { $in: [MIGRATION_ID, DOSE_SLOT] } as never });
+    const shared = { tenantId: "t-gate", userId: "u-gate", key: "receipt-gate" };
+    await db.collection("idempotencyKeys").insertMany([
+      { ...shared, state: "in_progress", claimedAt: new Date() },
+      { ...shared, state: "completed", claimedAt: new Date(), completedAt: new Date() },
+    ] as never[]);
+
+    try {
+      const verdict = await verifyTenantSchema(db, tenantMigrations);
+
+      // The FIRST outstanding migration is the one asked, and only it — a later one's preflight
+      // would be answering about a database state that does not exist yet.
+      expect(verdict.pending).toEqual([MIGRATION_ID, DOSE_SLOT]);
+      expect(verdict.history.inconsistent).toEqual([]);
+      expect(verdict.blockedBy?.migration).toBe(MIGRATION_ID);
+      expect(verdict.blockedBy?.reason).toMatch(/1 \(tenantId, userId, key\) group/);
+
+      const readiness = classify(verdict, SLUG);
+      expect(readiness.code).toBe("preflight_blocked");
+      expect(readiness.remedy).toMatch(/Converging will fail/);
+
+      // And it really was a prediction: the duplicates are still there, un-pruned, and 0048 is
+      // still unrecorded. Checking must never tidy up after itself.
+      expect(await db.collection("idempotencyKeys").countDocuments({ key: "receipt-gate" })).toBe(
+        2,
+      );
+      expect(await db.collection("migrations").countDocuments({ _id: MIGRATION_ID as never })).toBe(
+        0,
+      );
+
+      // The prediction is the migration's own answer — prove it by letting the runner try.
+      await expect(
+        migrateTenantDb(
+          db,
+          tenantMigrations.filter((m) => m.id === MIGRATION_ID),
+        ),
+      ).rejects.toThrow(verdict.blockedBy!.reason.split("\n")[0]!);
+    } finally {
+      await db.collection("idempotencyKeys").deleteMany({ key: "receipt-gate" });
+      await migrateTenantDb(
+        db,
+        tenantMigrations.filter((m) => m.id === MIGRATION_ID || m.id === DOSE_SLOT),
+      );
+    }
+  });
+
+  it("leaves the tenant exactly as it found it", async () => {
+    const verdict = await verifyTenantSchema(db, tenantMigrations);
+    expect(verdict.ok).toBe(true);
+    expect(classify(verdict, SLUG).code).toBe("ready");
   });
 });
