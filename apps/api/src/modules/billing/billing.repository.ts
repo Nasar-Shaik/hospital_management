@@ -630,6 +630,100 @@ export async function chargesForEncounter(encounterId: string): Promise<Charge[]
  * that is a new pending set for the next bill. Voided charges are excluded — a reversed charge is
  * not owed.
  */
+/** One visit that owes a bill nobody has raised yet. Amounts are paise. */
+export interface PendingBatch {
+  encounterId: string;
+  patientId: string;
+  amount: number;
+  /** How many charges are waiting — "3 items", so the cashier knows what they are about to raise. */
+  count: number;
+  /** When the OLDEST waiting charge posted: how long this has been unbilled. */
+  since: Date;
+}
+
+/**
+ * Every visit carrying charges that are on no invoice — the cash counter's queue.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ * `unbilledChargesForEncounter` answers the question for a visit you already know about, which is
+ * fine for Reception (it is looking at its own day's register). The cashier has no register: their
+ * screen lists INVOICES, and an ordered lab test has no invoice until somebody finalizes one. So a
+ * doctor's order posted a charge, the lab waited for payment, and the cashier — holding
+ * `billing:finalize` and `payment:collect` — had no screen on which either permission could be
+ * used. This is the missing read: not "what does this visit owe" but "who owes anything at all".
+ *
+ * ── DELIBERATELY NOT BRANCH-FILTERED ────────────────────────────────────────
+ * Two reasons, and they point the same way. A charge posted by an event consumer may carry NO
+ * `branchId` at all (`onOrderPlaced` stamps it only when the event envelope has one), so a
+ * `scopeFilter()` here would silently drop real money from the only list that goes looking for it
+ * — the same shape of bug as filtering vitals on their own optional branch stamp. And the invoice
+ * list this sits beside (`listInvoices`) is tenant-wide too; scoping one half of the billing
+ * screen and not the other would show a cashier a pending charge whose resulting bill then
+ * vanishes. Branch-scoping the cash counter is a real question for a multi-branch hospital, but it
+ * has to be answered for the whole screen at once.
+ *
+ * `tenantScopePlugin` prepends the `tenantId` $match to every aggregation, so the hospital wall
+ * still holds — see `core/db/plugins/tenantScope.ts`.
+ */
+export async function pendingBatches(filter: {
+  /** Restrict to these patients — how the counter's name/UHID search is applied. */
+  patientIds?: string[];
+  limit: number;
+  skip: number;
+}): Promise<{ items: PendingBatch[]; total: number }> {
+  const model = getChargeModel(getTenantDb());
+
+  const match: Record<string, unknown> = {
+    voided: { $ne: true },
+    invoiceId: { $exists: false },
+    ...(filter.patientIds
+      ? { patientId: { $in: filter.patientIds.map((id) => new Types.ObjectId(id)) } }
+      : {}),
+  };
+
+  const group = {
+    $group: {
+      _id: "$encounterId",
+      patientId: { $first: "$patientId" },
+      amount: { $sum: "$amount" },
+      count: { $sum: 1 },
+      since: { $min: "$postedAt" },
+    },
+  };
+
+  interface Row {
+    _id: Types.ObjectId;
+    patientId: Types.ObjectId;
+    amount: number;
+    count: number;
+    since: Date;
+  }
+
+  const [rows, counted] = await Promise.all([
+    model.aggregate<Row>([
+      { $match: match },
+      group,
+      // Oldest first: the visit that has been waiting longest is the one most likely to walk out
+      // of the building unbilled.
+      { $sort: { since: 1 } },
+      { $skip: filter.skip },
+      { $limit: filter.limit },
+    ]),
+    model.aggregate<{ total: number }>([{ $match: match }, group, { $count: "total" }]),
+  ]);
+
+  return {
+    items: rows.map((r) => ({
+      encounterId: r._id.toString(),
+      patientId: r.patientId.toString(),
+      amount: r.amount,
+      count: r.count,
+      since: r.since,
+    })),
+    total: counted[0]?.total ?? 0,
+  };
+}
+
 export async function unbilledChargesForEncounter(encounterId: string): Promise<Charge[]> {
   const docs = await getChargeModel(getTenantDb())
     .find({

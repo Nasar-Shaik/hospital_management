@@ -24,6 +24,7 @@ import { getEncounter } from "../encounters/index.js";
 import { getBranch } from "../branches/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getPolicy } from "../insurance/index.js";
+import { listPatients, namesByIds } from "../patients/index.js";
 import {
   debitForInvoice as debitWalletForInvoice,
   getBalance as walletBalance,
@@ -300,6 +301,64 @@ export const getCharges = repo.chargesForEncounter;
 export const listServices = repo.listServices;
 export const listInvoices = repo.listInvoices;
 export const getInvoice = repo.findInvoiceById;
+
+/** A visit owing a bill nobody has raised, named for the person standing at the counter. */
+export interface PendingBill extends repo.PendingBatch {
+  patientName: string;
+  uhid: string;
+}
+
+/**
+ * The cash counter's queue: visits with charges that are on no bill yet.
+ *
+ * ── WHY THE SEARCH RESOLVES PATIENTS FIRST ──────────────────────────────────
+ * A cashier's real question is not "show me the queue", it is "this person is in front of me and
+ * says they were sent to pay for a blood test". So `q` is matched against patients (name or UHID)
+ * and the pending charges are then restricted to whoever matched, rather than aggregating the
+ * whole hospital and filtering names afterwards — which would page over the wrong set and make
+ * `total` a lie.
+ *
+ * A search that matches nobody returns nothing, and says so honestly rather than falling back to
+ * the unfiltered queue — a cashier who mistypes a name must not be handed somebody else's bill.
+ */
+export async function listPendingBills(filter: {
+  q?: string;
+  limit: number;
+  skip: number;
+}): Promise<{ items: PendingBill[]; total: number }> {
+  let patientIds: string[] | undefined;
+  if (filter.q) {
+    // The app's one patient search, so the counter matches names exactly as every other screen
+    // does. It is branch-scoped where the charge aggregation below is not; that asymmetry is the
+    // same open question about branch-scoping the cash counter, not a rule invented here.
+    const matches = await listPatients({ q: filter.q, page: 1, limit: 100 });
+    if (matches.patients.length === 0) return { items: [], total: 0 };
+    patientIds = matches.patients.map((p) => p.id);
+  }
+
+  const { items, total } = await repo.pendingBatches({
+    ...(patientIds ? { patientIds } : {}),
+    limit: filter.limit,
+    skip: filter.skip,
+  });
+
+  const named = await namesByIds(items.map((r) => r.patientId));
+  const byId = new Map(named.map((p) => [p.id, p]));
+
+  return {
+    items: items.map((r) => {
+      const p = byId.get(r.patientId);
+      return {
+        ...r,
+        // A charge whose patient has been merged away still owes money; showing the id keeps the
+        // row payable instead of dropping it for want of a name.
+        patientName: p?.name ?? `Unknown (${r.patientId.slice(-6)})`,
+        uhid: p?.uhid ?? "—",
+      };
+    }),
+    total,
+  };
+}
 
 /** A person this bill records an act by, as the printed receipt names them. */
 export interface InvoiceSignatory {

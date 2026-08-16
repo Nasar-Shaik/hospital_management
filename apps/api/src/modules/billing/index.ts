@@ -29,6 +29,8 @@ export {
   finalizeInvoice,
   recordPayment,
   listInvoices,
+  listPendingBills,
+  type PendingBill,
   listServices,
   getInvoice,
   invoiceSignatories,

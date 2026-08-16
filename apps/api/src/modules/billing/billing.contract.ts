@@ -21,6 +21,7 @@ import type {
   EncounterBilling,
   InvoiceSignatory,
   OrderSettlementResult,
+  PendingBill,
   consultationPaymentStatus,
   getRunningBill,
   orderPaymentStatus,
@@ -233,6 +234,28 @@ export const encounterBilling = contract(
   }),
 );
 export type EncounterBillingProof = Proves<Matches<typeof encounterBilling, EncounterBilling>>;
+
+/**
+ * A visit carrying charges that are on no bill — one row of the cash counter's queue.
+ *
+ * The identity fields are what a cashier matches against the person in front of them; `since` is
+ * how long the money has been sitting unbilled, which is the whole reason this list is ordered.
+ */
+export const pendingBill = contract(
+  "PendingBill",
+  z.object({
+    encounterId: z.string(),
+    patientId: z.string(),
+    patientName: z.string(),
+    uhid: z.string(),
+    /** Paise waiting to be billed on this visit. */
+    amount: paise,
+    /** How many charges make it up. */
+    count: z.number().int(),
+    since: z.string(),
+  }),
+);
+export type PendingBillProof = Proves<Matches<typeof pendingBill, PendingBill>>;
 
 const paymentState = z.enum(["paid", "unpaid", "unbilled", "free"]);
 

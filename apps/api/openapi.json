@@ -4598,6 +4598,33 @@
         },
         "required": ["amount", "method", "at"]
       },
+      "PendingBill": {
+        "type": "object",
+        "properties": {
+          "encounterId": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "patientName": {
+            "type": "string"
+          },
+          "uhid": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": ["encounterId", "patientId", "patientName", "uhid", "amount", "count", "since"]
+      },
       "Permission": {
         "type": "object",
         "properties": {
@@ -14549,6 +14576,101 @@
           }
         ],
         "x-permission": "billing:finalize",
+        "x-feature": "module.ops.opd"
+      }
+    },
+    "/api/v1/billing/pending": {
+      "get": {
+        "operationId": "get_v1_billing_pending",
+        "tags": ["billing"],
+        "summary": "GET /api/v1/billing/pending",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PendingBill"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": ["success", "data", "meta"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "billing:read",
         "x-feature": "module.ops.opd"
       }
     },

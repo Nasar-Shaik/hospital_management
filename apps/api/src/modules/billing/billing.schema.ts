@@ -112,6 +112,15 @@ export const listInvoicesQuerySchema = z
   })
   .strict();
 
+/** The cash counter's queue. `q` matches a patient by name or UHID — who is at the window. */
+export const listPendingBillsQuerySchema = z
+  .object({
+    q: z.string().trim().min(1).max(100).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+  })
+  .strict();
+
 export const listServicesQuerySchema = z
   .object({ category: z.enum(CHARGE_CATEGORIES).optional() })
   .strict();
@@ -155,5 +164,6 @@ export type UpdatePackageBody = z.infer<typeof updatePackageSchema>;
 export type EnrollPackageBody = z.infer<typeof enrollPackageSchema>;
 export type ListPackagesQuery = z.infer<typeof listPackagesQuerySchema>;
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
+export type ListPendingBillsQuery = z.infer<typeof listPendingBillsQuerySchema>;
 export type CreateServiceBody = z.infer<typeof createServiceSchema>;
 export type UpdateServiceBody = z.infer<typeof updateServiceSchema>;

@@ -813,3 +813,238 @@ describe("a bill can name the people who took the money", () => {
     expect(summed).toBe(res.body.data.total);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE CASH COUNTER'S QUEUE — care given, no bill raised
+ *
+ * Manual testing, verbatim: "as a doctor i have ordered blood tests, in lab technician login he
+ * is waiting for payment to proceed those tests. i check in admin and cashier logins to pay those
+ * payments but i did not get option to pay those."
+ *
+ * The chain: an order posts a CHARGE, a charge has no invoice until somebody finalizes one, and
+ * the cashier's screen lists INVOICES. So the money existed, was owed, and was invisible to the
+ * one person whose job is to collect it — while `billing:finalize` sat in their grant with no
+ * screen to use it on. These tests are the whole path a cashier now walks.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a cashier can find, bill and collect for care nobody has billed yet", () => {
+  let cashierToken = "";
+  let patientId = "";
+  let encounterId = "";
+  let episodeId = "";
+  let uhid = "";
+
+  /** A fresh ObjectId — `sourceId` is stored as one, so a made-up string is a 500. */
+  const oid = (): string =>
+    [...Array<number>(24)].map(() => Math.floor(Math.random() * 16).toString(16)).join("");
+
+  /** Bills a lab test exactly as the relay does when a doctor's order commits. */
+  async function orderTest(
+    target: { encounterId: string; patientId: string; episodeId: string },
+    code: string,
+  ) {
+    const orderId = oid();
+    await asRelay(pvt, () =>
+      dispatchEventInline({
+        eventId: `evt-ord-${orderId}`,
+        name: "order.order.placed",
+        version: 1,
+        tenantId: pvt.id,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          orderId,
+          encounterId: target.encounterId,
+          patientId: target.patientId,
+          episodeId: target.episodeId,
+          code,
+          name: code,
+          category: "lab",
+        },
+      }),
+    );
+  }
+
+  const pendingAs = (token: string, qs = "", branchId?: string) => {
+    const req = request(app)
+      .get(`/api/v1/billing/pending${qs}`)
+      .set("Host", pvt.host)
+      .set("Authorization", `Bearer ${token}`);
+    return branchId ? req.set("X-Active-Branch", branchId) : req;
+  };
+
+  beforeAll(async () => {
+    await runWithContext(
+      {
+        traceId: "pending-setup",
+        tenantId: pvt.id,
+        tenantSlug: pvt.slug,
+        connection: pvt.connection,
+      },
+      async () => {
+        const user = await createUser({
+          email: "counter@bill.test",
+          name: "Counter Clerk",
+          status: "invited",
+        });
+        await setPassword(user.id, PASSWORD, { mustChangePassword: false });
+        // The REAL role, not FRONT_OFFICE. A cashier deliberately holds no `encounter:read` and
+        // no `encounter:create`, which is why Reception's register — the only other place a bill
+        // could be raised — is not even in their navigation.
+        await assignRoleByCode(user.id, "CASHIER", []);
+        await transitionStatus(user.id, "active");
+      },
+    );
+    const login = await request(app)
+      .post("/api/v1/auth/login")
+      .set("Host", pvt.host)
+      .send({ email: "counter@bill.test", password: PASSWORD })
+      .expect(200);
+    cashierToken = login.body.data.accessToken as string;
+
+    const visit = await arrive(pvt, "Lab Waiting", "9000100200");
+    encounterId = visit.encounterId;
+    patientId = visit.patientId;
+    episodeId = visit.event.payload.episodeId as string;
+    await asRelay(pvt, () => dispatchEventInline(visit.event));
+    await orderTest({ encounterId, patientId, episodeId }, "CBC");
+    await orderTest({ encounterId, patientId, episodeId }, "LFT");
+
+    const p = await auth(request(app).get(`/api/v1/patients/${patientId}`), pvt).expect(200);
+    uhid = p.body.data.uhid as string;
+  }, 60_000);
+
+  it("shows the visit, its total and what it is made of", async () => {
+    const res = await pendingAs(cashierToken).expect(200);
+    const row = (res.body.data as { encounterId: string }[]).find(
+      (r) => r.encounterId === encounterId,
+    );
+
+    // ₹500 consultation + ₹350 CBC + ₹600 LFT.
+    expect(row).toMatchObject({
+      patientName: "Lab Waiting",
+      uhid,
+      amount: 50_000 + 35_000 + 60_000,
+      count: 3,
+    });
+  });
+
+  it("finds the patient by name and by UHID — how a counter actually works", async () => {
+    const byName = await pendingAs(cashierToken, "?q=Lab%20Waiting").expect(200);
+    expect(byName.body.data.map((r: { encounterId: string }) => r.encounterId)).toContain(
+      encounterId,
+    );
+
+    const byUhid = await pendingAs(cashierToken, `?q=${uhid}`).expect(200);
+    expect(byUhid.body.data.map((r: { encounterId: string }) => r.encounterId)).toContain(
+      encounterId,
+    );
+  });
+
+  it("returns NOTHING for a name that matches nobody, rather than everybody", async () => {
+    /**
+     * The dangerous failure. A search that quietly falls back to the unfiltered queue hands a
+     * mistyped name somebody else's bill, and the cashier has no way to tell.
+     */
+    const res = await pendingAs(cashierToken, "?q=Nobody%20Of%20That%20Name").expect(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it("lets the cashier raise the bill and take the money, with no other role involved", async () => {
+    // 1. Raise it. `billing:finalize` — the permission that previously had no screen.
+    const invoice = await request(app)
+      .post(`/api/v1/encounters/${encounterId}/bill/finalize`)
+      .set("Host", pvt.host)
+      .set("Authorization", `Bearer ${cashierToken}`)
+      .expect(200);
+
+    expect(invoice.body.data.status).toBe("finalized");
+    expect(invoice.body.data.number).toBeTruthy();
+    expect(invoice.body.data.total).toBe(145_000);
+
+    // 2. Take it. `payment:collect`.
+    const paid = await request(app)
+      .post(`/api/v1/invoices/${invoice.body.data.id}/payments`)
+      .set("Host", pvt.host)
+      .set("Authorization", `Bearer ${cashierToken}`)
+      .send({ amount: 145_000, method: "cash" })
+      .expect(201);
+
+    expect(paid.body.data.status).toBe("paid");
+  });
+
+  it("drops the visit from the queue once it is billed", async () => {
+    // The queue is "charges on no bill". Finalizing moved all three onto one, so there is
+    // nothing left here — and a row that lingered would invite a second bill for the same tests.
+    const res = await pendingAs(cashierToken).expect(200);
+    expect(res.body.data.map((r: { encounterId: string }) => r.encounterId)).not.toContain(
+      encounterId,
+    );
+  });
+
+  it("brings it BACK when the doctor orders something else", async () => {
+    // Per-batch billing: a charge arriving after a bill is issued lands on the NEXT bill. The
+    // counter has to see that, or the second test is run and never paid for.
+    await orderTest({ encounterId, patientId, episodeId }, "TSH");
+
+    const res = await pendingAs(cashierToken).expect(200);
+    const row = (res.body.data as { encounterId: string; amount: number; count: number }[]).find(
+      (r) => r.encounterId === encounterId,
+    );
+    expect(row).toMatchObject({ amount: 45_000, count: 1 });
+  });
+
+  it("does not count a voided charge — a reversed charge is not owed", async () => {
+    const charges = await auth(
+      request(app).get(`/api/v1/encounters/${encounterId}/charges`),
+      pvt,
+    ).expect(200);
+    const tsh = (charges.body.data as { id: string; code: string; invoiceId?: string }[]).find(
+      (c) => c.code === "TSH" && !c.invoiceId,
+    );
+
+    await auth(request(app).post(`/api/v1/charges/${tsh?.id}/void`), pvt)
+      .send({ reason: "ordered in error" })
+      .expect(200);
+
+    const res = await pendingAs(cashierToken).expect(200);
+    expect(res.body.data.map((r: { encounterId: string }) => r.encounterId)).not.toContain(
+      encounterId,
+    );
+  });
+
+  it("still lists a charge that carries NO branchId at all, WITH a branch selected", async () => {
+    /**
+     * ── THE FALSIFICATION ───────────────────────────────────────────────────
+     * The obvious implementation adds `scopeFilter()` to the aggregation, and it is wrong. A
+     * charge posted by an event consumer carries a `branchId` only when the event envelope had
+     * one (`onOrderPlaced`), so a branch filter silently drops real money from the ONE list whose
+     * job is to find money nobody has billed. Same shape as filtering vitals on their own
+     * optional branch stamp: the filter hides exactly the rows it could least afford to hide.
+     *
+     * The branch header is what makes this a test rather than a hope. `scopeFilter()` returns
+     * `{}` when no branch is selected, so without `X-Active-Branch` a wrongly-added filter would
+     * be inert here and this test would pass against the bug. With Main Branch selected it
+     * returns `{ branchId }`, no charge in this suite carries one, and the queue goes empty.
+     *
+     * Measured: adding `...scopeFilter()` to the $match turns this test red and leaves the other
+     * seven green.
+     */
+    const branches = await auth(request(app).get("/api/v1/branches"), pvt).expect(200);
+    const mainBranchId = (branches.body.data as { id: string; isMain?: boolean }[])[0]?.id;
+    expect(mainBranchId).toBeTruthy();
+
+    const visit = await arrive(pvt, "No Branch Stamp", "9000100201");
+    await asRelay(pvt, () => dispatchEventInline(visit.event));
+
+    const charges = await auth(
+      request(app).get(`/api/v1/encounters/${visit.encounterId}/charges`),
+      pvt,
+    ).expect(200);
+    expect(charges.body.data[0].branchId).toBeUndefined();
+
+    const res = await pendingAs(cashierToken, "", mainBranchId).expect(200);
+    expect(res.body.data.map((r: { encounterId: string }) => r.encounterId)).toContain(
+      visit.encounterId,
+    );
+  });
+});

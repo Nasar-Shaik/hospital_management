@@ -15,6 +15,15 @@
  *
  * ── EVERY AMOUNT IS PAISE UNTIL IT IS PRINTED ────────────────────────────────
  * `rupees()` at the edge, nothing computed on the divided number (lib/money.ts).
+ *
+ * ── TWO LISTS, BECAUSE THERE ARE TWO KINDS OF MONEY OWED ────────────────────
+ * "To bill" is care that has been given and put on no bill yet; "Bills" is what has been issued.
+ * The counter used to show only the second, and the gap was not cosmetic: a doctor's lab order
+ * posts a CHARGE, and a charge has no invoice until somebody raises one. So a cashier holding
+ * `billing:finalize` had nothing to finalize on screen, the lab sat waiting for a payment that
+ * could not be made, and the only route through was Reception's day register — a page the
+ * CASHIER role cannot even see (it is gated on `encounter:create`). Manual testing found it
+ * exactly that way: "I checked admin and cashier logins to pay those, I did not get the option."
  */
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -23,9 +32,10 @@ import {
   type InvoiceStatus,
   type InsurancePolicy,
   type Patient,
+  type PendingBill,
 } from "@medicore/api-client";
 import { rupees, toPaise } from "../../lib/money";
-import { idempotencyMessage, useIdempotencyKey } from "../../lib/idempotency";
+import { idempotencyMessage, newIdempotencyKey, useIdempotencyKey } from "../../lib/idempotency";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
 
@@ -387,18 +397,78 @@ function PayerSplitForm({ invoice, onDone }: { invoice: Invoice; onDone: () => v
   );
 }
 
+/** How long money has been waiting, in the words a counter uses. */
+function waitingFor(since: string): string {
+  const days = Math.floor((Date.now() - new Date(since).getTime()) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "since yesterday";
+  return `${days} days waiting`;
+}
+
+/**
+ * One visit owing a bill that has never been raised.
+ *
+ * "Raise bill" is `finalizeBill`, which freezes the pending charges into a numbered invoice —
+ * and, deliberately, only the charges pending NOW. Per-batch billing is the point: the patient
+ * pays for their tests before the lab runs them, and anything ordered afterwards becomes the next
+ * bill rather than reopening this one.
+ */
+function PendingRow({ row, onRaised }: { row: PendingBill; onRaised: (invoice: Invoice) => void }) {
+  const { api, can } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Held against the ROW, so a retry after a lost response replays the same bill rather than
+  // raising a second one for the same charges.
+  const [key] = useState(newIdempotencyKey);
+
+  async function raise() {
+    setBusy(true);
+    setError(null);
+    try {
+      onRaised(await api.finalizeBill(row.encounterId, key));
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not raise the bill.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] p-3.5">
+      <div>
+        <p className="font-medium text-[var(--color-fg)]">{row.patientName}</p>
+        <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">
+          <span className="font-mono">{row.uhid}</span> · {row.count} item
+          {row.count === 1 ? "" : "s"} · {waitingFor(row.since)}
+        </p>
+        {error && <p className="mt-1 text-xs text-[var(--color-danger)]">{error}</p>}
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-lg font-semibold text-[var(--color-fg)]">{rupees(row.amount)}</span>
+        <PermissionGate can={can} permission="billing:finalize">
+          <Button loading={busy} onClick={() => void raise()}>
+            Raise bill
+          </Button>
+        </PermissionGate>
+      </div>
+    </li>
+  );
+}
+
 function InvoiceRow({
   invoice,
   nameOf,
   onChanged,
+  autoPay = false,
 }: {
   invoice: Invoice;
   nameOf: (id: string) => string;
   onChanged: () => void;
+  /** Opens the payment form on arrival — for a bill the cashier just raised to take money for. */
+  autoPay?: boolean;
 }) {
   const { can } = useAuth();
   const [open, setOpen] = useState(false);
-  const [paying, setPaying] = useState(false);
+  const [paying, setPaying] = useState(autoPay);
   const [discounting, setDiscounting] = useState(false);
   const [refunding, setRefunding] = useState(false);
   const [splitting, setSplitting] = useState(false);
@@ -587,14 +657,22 @@ function InvoiceRow({
   );
 }
 
+type View = "pending" | "bills";
+
 function Billing() {
   const { api } = useAuth();
 
+  const [view, setView] = useState<View>("pending");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [pending, setPending] = useState<PendingBill[]>([]);
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [search, setSearch] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [filter, setFilter] = useState<InvoiceStatus | "all">("all");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** The bill just raised from "To bill" — shown with its payment form already open. */
+  const [justRaised, setJustRaised] = useState<Invoice | null>(null);
 
   useEffect(() => {
     /**
@@ -615,18 +693,26 @@ function Billing() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const page = await api.listInvoices({
-        limit: 100,
-        ...(filter !== "all" ? { status: filter } : {}),
-      });
+      // Both lists, always. The counter's two questions — "who has not been billed" and "who has
+      // not paid" — are asked in the same breath by the same person, and the tab counts have to be
+      // true whichever tab is showing.
+      const [page, pendingPage] = await Promise.all([
+        api.listInvoices({
+          limit: 100,
+          ...(filter !== "all" ? { status: filter } : {}),
+        }),
+        api.listPendingBills({ limit: 100, ...(search.trim() ? { q: search.trim() } : {}) }),
+      ]);
       setInvoices(page.items);
+      setPending(pendingPage.items);
+      setPendingTotal(pendingPage.meta.total ?? pendingPage.items.length);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load bills.");
     } finally {
       setLoading(false);
     }
-  }, [api, filter]);
+  }, [api, filter, search]);
 
   useEffect(() => {
     void load();
@@ -636,58 +722,152 @@ function Billing() {
 
   const outstanding = invoices.reduce((sum, i) => sum + (i.total - i.paid), 0);
 
+  const pendingTotalAmount = pending.reduce((sum, p) => sum + p.amount, 0);
+
+  const VIEWS: { key: View; label: string; count: number }[] = [
+    { key: "pending", label: "To bill", count: pendingTotal },
+    { key: "bills", label: "Bills", count: invoices.length },
+  ];
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-[var(--color-fg)]">Billing</h1>
         <p className="mt-1 text-sm text-[var(--color-fg-muted)]">
-          Bills are issued from the visit — Reception finalizes them. This is the counter.
+          Raise a bill for care already given, then take the money. Reception can bill from the
+          visit too — this is the counter.
         </p>
       </div>
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          {(["all", "finalized", "paid", "cancelled"] as const).map((f) => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setFilter(f)}
-              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                filter === f
-                  ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
-                  : "bg-[var(--color-bg-elevated)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-              }`}
-            >
-              {f === "finalized" ? "unpaid" : f}
-            </button>
-          ))}
-        </div>
+      {justRaised && (
+        <Alert tone="success" title={`Bill ${justRaised.number ?? ""} raised`}>
+          {rupees(justRaised.total)} is now payable — the payment form below is open on it.
+        </Alert>
+      )}
 
-        {outstanding > 0 && (
-          <p className="text-sm text-[var(--color-fg-muted)]">
-            <span className="font-semibold text-[var(--color-fg)]">{rupees(outstanding)}</span>{" "}
-            outstanding
-          </p>
-        )}
+      <div className="flex flex-wrap gap-2 border-b border-[var(--color-border)]">
+        {VIEWS.map((v) => (
+          <button
+            key={v.key}
+            type="button"
+            onClick={() => {
+              setView(v.key);
+              setJustRaised(null);
+            }}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              view === v.key
+                ? "border-[var(--color-brand-600)] text-[var(--color-fg)]"
+                : "border-transparent text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+            }`}
+          >
+            {v.label}
+            <span className="ml-1.5 text-xs text-[var(--color-fg-subtle)]">{v.count}</span>
+          </button>
+        ))}
       </div>
 
-      <Card className="p-5">
-        {loading ? (
-          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
-        ) : invoices.length === 0 ? (
-          <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
-            No bills yet. A bill appears once Reception finalizes a visit.
-          </p>
-        ) : (
-          <ul className="space-y-2.5">
-            {invoices.map((i) => (
-              <InvoiceRow key={i.id} invoice={i} nameOf={nameOf} onChanged={() => void load()} />
-            ))}
-          </ul>
-        )}
-      </Card>
+      {view === "pending" ? (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by patient name or UHID…"
+              className="w-full max-w-sm rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+            />
+            {pendingTotalAmount > 0 && (
+              <p className="text-sm text-[var(--color-fg-muted)]">
+                <span className="font-semibold text-[var(--color-fg)]">
+                  {rupees(pendingTotalAmount)}
+                </span>{" "}
+                not yet billed
+              </p>
+            )}
+          </div>
+
+          <Card className="p-5">
+            {loading ? (
+              <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
+            ) : pending.length === 0 ? (
+              <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
+                {search.trim()
+                  ? "Nobody by that name has unbilled charges."
+                  : "Nothing waiting to be billed. Every charge is on a bill."}
+              </p>
+            ) : (
+              <ul className="space-y-2.5">
+                {pending.map((p) => (
+                  <PendingRow
+                    key={p.encounterId}
+                    row={p}
+                    onRaised={(invoice) => {
+                      // Straight to the money: the cashier raised this bill because somebody is
+                      // standing there to pay it.
+                      setJustRaised(invoice);
+                      setView("bills");
+                      setFilter("finalized");
+                      void load();
+                    }}
+                  />
+                ))}
+              </ul>
+            )}
+          </Card>
+        </>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+              {(["all", "finalized", "paid", "cancelled"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFilter(f)}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                    filter === f
+                      ? "bg-[var(--color-brand-600)] text-[var(--color-on-accent)]"
+                      : "bg-[var(--color-bg-elevated)] text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+                  }`}
+                >
+                  {f === "finalized" ? "unpaid" : f}
+                </button>
+              ))}
+            </div>
+
+            {outstanding > 0 && (
+              <p className="text-sm text-[var(--color-fg-muted)]">
+                <span className="font-semibold text-[var(--color-fg)]">{rupees(outstanding)}</span>{" "}
+                outstanding
+              </p>
+            )}
+          </div>
+
+          <Card className="p-5">
+            {loading ? (
+              <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
+            ) : invoices.length === 0 ? (
+              <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
+                No bills here yet. Raise one from &ldquo;To bill&rdquo;, or Reception can issue it
+                from the visit.
+              </p>
+            ) : (
+              <ul className="space-y-2.5">
+                {invoices.map((i) => (
+                  <InvoiceRow
+                    key={i.id}
+                    invoice={i}
+                    nameOf={nameOf}
+                    onChanged={() => void load()}
+                    autoPay={justRaised?.id === i.id}
+                  />
+                ))}
+              </ul>
+            )}
+          </Card>
+        </>
+      )}
     </div>
   );
 }

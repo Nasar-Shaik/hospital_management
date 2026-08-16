@@ -7,6 +7,7 @@ import { getEncounter } from "../encounters/index.js";
 import * as billing from "./billing.service.js";
 import type {
   ListInvoicesQuery,
+  ListPendingBillsQuery,
   PostChargeBody,
   RecordPaymentBody,
   ApplyDiscountBody,
@@ -194,6 +195,30 @@ export const voidCharge: RequestHandler = async (req, res) => {
 export const finalizeBill: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await billing.finalizeInvoice(id));
+};
+
+/**
+ * The cash counter's queue: visits carrying charges nobody has billed yet.
+ *
+ * Reception has its day register to find such a visit on; the cashier has only a list of
+ * invoices, and an ordered test has no invoice until somebody raises one. This is the read that
+ * lets `billing:finalize` be used by the role that holds it.
+ */
+export const listPendingBills: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as ListPendingBillsQuery;
+
+  const { items, total } = await billing.listPendingBills({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+    ...(query.q ? { q: query.q } : {}),
+  });
+
+  ok(res, items, 200, {
+    page: query.page,
+    limit: query.limit,
+    total,
+    hasMore: query.page * query.limit < total,
+  });
 };
 
 export const listInvoices: RequestHandler = async (req, res) => {

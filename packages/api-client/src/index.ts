@@ -2332,6 +2332,25 @@ export interface EncounterBilling {
   outstanding: number;
 }
 
+/**
+ * A visit carrying charges nobody has billed yet — one row of the cash counter's queue.
+ *
+ * Distinct from an `Invoice`: this is money owed that has no bill YET. Raising the bill
+ * (`finalizeBill`) turns one of these into an Invoice, which is then payable.
+ */
+export interface PendingBill {
+  encounterId: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  /** Paise waiting to be billed on this visit. */
+  amount: number;
+  /** How many charges make it up. */
+  count: number;
+  /** When the oldest waiting charge posted — how long this has gone unbilled. */
+  since: string;
+}
+
 /** The running bill for a visit — computed from the ledger until it is finalized. */
 export interface Bill {
   lines: InvoiceLine[];
@@ -5436,6 +5455,25 @@ export class ApiClient {
   /** The handover ledger — who gave what, when. */
   listDispenses(prescriptionId: string): Promise<Dispense[]> {
     return this.request<Dispense[]>("GET", `/api/v1/prescriptions/${prescriptionId}/dispenses`);
+  }
+
+  /**
+   * The cash counter's queue: visits carrying charges that are on no bill yet.
+   *
+   * The read that makes `billing:finalize` usable by the role that holds it. A cashier's screen
+   * lists INVOICES, and a lab test a doctor ordered has no invoice until somebody raises one — so
+   * without this the charge is invisible at the counter and the test is never paid for.
+   * `q` matches a patient by name or UHID. Needs `billing:read`.
+   */
+  listPendingBills(
+    params: { q?: string; page?: number; limit?: number } = {},
+  ): Promise<Paged<PendingBill>> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    const qs = query.toString();
+    return this.paged<PendingBill>(`/api/v1/billing/pending${qs ? `?${qs}` : ""}`);
   }
 
   listInvoices(

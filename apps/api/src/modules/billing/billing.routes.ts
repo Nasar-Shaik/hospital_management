@@ -32,6 +32,7 @@ import {
   consultationPaymentStates,
   encounterBilling,
   invoice,
+  pendingBill,
   invoiceSignatory,
   orderPaymentStates,
   orderSettlementInfos,
@@ -43,6 +44,7 @@ import {
 import {
   idParamSchema,
   listInvoicesQuerySchema,
+  listPendingBillsQuerySchema,
   listServicesQuerySchema,
   listAllServicesQuerySchema,
   createServiceSchema,
@@ -244,6 +246,23 @@ export function billingRouter(): Router {
     responds(invoice),
     idempotent("Replays the invoice this key already finalized, number and all."),
     asyncHandler(controller.finalizeBill),
+  );
+
+  /**
+   * The cash counter's queue — visits with charges on no bill yet.
+   *
+   * `billing:read`, the same authority as the invoice list it sits beside, because it answers the
+   * same question one step earlier: not "what has been billed" but "what has not been". Without
+   * it, a cashier holding `billing:finalize` had no screen on which to use it, and a lab test
+   * ordered by a doctor could not be paid for at the cash counter at all.
+   */
+  router.get(
+    "/billing/pending",
+    authenticate(),
+    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    validate(listPendingBillsQuerySchema, "query"),
+    responds(pendingBill.array(), { meta: true }),
+    asyncHandler(controller.listPendingBills),
   );
 
   router.get(
