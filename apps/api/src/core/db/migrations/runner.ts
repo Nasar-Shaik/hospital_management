@@ -62,7 +62,15 @@ export async function rollbackTenantDb(db: Connection, migration: Migration): Pr
   await db.collection<MigrationRecord>(MIGRATIONS_COLLECTION).deleteOne({ _id: migration.id });
 }
 
-/** Pending count — feeds the `hms_migration_pending` metric (OBSERVABILITY_GUIDE). */
+/**
+ * How many migrations this tenant is behind.
+ *
+ * OBSERVABILITY_GUIDE lists `hms_migration_pending{tenant}` as the metric this would feed, and a
+ * comment here used to say it did. It does not: that catalogue is a design for an observability
+ * layer this API has not built — no `prom-client`, no `/metrics`, no registry. Until it exists the
+ * fleet answer is `migrate --check`, which calls this for every tenant and exits non-zero if any
+ * is behind. (Risk register T2.)
+ */
 export async function pendingCount(db: Connection, migrations: Migration[]): Promise<number> {
   const done = await appliedIds(db);
   return migrations.filter((m) => !done.has(m.id)).length;
