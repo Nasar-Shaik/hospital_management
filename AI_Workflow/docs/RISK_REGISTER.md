@@ -17,15 +17,54 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 > as**. Those corrections are below with their evidence. Reducing the count was not the goal — two
 > entries stay open on purpose, and one is a product decision nobody has taken yet.
 
-| ID  | Defect                                                        | Sev | Status                                    |
-| --- | ------------------------------------------------------------- | --- | ----------------------------------------- |
-| D1  | Vitals chart read ignored branch scope — cross-branch PHI     | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)       |
-| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`    | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)       |
-| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`            | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)       |
-| D4  | An unknown `X-Active-Branch` is ignored, widening the read    | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below |
-| D5  | `maxBranches` is not derived from the plan                    | P3  | 🔵 **BY DESIGN** + one product decision   |
-| D6  | Migration 0048 over pre-existing duplicate idempotency claims | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)       |
-| D7  | `administeredBy` renders an identifier, not a name            | P3  | 🟡 **OPEN** — product decision, see below |
+| ID  | Defect                                                        | Sev | Status                                       |
+| --- | ------------------------------------------------------------- | --- | -------------------------------------------- |
+| D1  | Vitals chart read ignored branch scope — cross-branch PHI     | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)          |
+| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`    | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)          |
+| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`            | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)          |
+| D4  | An unknown `X-Active-Branch` is ignored, widening the read    | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below    |
+| D5  | `maxBranches` is not derived from the plan                    | P3  | 🔵 **BY DESIGN** + one product decision      |
+| D6  | Migration 0048 over pre-existing duplicate idempotency claims | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)          |
+| D7  | `administeredBy` renders an identifier, not a name            | P3  | 🟡 **OPEN** — product decision, see below    |
+| D8  | Mobile licence banner is built but never mounted              | P3  | 🟡 **OPEN** — reported 2026-08-17, see below |
+
+### D8 — the mobile licence warning cannot reach a screen
+
+**Reported by a user who said they could see a licence-expiry banner in the mobile app, near the
+notifications area.** The repository evidence does not support a render path, so both the report and
+the evidence are recorded here and the discrepancy is left open rather than resolved by assumption.
+
+What the code shows, as of 2026-08-17:
+
+- `apps/mobile/src/components/LicenceNotice.tsx` has **zero importers**. Nothing outside the file
+  references it.
+- `apps/mobile/app/_layout.tsx` mounts `PrivacyCover` and `LockGate` above the navigator and nothing
+  else. There is no banner slot in the mobile shell.
+- `licenceNotice()` in `src/lib/licence.ts` is therefore consumed **only** by that unmounted
+  component, so no `EXPIRING` or `GRACE` warning can paint.
+
+What IS wired, and is not this:
+
+- **Write blocking.** `blocksWrites` → `hooks/useWrite.ts` disables clinical writes on `EXPIRED`.
+  That path is live and correct, and it renders licence wording next to a disabled button — a
+  plausible thing to have seen, in a different place from a top banner.
+- **The web banner.** `apps/web/components/LicenseBanner.tsx` IS mounted, in `AppShell.tsx`.
+
+Why it was not caught: `__tests__/licence.test.ts` §4 ("the banner says something worth reading, or
+nothing") proves the POLICY thoroughly — tone, day counts, singular/plural, silence when ACTIVE —
+and nothing asserts the component is ever rendered. `__tests__/routes.test.ts` lists the file in an
+ownership allow-list, which passes either way. **This is the `nursing:manage` shape again** (see
+`PERMISSION_LIFECYCLE.md`): a complete, well-designed feature with no caller, and a test suite that
+looks like coverage.
+
+Consequence: a hospital gets **no in-app warning on mobile** that its subscription is lapsing — only
+a hard refusal once it already has. That is the specific case the banner was written for, since
+`GRACE` deliberately does not block.
+
+**Next slice** (not done here, deliberately kept out of the MAR clinical-safety commit): mount
+`LicenceNotice` in the shell above the navigator, and add the one test the suite is missing — that a
+`GRACE`/`EXPIRING` licence actually produces a rendered warning. Before implementing, get the
+reporter to confirm the screen and platform, in case there is a render path this audit missed.
 
 ### D1 — what it was, and why the obvious fix was the wrong one
 
