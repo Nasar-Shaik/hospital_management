@@ -22,21 +22,21 @@ the code won and the difference is recorded in §10.
 
 ## 1. Snapshot
 
-|                        |                                                                                                                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Branch**             | `feature/0.1` — **8 commits unpushed**, HEAD `70e5a6e`                                                                                                                               |
-| **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                       |
-| **API**                | 43 modules · 224 OpenAPI paths · 273 contract operations                                                                                                                             |
-| **Web**                | 46 screens                                                                                                                                                                           |
-| **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                         |
-| **Tests passing**      | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                                              |
-| **Gates**              | `format` · `lint` 18/18 · `typecheck` 18/18 · `unit` · `integration` · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — all green at `375e4cf`                     |
-| **Test environment**   | ✅ **Ready** — `pnpm seed:validation` builds a 45-bed, 42-patient ward across two sites and two timezones; `--verify` is 19 read-only checks. See `SEED.md`.                         |
-| **API pre-validation** | ✅ 2026-08-14 — **43 server-side safety checks**, two real nurses racing one dose. Duplicate prevention, 409-as-answer, idempotent replay and lost-response reconciliation all hold. |
-| **Manual validation**  | 🔴 **0 of 106 + web.** Mobile M2 0/61 · M3 0/45 · the web checklist is written but unexecuted. **Nothing has been seen on a screen by a person.**                                    |
-| **Open defects**       | 7 — `docs/RISK_REGISTER.md` §0. Worst is **D1**, cross-branch vitals reads. **No P0, no P1.**                                                                                        |
-| **CI**                 | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                                              |
-| **Next action**        | **Stage A in §9 — Phase 2 of manual validation. Web first: it needs no device and D-1/D-2 have never been opened in a browser.**                                                     |
+|                        |                                                                                                                                                                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**             | `feature/0.1` — **10 commits unpushed**, HEAD `39e2dff`                                                                                                                                                                                                    |
+| **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                                                                                             |
+| **API**                | 43 modules · 224 OpenAPI paths · 273 contract operations                                                                                                                                                                                                   |
+| **Web**                | 46 screens                                                                                                                                                                                                                                                 |
+| **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                                                                                               |
+| **Tests passing**      | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                                                                                                                    |
+| **Gates**              | `format` · `lint` 18/18 · `typecheck` 18/18 · `unit` · `integration` · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — all green at `375e4cf`                                                                                           |
+| **Test environment**   | ✅ **Ready** — `pnpm seed:validation` builds a 45-bed, 42-patient ward across two sites and two timezones; `--verify` checks the **schema** (3) then the **data** (19), and refuses a database that cannot enforce the clinical invariants. See `SEED.md`. |
+| **API pre-validation** | ✅ 2026-08-14 — **43 server-side safety checks**, two real nurses racing one dose. Duplicate prevention, 409-as-answer, idempotent replay and lost-response reconciliation all hold.                                                                       |
+| **Manual validation**  | 🔴 **0 executed.** Procedure now written: [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md). Mobile M2 0/61 · M3 0/45 · Web 0/24 · safety, permission and negative suites 0. **Nothing has been seen on a screen by a person.**     |
+| **Open defects**       | 7 — `docs/RISK_REGISTER.md` §0. Worst is **D1**, cross-branch vitals reads. **No P0, no P1.**                                                                                                                                                              |
+| **CI**                 | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                                                                                                                    |
+| **Next action**        | **Execute [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md) in its §5 order** — environment gate, permissions by API, then **Web first** (no device, and D-1/D-2 have never been opened in a browser), then mobile.                 |
 
 ---
 
@@ -276,23 +276,38 @@ found after M4 and M5 are built on top costs a redesign.
 **Done (2026-08-14):**
 
 - [x] **Test environment built and verified** — `seed:validation`, 19/19 (`70e5a6e`).
-- [x] **Web checklist written** — 30 scenarios, in the Phase 1 plan.
+- [x] **Schema verification gate** — `--verify` now refuses a database that cannot enforce the
+      clinical invariants, checking `pendingCount()` **and** the actual indexes (`39e2dff`). Gates
+      **one tenant**; risk register T2 stays open.
 - [x] **API layer pre-validated** — 43 server-side checks, two nurses racing one dose. **This is
       where the day's real finding came from:** the first run reported seven catastrophic safety
       failures that were entirely the missing migrations 0048/0049 (risk register T2). Had a human
       met that on a handset, duplicate administration would have been raised as a P0 and been wrong.
+- [x] **Manual validation runbook** — [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md),
+      the authoritative procedure for M2, M3 and Web: environment gate, accounts, **192 identified
+      tests**, evidence standard, failure classification, escalation.
 
-**Left:**
+> **Correction (2026-08-16).** This list previously claimed **"Web checklist written — 30 scenarios,
+> in the Phase 1 plan"** as done. **It was not in the repository** — no file defined `WEB-nn` IDs and
+> the scratchpads were empty; it had been written in a conversation and never persisted. §13 of the
+> runbook now supplies it, written from the implementation rather than recovered from memory. Worth
+> noting for its own sake: _a plan that lives only in a conversation is not a deliverable_, and it
+> was marked `[x]` for two days.
+
+**Left — the runbook is prepared but NOT executed. No manual result exists yet.**
 
 1. **Web first, not mobile** — it needs no build, no device, no pairing, and D-1/D-2 have _never_
    been opened in a browser, whereas the mobile MAR has 1,613 tests around it. Highest defect
-   probability per minute.
+   probability per minute. → runbook §13, `WEB-01`…`WEB-24`.
 2. Run `MOBILE_M2_DEVICE_CHECKLIST.md` on hardware → 61/61. Gate is §1 + §2 + §7[1–3], 17 rows.
 3. Run `MOBILE_M3_DEVICE_CHECKLIST.md` on hardware → 45/45.
 4. Prepare the licence grace/expired states in the operator console — **5 M2 rows are BLOCKED
-   without it**, and it needs no code.
-5. Resolve the push blocker (SSH unlock or `workflow` scope) and push the 8 commits.
-6. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.
+   without it**, and it needs no code. → runbook §18.
+5. Create a **branch-confined** nurse so runbook `BR-07` can run — it is the only way to prove
+   empirically that risk-register D1 reaches a bound user, which is currently inferred from the
+   code path. Roles UI, no code change.
+6. Resolve the push blocker (SSH unlock or `workflow` scope) and push the outstanding commits.
+7. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.
 
 **Every session starts with `pnpm seed:migrate --all`.** Not hygiene — T2 will silently reproduce on
 any database that predates M3, and it invalidates results without saying so.

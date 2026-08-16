@@ -1,5 +1,14 @@
 # MOBILE M3 — NURSE: REAL-DEVICE VERIFICATION CHECKLIST
 
+> **The execution procedure lives in [`MANUAL_VALIDATION_RUNBOOK.md`](MANUAL_VALIDATION_RUNBOOK.md).**
+> That document owns the test IDs (`M3-01`…`M3-37`, plus `FR-`, `MAR-`, `LR-`, `BR-`, `TZ-` for the
+> safety scenarios), the environment gate, the evidence standard and the escalation rules. **This page
+> keeps its 45 tick-boxes and the reasoning behind them**; read it for the why, work from the runbook.
+>
+> Two notes on drift: §0 says `--verify` prints "READY, 19/19" — it now prints a **SCHEMA** block of 3
+> checks _before_ the 19 data checks. And "Expo Go is sufficient" is asserted, not device-proven; the
+> runbook's **ENV-07** tests it.
+
 **Status:** the nurse app is **engineering-complete on automated evidence, pending manual real-device
 validation.** 1,613 mobile tests and 1,690 API integration tests green, and on 2026-08-14 the API
 beneath this checklist was separately pre-validated by a server-side probe — 43 checks including two

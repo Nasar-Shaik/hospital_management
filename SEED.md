@@ -42,8 +42,10 @@ Then sign in (see **Logins** at the bottom). That's it — you don't need anythi
 
 ## Preparing the MANUAL-VALIDATION ward
 
-For working the device checklists in `AI_Workflow/docs/`. Builds a real ward — 45 beds, 42 admitted
-patients, a second site in another timezone, prescriptions with due and overdue doses, allergies:
+For working **`AI_Workflow/docs/MANUAL_VALIDATION_RUNBOOK.md`** — the authoritative procedure for
+manual M2/M3/Web validation, which starts with these commands as its `ENV-01`…`ENV-04`. Builds a real
+ward — 45 beds, 42 admitted patients, a second site in another timezone, prescriptions with due and
+overdue doses, allergies:
 
 ```bash
 pnpm seed:demo

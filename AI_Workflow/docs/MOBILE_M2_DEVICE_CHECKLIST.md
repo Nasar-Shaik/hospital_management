@@ -1,5 +1,15 @@
 # MOBILE M2 — REAL-DEVICE VERIFICATION CHECKLIST
 
+> **The execution procedure lives in [`MANUAL_VALIDATION_RUNBOOK.md`](MANUAL_VALIDATION_RUNBOOK.md).**
+> That document owns the test IDs (`M2-01`…`M2-52`), the environment gate, the evidence standard, the
+> result classification and the escalation rules — a result you cannot cite is a result nobody can
+> re-run. **This page keeps its 61 tick-boxes and its explanation of why each row is beyond CI's
+> reach**; read it for the reasoning, work from the runbook.
+>
+> One claim here is asserted rather than proven: **"Expo Go is sufficient"**. It is consistent with
+> the current SDK 54 setup but no device has confirmed it — the runbook's **ENV-07** turns it into a
+> test. If it fails, correct this table.
+
 **Status:** the M2 doctor app is code-complete and green (1,613 mobile tests, 1,690 API integration
 tests). Its server layer — auth, refresh rotation with reuse detection, logout revocation,
 permission-driven navigation, branch selection, chart reads, prescription signing and
