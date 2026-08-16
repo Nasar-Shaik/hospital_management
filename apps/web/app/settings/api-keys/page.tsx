@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ApiClientError, type ApiKeyMeta, type CreatedApiKey } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
-import { Alert, Badge, Button, Card, Field } from "../../../components/ui";
+import { Alert, Badge, Button, Card, ConfirmDialog, Field } from "../../../components/ui";
 
 function fmtDate(iso?: string): string {
   if (!iso) return "—";
@@ -36,6 +36,8 @@ function ApiKeysPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [justCreated, setJustCreated] = useState<CreatedApiKey | null>(null);
   const [copied, setCopied] = useState(false);
+  /** The key the user has asked to revoke, awaiting the in-app confirmation. */
+  const [revoking, setRevoking] = useState<ApiKeyMeta | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -73,13 +75,13 @@ function ApiKeysPage() {
   }
 
   async function revoke(k: ApiKeyMeta) {
-    if (!window.confirm(`Revoke "${k.name}"? Any integration using it stops working immediately.`))
-      return;
     try {
       await api.revokeApiKey(k.id);
       load();
     } catch {
       /* best-effort */
+    } finally {
+      setRevoking(null);
     }
   }
 
@@ -218,7 +220,7 @@ function ApiKeysPage() {
                       {!k.revokedAt && (
                         <button
                           className="text-xs text-[var(--color-danger)] hover:underline"
-                          onClick={() => void revoke(k)}
+                          onClick={() => setRevoking(k)}
                         >
                           Revoke
                         </button>
@@ -231,6 +233,22 @@ function ApiKeysPage() {
           </tbody>
         </table>
       </Card>
+
+      {revoking && (
+        <ConfirmDialog
+          title={`Revoke "${revoking.name}"?`}
+          confirmLabel="Revoke the key"
+          cancelLabel="Keep it"
+          tone="danger"
+          onConfirm={() => void revoke(revoking)}
+          onCancel={() => setRevoking(null)}
+        >
+          <p>
+            Any integration using this key stops working <strong>immediately</strong>, and the key
+            cannot be un-revoked — a replacement has to be issued and deployed.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

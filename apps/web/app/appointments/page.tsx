@@ -31,7 +31,7 @@ import {
 import { useAuth } from "../../components/AuthProvider";
 import { useBranch } from "../../components/BranchProvider";
 import { addDays, todayInZone } from "../../lib/day";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { Alert, Badge, Button, Card, ConfirmDialog, PermissionGate } from "../../components/ui";
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -369,6 +369,8 @@ function Appointments() {
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  /** The appointment awaiting a cancellation reason, asked for in the app not by `window.prompt`. */
+  const [cancelling, setCancelling] = useState<Appointment | null>(null);
 
   /**
    * The doctors directory (`GET /doctors`, `encounter:read`).
@@ -476,19 +478,29 @@ function Appointments() {
       if (action === "start") await api.startConsultation(appointment.id);
       if (action === "complete") await api.completeAppointment(appointment.id);
       if (action === "noShow") await api.markNoShow(appointment.id);
-      if (action === "cancel") {
-        // A reason is required by the API, and rightly: "cancelled" with no why is
-        // useless to the doctor whose list just shrank.
-        const why = window.prompt("Why is this appointment being cancelled?");
-        if (!why) {
-          setBusy(false);
-          return;
-        }
-        await api.cancelAppointment(appointment.id, why);
-      }
       await load();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not update the appointment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Cancelling is the one edge that needs a sentence typed first — the API requires a reason, and
+   * rightly: "cancelled" with no why is useless to the doctor whose list just shrank. It is asked
+   * for in the application rather than by `window.prompt`, which names no patient, validates
+   * nothing, and can be suppressed by the browser into a button that silently does nothing.
+   */
+  async function cancelAppointment(appointment: Appointment, why: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.cancelAppointment(appointment.id, why);
+      setCancelling(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not cancel the appointment.");
     } finally {
       setBusy(false);
     }
@@ -693,7 +705,7 @@ function Appointments() {
                             <Button
                               variant="ghost"
                               disabled={busy}
-                              onClick={() => void act(a, "cancel")}
+                              onClick={() => setCancelling(a)}
                             >
                               Cancel
                             </Button>
@@ -707,6 +719,31 @@ function Appointments() {
           </div>
         )}
       </Card>
+
+      {cancelling && (
+        <ConfirmDialog
+          title="Cancel this appointment?"
+          confirmLabel="Cancel the appointment"
+          cancelLabel="Keep it"
+          tone="danger"
+          busy={busy}
+          reason={{
+            label: "Why is this appointment being cancelled?",
+            placeholder: "Patient rang to reschedule",
+            // The server's own minimum (appointment.schema.ts §cancelAppointmentSchema).
+            minLength: 3,
+          }}
+          onConfirm={(why) => void cancelAppointment(cancelling, why)}
+          onCancel={() => setCancelling(null)}
+        >
+          <p>
+            <strong className="text-[var(--color-fg)]">{nameOf(cancelling.patientId)}</strong>{" "}
+            <span className="font-mono text-xs">{uhidOf(cancelling.patientId)}</span> ·{" "}
+            {time(cancelling.startAt)}. The slot is released for someone else, and the reason is
+            what the doctor sees when their list shrinks.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

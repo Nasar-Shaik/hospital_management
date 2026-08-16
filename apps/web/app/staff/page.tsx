@@ -31,6 +31,7 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   DataTable,
   Field,
   PermissionGate,
@@ -251,6 +252,12 @@ function StaffForm({
   fieldErrors: Record<string, string[]>;
 }) {
   const [form, setForm] = useState<FormState>(initial);
+  /**
+   * Why the signature's size complaint is a line under the field and not `window.alert`: an alert
+   * is dismissed and then gone, so the person is left staring at a form with no signature on it and
+   * nothing saying why. This stays until they pick a different file.
+   */
+  const [signatureError, setSignatureError] = useState<string | null>(null);
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
   const isClinical = CLINICAL_ROLES.has(form.role);
   const hasSpecialty = SPECIALTY_ROLES.has(form.role);
@@ -462,15 +469,21 @@ function StaffForm({
                   e.target.value = "";
                   if (!file) return;
                   if (file.size > 200_000) {
-                    window.alert("That image is too large — please use one under 200 KB.");
+                    setSignatureError(
+                      `That image is ${String(Math.round(file.size / 1024))} KB — please use one under 200 KB.`,
+                    );
                     return;
                   }
+                  setSignatureError(null);
                   const reader = new FileReader();
                   reader.onload = () => set({ signature: String(reader.result) });
                   reader.readAsDataURL(file);
                 }}
               />
             </div>
+            {signatureError && (
+              <p className="mt-2 text-xs text-[var(--color-danger)]">{signatureError}</p>
+            )}
           </div>
           {isClinical && (
             <Field
@@ -641,6 +654,15 @@ function StaffDirectory() {
 
   const [viewing, setViewing] = useState<StaffMember | null>(null);
   const [editing, setEditing] = useState<StaffMember | null>(null);
+  /**
+   * The account action awaiting confirmation. Both end somebody's sessions mid-shift, so both are
+   * asked in the application rather than through `window.confirm` — which cannot name the person
+   * in a styled, screen-readable way and which the browser may refuse to show at all.
+   */
+  const [confirming, setConfirming] = useState<{
+    member: StaffMember;
+    action: "disable" | "reset";
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -756,23 +778,28 @@ function StaffDirectory() {
     }
   }
 
+  /** Re-ENABLING is not asked about — it restores access rather than taking it away. */
   async function toggleStatus(member: StaffMember) {
     const next = member.status === "active" ? "disabled" : "active";
-    if (
-      next === "disabled" &&
-      !window.confirm(`Disable ${member.name}'s login? Their sessions end immediately.`)
-    )
+    if (next === "disabled") {
+      setConfirming({ member, action: "disable" });
       return;
+    }
+    await setStatus(member, next);
+  }
+
+  async function setStatus(member: StaffMember, next: "active" | "disabled") {
     try {
       await api.setStaffStatus(member.id, next);
       await load();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not update the account.");
+    } finally {
+      setConfirming(null);
     }
   }
 
   async function resetPassword(member: StaffMember) {
-    if (!window.confirm(`Reset ${member.name}'s password? Their current sessions end.`)) return;
     try {
       const res = await api.resetStaffPassword(member.id);
       setCreated({
@@ -781,6 +808,8 @@ function StaffDirectory() {
       });
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not reset the password.");
+    } finally {
+      setConfirming(null);
     }
   }
 
@@ -854,7 +883,11 @@ function StaffDirectory() {
             >
               Edit
             </Button>
-            <Button variant="ghost" className="text-xs" onClick={() => void resetPassword(member)}>
+            <Button
+              variant="ghost"
+              className="text-xs"
+              onClick={() => setConfirming({ member, action: "reset" })}
+            >
               Reset password
             </Button>
           </PermissionGate>
@@ -980,6 +1013,38 @@ function StaffDirectory() {
         <Modal title="Staff profile" onClose={() => setViewing(null)}>
           <StaffDetail member={viewing} branches={branches} />
         </Modal>
+      )}
+
+      {confirming?.action === "disable" && (
+        <ConfirmDialog
+          title={`Disable ${confirming.member.name}'s login?`}
+          confirmLabel="Disable the login"
+          cancelLabel="Leave it active"
+          tone="danger"
+          onConfirm={() => void setStatus(confirming.member, "disabled")}
+          onCancel={() => setConfirming(null)}
+        >
+          <p>
+            Every session they have open ends <strong>immediately</strong> — including one part-way
+            through charting. The account can be re-enabled from this screen afterwards.
+          </p>
+        </ConfirmDialog>
+      )}
+
+      {confirming?.action === "reset" && (
+        <ConfirmDialog
+          title={`Reset ${confirming.member.name}'s password?`}
+          confirmLabel="Reset the password"
+          cancelLabel="Leave it alone"
+          tone="danger"
+          onConfirm={() => void resetPassword(confirming.member)}
+          onCancel={() => setConfirming(null)}
+        >
+          <p>
+            Their current sessions end and a temporary password is shown <em>once</em> on this
+            screen — there is no way to see it again, so hand it over before closing the dialog.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );

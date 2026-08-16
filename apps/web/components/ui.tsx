@@ -17,6 +17,7 @@
  */
 import {
   useEffect,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -609,6 +610,129 @@ export function DataTable<T>({
         </tbody>
       </table>
     </div>
+  );
+}
+
+/**
+ * The confirmation, in the application.
+ *
+ * ── WHY NOT `window.confirm` / `window.prompt` ──────────────────────────────
+ * They are not a style problem. A native dialog cannot be labelled for a screen reader, cannot
+ * show the patient it is about, cannot validate what is typed, and — the part that actually bites
+ * — CAN BE SUPPRESSED. Chrome offers "prevent this page from creating additional dialogues" after
+ * the second one, and every browser suppresses them outright inside a cross-origin frame. A
+ * technician who ticks that box silently loses the ability to cancel an order or record a note:
+ * `prompt` returns `null`, our code reads that as "cancelled", and the button does nothing forever
+ * with no error to report. `MedicationRecord` already learned this at the bedside; this is the
+ * same lesson, made shared.
+ *
+ * ── WHAT IT REPLACES, IN BOTH SHAPES ────────────────────────────────────────
+ * `confirm` — omit `reason`. `prompt` — pass `reason` and receive the text in `onConfirm`. A
+ * required reason is enforced BEFORE the request, so a server-side minimum length never comes
+ * back as a validation error the user cannot connect to anything they did.
+ */
+export function ConfirmDialog({
+  title,
+  children,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  tone = "default",
+  busy = false,
+  reason,
+  onConfirm,
+  onCancel,
+}: {
+  title: ReactNode;
+  /** The consequence, in the user's terms. Shown above the reason box. */
+  children?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** `danger` for anything that destroys, revokes or cannot be undone. */
+  tone?: "default" | "danger";
+  busy?: boolean;
+  /** Present ⇒ this is a `prompt`. The text is handed to `onConfirm`. */
+  reason?: {
+    label: string;
+    placeholder?: string;
+    /** Blank ⇒ optional. Set to the server's own minimum so the two never disagree. */
+    minLength?: number;
+    defaultValue?: string;
+    multiline?: boolean;
+    /**
+     * Anything beyond a length check — returns the problem, or `null` when the text is fine.
+     * The amount dialogs use it: `toPaise` turns an unparseable figure into ZERO, so without a
+     * check here a fat-fingered "12o0" approves a claim for nothing at all, silently.
+     */
+    validate?: (text: string) => string | null;
+  };
+  onConfirm: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState(reason?.defaultValue ?? "");
+  const trimmed = text.trim();
+  const min = reason?.minLength ?? 0;
+  const short = min > 0 && trimmed.length < min;
+  const invalid = !short && reason?.validate ? reason.validate(trimmed) : null;
+
+  const field = reason ? (
+    <label className="block text-sm font-medium text-[var(--color-fg)]">
+      {reason.label}
+      {min > 0 && <span className="ml-1 text-[var(--color-danger)]">*</span>}
+      {reason.multiline === false ? (
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={reason.placeholder ?? ""}
+          autoFocus
+          className="mt-1.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm font-normal text-[var(--color-fg)]"
+        />
+      ) : (
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={reason.placeholder ?? ""}
+          rows={2}
+          autoFocus
+          className="mt-1.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm font-normal text-[var(--color-fg)]"
+        />
+      )}
+      {short && (
+        <span className="mt-1 block text-xs font-normal text-[var(--color-fg-subtle)]">
+          At least {min} characters — it is stored on the record and read by whoever picks this up
+          next.
+        </span>
+      )}
+      {invalid !== null && (
+        <span className="mt-1 block text-xs font-normal text-[var(--color-danger)]">{invalid}</span>
+      )}
+    </label>
+  ) : null;
+
+  return (
+    /**
+     * While the write is IN FLIGHT the dialog cannot be dismissed — not by ✕, not by the scrim, not
+     * by Escape. Closing it mid-request would leave the user with no idea whether the thing
+     * happened, which is the exact ambiguity that had a technician upload the same report twice.
+     */
+    <Modal title={title} onClose={busy ? () => undefined : onCancel}>
+      <div className="space-y-4">
+        {children && <div className="text-sm text-[var(--color-fg-muted)]">{children}</div>}
+        {field}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>
+            {cancelLabel}
+          </Button>
+          <Button
+            variant={tone === "danger" ? "danger" : "primary"}
+            loading={busy}
+            disabled={busy || short || invalid !== null}
+            onClick={() => onConfirm(trimmed)}
+          >
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

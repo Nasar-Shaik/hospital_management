@@ -46,8 +46,9 @@ import {
 } from "@medicore/api-client";
 import { VitalsPanel } from "../../components/Vitals";
 import { useAuth } from "../../components/AuthProvider";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { Alert, Badge, Button, Card, ConfirmDialog, PermissionGate } from "../../components/ui";
 import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
+import { groupReportsByOrder } from "../../lib/reports";
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -410,6 +411,8 @@ function AllergyPanel({
   const [reaction, setReaction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The allergy awaiting a rule-out reason, asked for in the app rather than by `window.prompt`. */
+  const [refuting, setRefuting] = useState<Allergy | null>(null);
 
   const active = allergies.filter((a) => a.status === "active");
   const refuted = allergies.filter((a) => a.status === "refuted");
@@ -435,13 +438,12 @@ function AllergyPanel({
     }
   }
 
-  async function refute(id: string) {
-    const reason = window.prompt("Why is this allergy being ruled out? (kept on the record)");
-    if (!reason?.trim()) return;
+  async function refute(id: string, reason: string) {
     setBusy(true);
     setError(null);
     try {
-      await api.refuteAllergy(id, reason.trim());
+      await api.refuteAllergy(id, reason);
+      setRefuting(null);
       onChange();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not rule out the allergy.");
@@ -468,7 +470,7 @@ function AllergyPanel({
               {canManage && (
                 <button
                   type="button"
-                  onClick={() => void refute(a.id)}
+                  onClick={() => setRefuting(a)}
                   disabled={busy}
                   className="opacity-60 hover:opacity-100"
                   title="Rule this out"
@@ -531,6 +533,30 @@ function AllergyPanel({
             Add
           </Button>
         </div>
+      )}
+
+      {refuting && (
+        <ConfirmDialog
+          title={`Rule out ${refuting.label}?`}
+          confirmLabel="Rule it out"
+          cancelLabel="Leave it on the record"
+          tone="danger"
+          busy={busy}
+          reason={{
+            label: "Why is this being ruled out?",
+            placeholder: "Challenge tested negative on 12 Aug — patient tolerated a full dose",
+            // The server requires a reason (allergy.schema.ts); a ruled-out allergy without one is
+            // indistinguishable from a mis-click, and the prescribing check stops screening for it.
+            minLength: 1,
+          }}
+          onConfirm={(reason) => void refute(refuting.id, reason)}
+          onCancel={() => setRefuting(null)}
+        >
+          <p>
+            The prescribing check <strong>stops screening against this allergy</strong>. It stays
+            visible on the record as ruled out, with this reason and your name against it.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
@@ -609,29 +635,77 @@ function PatientReports({ reports }: { reports: ReportMeta[] }) {
                   <p className="text-xs font-medium tracking-wide text-[var(--color-fg-subtle)] uppercase">
                     {REPORT_CATEGORY_LABEL[category] ?? category}
                   </p>
+                  {/*
+                    ONE ROW PER TEST. A test with two files attached is one test that was uploaded
+                    twice — not two tests — and drawing it as two rows is exactly what made four
+                    completed orders look like seven results on the doctor's screen. Both files stay
+                    openable, because the second is often the corrected one and this screen has no
+                    business choosing between them.
+                  */}
                   <ul className="mt-1 space-y-1">
-                    {catReports.map((r) => (
-                      <li
-                        key={r.id}
-                        className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-[var(--color-fg)]">
-                            {r.testName}
-                          </p>
-                          <p className="truncate text-xs text-[var(--color-fg-muted)]">
-                            {r.filename} · {(r.size / 1024).toFixed(0)} KB
-                          </p>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          disabled={opening === r.id}
-                          onClick={() => void open(r)}
+                    {groupReportsByOrder(catReports).map((g) => {
+                      const [latest, ...earlier] = g.files;
+                      if (!latest) return null;
+                      return (
+                        <li
+                          key={g.orderId}
+                          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
                         >
-                          {opening === r.id ? "Opening…" : "View"}
-                        </Button>
-                      </li>
-                    ))}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-[var(--color-fg)]">
+                                {g.testName}
+                              </p>
+                              <p className="truncate text-xs text-[var(--color-fg-muted)]">
+                                {latest.filename} · {(latest.size / 1024).toFixed(0)} KB
+                                {earlier.length > 0 && (
+                                  <span className="text-[var(--color-fg-subtle)]">
+                                    {" "}
+                                    · latest of {g.files.length}
+                                  </span>
+                                )}
+                              </p>
+                            </div>
+                            <Button
+                              variant="secondary"
+                              disabled={opening === latest.id}
+                              onClick={() => void open(latest)}
+                            >
+                              {opening === latest.id ? "Opening…" : "View"}
+                            </Button>
+                          </div>
+
+                          {earlier.length > 0 && (
+                            <ul className="mt-1.5 space-y-1 border-t border-[var(--color-border)] pt-1.5">
+                              {earlier.map((f) => (
+                                <li
+                                  key={f.id}
+                                  className="flex items-center justify-between gap-3 text-xs"
+                                >
+                                  <span className="min-w-0 truncate text-[var(--color-fg-subtle)]">
+                                    Earlier upload · {f.filename} ·{" "}
+                                    {new Date(f.uploadedAt).toLocaleString(undefined, {
+                                      day: "numeric",
+                                      month: "short",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={opening === f.id}
+                                    onClick={() => void open(f)}
+                                    className="shrink-0 text-[var(--color-brand-700)] underline underline-offset-2"
+                                  >
+                                    {opening === f.id ? "Opening…" : "View"}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}

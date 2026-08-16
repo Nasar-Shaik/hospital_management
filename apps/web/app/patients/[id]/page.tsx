@@ -44,7 +44,7 @@ import {
   type CodedDiagnosis,
 } from "@medicore/api-client";
 import { useAuth } from "../../../components/AuthProvider";
-import { Alert, Badge, Button, Card } from "../../../components/ui";
+import { Alert, Badge, Button, Card, ConfirmDialog } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
 import { rupees, toPaise } from "../../../lib/money";
 import { idempotencyMessage, newIdempotencyKey } from "../../../lib/idempotency";
@@ -1391,6 +1391,8 @@ function Documents({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The document awaiting a delete confirmation — irreversible, so it is asked in the app. */
+  const [removing, setRemoving] = useState<DocumentMeta | null>(null);
 
   async function upload() {
     if (!file) return;
@@ -1427,12 +1429,13 @@ function Documents({
   }
 
   async function remove(doc: DocumentMeta) {
-    if (!window.confirm(`Remove "${doc.title}"? This cannot be undone.`)) return;
     try {
       await api.deleteDocument(doc.id);
       reload();
     } catch {
       /* best-effort */
+    } finally {
+      setRemoving(null);
     }
   }
 
@@ -1517,7 +1520,7 @@ function Documents({
                 {canDelete && (
                   <button
                     className="ml-3 text-xs text-[var(--color-danger)] hover:underline"
-                    onClick={() => void remove(d)}
+                    onClick={() => setRemoving(d)}
                   >
                     Remove
                   </button>
@@ -1526,6 +1529,22 @@ function Documents({
             </tr>
           ))}
         </Rows>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title={`Remove "${removing.title}"?`}
+          confirmLabel="Remove it"
+          cancelLabel="Keep it"
+          tone="danger"
+          onConfirm={() => void remove(removing)}
+          onCancel={() => setRemoving(null)}
+        >
+          <p>
+            {DOC_CATEGORY_LABELS[removing.category]} · {removing.filename}. This cannot be undone —
+            if the file is still needed anywhere it has to be uploaded again.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
@@ -1583,6 +1602,12 @@ function Insurance({
   const [error, setError] = useState<unknown>(null);
   const [showPolicy, setShowPolicy] = useState(false);
   const [showClaim, setShowClaim] = useState(false);
+  /** A claim step that needs a figure typed, awaiting the in-app dialog. */
+  const [amountFor, setAmountFor] = useState<{
+    claim: InsuranceClaim;
+    step: "approve" | "settle";
+    to?: ClaimStatus;
+  } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -1609,24 +1634,30 @@ function Insurance({
     }
   }
 
-  // A claim's actions depend on its state; amount-bearing steps prompt for the figure.
+  /**
+   * A claim's actions depend on its state; the amount-bearing steps ask for the figure first.
+   *
+   * They used `window.prompt`, which is worse here than anywhere else in the app: `toPaise`
+   * returns ZERO for anything it cannot parse, so a mistyped "12o0" approved the claim for
+   * nothing at all and said so nowhere. The dialog validates the figure before the request.
+   */
   function decide(claim: InsuranceClaim, to: ClaimStatus) {
     if (to === "approved" || to === "partially_approved") {
-      const raw = window.prompt(
-        "Amount the payer approved (₹):",
-        (claim.claimedAmount / 100).toString(),
-      );
-      if (raw === null || !raw.trim()) return;
-      void act(() => api.transitionInsuranceClaim(claim.id, { to, approvedAmount: toPaise(raw) }));
+      setAmountFor({ claim, step: "approve", to });
     } else {
       void act(() => api.transitionInsuranceClaim(claim.id, { to }));
     }
   }
-  function settle(claim: InsuranceClaim) {
-    const base = claim.approvedAmount ?? claim.claimedAmount;
-    const raw = window.prompt("Amount settled by the payer (₹):", (base / 100).toString());
-    if (raw === null || !raw.trim()) return;
-    void act(() => api.settleInsuranceClaim(claim.id, { settledAmount: toPaise(raw) }));
+
+  function submitAmount(raw: string) {
+    if (!amountFor) return;
+    const { claim, step, to } = amountFor;
+    setAmountFor(null);
+    if (step === "settle") {
+      void act(() => api.settleInsuranceClaim(claim.id, { settledAmount: toPaise(raw) }));
+    } else if (to) {
+      void act(() => api.transitionInsuranceClaim(claim.id, { to, approvedAmount: toPaise(raw) }));
+    }
   }
 
   if (loading) {
@@ -1786,7 +1817,9 @@ function Insurance({
                     )}
                     {canReconcile &&
                       (c.status === "approved" || c.status === "partially_approved") && (
-                        <ClaimBtn onClick={() => settle(c)}>Record settlement</ClaimBtn>
+                        <ClaimBtn onClick={() => setAmountFor({ claim: c, step: "settle" })}>
+                          Record settlement
+                        </ClaimBtn>
                       )}
                   </div>
                 </Card>
@@ -1795,6 +1828,41 @@ function Insurance({
           </div>
         )}
       </div>
+
+      {amountFor && (
+        <ConfirmDialog
+          title={amountFor.step === "settle" ? "Record settlement" : "Record the payer's decision"}
+          confirmLabel={amountFor.step === "settle" ? "Record it" : "Record the decision"}
+          reason={{
+            label:
+              amountFor.step === "settle"
+                ? "Amount settled by the payer (₹)"
+                : "Amount the payer approved (₹)",
+            multiline: false,
+            defaultValue: String(
+              (amountFor.step === "settle"
+                ? (amountFor.claim.approvedAmount ?? amountFor.claim.claimedAmount)
+                : amountFor.claim.claimedAmount) / 100,
+            ),
+            minLength: 1,
+            validate: (raw) => {
+              const value = Number(raw);
+              if (!Number.isFinite(value)) return "Enter a number — for example 12500 or 12500.50.";
+              if (value < 0) return "An amount cannot be negative.";
+              return null;
+            },
+          }}
+          onConfirm={submitAmount}
+          onCancel={() => setAmountFor(null)}
+        >
+          <p>
+            Claimed {rupees(amountFor.claim.claimedAmount)}
+            {amountFor.claim.approvedAmount != null &&
+              ` · approved ${rupees(amountFor.claim.approvedAmount)}`}
+            .
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -2108,6 +2176,8 @@ function ConsentPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [showForm, setShowForm] = useState(false);
+  /** The consent awaiting a withdrawal reason — a medico-legal record, so it is asked properly. */
+  const [withdrawing, setWithdrawing] = useState<Consent | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -2129,10 +2199,9 @@ function ConsentPanel({
     }
   }
 
-  function withdraw(c: Consent) {
-    const reason = window.prompt("Why is this consent being withdrawn?");
-    if (reason === null || !reason.trim()) return;
-    void act(() => api.withdrawConsent(c.id, reason.trim()));
+  function withdraw(c: Consent, reason: string) {
+    setWithdrawing(null);
+    void act(() => api.withdrawConsent(c.id, reason));
   }
 
   if (loading) {
@@ -2200,7 +2269,7 @@ function ConsentPanel({
               <div className="flex flex-col items-end gap-1 text-right text-xs text-[var(--color-fg-muted)]">
                 <span>{fmtDate(c.signedAt)}</span>
                 {canManage && c.status === "active" && (
-                  <Button variant="ghost" onClick={() => withdraw(c)}>
+                  <Button variant="ghost" onClick={() => setWithdrawing(c)}>
                     Withdraw
                   </Button>
                 )}
@@ -2208,6 +2277,28 @@ function ConsentPanel({
             </Card>
           ))}
         </div>
+      )}
+
+      {withdrawing && (
+        <ConfirmDialog
+          title="Withdraw this consent?"
+          confirmLabel="Withdraw it"
+          cancelLabel="Leave it in force"
+          tone="danger"
+          reason={{
+            label: "Why is this consent being withdrawn?",
+            placeholder: "Patient withdrew consent verbally, witnessed by the ward sister",
+            // The server's own minimum (medicolegal.schema.ts).
+            minLength: 1,
+          }}
+          onConfirm={(reason) => withdraw(withdrawing, reason)}
+          onCancel={() => setWithdrawing(null)}
+        >
+          <p>
+            This is a <strong>medico-legal record</strong>. The consent stays on file marked
+            withdrawn, with this reason, the time and your name against it — nothing is erased.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );

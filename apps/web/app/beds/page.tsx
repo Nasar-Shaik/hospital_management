@@ -22,7 +22,7 @@ import {
   type RoomKind,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Badge, Button, Card, Field, ErrorAlert } from "../../components/ui";
+import { Badge, Button, Card, ConfirmDialog, Field, ErrorAlert } from "../../components/ui";
 
 const WARD_KINDS: { value: WardKind; label: string }[] = [
   { value: "general", label: "General ward" },
@@ -519,6 +519,8 @@ type ModalState =
   | { kind: "room-edit"; room: Room }
   | { kind: "bed-create"; wardId: string; wardName: string }
   | { kind: "bed-edit"; bed: InventoryBed }
+  /** Taking a bed out of service — needs a reason, so it is a dialog rather than a direct write. */
+  | { kind: "bed-block"; bed: InventoryBed }
   | null;
 
 function Manage() {
@@ -560,13 +562,15 @@ function Manage() {
     }
   }
 
+  /**
+   * Blocking needs a reason — the ward sees it on the board and it is why nobody wastes ten
+   * minutes chasing a bed that is being repaired. Releasing back to available does not: it adds
+   * capacity rather than removing it, and asking twice would just train people to click through.
+   */
   function toggleBed(b: InventoryBed) {
     if (b.status === "available") {
-      const reason = window.prompt(
-        "Why is this bed out of service? (cleaning, maintenance, reserved)",
-      );
-      if (!reason || !reason.trim()) return;
-      void run(() => api.updateBed(b.id, { status: "blocked", blockedReason: reason.trim() }));
+      setFormError(null);
+      setModal({ kind: "bed-block", bed: b });
     } else {
       void run(() => api.updateBed(b.id, { status: "available" }));
     }
@@ -818,6 +822,34 @@ function Manage() {
             }
           />
         </Modal>
+      )}
+      {modal?.kind === "bed-block" && (
+        <ConfirmDialog
+          title={`Take bed ${modal.bed.code} out of service?`}
+          confirmLabel="Block the bed"
+          cancelLabel="Leave it available"
+          busy={saving}
+          reason={{
+            label: "Why is this bed out of service?",
+            placeholder: "Cleaning · maintenance · reserved for a transfer",
+            multiline: false,
+            // The server stores up to 200 characters and does not require one, but a blocked bed
+            // with no reason is a bed nobody dares release — so the dialog asks for at least a word.
+            minLength: 3,
+          }}
+          onConfirm={(reason) =>
+            void run(() =>
+              api.updateBed(modal.bed.id, { status: "blocked", blockedReason: reason }),
+            )
+          }
+          onCancel={() => setModal(null)}
+        >
+          <p>
+            It stops being offered for admission until somebody releases it. The reason shows on the
+            ward board, which is what stops the next person hunting for a bed that is being
+            repaired.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
