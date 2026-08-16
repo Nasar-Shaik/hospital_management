@@ -32,20 +32,21 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 
 ## Patient & Clinical
 
-| Code        | HTTP | Message                                   | Recovery                                                       | Retry |
-| ----------- | ---- | ----------------------------------------- | -------------------------------------------------------------- | ----- |
-| HMS-PAT-001 | 404  | Patient not found                         | Verify UHID/search                                             | no    |
-| HMS-PAT-002 | 409  | Possible duplicate patient                | Review `details.candidates`; merge or override with permission | no    |
-| HMS-APT-001 | 409  | Slot no longer available                  | Pick another slot (`details.alternatives`)                     | no    |
-| HMS-APT-002 | 422  | Doctor not available at this time         | Check schedule                                                 | no    |
-| HMS-ADM-001 | 409  | Bed already occupied                      | Bed board refresh; pick another                                | no    |
-| HMS-ADM-002 | 422  | Discharge blocked: pending items          | Clear `details.blockers` (bill/orders/summary)                 | no    |
-| HMS-EMR-001 | 403  | Record is signed and immutable            | Create an amendment/new version                                | no    |
-| HMS-RX-001  | 422  | Allergy conflict (`details.allergen`)     | Licensed override with reason, or change drug                  | no    |
-| HMS-RX-002  | 422  | Drug interaction (`details.severity`)     | Review; override per policy                                    | no    |
-| HMS-LAB-001 | 422  | Sample rejected (`details.reason`)        | Recollect                                                      | no    |
-| HMS-LAB-002 | 403  | Result approval requires pathologist role | Route to approver                                              | no    |
-| HMS-MAR-001 | 409  | This dose has already been administered   | Show `details.existing`; do NOT retry — see below              | no    |
+| Code        | HTTP | Message                                                                         | Recovery                                                       | Retry         |
+| ----------- | ---- | ------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------- |
+| HMS-PAT-001 | 404  | Patient not found                                                               | Verify UHID/search                                             | no            |
+| HMS-PAT-002 | 409  | Possible duplicate patient                                                      | Review `details.candidates`; merge or override with permission | no            |
+| HMS-APT-001 | 409  | Slot no longer available                                                        | Pick another slot (`details.alternatives`)                     | no            |
+| HMS-APT-002 | 422  | Doctor not available at this time                                               | Check schedule                                                 | no            |
+| HMS-ADM-001 | 409  | Bed already occupied                                                            | Bed board refresh; pick another                                | no            |
+| HMS-ADM-002 | 422  | Discharge blocked: pending items                                                | Clear `details.blockers` (bill/orders/summary)                 | no            |
+| HMS-EMR-001 | 403  | Record is signed and immutable                                                  | Create an amendment/new version                                | no            |
+| HMS-RX-001  | 422  | Allergy conflict (`details.allergen`)                                           | Licensed override with reason, or change drug                  | no            |
+| HMS-RX-002  | 422  | Drug interaction (`details.severity`)                                           | Review; override per policy                                    | no            |
+| HMS-LAB-001 | 422  | Sample rejected (`details.reason`)                                              | Recollect                                                      | no            |
+| HMS-LAB-002 | 403  | Result approval requires pathologist role                                       | Route to approver                                              | no            |
+| HMS-MAR-001 | 409  | This dose has already been administered                                         | Show `details.existing`; do NOT retry — see below              | no            |
+| HMS-MAR-002 | 503  | Charting is unavailable: this database cannot enforce the dose-duplication rule | Chart on paper and escalate; respect `Retry-After` — see below | yes (backoff) |
 
 ## Financial
 
@@ -111,3 +112,20 @@ Only a unique index can answer that, and only the database can arbitrate it (mig
 `details.existing` carries the administration holding the slot: who gave it, when, and with what
 outcome. That is what a client must show. **A client must never retry into it** — the whole purpose
 of the code is that a lost response cannot become a second dose in a patient.
+
+### `HMS-MAR-002` is what happens when the arbiter itself is gone
+
+`HMS-MAR-001` is the rule working. `HMS-MAR-002` is the API refusing to chart because the rule
+**cannot be enforced** — the unique index migration 0049 installs is not in that tenant's database,
+so two nurses charting one dose would both succeed and the chart would read as a single dose.
+
+It is a 503 with `Retry-After`, not a 4xx: nothing is wrong with the request, and it will work
+unchanged once the schema is repaired. Nothing is written, so there is no partial state to reconcile.
+
+**The client must tell the nurse to chart on paper and escalate**, not merely show a failure. And
+the escalation is urgent for a reason that is not obvious: every dose charted into a drifted tenant
+makes the repair harder, because a unique index cannot be rebuilt over rows that already violate it
+— and the MAR is append-only, so those rows can never be withdrawn.
+
+`details.missing` names the rule that is absent and the migration that installs it. See
+`DEPLOYMENT_GATE.md` for how a tenant reaches this state and how it is repaired.

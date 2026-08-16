@@ -42,6 +42,12 @@
  */
 import type { Connection } from "mongoose";
 import {
+  CLINICAL_SAFETY_INVARIANTS,
+  inspectInvariants,
+  type MissingInvariant,
+  type SafetyInvariant,
+} from "../core/db/clinicalInvariants.js";
+import {
   analyseHistory,
   readHistory,
   type HistoryAnalysis,
@@ -49,61 +55,18 @@ import {
 } from "../core/db/migrations/runner.js";
 
 /**
- * A storage constraint that a clinical rule rests on.
- *
- * `why` is not decoration: when this fires, the reader needs to know what stops working, not which
- * index is absent.
+ * The invariant declaration moved to `core/db/clinicalInvariants.ts` when the running application
+ * became a second consumer of it. It is re-exported here unchanged so every existing importer — the
+ * deployment gate, `seed:validation`, the tests — keeps working, and so there remains exactly ONE
+ * list of what the database must be able to enforce.
  */
-export interface SafetyInvariant {
-  /** The clinical rule, in the words a nurse would use. */
-  rule: string;
-  collection: string;
-  /** The key the rule requires. Field order matters — an index is only usable in its own order. */
-  key: Record<string, 1>;
-  unique: true;
-  /** Present when the rule deliberately covers only some rows (PRN doses have no slot). */
-  partialFilterExpression?: Record<string, unknown>;
-  /** What goes wrong, silently, when it is missing. */
-  why: string;
-  /** The migration that installs it — quoted in the remediation message. */
-  migration: string;
-}
-
-/**
- * The invariants the M2/M3 manual validation actually rests on.
- *
- * Deliberately NOT "every unique index in the product". These two are here because their absence is
- * what produced the seven false safety failures on 2026-08-14 — that is the evidence for the list,
- * and a list that grows past its evidence becomes a thing people stop reading. `pendingCount()`
- * already covers everything else.
- */
-export const CLINICAL_SAFETY_INVARIANTS: readonly SafetyInvariant[] = [
-  {
-    rule: "the same scheduled dose cannot be charted twice",
-    collection: "medicationAdministrations",
-    key: { tenantId: 1, prescriptionId: 1, lineIndex: 1, scheduledFor: 1 },
-    unique: true,
-    // PRN doses carry no slot and may legitimately be given many times — constraining them would
-    // refuse a real second dose. The filter is part of the rule, not an optimisation.
-    partialFilterExpression: { scheduledFor: { $exists: true } },
-    why: "two nurses charting the same round both succeed, and the chart reads as a double dose",
-    migration: "0049-one-administration-per-dose-slot",
-  },
-  {
-    rule: "one Idempotency-Key claim survives, so a retry replays instead of repeating",
-    collection: "idempotencyKeys",
-    key: { tenantId: 1, userId: 1, key: 1 },
-    unique: true,
-    why: "a lost response retried with the held key writes a SECOND administration or observation",
-    migration: "0048-idempotency-key-claims",
-  },
-] as const;
-
-export interface MissingInvariant {
-  invariant: SafetyInvariant;
-  /** What was actually found — so the reader can tell "absent" from "present but wrong". */
-  found: string;
-}
+export {
+  CLINICAL_SAFETY_INVARIANTS,
+  invariantsFor,
+  type ClinicalCapability,
+  type MissingInvariant,
+  type SafetyInvariant,
+} from "../core/db/clinicalInvariants.js";
 
 export interface SchemaVerdict {
   ok: boolean;
@@ -122,20 +85,6 @@ export interface SchemaVerdict {
    * say "behind, and converging will fail" before the deploy window rather than during it.
    */
   blockedBy?: { migration: string; reason: string };
-}
-
-/** Mongo reports index keys in definition order; compare as ordered pairs, not as a set. */
-function sameKey(actual: Record<string, unknown>, expected: Record<string, 1>): boolean {
-  const a = Object.entries(actual);
-  const b = Object.entries(expected);
-  if (a.length !== b.length) return false;
-  return a.every(([field, dir], i) => b[i]?.[0] === field && Number(dir) === b[i]?.[1]);
-}
-
-function samePartial(actual: unknown, expected: Record<string, unknown> | undefined): boolean {
-  if (expected === undefined) return actual === undefined;
-  if (actual === undefined) return false;
-  return JSON.stringify(actual) === JSON.stringify(expected);
 }
 
 /**
@@ -165,39 +114,7 @@ export async function verifyTenantSchema(
     if (reason !== null) blockedBy = { migration: next.id, reason };
   }
 
-  const missing: MissingInvariant[] = [];
-  for (const invariant of invariants) {
-    // `indexes()` throws when the collection does not exist yet — which IS the finding, not an error.
-    let indexes: {
-      key: Record<string, unknown>;
-      unique?: boolean;
-      partialFilterExpression?: unknown;
-    }[];
-    try {
-      indexes = (await db.collection(invariant.collection).indexes()) as typeof indexes;
-    } catch {
-      missing.push({ invariant, found: `collection \`${invariant.collection}\` does not exist` });
-      continue;
-    }
-
-    const match = indexes.find(
-      (ix) =>
-        sameKey(ix.key, invariant.key) &&
-        ix.unique === true &&
-        samePartial(ix.partialFilterExpression, invariant.partialFilterExpression),
-    );
-    if (match) continue;
-
-    // Distinguish "no such index" from "an index on those fields that does not enforce the rule" —
-    // the second is the more alarming finding and the more confusing one to debug.
-    const sameFields = indexes.find((ix) => sameKey(ix.key, invariant.key));
-    missing.push({
-      invariant,
-      found: sameFields
-        ? `an index on those fields exists but does not enforce the rule (unique=${String(sameFields.unique === true)}, partial=${JSON.stringify(sameFields.partialFilterExpression ?? null)})`
-        : "no index on those fields",
-    });
-  }
+  const missing = await inspectInvariants(db, invariants);
 
   return {
     // `ahead` is deliberately absent from this condition. A tenant carrying migrations from a NEWER

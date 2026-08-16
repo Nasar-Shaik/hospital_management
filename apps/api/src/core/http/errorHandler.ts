@@ -22,6 +22,11 @@ export function errorHandler(logger: Logger) {
         success: false,
         error: { code: err.code, message: err.message, details: err.details, traceId: req.traceId },
       };
+      // RFC 9110 §10.2.3. Set here rather than at each throw site so a refusal cannot carry the
+      // advice in its body and forget it in the headers.
+      if (err.retryAfterSeconds !== undefined) {
+        res.setHeader("Retry-After", String(err.retryAfterSeconds));
+      }
       res.status(err.httpStatus).json(body);
       return;
     }

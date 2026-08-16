@@ -14,6 +14,9 @@
  * the same event. `scheduledFor` gives the round itself a name, migration 0049 makes that name
  * unique, and the database refuses the second one. See `schedule.ts`.
  */
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
 import { AppError } from "../../core/errors/appError.js";
 import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
 import { branchZone } from "../branches/index.js";
@@ -126,10 +129,60 @@ export interface RecordAdministrationInput {
   note?: string;
 }
 
+/**
+ * The capabilities a dose charting rests on. BOTH, and the second is not obvious.
+ *
+ * The dose-slot index arbitrates two nurses racing one scheduled slot. It deliberately does not
+ * cover a PRN dose — those carry no `scheduledFor` and may legitimately be given many times — so
+ * for PRN the ONLY thing standing between a retried request and a second recorded dose is the
+ * Idempotency-Key claim. Charting is safe when both are armed and not otherwise.
+ */
+const MAR_REQUIRES: readonly ClinicalCapability[] = [
+  "medication-administration",
+  "idempotent-replay",
+];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * Everything below this line assumes the database will refuse a second administration of the same
+ * slot: `repo.record` inserts unconditionally and reads E11000 as "somebody got there first". If
+ * the index is gone that insert simply succeeds, both nurses are told "recorded", and the round
+ * shows one dose because `slotsForStay` keys administrations by slot identity, last write wins.
+ *
+ * So the assumption is checked rather than made. First, before any read and long before any write,
+ * so a refusal leaves nothing behind to reconcile.
+ */
+async function assertChartingIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), MAR_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-MAR-002",
+    503,
+    "Medication charting is unavailable on this system — chart on paper and escalate",
+    {
+      // Named, not counted: whoever is paged needs the rule and the migration, not a number.
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    // A minute: the readiness verdict is re-checked on that cadence anyway, so retrying sooner
+    // cannot produce a different answer.
+    60,
+  );
+}
+
 export async function recordAdministration(
   encounterId: string,
   input: RecordAdministrationInput,
 ): Promise<repo.MedicationAdministration> {
+  await assertChartingIsSafe();
+
   const prescription = await getPrescription(input.prescriptionId);
   if (!prescription) {
     throw new AppError("HMS-GEN-404", 404, "Prescription not found", { id: input.prescriptionId });

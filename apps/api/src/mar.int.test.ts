@@ -41,6 +41,7 @@ const { createApp } = await import("./app.js");
 const { provisionTenant } = await import("./modules/tenants/index.js");
 const { getTenantConnection, closeAllTenantConnections } =
   await import("./core/db/connectionManager.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
 const { closeMaster } = await import("./core/db/masterDb.js");
 const { closeRedis } = await import("./core/redis/redis.js");
 const { runWithContext } = await import("./core/context/requestContext.js");
@@ -2109,5 +2110,227 @@ describe("another hospital's dose is unreachable", () => {
       .expect(200);
 
     expect((rows.body.data as { id: string }[]).map((r) => r.id)).toContain(rivalAdministrationId);
+  });
+});
+
+/**
+ * THE RUNTIME SCHEMA GUARD — the API refuses to chart when the rule cannot be enforced.
+ *
+ * ── WHY THIS IS A REAL REQUEST AND NOT A UNIT TEST ──────────────────────────
+ * `schemaReadiness.test.ts` proves every judgement the guard makes, in memory. What it cannot prove
+ * is the thing a nurse actually meets: that a tenant whose index has genuinely been dropped answers
+ * 503 rather than 201, that nothing reaches the collection on the way, and that the rest of the
+ * ward — vitals, nursing notes, reads — keeps working while it does.
+ *
+ * These tests drop a real index on this suite's own throwaway tenant and put it straight back. The
+ * readiness verdict is cached for a minute, so every transition clears the cache explicitly; that is
+ * not test scaffolding working around the design, it is the documented way an operator's repair
+ * becomes visible before the TTL expires.
+ */
+describe("charting refuses when the database cannot enforce the dose-duplication rule", () => {
+  const SLOT_INDEX = "one_administration_per_dose_slot";
+  const CLAIM_INDEX = "one_claim_per_idempotency_key";
+
+  async function dropSlotIndex(): Promise<void> {
+    await connection.collection("medicationAdministrations").dropIndex(SLOT_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreSlotIndex(): Promise<void> {
+    await connection.collection("medicationAdministrations").createIndex(
+      { tenantId: 1, prescriptionId: 1, lineIndex: 1, scheduledFor: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { scheduledFor: { $exists: true } },
+        background: true,
+        name: SLOT_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  it("charts normally while every invariant it rests on is armed", async () => {
+    const enc = await admitPatient("Guard Baseline");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slots = (await schedule(enc).expect(200)).body.data as { scheduledFor: string }[];
+
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slots[0]?.scheduledFor,
+    }).expect(201);
+  });
+
+  /**
+   * ── THE REFUSAL ───────────────────────────────────────────────────────────
+   * Without the index `repo.record` inserts unconditionally, so a second nurse would ALSO be told
+   * "recorded" and the round would show one dose. The guard is what turns that into a stop.
+   */
+  it("answers 503 HMS-MAR-002 with Retry-After when the dose-slot index is gone", async () => {
+    const enc = await admitPatient("Guard Refusal");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slots = (await schedule(enc).expect(200)).body.data as { scheduledFor: string }[];
+    const slot = slots[0]?.scheduledFor;
+
+    await dropSlotIndex();
+    try {
+      const res = await chart(enc, {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slot,
+      }).expect(503);
+
+      expect(res.body.error.code).toBe("HMS-MAR-002");
+      // A client that cannot see WHEN to come back will either hammer or give up.
+      expect(res.headers["retry-after"]).toBe("60");
+      // The finding names the rule and the migration, so whoever is paged has the remedy.
+      const missing = res.body.error.details.missing as { rule: string; migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0049-one-administration-per-dose-slot");
+      // It must tell the nurse what to DO — a bare failure sends her back to the same button.
+      expect(String(res.body.error.message)).toMatch(/paper/i);
+
+      /**
+       * NOTHING WAS WRITTEN. The whole point of refusing before the read-and-write path is that
+       * there is no partial state to reconcile afterwards.
+       */
+      const rows = await connection
+        .collection("medicationAdministrations")
+        .countDocuments({ prescriptionId: new mongoose.Types.ObjectId(rx) });
+      expect(rows).toBe(0);
+    } finally {
+      await restoreSlotIndex();
+    }
+  });
+
+  it("charts again the moment the index is restored — the refusal is not sticky", async () => {
+    const enc = await admitPatient("Guard Recovery");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slots = (await schedule(enc).expect(200)).body.data as { scheduledFor: string }[];
+
+    await dropSlotIndex();
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slots[0]?.scheduledFor,
+    }).expect(503);
+
+    await restoreSlotIndex();
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slots[0]?.scheduledFor,
+    }).expect(201);
+  });
+
+  /**
+   * A PRN dose carries no `scheduledFor`, so the dose-slot index deliberately does not cover it —
+   * the Idempotency-Key claim is the only thing standing between a retried request and a second
+   * recorded dose. That is why charting asks for both invariants and not just its own.
+   */
+  it("also refuses when the idempotency claim index is gone", async () => {
+    const enc = await admitPatient("Guard Claim");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slots = (await schedule(enc).expect(200)).body.data as { scheduledFor: string }[];
+
+    await connection.collection("idempotencyKeys").dropIndex(CLAIM_INDEX);
+    forgetSchemaReadiness();
+    try {
+      const res = await chart(enc, {
+        prescriptionId: rx,
+        drugCode: PARACETAMOL_TDS.drugCode,
+        scheduledFor: slots[0]?.scheduledFor,
+      }).expect(503);
+
+      expect(res.body.error.code).toBe("HMS-MAR-002");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0048-idempotency-key-claims");
+    } finally {
+      await connection
+        .collection("idempotencyKeys")
+        .createIndex(
+          { tenantId: 1, userId: 1, key: 1 },
+          { unique: true, background: true, name: CLAIM_INDEX },
+        );
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── PROPORTIONALITY ───────────────────────────────────────────────────────
+   * The MAR cannot be trusted; the ward has not stopped existing. Vitals (migration 0025 creates NO
+   * unique index) and nursing notes (whose only uniqueness is partial on discharge summaries) have
+   * no dependency on the missing constraint, and blocking them would invent a rule the product does
+   * not have — while pushing a nurse off the system for observations that are still perfectly safe
+   * to record.
+   */
+  it("does not block vitals, nursing notes, or reads while charting is refused", async () => {
+    const enc = await admitToWard("Guard Bystander");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+
+    await dropSlotIndex();
+    try {
+      await chart(enc, { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode }).expect(503);
+
+      await auth(request(app).post(`/api/v1/encounters/${enc}/vitals`), nurseToken)
+        .send({ systolic: 118, diastolic: 76, pulse: 72 })
+        .expect(201);
+
+      await auth(request(app).post(`/api/v1/encounters/${enc}/nursing-notes`), nurseToken)
+        .send({ text: "Patient settled; dose charted on paper, escalated to the ward manager." })
+        .expect(201);
+
+      // Reads are untouched — the chart must stay legible precisely when writing is refused.
+      await schedule(enc).expect(200);
+      await auth(
+        request(app).get(`/api/v1/encounters/${enc}/medication-administrations`),
+        nurseToken,
+      ).expect(200);
+    } finally {
+      await restoreSlotIndex();
+    }
+  });
+
+  /**
+   * The guard sits in front of the existing protection; it must not replace or weaken it. With the
+   * index present, a second nurse on the same slot still meets HMS-MAR-001 and its oracle.
+   */
+  it("leaves the existing duplicate protection exactly as it was", async () => {
+    const enc = await admitPatient("Guard Duplicate");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+    const slots = (await schedule(enc).expect(200)).body.data as { scheduledFor: string }[];
+    const slot = slots[0]?.scheduledFor;
+
+    await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+    }).expect(201);
+    const second = await chart(enc, {
+      prescriptionId: rx,
+      drugCode: PARACETAMOL_TDS.drugCode,
+      scheduledFor: slot,
+    }).expect(409);
+
+    expect(second.body.error.code).toBe("HMS-MAR-001");
+    expect(second.body.error.details.existing).toBeDefined();
+  });
+
+  /**
+   * One hospital's schema says nothing about another's. The rival tenant is a physically separate
+   * database (ADR-0005), and its charting must be unaffected while this one is refusing.
+   */
+  it("refuses only the tenant whose index is missing", async () => {
+    await dropSlotIndex();
+    try {
+      const enc = await admitPatient("Guard Isolation");
+      const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+      await chart(enc, { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode }).expect(503);
+
+      // The rival hospital charts normally throughout. `chartAtRival` writes its own prescription
+      // and charts a PRN dose against it, so it is repeatable and independent of this tenant.
+      await chartAtRival(rivalEncounterId);
+    } finally {
+      await restoreSlotIndex();
+    }
   });
 });

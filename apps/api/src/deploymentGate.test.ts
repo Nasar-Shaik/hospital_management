@@ -342,6 +342,21 @@ describe("the registry row is validated, never coerced", () => {
 
 /* ── 4. a tenant that cannot be inspected ───────────────────────────────────── */
 
+/**
+ * A connection whose migration history reads fine and whose index listing behaves as given.
+ *
+ * The history has to work, or `readHistory` throws first and the test passes on the WRONG error —
+ * which is exactly what my first version of the two tests below did.
+ */
+function dbWhere(indexes: (collection: string) => Promise<unknown[]>): Connection {
+  return {
+    collection: (name: string) => ({
+      find: () => ({ toArray: () => Promise.resolve([]) }),
+      indexes: () => indexes(name),
+    }),
+  } as unknown as Connection;
+}
+
 describe("failing to look is not a finding about the schema", () => {
   it("an unreachable tenant is `unreachable`, and says so instead of implying drift", async () => {
     const result = await checkTenant(
@@ -354,6 +369,57 @@ describe("failing to look is not a finding about the schema", () => {
     expect(result.ready).toBe(false);
     expect(result.detail[0]).toMatch(/ECONNREFUSED/);
     expect(result.remedy).toMatch(/NOTHING about the tenant's schema/);
+  });
+
+  /**
+   * ── REGRESSION: A DATABASE THAT DIES MID-INSPECTION ───────────────────────
+   * The test above kills the CONNECT. This kills the inspection AFTER a connection is handed over,
+   * which is a different path and was genuinely broken: `inspectInvariants` used to swallow every
+   * error per invariant and record it as "collection does not exist". A tenant that went away
+   * mid-check therefore came back as eight missing constraints — reported as `schema_drift`,
+   * NOT_READY, exit 1 — telling an operator that eight indexes had been dropped when in truth
+   * nothing had been learned. It now absorbs only MongoDB's `NamespaceNotFound` (code 26) and lets
+   * everything else through to be reported as what it is.
+   */
+  it("a database that fails DURING inspection is `unreachable`, never `schema_drift`", async () => {
+    const result = await checkTenant(
+      { id: "t1", slug: "apollo", databaseName: "hms_apollo" },
+      () =>
+        Promise.resolve(
+          dbWhere(() =>
+            Promise.reject(
+              // No `code` — exactly what a server-selection failure looks like.
+              new Error("connection <monitor> to 127.0.0.1 closed"),
+            ),
+          ),
+        ),
+      [],
+    );
+
+    expect(result.code).toBe("unreachable");
+    expect(fleetVerdict([result])).toBe("ERROR");
+    expect(EXIT_CODE[fleetVerdict([result])]).toBe(2);
+  });
+
+  /**
+   * The other half of the same rule: a collection that genuinely has never been created IS a schema
+   * finding, and must keep being reported as one. Absorbing too little would be as wrong as
+   * absorbing too much — every un-migrated tenant would read as unreachable.
+   */
+  it("but a collection that was never created is still a schema finding", async () => {
+    const result = await checkTenant(
+      { id: "t1", slug: "apollo", databaseName: "hms_apollo" },
+      () =>
+        Promise.resolve(
+          dbWhere((name) =>
+            Promise.reject(Object.assign(new Error(`ns not found: ${name}`), { code: 26 })),
+          ),
+        ),
+      [],
+    );
+
+    expect(result.code).toBe("schema_drift");
+    expect(EXIT_CODE[fleetVerdict([result])]).toBe(1);
   });
 
   it("does not throw — one dead tenant must not hide the state of the other thirty", async () => {

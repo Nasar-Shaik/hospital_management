@@ -9,6 +9,13 @@ export class AppError extends Error {
     message: string,
     public readonly details?: unknown,
     public readonly isOperational = true,
+    /**
+     * Seconds a client should wait before retrying; `errorHandler` turns this into `Retry-After`.
+     *
+     * Only meaningful on a refusal that is expected to clear on its own or after an operator acts
+     * (503/429). Omitted everywhere else, because telling a client to retry a 422 is a lie.
+     */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "AppError";
