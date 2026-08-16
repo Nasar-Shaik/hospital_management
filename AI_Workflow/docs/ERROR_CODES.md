@@ -32,23 +32,24 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 
 ## Patient & Clinical
 
-| Code        | HTTP | Message                                                                         | Recovery                                                       | Retry         |
-| ----------- | ---- | ------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------- |
-| HMS-PAT-001 | 404  | Patient not found                                                               | Verify UHID/search                                             | no            |
-| HMS-PAT-002 | 409  | Possible duplicate patient                                                      | Review `details.candidates`; merge or override with permission | no            |
-| HMS-APT-001 | 409  | Slot no longer available                                                        | Pick another slot (`details.alternatives`)                     | no            |
-| HMS-APT-002 | 422  | Doctor not available at this time                                               | Check schedule                                                 | no            |
-| HMS-ADM-001 | 409  | Bed already occupied                                                            | Bed board refresh; pick another                                | no            |
-| HMS-ADM-002 | 422  | Discharge blocked: pending items                                                | Clear `details.blockers` (bill/orders/summary)                 | no            |
-| HMS-ADM-003 | 503  | Bed assignment unavailable: this database cannot enforce one-stay-per-bed       | Allocate on the ward board and escalate; respect `Retry-After` | yes (backoff) |
-| HMS-EMR-001 | 403  | Record is signed and immutable                                                  | Create an amendment/new version                                | no            |
-| HMS-RX-001  | 422  | Allergy conflict (`details.allergen`)                                           | Licensed override with reason, or change drug                  | no            |
-| HMS-RX-002  | 422  | Drug interaction (`details.severity`)                                           | Review; override per policy                                    | no            |
-| HMS-LAB-001 | 422  | Sample rejected (`details.reason`)                                              | Recollect                                                      | no            |
-| HMS-LAB-002 | 403  | Result approval requires pathologist role                                       | Route to approver                                              | no            |
-| HMS-MAR-001 | 409  | This dose has already been administered                                         | Show `details.existing`; do NOT retry — see below              | no            |
-| HMS-MAR-002 | 503  | Charting is unavailable: this database cannot enforce the dose-duplication rule | Chart on paper and escalate; respect `Retry-After` — see below | yes (backoff) |
-| HMS-ORD-001 | 503  | Ordering is unavailable: this database cannot enforce one-order-per-request     | Order on paper and escalate; respect `Retry-After` — see below | yes (backoff) |
+| Code        | HTTP | Message                                                                         | Recovery                                                          | Retry         |
+| ----------- | ---- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------- |
+| HMS-PAT-001 | 404  | Patient not found                                                               | Verify UHID/search                                                | no            |
+| HMS-PAT-002 | 409  | Possible duplicate patient                                                      | Review `details.candidates`; merge or override with permission    | no            |
+| HMS-APT-001 | 409  | Slot no longer available                                                        | Pick another slot (`details.alternatives`)                        | no            |
+| HMS-APT-002 | 422  | Doctor not available at this time                                               | Check schedule                                                    | no            |
+| HMS-ADM-001 | 409  | Bed already occupied                                                            | Bed board refresh; pick another                                   | no            |
+| HMS-ADM-002 | 422  | Discharge blocked: pending items                                                | Clear `details.blockers` (bill/orders/summary)                    | no            |
+| HMS-ADM-003 | 503  | Bed assignment unavailable: this database cannot enforce one-stay-per-bed       | Allocate on the ward board and escalate; respect `Retry-After`    | yes (backoff) |
+| HMS-EMR-001 | 403  | Record is signed and immutable                                                  | Create an amendment/new version                                   | no            |
+| HMS-RX-001  | 422  | Allergy conflict (`details.allergen`)                                           | Licensed override with reason, or change drug                     | no            |
+| HMS-RX-002  | 422  | Drug interaction (`details.severity`)                                           | Review; override per policy                                       | no            |
+| HMS-LAB-001 | 422  | Sample rejected (`details.reason`)                                              | Recollect                                                         | no            |
+| HMS-LAB-002 | 403  | Result approval requires pathologist role                                       | Route to approver                                                 | no            |
+| HMS-MAR-001 | 409  | This dose has already been administered                                         | Show `details.existing`; do NOT retry — see below                 | no            |
+| HMS-MAR-002 | 503  | Charting is unavailable: this database cannot enforce the dose-duplication rule | Chart on paper and escalate; respect `Retry-After` — see below    | yes (backoff) |
+| HMS-ORD-001 | 503  | Ordering is unavailable: this database cannot enforce one-order-per-request     | Order on paper and escalate; respect `Retry-After` — see below    | yes (backoff) |
+| HMS-ENC-001 | 503  | Starting a visit unavailable: cannot enforce one open encounter per patient     | Register on paper and escalate; respect `Retry-After` — see below | yes (backoff) |
 
 ## Financial
 
@@ -197,3 +198,26 @@ same reason: a board that goes dark is a board nobody can use to sort the mess o
 It requires `bed-occupancy` alone. `one_open_encounter_per_patient` is what `arrive()` rests on;
 admission's "already admitted" refusal is an application check on the encounter's class, not an
 index, so losing 0012 cannot put two patients in one bed.
+
+### `HMS-ENC-001` is the one where the index is not a guard but a FEATURE
+
+`one_open_encounter_per_patient` (migration 0012) is what makes `startEncounter` RESUME a visit
+rather than fork it. The service performs no read first, by design: "two desks registering the
+same patient at the same instant both read 'no open encounter' and both write. Only the database
+can arbitrate that." The `catch` that hands the clerk back the visit already in progress only runs
+because the insert threw.
+
+So without the index nothing throws, and the resume silently becomes a duplicate — the commonest
+data-quality disaster in an OPD. The census double-counts, the bill splits across two records that
+no longer reconcile, and notes land on whichever encounter the screen happened to find. Each
+duplicate also strands a whole EPISODE, because `createEpisode` runs first in the same transaction
+and commits with the row.
+
+It guards **starting a visit** — including the appointment desk's check-in, which reaches the same
+function. It does not guard queueing, starting a consultation, closing, or any other transition:
+those move an encounter that already exists, and a hospital that cannot move patients through the
+queue it already has is worse off than one that cannot admit new ones.
+
+The key is tenant-wide on purpose. Migration 0046 made four keys branch-aware and deliberately
+left this one alone: a ward name may repeat across sites, a patient may not be in two places at
+once. A second open visit at another branch is correctly refused.

@@ -190,6 +190,57 @@ async function assertBedAssignmentIsSafe(): Promise<void> {
   );
 }
 
+/**
+ * The capability that OPENING A VISIT rests on.
+ *
+ * `one_open_encounter_per_patient` (migration 0012) is not merely a duplicate guard here — it is
+ * the mechanism by which `startEncounter` RESUMES a visit instead of forking it. The service has
+ * no read-before-write at all, and says so: "two desks registering the same patient at the same
+ * instant both read 'no open encounter' and both write. Only the database can arbitrate that."
+ */
+const ARRIVAL_REQUIRES: readonly ClinicalCapability[] = ["open-encounter"];
+
+/**
+ * ── WITHOUT THE INDEX, THE RESUME BECOMES A FORK ────────────────────────────
+ * Measured against Mongo 7 on 2026-08-17 with the index absent: the same patient is admitted to
+ * the queue twice, two open encounters exist, and the `catch` that would have handed back the
+ * first one never runs because nothing threw. That is the commonest data-quality disaster in an
+ * OPD, and this codebase already calls it a modelling failure rather than a training one: the
+ * census double-counts, the bill splits across two records that no longer reconcile, and the
+ * doctor's history has a hole in it — notes land on whichever encounter the screen happened to
+ * find. Every duplicate also strands a whole EPISODE, because `createEpisode` runs first inside
+ * the same transaction and commits with the row.
+ *
+ * Recreating the index over that pair is REFUSED (11000), so it entrenches like the others.
+ *
+ * ── THE KEY IS TENANT-WIDE ON PURPOSE ───────────────────────────────────────
+ * Migration 0046 made four keys branch-aware and deliberately left this one alone. A ward name
+ * may legitimately repeat across sites; a patient may not be in two places at once. Measured:
+ * with the index present, the same patient is refused a second open visit at a DIFFERENT branch,
+ * and that is correct rather than a multi-branch bug.
+ */
+async function assertArrivalIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), ARRIVAL_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-ENC-001",
+    503,
+    "Starting a visit is unavailable on this system — register on paper and escalate",
+    {
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    60,
+  );
+}
+
 /** The queue a patient is placed in — a named doctor, or a department/OP room. */
 function queueKeyOf(input: { doctorId?: string; departmentId?: string }): string {
   return input.doctorId ?? input.departmentId ?? "general";
@@ -221,6 +272,13 @@ function queueKeyOf(input: { doctorId?: string; departmentId?: string }): string
  */
 export async function startEncounter(input: StartEncounterInput): Promise<StartEncounterResult> {
   const ctx = getContext();
+
+  /**
+   * Guarded here rather than at each caller: the appointment desk's check-in reaches this same
+   * function, so there is one door into a visit and one place to hold it. Before the patient read
+   * only so the refusal is the first thing the clerk hears — the read is harmless either way.
+   */
+  await assertArrivalIsSafe();
 
   const patient = await getPatient(input.patientId);
   if (!patient) {

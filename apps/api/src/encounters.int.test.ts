@@ -37,6 +37,7 @@ const { createUser, transitionStatus } = await import("./modules/users/index.js"
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { canTransition } = await import("./modules/encounters/index.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
 
 /** A GOVERNMENT hospital: walk-in entry, token at registration, department routing. */
 const GOV = "test-enc-gov";
@@ -53,6 +54,8 @@ interface Hospital {
   token: string;
   doctorId: string;
   patientId: string;
+  /** Needed by the schema-safety block, which drops a real index on this tenant's own database. */
+  connection: Awaited<ReturnType<typeof getTenantConnection>>;
 }
 
 const gov = {} as Hospital;
@@ -117,6 +120,7 @@ async function setupHospital(
     token: login.body.data.accessToken as string,
     doctorId,
     patientId: "",
+    connection,
   };
 
   const patient = await auth(request(app).post("/api/v1/patients"), h)
@@ -462,5 +466,252 @@ describe("an encounter records when the doctor actually saw the patient", () => 
     // And the one door in is the one `seenAt` is stamped from.
     expect(canTransition("in_queue", "in_progress")).toBe(true);
     expect(canTransition("arrived", "in_progress")).toBe(true);
+  });
+});
+
+/**
+ * OPEN-ENCOUNTER RUNTIME SCHEMA SAFETY.
+ *
+ * ── HERE THE INDEX IS NOT A GUARD, IT IS THE FEATURE ────────────────────────
+ * `one_open_encounter_per_patient` (migration 0012) is what makes `startEncounter` RESUME a visit
+ * instead of forking it. There is no read-before-write, by design — the service header says so:
+ * "two desks registering the same patient at the same instant both read 'no open encounter' and
+ * both write. Only the database can arbitrate that." The `catch` that hands the clerk back the
+ * visit in progress only runs BECAUSE the insert threw.
+ *
+ * So without the index nothing throws, and the resume silently becomes a duplicate. Measured
+ * against Mongo 7 on 2026-08-17: the same patient queued twice, two open encounters, and
+ * recreating the index over the pair REFUSED (11000). Every duplicate also strands an EPISODE,
+ * since `createEpisode` runs first inside the same transaction.
+ */
+describe("starting a visit refuses when the database cannot enforce one open encounter", () => {
+  const OPEN_INDEX = "one_open_encounter_per_patient";
+
+  async function dropOpenIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("encounters").dropIndex(OPEN_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreOpenIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("encounters").createIndex(
+      { tenantId: 1, patientId: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { open: { $eq: true } },
+        background: true,
+        name: OPEN_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  let phone = 9400500000;
+  async function newPatient(h: Hospital, name: string): Promise<string> {
+    phone += 1;
+    const res = await auth(request(app).post("/api/v1/patients"), h)
+      .send({ name, gender: "male", contact: { phone: String(phone) } })
+      .expect(201);
+    return res.body.data.patient.id as string;
+  }
+
+  /** Close whatever visit this patient is on, so the next test's patient pool stays clean. */
+  async function close(h: Hospital, encounterId: string): Promise<void> {
+    await auth(request(app).post(`/api/v1/encounters/${encounterId}/close`), h).send({});
+  }
+
+  it("starts a visit normally while the invariant it rests on is armed", async () => {
+    const patientId = await newPatient(gov, "Guard Normal");
+
+    const res = await auth(request(app).post("/api/v1/encounters"), gov)
+      .send({ patientId, departmentId: gov.doctorId })
+      .expect(201);
+
+    expect(res.body.data.resumed).toBe(false);
+    await close(gov, res.body.data.encounter.id as string);
+  });
+
+  it("answers 503 HMS-ENC-001 with Retry-After when the open-encounter index is gone", async () => {
+    const patientId = await newPatient(gov, "Guard Refusal");
+
+    await dropOpenIndex(gov);
+    try {
+      const res = await auth(request(app).post("/api/v1/encounters"), gov).send({
+        patientId,
+        departmentId: gov.doctorId,
+      });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ENC-001");
+      expect(res.headers["retry-after"]).toBe("60");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0012-encounters");
+      expect(String(res.body.error.message)).toMatch(/paper/i);
+    } finally {
+      await restoreOpenIndex(gov);
+    }
+  });
+
+  /**
+   * Nothing is written — and the EPISODE matters as much as the encounter here, because
+   * `createEpisode` runs first inside the transaction and a stranded episode is a care story with
+   * no visit in it.
+   */
+  it("writes neither an encounter nor an episode when it refuses", async () => {
+    const patientId = await newPatient(gov, "Guard No Write");
+
+    const episodesBefore = await gov.connection.collection("episodes").countDocuments({});
+
+    await dropOpenIndex(gov);
+    try {
+      await auth(request(app).post("/api/v1/encounters"), gov)
+        .send({ patientId, departmentId: gov.doctorId })
+        .expect(503);
+
+      expect(await gov.connection.collection("encounters").countDocuments({ patientId })).toBe(0);
+      expect(await gov.connection.collection("episodes").countDocuments({})).toBe(episodesBefore);
+    } finally {
+      await restoreOpenIndex(gov);
+    }
+  });
+
+  it("starts visits again the moment the index is restored", async () => {
+    const patientId = await newPatient(gov, "Guard Recovery");
+
+    await dropOpenIndex(gov);
+    const refused = await auth(request(app).post("/api/v1/encounters"), gov).send({
+      patientId,
+      departmentId: gov.doctorId,
+    });
+    expect(refused.status).toBe(503);
+
+    await restoreOpenIndex(gov);
+    const ok = await auth(request(app).post("/api/v1/encounters"), gov)
+      .send({ patientId, departmentId: gov.doctorId })
+      .expect(201);
+    await close(gov, ok.body.data.encounter.id as string);
+  });
+
+  /**
+   * ── THE QUEUE MUST KEEP MOVING ────────────────────────────────────────────
+   * Every other transition acts on an encounter that already exists and rests on nothing this
+   * index provides. A hospital that could not move the patients already in its waiting room would
+   * be worse off than one that merely cannot admit new ones — the people in front of the desk are
+   * the ones with nowhere else to go.
+   */
+  it("does not block the queue, the consultation, or closing a visit already open", async () => {
+    const patientId = await newPatient(gov, "Guard In Flight");
+    const started = await auth(request(app).post("/api/v1/encounters"), gov)
+      .send({ patientId, departmentId: gov.doctorId })
+      .expect(201);
+    const encounterId = started.body.data.encounter.id as string;
+
+    await dropOpenIndex(gov);
+    try {
+      // A new arrival is refused …
+      const other = await newPatient(gov, "Guard Blocked Arrival");
+      await auth(request(app).post("/api/v1/encounters"), gov)
+        .send({ patientId: other, departmentId: gov.doctorId })
+        .expect(503);
+
+      // … while the patient already in the building is seen and sent home.
+      await auth(request(app).post(`/api/v1/encounters/${encounterId}/start`), gov).expect(200);
+      await auth(request(app).post(`/api/v1/encounters/${encounterId}/close`), gov)
+        .send({})
+        .expect(200);
+    } finally {
+      await restoreOpenIndex(gov);
+    }
+  });
+
+  it("does not block reads — the queue and the chart stay legible", async () => {
+    const patientId = await newPatient(gov, "Guard Reads");
+    const started = await auth(request(app).post("/api/v1/encounters"), gov)
+      .send({ patientId, departmentId: gov.doctorId })
+      .expect(201);
+    const encounterId = started.body.data.encounter.id as string;
+
+    await dropOpenIndex(gov);
+    try {
+      await auth(request(app).get(`/api/v1/encounters/${encounterId}`), gov).expect(200);
+      await auth(request(app).get("/api/v1/encounters?status=in_queue"), gov).expect(200);
+    } finally {
+      await restoreOpenIndex(gov);
+    }
+    await close(gov, encounterId);
+  });
+
+  /** Database-per-tenant (ADR-0005): the private hospital carries on regardless. */
+  it("does not block a DIFFERENT hospital, whose own index is intact", async () => {
+    const mine = await newPatient(gov, "Guard Isolation");
+    const theirs = await newPatient(pvt, "Other Hospital Patient");
+
+    await dropOpenIndex(gov);
+    try {
+      await auth(request(app).post("/api/v1/encounters"), gov)
+        .send({ patientId: mine, departmentId: gov.doctorId })
+        .expect(503);
+
+      const ok = await auth(request(app).post("/api/v1/encounters"), pvt)
+        .send({ patientId: theirs, doctorId: pvt.doctorId })
+        .expect(201);
+      await close(pvt, ok.body.data.encounter.id as string);
+    } finally {
+      await restoreOpenIndex(gov);
+    }
+  });
+
+  /** An index on the right fields that is not unique enforces nothing. */
+  it("fails CLOSED when the index exists but has stopped being unique", async () => {
+    const patientId = await newPatient(gov, "Guard Not Unique");
+
+    await gov.connection.collection("encounters").dropIndex(OPEN_INDEX);
+    await gov.connection.collection("encounters").createIndex(
+      { tenantId: 1, patientId: 1 },
+      {
+        partialFilterExpression: { open: { $eq: true } },
+        background: true,
+        name: OPEN_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+    try {
+      const res = await auth(request(app).post("/api/v1/encounters"), gov).send({
+        patientId,
+        departmentId: gov.doctorId,
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ENC-001");
+    } finally {
+      await gov.connection.collection("encounters").dropIndex(OPEN_INDEX);
+      await restoreOpenIndex(gov);
+    }
+  });
+
+  /**
+   * `encounters` carries TWO declared invariants and this guard must answer for only one of them.
+   * Losing the BED key cannot fork a visit — admission is protected separately (HMS-ADM-003).
+   */
+  it("still starts visits when the BED index is gone — that is a different capability", async () => {
+    const patientId = await newPatient(gov, "Guard Other Index");
+
+    await gov.connection.collection("encounters").dropIndex("one_open_stay_per_bed_per_branch");
+    forgetSchemaReadiness();
+    try {
+      const res = await auth(request(app).post("/api/v1/encounters"), gov)
+        .send({ patientId, departmentId: gov.doctorId })
+        .expect(201);
+      await close(gov, res.body.data.encounter.id as string);
+    } finally {
+      await gov.connection.collection("encounters").createIndex(
+        { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+          background: true,
+          name: "one_open_stay_per_bed_per_branch",
+        },
+      );
+      forgetSchemaReadiness();
+    }
   });
 });
