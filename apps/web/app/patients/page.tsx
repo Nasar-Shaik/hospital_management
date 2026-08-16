@@ -35,6 +35,9 @@ import {
   type Column,
 } from "../../components/ui";
 
+/** One screenful of the register. The server caps a page at 100; 50 keeps the list scannable. */
+const PAGE_SIZE = 50;
+
 const EMPTY_FORM = {
   name: "",
   gender: "unknown",
@@ -144,6 +147,16 @@ function Patients() {
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [query, setQuery] = useState("");
+  /**
+   * How many patients the search matches, against the page we hold.
+   *
+   * The list asked for 50 rows and rendered them with no page controls and no count, so a
+   * hospital with more than 50 patients had a register that simply stopped — and, because the
+   * screen said nothing, read as "that is everyone". Manual testing hit the same shape on the
+   * lab's copy of this page.
+   */
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -159,19 +172,30 @@ function Patients() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const page = await api.listPatients({ limit: 50, ...(query ? { q: query } : {}) });
-      setPatients(page.items);
+      const result = await api.listPatients({
+        limit: PAGE_SIZE,
+        page,
+        ...(query ? { q: query } : {}),
+      });
+      setPatients(result.items);
+      setTotal(result.meta.total ?? result.items.length);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load patients.");
     } finally {
       setLoading(false);
     }
-  }, [api, query]);
+  }, [api, query, page]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A new search is a new register — page 2 of the old one is meaningless against it, and landing
+  // on an empty page 2 reads as "no such patient".
+  useEffect(() => {
+    setPage(1);
+  }, [query]);
 
   /**
    * The live duplicate check. Debounced, and deliberately fired on the fields that
@@ -402,9 +426,43 @@ function Patients() {
         rows={loading ? [] : patients}
         keyOf={(p) => p.id}
         loading={loading}
-        empty="No patients yet."
+        empty={query ? "No patient matches that." : "No patients yet."}
         onRowClick={(p) => router.push(`/patients/${p.id}`)}
       />
+
+      {/*
+        The count first, the controls second. "1–50 of 812" is the sentence that was missing:
+        without it a full page and a complete register look identical, and a clerk who cannot find
+        someone has no way to tell whether they are absent or merely on page four.
+      */}
+      {!loading && total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-[var(--color-fg-muted)]">
+            {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of{" "}
+            <span className="font-medium text-[var(--color-fg)]">{total}</span>
+            {query ? " matching" : ""}
+          </p>
+
+          {total > PAGE_SIZE && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                disabled={page === 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={page * PAGE_SIZE >= total}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
