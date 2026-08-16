@@ -9,9 +9,13 @@
  *                             not heard of has to survive.
  *   OCCUPANCY IS THE SERVER'S — the phone reports `free of total` from the board and never counts
  *                             beds itself, so a page of twenty rows cannot describe a forty-bed ward.
- *   A RETRY CANNOT DUPLICATE — the ward-note endpoint has NO idempotency and NO state guard, so the
- *                             only protection is the reconciliation, and `fakeWard()` below models a
- *                             server that really does append a second note if you ask it twice.
+ *   A RETRY CANNOT DUPLICATE — the note endpoints carry `idempotent()` and the repository does NOT
+ *                             de-duplicate on content, so the key and the reconciliation are both
+ *                             load-bearing. `fakeWard()` models a server that really does append a
+ *                             second note when asked twice without one.
+ *   THE RIGHT DOOR, PER ROLE  — a doctor's note and a nurse's are different routes into the same
+ *                             chart (§22). Which one the phone calls is decided by permission, not
+ *                             by whichever the screen was written against first.
  */
 import { describe, expect, it } from "vitest";
 import { BRANCH_CHN, BRANCH_HYD, PASSWORD, USER, createHarness } from "./support/harness";
@@ -53,6 +57,7 @@ import { createIntentKeys } from "../src/lib/idempotency";
 import { isStayEnded } from "../src/clinical/discharge";
 import { isFeatureUnavailable, toUserMessage } from "../src/lib/net/errors";
 import { buildTimeline } from "../src/clinical/timeline";
+import { NURSING_NOTE, PROGRESS_NOTE, chartNoteCapability } from "@medicore/api-client";
 import type { Encounter, Paged, WardNote } from "@medicore/api-client";
 import type { MobileRuntime } from "../src/lib/runtime";
 
@@ -143,9 +148,20 @@ async function onWard(options: { permissions?: string[] } = {}) {
  * reconciliation stays, and `unkeyed()` models that path so the tests can prove it still works.
  * A fake that de-duplicated unconditionally would make the reconciliation look unnecessary while
  * hiding the bug it prevents.
+ *
+ * ── TWO DOORS INTO ONE CHART ────────────────────────────────────────────────
+ * `writes` is the URL the note is POSTed to and `type` is what the SERVER stamps on it — the pair
+ * that distinguishes the doctor's route from the nurse's. Both read back through the same
+ * `GET …/notes`, because there is one chart. A test that mounted the nursing route while still
+ * reading `type: "progress"` back would pass while proving nothing, so the two move together.
  */
-function fakeWard(api: FakeApi, options: { honourKeys?: boolean } = {}) {
+function fakeWard(
+  api: FakeApi,
+  options: { honourKeys?: boolean; writes?: string; type?: WardNote["type"] } = {},
+) {
   const honourKeys = options.honourKeys ?? true;
+  const writes = options.writes ?? NOTES;
+  const type = options.type ?? "progress";
   const byKey = new Map<string, WardNote>();
   const keysSeen: string[] = [];
   let notes = [wardNote()];
@@ -153,7 +169,7 @@ function fakeWard(api: FakeApi, options: { honourKeys?: boolean } = {}) {
   let dropNext = false;
 
   api.on("GET", NOTES, () => ok(notes));
-  api.on("POST", NOTES, (call) => {
+  api.on("POST", writes, (call) => {
     const key = call.headers["idempotency-key"];
     if (key) keysSeen.push(key);
 
@@ -167,6 +183,7 @@ function fakeWard(api: FakeApi, options: { honourKeys?: boolean } = {}) {
     const note = wardNote({
       id: `note-${String(sequence)}`,
       text: body.text,
+      type,
       at: "2026-08-12T04:00:00.000Z",
     });
     notes = [...notes, note];
@@ -700,6 +717,7 @@ describe("15. an action the doctor may not take", () => {
         add: (text) => h.runtime.api.addWardNote(IP_ENCOUNTER_ID, text),
         reload: () => h.runtime.api.listWardNotes(IP_ENCOUNTER_ID),
         before: [],
+        type: "progress",
       },
       "Reviewed.",
     );
@@ -772,7 +790,11 @@ describe("17. a ward note that lands", () => {
     const ward = fakeWard(h.api);
     const before = await h.runtime.api.listWardNotes(IP_ENCOUNTER_ID);
 
-    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, { before, authorId: USER.id });
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
+      before,
+      authorId: USER.id,
+    });
     const outcome = await write.mutationFn("Chest clear. Continue same.");
 
     expect(outcome.outcome).toBe("saved");
@@ -782,7 +804,10 @@ describe("17. a ward note that lands", () => {
 
   it("invalidates the whole branch, so the chart and the ward list both refresh", () => {
     const h = clinicalMutations({} as never, { tenantSlug: "apollo", branchId: "branch-hyd" });
-    expect(h.addWardNote("e1", { before: [] }).invalidates).toEqual(["apollo", "branch-hyd"]);
+    expect(h.addWardNote("e1", { capability: PROGRESS_NOTE, before: [] }).invalidates).toEqual([
+      "apollo",
+      "branch-hyd",
+    ]);
     expect(h.discharge("e1").invalidates).toEqual(["apollo", "branch-hyd"]);
   });
 });
@@ -800,7 +825,11 @@ describe("18. the response is lost after the note commits", () => {
     const before = await h.runtime.api.listWardNotes(IP_ENCOUNTER_ID);
     ward.loseNextResponse();
 
-    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, { before, authorId: USER.id });
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
+      before,
+      authorId: USER.id,
+    });
     const outcome = await write.mutationFn("Chest clear. Continue same.");
 
     expect(outcome.outcome).toBe("saved");
@@ -817,7 +846,11 @@ describe("18. the response is lost after the note commits", () => {
       throw new TypeError("Network request failed");
     });
 
-    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, { before, authorId: USER.id });
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
+      before,
+      authorId: USER.id,
+    });
     const outcome = await write.mutationFn("Never made it.");
 
     expect(outcome.outcome).toBe("notSaved");
@@ -831,7 +864,10 @@ describe("18. the response is lost after the note commits", () => {
     // The screen never loaded the notes, so `before` is undefined. The note DID land — and the
     // honest answer is still "not saved", because the cheap failure is a duplicate and the
     // expensive one is a lost note.
-    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, { before: undefined });
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
+      before: undefined,
+    });
     const outcome = await write.mutationFn("Chest clear. Continue same.");
 
     expect(outcome.outcome).toBe("notSaved");
@@ -843,15 +879,25 @@ describe("18. the response is lost after the note commits", () => {
     const before = [wardNote({ id: "note-1" })];
 
     expect(newNotesSince(before, [...before, mine, theirs])).toHaveLength(2);
-    expect(matchingNote(before, [...before, theirs], "Reviewed.", "user-1")).toBeUndefined();
-    expect(matchingNote(before, [...before, mine], "Reviewed.", "user-1")?.id).toBe("note-2");
+    expect(
+      matchingNote(before, [...before, theirs], "Reviewed.", "user-1", "progress"),
+    ).toBeUndefined();
+    expect(matchingNote(before, [...before, mine], "Reviewed.", "user-1", "progress")?.id).toBe(
+      "note-2",
+    );
   });
 
   it("does not mistake yesterday's identical note for today's", () => {
     // The sentence a doctor genuinely writes every morning. It is in `before`, so it is not new.
     const yesterday = wardNote({ id: "note-1", text: "Reviewed. Stable. Continue same." });
     expect(
-      matchingNote([yesterday], [yesterday], "Reviewed. Stable. Continue same.", "user-1"),
+      matchingNote(
+        [yesterday],
+        [yesterday],
+        "Reviewed. Stable. Continue same.",
+        "user-1",
+        "progress",
+      ),
     ).toBeUndefined();
   });
 });
@@ -1107,6 +1153,7 @@ describe("21. the ward note carries an idempotency key", () => {
     ward.loseNextResponse();
 
     const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
       before,
       key: keys.keyFor("note"),
       authorId: USER.id,
@@ -1115,6 +1162,7 @@ describe("21. the ward note carries an idempotency key", () => {
     // The first attempt commits and the wire dies; the doctor presses save again.
     await write.mutationFn("Chest clear. Continue same.");
     const again = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
       before,
       key: keys.keyFor("note"),
       authorId: USER.id,
@@ -1136,6 +1184,7 @@ describe("21. the ward note carries an idempotency key", () => {
     const keys = createIntentKeys();
 
     const first = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
       before,
       key: keys.keyFor("note"),
       authorId: USER.id,
@@ -1144,6 +1193,7 @@ describe("21. the ward note carries an idempotency key", () => {
     keys.reset();
 
     const second = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
       before,
       key: keys.keyFor("note"),
       authorId: USER.id,
@@ -1169,6 +1219,7 @@ describe("21. the ward note carries an idempotency key", () => {
     ward.loseNextResponse();
 
     const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
       before,
       key: "k-stripped-by-a-proxy",
       authorId: USER.id,
@@ -1189,12 +1240,172 @@ describe("21. the ward note carries an idempotency key", () => {
     // No snapshot: the note DID land, and the honest answer is still "not saved" — a duplicate is
     // recoverable and a lost clinical note is not. Unchanged by server-side idempotency.
     const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: PROGRESS_NOTE,
       before: undefined,
       key: "k-no-snapshot",
     });
     const outcome = await write.mutationFn("Chest clear. Continue same.");
 
     expect(outcome.outcome).toBe("notSaved");
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * 22 · THE NURSE'S OWN ENTRY (F-2)
+ *
+ * The API shipped `POST /encounters/:id/nursing-notes` under `nursing:manage` in M3-S2 and NO
+ * CLIENT EVER CALLED IT. This screen asked for `emr:write` — the doctor's permission — so a nurse
+ * saw a permanently disabled button, and the one note they are entitled to write had no door.
+ *
+ * What these tests pin is the whole path, not the button: which URL leaves the phone, what the
+ * server is told, and — the part that would have failed silently — that reconciliation looks for
+ * the kind of note this user actually wrote.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const NURSING_NOTES = `/api/v1/encounters/${IP_ENCOUNTER_ID}/nursing-notes`;
+
+/** Every permission the ward touches, as the NURSE role actually grants them. Note: no `emr:write`. */
+const NURSE = [
+  "patient:read",
+  "encounter:read",
+  "emr:read",
+  "nursing:manage",
+  "vitals:record",
+  "mar:administer",
+  "order:read",
+  "bed:allocate",
+];
+
+describe("22. the note a nurse may write", () => {
+  it("is the nursing note, and a doctor's is still the progress note", () => {
+    const held = (permissions: string[]) => (p: string) => permissions.includes(p);
+
+    expect(chartNoteCapability(held(NURSE))).toEqual(NURSING_NOTE);
+    expect(chartNoteCapability(held(DOCTOR))).toEqual(PROGRESS_NOTE);
+  });
+
+  /**
+   * A receptionist gets NOTHING — not a disabled button, not an empty box. There is no permission
+   * they could be granted from this screen, so inviting the tap would only ever end in a 403.
+   */
+  it("is nothing at all for somebody who holds neither permission", () => {
+    expect(chartNoteCapability(() => false)).toBeUndefined();
+    expect(chartNoteCapability((p) => p === "patient:read")).toBeUndefined();
+  });
+
+  /**
+   * The assertion this whole step exists for: the nurse's words go to the NURSING route.
+   *
+   * `h.api` has no handler for `POST …/notes` at all in this test, so a regression that sent the
+   * nurse back through the doctor's door fails loudly rather than passing on a lenient fake.
+   */
+  it("POSTs to the nursing route, never the generic EMR one, and carries the key", async () => {
+    const h = await onWard({ permissions: NURSE });
+    const ward = fakeWard(h.api, { writes: NURSING_NOTES, type: "nursing" });
+
+    const write = writesOf(h.runtime).addWardNote(IP_ENCOUNTER_ID, {
+      capability: NURSING_NOTE,
+      before: [wardNote()],
+      key: "k-nursing-1",
+      authorId: USER.id,
+    });
+    const outcome = await write.mutationFn("Settled, obs stable, family updated.");
+
+    expect(outcome.outcome).toBe("saved");
+    expect(h.api.callsTo("POST", NURSING_NOTES)).toHaveLength(1);
+    expect(h.api.callsTo("POST", NOTES)).toHaveLength(0);
+    expect(ward.keys).toEqual(["k-nursing-1"]);
+
+    // The body carries text and NOTHING else. The DTO is `.strict()` with no `type` field, so a
+    // client that helpfully sent one would get a 400 — the type is the server's to stamp.
+    expect(h.api.callsTo("POST", NURSING_NOTES)[0]?.body).toEqual({
+      text: "Settled, obs stable, family updated.",
+    });
+  });
+
+  it("carries the tenant host, the bearer token and the active branch, like every other write", async () => {
+    const h = await onWard({ permissions: NURSE });
+    fakeWard(h.api, { writes: NURSING_NOTES, type: "nursing" });
+
+    await writesOf(h.runtime)
+      .addWardNote(IP_ENCOUNTER_ID, { capability: NURSING_NOTE, before: [], key: "k-nursing-2" })
+      .mutationFn("Handover written.");
+
+    const call = h.api.callsTo("POST", NURSING_NOTES)[0];
+    expect(call?.headers.authorization).toBe("Bearer access-1");
+    expect(call?.headers["x-active-branch"]).toBe(BRANCH_HYD.id);
+  });
+
+  /**
+   * ── THE BUG THAT WOULD HAVE SURVIVED THE OBVIOUS FIX ────────────────────────
+   * Wiring the route without `matchingNote`'s type would have shipped a nurse this experience: the
+   * reply is lost, the note IS on the chart, and the phone says "the chart was checked and this
+   * note is not on it — try again". It looked correct because it was only ever exercised by
+   * doctors, whose notes really are `progress`.
+   */
+  it("reconciles a lost response against a NURSING note, and reports the truth", async () => {
+    const h = await onWard({ permissions: NURSE });
+    const before = [wardNote()];
+    const ward = fakeWard(h.api, {
+      writes: NURSING_NOTES,
+      type: "nursing",
+      honourKeys: false,
+    });
+    ward.loseNextResponse();
+
+    const outcome = await writesOf(h.runtime)
+      .addWardNote(IP_ENCOUNTER_ID, {
+        capability: NURSING_NOTE,
+        before,
+        key: "k-nursing-lost",
+        authorId: USER.id,
+      })
+      .mutationFn("Pressure areas checked, no redness.");
+
+    expect(outcome.outcome).toBe("saved");
+    expect(outcome.outcome === "saved" && outcome.reconciled).toBe(true);
+    // One note on the chart. The nurse is not sent back to write it a second time.
+    expect(ward.count).toBe(2);
+  });
+
+  /**
+   * The falsification, stated as a test: a `progress` note appearing on the chart is NOT evidence
+   * that the nurse's entry landed. Same encounter, same words, same author — different record.
+   * This is what fails if anybody re-hardcodes the type.
+   */
+  it("never claims a doctor's note as the nurse's, however alike they read", () => {
+    const before = [wardNote({ id: "note-1" })];
+    const words = "Reviewed. Stable. Continue same.";
+    const theirs = wardNote({ id: "note-2", type: "progress", text: words, authorId: USER.id });
+    const ours = wardNote({ id: "note-3", type: "nursing", text: words, authorId: USER.id });
+
+    expect(matchingNote(before, [...before, theirs], words, USER.id, "nursing")).toBeUndefined();
+    expect(matchingNote(before, [...before, ours], words, USER.id, "nursing")?.id).toBe("note-3");
+    // And symmetrically — a nursing note is not the doctor's progress note either.
+    expect(matchingNote(before, [...before, ours], words, USER.id, "progress")).toBeUndefined();
+  });
+
+  /**
+   * The retry is safe on the nurse's route for the same reason it is on the doctor's: the server
+   * replays the key. Proven end-to-end rather than assumed from the middleware being mounted.
+   */
+  it("replays rather than duplicating when the same submission is retried", async () => {
+    const h = await onWard({ permissions: NURSE });
+    const ward = fakeWard(h.api, { writes: NURSING_NOTES, type: "nursing" });
+    const key = "k-nursing-retry";
+
+    const attempt = () =>
+      writesOf(h.runtime)
+        .addWardNote(IP_ENCOUNTER_ID, { capability: NURSING_NOTE, before: [], key })
+        .mutationFn("Analgesia given, pain now 3/10.");
+
+    await attempt();
+    await attempt();
+
+    expect(h.api.callsTo("POST", NURSING_NOTES)).toHaveLength(2);
+    expect(ward.keys).toEqual([key, key]);
+    // Two requests, ONE note. The permanent second entry on a medico-legal record does not happen.
+    expect(ward.count).toBe(2);
   });
 });
 

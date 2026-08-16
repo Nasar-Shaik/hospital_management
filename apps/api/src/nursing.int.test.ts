@@ -323,6 +323,135 @@ describe("nursing notes", () => {
     const res = await nursingNote(enc.body.data.encounter.id as string, "op note").expect(422);
     expect(res.body.error.code).toBe("HMS-STATE-001");
   });
+
+  /**
+   * ── THE AUTHOR AND THE CLOCK ARE THE SERVER'S ───────────────────────────────
+   * A note is signed and timed evidence. Both come from the request context and the database, and
+   * the DTO is `.strict()` with neither field on it — so a client that tried to sign a colleague's
+   * name or backdate the entry is refused at the edge rather than trusted. Structure again, not a
+   * check somebody could later relax.
+   */
+  it("signs the note with the AUTHENTICATED nurse, whatever the body claims", async () => {
+    const enc = await admit("Attribution Subject");
+
+    await req("post", `/api/v1/encounters/${enc}/nursing-notes`, nurseToken, main.host, wardA)
+      .send({ text: "signed by somebody else", authorId: doctorId })
+      .expect(400);
+    await req("post", `/api/v1/encounters/${enc}/nursing-notes`, nurseToken, main.host, wardA)
+      .send({ text: "written last Tuesday", at: "2020-01-01T00:00:00.000Z" })
+      .expect(400);
+
+    const before = Date.now();
+    const res = await nursingNote(enc, "Obs stable, analgesia given.").expect(201);
+
+    expect(res.body.data.authorId).toBe(nurseId);
+    expect(res.body.data.authorId).not.toBe(doctorId);
+    // The server's clock, not a client's: within a minute either side of this request.
+    const at = Date.parse(res.body.data.at as string);
+    expect(at).toBeGreaterThanOrEqual(before - 60_000);
+    expect(at).toBeLessThanOrEqual(Date.now() + 60_000);
+  });
+});
+
+/* ── 1b. the note is confined to its site and its hospital ─────────────────── */
+
+/**
+ * The nurse's route is new reach into the chart, so it gets the same two walls every other
+ * clinical write has. These are WRITE tests deliberately: §3 below already proves a note does not
+ * READ across a branch, and "cannot see it" is a different claim from "cannot write onto it".
+ */
+describe("a nursing note cannot be written outside the nurse's reach", () => {
+  it("refuses an encounter that belongs to another branch", async () => {
+    const enc = await admit("Ward A Stay");
+
+    // Sister Grace is rostered to Ward B. The stay is Ward A's, and the id is no help: the
+    // encounter is simply not there for her (HMS-GEN-404 — "may belong to another branch").
+    const res = await req(
+      "post",
+      `/api/v1/encounters/${enc}/nursing-notes`,
+      wardBNurseToken,
+      main.host,
+      wardB,
+    ).send({ text: "written from the wrong ward" });
+    expect([403, 404]).toContain(res.status);
+
+    // And nothing landed. The status is the mechanism; the chart is the property.
+    const notes = await req(
+      "get",
+      `/api/v1/encounters/${enc}/notes`,
+      nurseToken,
+      main.host,
+      wardA,
+    ).expect(200);
+    expect(notes.body.data).toHaveLength(0);
+  });
+
+  /**
+   * The other hospital, holding the same permission through its own admin. `getTenantDb()` hands
+   * back a physically separate database, so the encounter id resolves to nothing — the write is
+   * not filtered out, it has nowhere to go.
+   */
+  it("refuses an encounter that belongs to another hospital", async () => {
+    const enc = await admit("Tenant A Stay");
+
+    const res = await request(app)
+      .post(`/api/v1/encounters/${enc}/nursing-notes`)
+      .set("Host", rival.host)
+      .set("Authorization", `Bearer ${rival.admin}`)
+      .send({ text: "written from another hospital" });
+    expect([403, 404]).toContain(res.status);
+
+    const notes = await req(
+      "get",
+      `/api/v1/encounters/${enc}/notes`,
+      nurseToken,
+      main.host,
+      wardA,
+    ).expect(200);
+    expect(notes.body.data).toHaveLength(0);
+  });
+
+  /**
+   * A token from one hospital presented at the other's host. Refused before the route is reached —
+   * the note is incidental here, but the door it knocks on is new, so it is worth one assertion
+   * that the new door is behind the same lock as every other.
+   */
+  it("refuses a token issued by the other hospital", async () => {
+    const enc = await admit("Cross Token Stay");
+
+    const res = await request(app)
+      .post(`/api/v1/encounters/${enc}/nursing-notes`)
+      .set("Host", rival.host)
+      .set("Authorization", `Bearer ${nurseToken}`)
+      .send({ text: "wrong hospital entirely" });
+    expect([401, 403, 404]).toContain(res.status);
+  });
+
+  it("refuses an encounter that does not exist at all", async () => {
+    const res = await nursingNote("64b7f0000000000000000009", "nobody's chart");
+    expect([404, 422]).toContain(res.status);
+  });
+
+  /** Empty and whitespace-only prose is a 400, not an empty entry on a medico-legal record. */
+  it("refuses a note with no words in it", async () => {
+    const enc = await admit("Empty Note Subject");
+
+    await req("post", `/api/v1/encounters/${enc}/nursing-notes`, nurseToken, main.host, wardA)
+      .send({ text: "" })
+      .expect(400);
+    await req("post", `/api/v1/encounters/${enc}/nursing-notes`, nurseToken, main.host, wardA)
+      .send({})
+      .expect(400);
+
+    const notes = await req(
+      "get",
+      `/api/v1/encounters/${enc}/notes`,
+      nurseToken,
+      main.host,
+      wardA,
+    ).expect(200);
+    expect(notes.body.data).toHaveLength(0);
+  });
 });
 
 /* ── 2. a retry must not duplicate a medico-legal record ───────────────────── */

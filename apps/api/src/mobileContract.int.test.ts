@@ -347,9 +347,7 @@ describe("a phone can choose which site it is working at", () => {
  * arrive through `getActiveBranch()` — the callback the whole mobile branch design rests on:
  *
  *   1. A RECORD ID FROM OUTSIDE THE SESSION. A push payload or a deep link hands the app an id
- *      it did not fetch, and the app navigates straight to it. If a by-id read ignored the
- *      active branch, one notification would show a nurse a patient from a site she is not
- *      working at — and the app would have done nothing wrong.
+ *      it did not fetch, and the app navigates straight to it.
  *   2. A PERSISTED SELECTION THAT OUTLIVED ITS TRUTH. The phone stores the active branch across
  *      cold starts (M0 §7). The stored id can be stale in a way a tab open for ten minutes
  *      never is.
@@ -357,6 +355,18 @@ describe("a phone can choose which site it is working at", () => {
  * The mobile architecture states that the app validates NOTHING about branches. That is only
  * safe if the server refuses on its own, through the real client, with the real header. That is
  * what is asserted here.
+ *
+ * ── WHAT A DEEP LINK MAY AND MAY NOT REACH (F-1, ADR-0015 §5) ───────────────
+ * These tests used to assert that a by-id patient read was refused from the wrong branch. That is
+ * no longer the boundary and it never protected anything: `POST /patients/check-duplicates` has
+ * always answered tenant-wide under the SAME `patient:read` permission and returned the full
+ * demographic record, so the wall disclosed through one door exactly what it withheld through the
+ * other — and forced a second UHID with an empty allergy list, which is the failure that actually
+ * reaches a patient.
+ *
+ * So the boundary a deep link meets is now stated where it really sits: WHO the patient is
+ * resolves anywhere in the hospital; WHAT HAPPENED TO THEM does not. A push notification opening
+ * a patient a nurse has not met shows a name and a UHID, and nothing about another site's care.
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("a phone cannot reach across a branch, whatever it sends", () => {
@@ -392,17 +402,44 @@ describe("a phone cannot reach across a branch, whatever it sends", () => {
     confined.accessToken = result.accessToken;
   }, 60_000);
 
-  it("refuses a deep link into another branch — an id is not a key", async () => {
-    /**
-     * The same call, the same token, the same client. Only `getActiveBranch()` differs. A 404
-     * rather than a 403 is deliberate and correct: from branch B that patient does not exist, and
-     * saying "forbidden" would confirm the record to someone who may not know it is there.
-     */
+  /**
+   * A deep link RESOLVES the patient from either site — and that is the intended behaviour, not a
+   * hole. See the block header: the identity lookup is tenant-wide by ADR-0015 §5, and the wall
+   * that used to stand here was never a wall, because the duplicate check answered the same
+   * question tenant-wide under the same permission.
+   *
+   * Do not "fix" this back to a 404. The isolation that matters is asserted immediately below, on
+   * the records rather than on the name.
+   */
+  it("resolves a deep-linked patient from either branch — identity is tenant-wide", async () => {
     session.activeBranch = branchA;
     await expect(api.getPatient(patientId)).resolves.toMatchObject({ id: patientId });
 
     session.activeBranch = branchB;
-    await expect(api.getPatient(patientId)).rejects.toMatchObject({ status: 404 });
+    await expect(api.getPatient(patientId)).resolves.toMatchObject({
+      id: patientId,
+      // The record still says where they were registered. Reading it changes nothing about it.
+      branchId: branchA,
+    });
+  });
+
+  /**
+   * ── AND RESOLVING THEM GRANTS NOTHING ───────────────────────────────────────
+   * This is the assertion the old one was reaching for. The phone now has a real patient id in
+   * hand from the wrong site; the register it lists, and the visits it can enumerate, must stay
+   * this branch's. A name is not a chart.
+   */
+  it("but the other branch's REGISTER and VISITS stay out of reach with that id in hand", async () => {
+    session.activeBranch = branchB;
+
+    // The register is the branch's own list — the patient is readable by id, and still not on it.
+    const register = await api.listPatients({ limit: 50 });
+    expect(register.items.map((p) => p.id)).not.toContain(patientId);
+
+    // And the encounter opened at branch A (see "scopes a WRITE to the active branch") is not
+    // enumerable from branch B, whoever the caller can now name.
+    const visits = await api.listEncounters({ patientId, limit: 50 });
+    expect(visits.items.every((e) => e.branchId === branchB)).toBe(true);
   });
 
   it("ignores an X-Active-Branch the caller may not reach, rather than honouring it", async () => {
@@ -423,8 +460,13 @@ describe("a phone cannot reach across a branch, whatever it sends", () => {
     expect(names).toContain("Branch A Patient");
     expect(names).not.toContain("Branch B Patient");
 
-    // And the by-id path, which is the one a deep link takes.
-    await expect(confinedApi.getPatient(patientBId)).rejects.toMatchObject({ status: 404 });
+    /**
+     * The by-id path answers — identity is tenant-wide (F-1) — and that is precisely why the LIST
+     * assertion above is the one carrying the weight here. What must never happen is the header
+     * WIDENING her scope: she asked to act at a site she does not hold, and her register came back
+     * unchanged rather than becoming branch B's.
+     */
+    await expect(confinedApi.getPatient(patientBId)).resolves.toMatchObject({ id: patientBId });
   });
 
   it("shows the confined user only her own site in the switcher, and offers her no All mode", async () => {

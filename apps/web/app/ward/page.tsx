@@ -19,14 +19,17 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiClientError,
+  chartNoteCapability,
   type InpatientRow,
   type WardNote,
+  type WardNoteType,
   type TerminalOutcome,
   type BedBoard,
   type MannerOfDeath,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { AddChartNote } from "../../components/ChartNote";
 import { MedicationRecord } from "../../components/MedicationRecord";
 import { rupees, toPaise } from "../../lib/money";
 
@@ -48,6 +51,23 @@ function daysIn(admittedAt: string): number {
   return days + 1;
 }
 
+/**
+ * How each kind of entry is named and toned on the chart.
+ *
+ * ── EXHAUSTIVE ON PURPOSE ───────────────────────────────────────────────────
+ * This was a nested ternary that ended `: "progress"`, so `nursing` — which had no client able to
+ * write it until F-2 — would have been labelled "progress" the moment nurses could. A nursing
+ * entry presented as a doctor's progress note is a false attribution on a medico-legal record.
+ * `Record<WardNoteType, …>` makes the next note type a compile error instead.
+ */
+const NOTE_KINDS: Record<WardNoteType, { label: string; tone: "success" | "warning" | "neutral" }> =
+  {
+    progress: { label: "progress", tone: "neutral" },
+    nursing: { label: "nursing", tone: "neutral" },
+    discharge_summary: { label: "discharge summary", tone: "success" },
+    outcome_note: { label: "outcome", tone: "warning" },
+  };
+
 /** The chart: what happened, day by day. */
 function Notes({ notes }: { notes: WardNote[] }) {
   if (notes.length === 0) {
@@ -62,21 +82,7 @@ function Notes({ notes }: { notes: WardNote[] }) {
           className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-2.5"
         >
           <div className="mb-1 flex flex-wrap items-center gap-2">
-            <Badge
-              tone={
-                n.type === "discharge_summary"
-                  ? "success"
-                  : n.type === "outcome_note"
-                    ? "warning"
-                    : "neutral"
-              }
-            >
-              {n.type === "discharge_summary"
-                ? "discharge summary"
-                : n.type === "outcome_note"
-                  ? "outcome"
-                  : "progress"}
-            </Badge>
+            <Badge tone={NOTE_KINDS[n.type].tone}>{NOTE_KINDS[n.type].label}</Badge>
             <span className="text-xs text-[var(--color-fg-subtle)]">{when(n.at)}</span>
           </div>
           {n.diagnosis && (
@@ -91,47 +97,6 @@ function Notes({ notes }: { notes: WardNote[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-/** Today's entry. Immutable once written — a correction is a new note. */
-function AddNote({ encounterId, onAdded }: { encounterId: string; onAdded: () => void }) {
-  const { api } = useAuth();
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function save() {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.addWardNote(encounterId, text);
-      setText("");
-      onAdded();
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not save the note.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="space-y-2">
-      {error && <Alert tone="danger">{error}</Alert>}
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={3}
-        placeholder="How is the patient today? What changed, what is planned…"
-        className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
-      />
-      <Button disabled={busy || text.trim().length === 0} onClick={() => void save()}>
-        {busy ? "Saving…" : "Add note"}
-      </Button>
-      <p className="text-xs text-[var(--color-fg-subtle)]">
-        A note cannot be edited or deleted once saved. A correction is a new note that says so.
-      </p>
-    </div>
   );
 }
 
@@ -684,6 +649,13 @@ function TransferBed({
 function Ward() {
   const { api, can } = useAuth();
 
+  /**
+   * Which entry this user may add to the round — the doctor's progress note, the nurse's nursing
+   * note, or neither. `undefined` renders no box at all rather than a disabled one: there is
+   * nothing a receptionist could do to enable it.
+   */
+  const noteCapability = chartNoteCapability(can);
+
   const [beds, setBeds] = useState<InpatientRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notes, setNotes] = useState<WardNote[]>([]);
@@ -896,14 +868,24 @@ function Ward() {
                 />
               </PermissionGate>
 
-              <PermissionGate can={can} permission="emr:write">
+              {/*
+               * Not a `PermissionGate`: which note this user may write is a THREE-way answer
+               * (the doctor's progress note, the nurse's, or none), and the gate only knows how
+               * to ask about one permission. `chartNoteCapability` owns the rule for both clients.
+               */}
+              {noteCapability && (
                 <Card className="p-5">
                   <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
-                    Today&apos;s note
+                    Today&apos;s {noteCapability.label.toLowerCase()}
                   </h3>
-                  <AddNote encounterId={selected.id} onAdded={() => loadChart(selected.id)} />
+                  <AddChartNote
+                    api={api}
+                    capability={noteCapability}
+                    encounterId={selected.id}
+                    onAdded={() => loadChart(selected.id)}
+                  />
                 </Card>
-              </PermissionGate>
+              )}
 
               <PermissionGate can={can} permission="emr:read">
                 <Card className="p-5">

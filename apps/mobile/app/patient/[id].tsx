@@ -22,6 +22,7 @@ import { useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
+import { chartNoteCapability } from "@medicore/api-client";
 import type { Encounter } from "@medicore/api-client";
 import { Screen } from "../../src/components/Screen";
 import { Card, SectionTitle } from "../../src/components/Card";
@@ -504,7 +505,13 @@ function Stay({ encounter, zone }: { encounter: Encounter; zone: string }): Reac
 }
 
 /**
- * The two IPD writes a DOCTOR may actually make.
+ * The IPD writes the signed-in clinician may actually make.
+ *
+ * ── THE NOTE IS WHOSE NOTE THEY ARE ENTITLED TO WRITE ───────────────────────
+ * This list asked for `emr:write` and called the action "Ward note", so a NURSE standing on an
+ * admitted patient's chart was offered nothing at all: the only entry they may write goes through
+ * `nursing:manage` and the list had never heard of it. `chartNoteCapability` answers both, and
+ * names the action after what will actually land on the chart.
  *
  * ── WHAT IS NOT HERE, AND WHY ───────────────────────────────────────────────
  * BED TRANSFER needs `bed:allocate`, which the DOCTOR role does not hold — it is the nurse's, and
@@ -527,16 +534,22 @@ function IpdActions({ encounter }: { encounter: Encounter }): React.JSX.Element 
   // admission is already over"); this declines to invite the refusal.
   if (!isStayOpen(encounter)) return null;
 
+  const note = chartNoteCapability(can);
+
   const actions: { label: string; needs: string; go: () => void }[] = [
-    {
-      label: "Ward note",
-      needs: "emr:write",
-      go: () =>
-        router.push({
-          pathname: "/ward-note/[encounterId]",
-          params: { encounterId: encounter.id },
-        }),
-    },
+    ...(note
+      ? [
+          {
+            label: note.label,
+            needs: note.needs,
+            go: () =>
+              router.push({
+                pathname: "/ward-note/[encounterId]" as const,
+                params: { encounterId: encounter.id },
+              }),
+          },
+        ]
+      : []),
     {
       label: "Discharge",
       needs: "admission:discharge",

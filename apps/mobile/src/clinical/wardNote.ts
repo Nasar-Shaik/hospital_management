@@ -1,15 +1,24 @@
 /**
- * Writing a ward note against an endpoint with NO idempotency and NO state guard.
+ * Writing a note on the ward round, and knowing afterwards whether it landed.
  *
- * ── THIS IS THE WEAKEST WRITE IN THE APP, AND IT IS WORTH BEING EXACT ───────
- * `POST /encounters/:id/notes` has no `idempotent()` middleware (its sibling `admit` does) and the
- * ward-note repository has no de-duplication. A retry after a lost response therefore creates a
- * SECOND note. Nothing server-side prevents it.
+ * ── WHOSE NOTE, AND THROUGH WHICH DOOR ──────────────────────────────────────
+ * There are two: `POST /encounters/:id/notes` under `emr:write` writes the doctor's `progress`
+ * note, and `POST /encounters/:id/nursing-notes` under `nursing:manage` writes the nurse's
+ * `nursing` one. The choice is NOT made here — `chartNoteCapability` in `@medicore/api-client`
+ * owns it for both clients — but it reaches this module all the same, because reconciliation has
+ * to know what TYPE it is looking for on the chart. It used to look for `"progress"`
+ * unconditionally, which would have told every nurse whose reply was lost that their note was not
+ * on the chart when it was.
  *
- * That is milder than a second order — nobody is stuck twice — but it is not nothing: a ward note
- * is an immutable medico-legal record with no update path and no delete path, so a duplicate is
+ * ── THE DUPLICATE HAZARD, AND WHAT NOW COVERS IT ────────────────────────────
+ * A note is an immutable medico-legal record with no update path and no delete path, and neither
+ * route's repository de-duplicates. A retry after a lost response used to create a SECOND note —
  * permanent, and a chart with two identical 09:40 entries reads as though the patient was reviewed
- * twice. It also makes every later reader wonder which one is real.
+ * twice. Both routes now carry `idempotent()`, so a retry under the same key replays the original
+ * 201 and writes nothing.
+ *
+ * That fixes the WRITE. It does not answer the clinician's question — "is it on the chart?" — for
+ * which the only honest source is the chart, which is the rest of this file.
  *
  * ── SO THE PHONE ASKS THE CHART, AND IT ASKS EXACTLY ────────────────────────
  * After an ambiguous failure, re-read the notes and look for a note that WAS NOT THERE BEFORE and
@@ -29,11 +38,12 @@
  *
  * The cheap failure is the one to choose, every time.
  *
- * ── THE CLEAN FIX IS A BACKEND ONE, AND IT IS NOT MADE HERE ─────────────────
- * Mounting `idempotent()` on the notes route would make this exact rather than careful: one line,
- * backward compatible (the header is optional), and identical to what `admit` already does. It is
- * NOT required — this module is sufficient without it — so under the existing-backend-first rule it
- * is reported rather than done.
+ * ── THE KEY AND THE RECONCILIATION ARE NOT ALTERNATIVES ─────────────────────
+ * The key stops a retry writing twice; it says nothing about what happened to the attempt whose
+ * reply never arrived. Deleting either layer is a regression: without the key a genuine retry
+ * duplicates, and without this a clinician is told nothing and writes the note again somewhere
+ * else. They fail differently too — a key is scoped to one attempt on one device and expires,
+ * while the chart is the record.
  */
 import { ApiClientError, type WardNote } from "@medicore/api-client";
 
@@ -46,10 +56,18 @@ export type WardNoteOutcome =
   | { outcome: "failed"; error: unknown };
 
 export interface WardNoteDeps {
-  /** `POST /encounters/:id/notes`. Called AT MOST ONCE per attempt. */
+  /** The note route this user's permission opens. Called AT MOST ONCE per attempt. */
   add: (text: string) => Promise<WardNote>;
   /** `GET /encounters/:id/notes`. The oracle, read only when the attempt was ambiguous. */
   reload: () => Promise<WardNote[]>;
+  /**
+   * What the server stamps on the note `add` writes — `progress` or `nursing`.
+   *
+   * Required rather than defaulted, deliberately. A default of `"progress"` is exactly the bug
+   * this replaces: it was invisible while only doctors could write, and would have silently
+   * returned "not saved" for every nurse the moment they could.
+   */
+  type: WardNote["type"];
   /**
    * The notes as they were immediately before the attempt, or `undefined` if the screen never
    * loaded them. `undefined` disables the "saved" conclusion — see the header.
@@ -85,21 +103,25 @@ export function newNotesSince(before: readonly WardNote[], after: readonly WardN
 }
 
 /**
- * Did OUR note land? A new `progress` note, our text, our authorship.
+ * Did OUR note land? A new note, OF THE KIND WE WROTE, our text, our authorship.
  *
- * All three conditions are required. Text alone would match a colleague writing the same line at
- * the same moment on the ward computer, and claiming their note as ours would lose the doctor's.
+ * All four conditions are required. Text alone would match a colleague writing the same line at
+ * the same moment on the ward computer, and claiming their note as ours would lose ours. The type
+ * matters for the same reason in the other direction: the doctor and the nurse write into the
+ * SAME chart, so a nurse's "Reviewed. Stable." and a doctor's are distinguishable only by kind
+ * and author.
  */
 export function matchingNote(
   before: readonly WardNote[],
   after: readonly WardNote[],
   text: string,
   authorId: string | undefined,
+  type: WardNote["type"],
 ): WardNote | undefined {
   const wanted = text.trim();
   return newNotesSince(before, after).find(
     (note) =>
-      note.type === "progress" &&
+      note.type === type &&
       note.text.trim() === wanted &&
       (authorId === undefined || note.authorId === authorId),
   );
@@ -154,7 +176,7 @@ export async function reconcileWardNote(
     return { outcome: "notSaved", error };
   }
 
-  const found = matchingNote(deps.before, after, text, deps.authorId);
+  const found = matchingNote(deps.before, after, text, deps.authorId, deps.type);
   if (found) return { outcome: "saved", note: found, reconciled: true };
   return { outcome: "notSaved", error };
 }

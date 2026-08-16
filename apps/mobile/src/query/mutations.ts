@@ -22,8 +22,10 @@
  * branch segment (it is read hospital-wide), so the prefix does not match it — and nothing in this
  * slice can change it.
  */
+import { writeChartNote } from "@medicore/api-client";
 import type {
   ApiClient,
+  ChartNoteCapability,
   ConsultationNote,
   PlaceOrderResult,
   Prescription,
@@ -178,6 +180,16 @@ export function clinicalMutations(api: ApiClient, scope: QueryScope) {
     addWardNote(
       encounterId: string,
       context: {
+        /**
+         * WHICH note this user may write — the doctor's `progress` or the nurse's `nursing` — and
+         * therefore which route is called and which type reconciliation looks for.
+         *
+         * Required, not defaulted. This mutation was hard-wired to `addWardNote` / `emr:write`,
+         * so `nursing:manage` reached nothing and a nurse's only possible outcome was a 403.
+         * `chartNoteCapability` decides; passing it in keeps that decision in ONE place across
+         * both clients rather than re-derived here.
+         */
+        capability: ChartNoteCapability;
         before: readonly WardNote[] | undefined;
         authorId?: string;
         /** Stable across the retries of ONE submission — see `lib/idempotency.ts`. */
@@ -185,9 +197,10 @@ export function clinicalMutations(api: ApiClient, scope: QueryScope) {
       },
     ): Write<string, WardNoteOutcome> {
       const deps: WardNoteDeps = {
-        add: (text) => api.addWardNote(encounterId, text, context.key),
+        add: (text) => writeChartNote(api, context.capability, encounterId, text, context.key),
         reload: () => api.listWardNotes(encounterId),
         before: context.before,
+        type: context.capability.type,
         ...(context.authorId ? { authorId: context.authorId } : {}),
       };
       return {

@@ -2910,6 +2910,100 @@ export interface WardNote {
   branchId?: string;
 }
 
+/**
+ * ── WHICH NOTE THIS USER MAY WRITE, AND THROUGH WHICH DOOR ──────────────────
+ * Two endpoints write to the ward round and they are NOT interchangeable:
+ *
+ *   `emr:write`      → `POST /encounters/:id/notes`          → `type: "progress"`
+ *   `nursing:manage` → `POST /encounters/:id/nursing-notes`  → `type: "nursing"`
+ *
+ * The API split them deliberately (M3-S2): `authorize()` takes exactly one permission, and a
+ * nurse granted `emr:write` to reach the first door would also gain `discharge_summary` and
+ * `outcome_note` — a doctor's record and the statutory account of a death. So there are two
+ * doors, and a client has to pick the one the signed-in user actually holds.
+ *
+ * ── WHY THIS LIVES IN THE SHARED CLIENT AND NOT IN EACH APP ─────────────────
+ * Both apps got it wrong in the same way and for months: each hard-coded `emr:write` and
+ * `addWardNote`, so `nursing:manage` gated a route no client ever called and a nurse saw either
+ * nothing (web hid the box) or a permanent 403 (mobile disabled the button). Duplicating the rule
+ * a second time is how the NEXT note type ends up wired into one app only.
+ *
+ * ── THE ORDER IS THE RULE, AND IT PRESERVES TODAY'S BEHAVIOUR ───────────────
+ * `emr:write` is tried FIRST. In the shipped catalogue the two are disjoint — `emr:write` is the
+ * DOCTOR's alone and `nursing:manage` the NURSE's — so for every user that exists today this
+ * returns exactly what the clients did before. A hospital that mints a custom role holding both
+ * has said that person writes the doctor's record, and gets it unchanged rather than silently
+ * demoted to a nursing note.
+ */
+export interface ChartNoteCapability {
+  /** The permission that opens this door. Re-checked server-side on every request. */
+  needs: "emr:write" | "nursing:manage";
+  /**
+   * What the SERVER will stamp on the note — never sent in the body (the nursing DTO is
+   * `.strict()` with no `type` field, so naming one is a 400). Held here because reconciliation
+   * after a lost response has to know what it is looking for on the chart.
+   */
+  type: Extract<WardNoteType, "progress" | "nursing">;
+  /** What the box is called. A nurse writing "Progress note" is being asked the doctor's question. */
+  label: string;
+  placeholder: string;
+}
+
+/** The doctor's entry on the round. */
+export const PROGRESS_NOTE: ChartNoteCapability = {
+  needs: "emr:write",
+  type: "progress",
+  label: "Progress note",
+  placeholder: "How is the patient today? What changed, what is planned…",
+};
+
+/** The nurse's bedside entry. Same chart, own door. */
+export const NURSING_NOTE: ChartNoteCapability = {
+  needs: "nursing:manage",
+  type: "nursing",
+  label: "Nursing note",
+  placeholder: "What was observed, what was done, what to hand over…",
+};
+
+/** Most-privileged first — see the order rule above. */
+export const CHART_NOTE_CAPABILITIES: readonly ChartNoteCapability[] = [
+  PROGRESS_NOTE,
+  NURSING_NOTE,
+];
+
+/**
+ * The note this user may write, or `undefined` if they may write none.
+ *
+ * `undefined` is a real answer and callers must render nothing for it — a receptionist gets no
+ * box at all rather than a disabled one, because there is nothing they could do to enable it.
+ */
+export function chartNoteCapability(
+  can: (permission: string) => boolean,
+): ChartNoteCapability | undefined {
+  return CHART_NOTE_CAPABILITIES.find((capability) => can(capability.needs));
+}
+
+/**
+ * Writes the note through the door the capability names.
+ *
+ * ── SEND THE KEY ────────────────────────────────────────────────────────────
+ * Both routes carry `idempotent()` and neither collection de-duplicates. A note is append-only
+ * with no update and no delete path, so a retry after a lost response is otherwise a permanent
+ * duplicate on a medico-legal record. The parameter is optional because the ROUTES honour the
+ * header rather than demanding it; every caller here should pass one.
+ */
+export function writeChartNote(
+  api: Pick<ApiClient, "addWardNote" | "addNursingNote">,
+  capability: ChartNoteCapability,
+  encounterId: string,
+  text: string,
+  key?: string,
+): Promise<WardNote> {
+  return capability.type === "nursing"
+    ? api.addNursingNote(encounterId, text, key)
+    : api.addWardNote(encounterId, text, key);
+}
+
 export interface AdmitResult {
   /** The OP encounter, now `admitted` — terminal. */
   outpatient: Encounter;

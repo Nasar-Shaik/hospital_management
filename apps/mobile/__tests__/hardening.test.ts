@@ -28,6 +28,7 @@ import {
   prescription,
   wardNote,
 } from "./support/fixtures";
+import { PROGRESS_NOTE } from "@medicore/api-client";
 import { orderRequests } from "../src/clinical/prescribing";
 import { clinicalQueries } from "../src/query/clinical";
 import { clinicalMutations } from "../src/query/mutations";
@@ -97,7 +98,12 @@ describe("1. a full round at branch A, then a switch to B", () => {
     await m.createPrescription(ENCOUNTER_ID).mutationFn(prescription().lines);
     await h.runtime.queryClient.fetchInfiniteQuery(q.inpatients());
     await m
-      .addWardNote(IP_ENCOUNTER_ID, { before: [], authorId: USER.id, key: "intent-note-1" })
+      .addWardNote(IP_ENCOUNTER_ID, {
+        capability: PROGRESS_NOTE,
+        before: [],
+        authorId: USER.id,
+        key: "intent-note-1",
+      })
       .mutationFn("Reviewed on the round.");
 
     /**

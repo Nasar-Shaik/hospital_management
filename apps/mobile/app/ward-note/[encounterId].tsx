@@ -1,17 +1,24 @@
 /**
  * Today's entry on the round (M2 J) — the ward's own write.
  *
+ * ── THE DOCTOR'S NOTE AND THE NURSE'S, ONE SCREEN ───────────────────────────
+ * This screen was hard-wired to `emr:write`, which is the DOCTOR's permission: a nurse who opened
+ * it found the button permanently disabled, reading "you do not have permission", while
+ * `nursing:manage` — which they hold — gated a route no client ever called. Both are written here
+ * now, into the same chart, through the door `chartNoteCapability` says the signed-in user has.
+ * A user with neither never reaches this screen: the action that navigates here is not offered.
+ *
  * ── A WARD NOTE IS APPEND-ONLY AND PERMANENT ────────────────────────────────
  * There is no update path and no delete path in the repository, and that is the design: a
  * contemporaneous record that can be rewritten afterwards is not evidence of anything. A correction
  * is a NEW note that says so. So this screen writes; it never edits, and it says as much before the
- * doctor commits, because "save" reads as reversible everywhere else in software.
+ * clinician commits, because "save" reads as reversible everywhere else in software.
  *
  * ── THE RETRY HAZARD IS REAL AND IT IS HANDLED IN `clinical/wardNote.ts` ────
- * The endpoint has no idempotency key and the repository has no de-duplication, so a naive retry
- * after a lost response leaves TWO identical notes on the chart, permanently. Every ambiguous
- * ending therefore goes through `attemptWardNote`, which re-reads the notes and looks for one that
- * was not there before. The doctor is told which of the two things happened, in words.
+ * Neither repository de-duplicates, so a naive retry after a lost response leaves TWO identical
+ * notes on the chart, permanently. The `Idempotency-Key` stops the retry writing twice; the
+ * reconciliation in `attemptWardNote` is what tells the clinician WHICH of the two things happened,
+ * by re-reading the chart and looking for a note of their own kind that was not there before.
  *
  * ── NO OFFLINE QUEUE (M0 §11) ───────────────────────────────────────────────
  * Offline the button is disabled with a reason, the text stays on screen, and nothing is promised.
@@ -21,7 +28,12 @@ import { useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
-import { ApiClientError, type WardNote } from "@medicore/api-client";
+import {
+  ApiClientError,
+  PROGRESS_NOTE,
+  chartNoteCapability,
+  type WardNote,
+} from "@medicore/api-client";
 import { Screen } from "../../src/components/Screen";
 import { Card, SectionTitle } from "../../src/components/Card";
 import { Button } from "../../src/components/Button";
@@ -31,6 +43,7 @@ import { QueryGate } from "../../src/components/QueryGate";
 import { WardNoteRow } from "../../src/components/clinical/Stay";
 import { requireRuntime } from "../../src/providers/RuntimeProvider";
 import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
+import { useCapabilities } from "../../src/hooks/useStores";
 import {
   useClinicalMutations,
   useClinicalWrite,
@@ -50,7 +63,19 @@ function WardNoteScreen(): React.JSX.Element {
   const { queries, ready, userId } = useClinical();
   const zoneFor = useZoneFor();
   const mutations = useClinicalMutations();
-  const guard = useWriteGuard("emr:write");
+  const { can } = useCapabilities();
+
+  /**
+   * Which note this user writes, and therefore which permission the guard asks about.
+   *
+   * The fallback matters: with NEITHER permission there is no capability, and the screen falls
+   * back to the doctor's note so the guard has a permission to report and the button is disabled
+   * with an accurate reason rather than silently enabled. That state is not reachable through the
+   * app — the action that navigates here is only offered to somebody who holds one of the two —
+   * but a deep link is, and it must not present a save that could only ever be a 403.
+   */
+  const writing = chartNoteCapability(can) ?? PROGRESS_NOTE;
+  const guard = useWriteGuard(writing.needs);
 
   const [text, setText] = useState("");
   const [outcome, setOutcome] = useState<WardNoteOutcome | undefined>(undefined);
@@ -82,6 +107,7 @@ function WardNoteScreen(): React.JSX.Element {
 
   const write = useClinicalWrite(
     mutations.addWardNote(encounterId, {
+      capability: writing,
       before,
       key: keys.keyFor("note"),
       ...(userId ? { authorId: userId } : {}),
@@ -101,7 +127,7 @@ function WardNoteScreen(): React.JSX.Element {
 
   const written = text.trim();
   const dirty = written.length > 0;
-  useUnsavedChanges(dirty, "ward note");
+  useUnsavedChanges(dirty, writing.label.toLowerCase());
 
   const canSave = guard.canWrite && dirty && !write.isPending;
   const fieldErrors =
@@ -120,10 +146,10 @@ function WardNoteScreen(): React.JSX.Element {
       >
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <TextField
-            label="Progress note"
+            label={writing.label}
             value={text}
             onChangeText={setText}
-            placeholder="How the patient is, what changed, what is planned"
+            placeholder={writing.placeholder}
             multiline
             hint="Saved to the chart as written, with your name and the time. It cannot be edited afterwards — a correction is a new note."
             errors={fieldErrors.text}
