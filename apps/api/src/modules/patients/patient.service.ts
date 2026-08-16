@@ -252,10 +252,10 @@ export async function mergePatients(input: {
   }
 
   return withTransaction(async (session) => {
-    const survivor = await repo.findByIdUnscoped(input.survivorId, session);
+    const survivor = await repo.findByIdentity(input.survivorId, session);
     if (!survivor) throw new PatientNotFoundError({ patientId: input.survivorId });
 
-    const duplicate = await repo.findByIdUnscoped(input.duplicateId, session);
+    const duplicate = await repo.findByIdentity(input.duplicateId, session);
     if (!duplicate) throw new PatientNotFoundError({ patientId: input.duplicateId });
 
     /**
@@ -319,8 +319,16 @@ export async function mergePatients(input: {
   });
 }
 
+/**
+ * Who this patient IS — tenant-wide, per ADR-0015 §5. See `findByIdentity` for the evidence.
+ *
+ * Resolving identity grants nothing operational: every encounter, order, admission, MAR row and
+ * ward note is filtered on its own read path by the TREATING branch, so a clerk who can now name
+ * a patient from another site still cannot open that site's visits. `listPatients` stays
+ * branch-defaulted — a register is a site's own list, which is what `branchId` is FOR.
+ */
 export async function getPatient(id: string): Promise<Patient> {
-  const patient = await repo.findByIdScoped(id);
+  const patient = await repo.findByIdentity(id);
   if (!patient) throw new PatientNotFoundError({ patientId: id });
   return patient;
 }

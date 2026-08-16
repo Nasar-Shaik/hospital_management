@@ -19,7 +19,7 @@
  *   `forPatientAcrossBranches`— hospital-wide ON PURPOSE, like allergies. A weight recorded at
  *                               one branch is the same person's weight at another, and a trend
  *                               broken by a branch boundary is a trend that lies. The name says
- *                               so at every call site, the way `findByIdUnscoped` and
+ *                               so at every call site, the way `findByIdentity` and
  *                               `namesByIds` do in `patients`.
  *   `latestForEncounters`     — a batch read over ids the caller's own scoped query just
  *                               produced. It narrows an existing set; it cannot widen one.
