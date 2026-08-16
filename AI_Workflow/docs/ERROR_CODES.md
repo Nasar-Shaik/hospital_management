@@ -47,6 +47,7 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-LAB-002 | 403  | Result approval requires pathologist role                                       | Route to approver                                              | no            |
 | HMS-MAR-001 | 409  | This dose has already been administered                                         | Show `details.existing`; do NOT retry — see below              | no            |
 | HMS-MAR-002 | 503  | Charting is unavailable: this database cannot enforce the dose-duplication rule | Chart on paper and escalate; respect `Retry-After` — see below | yes (backoff) |
+| HMS-ORD-001 | 503  | Ordering is unavailable: this database cannot enforce one-order-per-request     | Order on paper and escalate; respect `Retry-After` — see below | yes (backoff) |
 
 ## Financial
 
@@ -145,3 +146,31 @@ because a unique index cannot be rebuilt over rows that already violate it.
 
 It is scoped to dispensing alone. A missing dispensing constraint says nothing about whether a
 nurse may chart a dose, and does not block one.
+
+### `HMS-ORD-001` refuses to RAISE work, and only that
+
+`one_order_per_request_id` (migration 0013) is the sole race arbiter for placing an order —
+`placeOrder` performs no read before it writes, and consults `findByRequestId` only after the
+database has already answered E11000. Without the index a retried request raises a **second
+investigation**: another tube of blood from a real arm, another exposure for an X-ray, and a
+second bill for it.
+
+It differs from the other two in **two** ways, both deliberate:
+
+**It requires only its own capability, not `idempotent-replay`.** MAR and dispensing each have a
+legitimate write that carries no module identifier (a PRN dose, a partial handover), so for those
+the `Idempotency-Key` claim is the only lock and index 0048 must be sound. Every order write in
+this system carries a `requestId` — both clients send it alongside the header, and the
+`prescription.signed` consumer sets `rx:<prescriptionId>` — so losing 0048 alone leaves ordering
+still arbitrated by 0013, and refusing then would block a hospital that is provably still safe.
+
+**It guards placing only, never the state machine.** Accept, start, complete, verify, release and
+cancel update a row that already exists and rest on nothing this index provides. A drifted tenant
+can still finish the work already on its benches while somebody runs the migration; blocking those
+would strand samples mid-analysis for a rule with no bearing on them.
+
+The escalation is urgent for the usual reason: a unique index cannot be rebuilt over rows that
+already violate it, so every duplicate raised into a drifted tenant makes the repair harder. The
+pharmacy path is the sharpest case — it reaches `placeOrder` from an event with no HTTP request,
+so no `Idempotency-Key` middleware exists there to fall back on, and at-least-once delivery is
+guaranteed by design rather than merely possible.

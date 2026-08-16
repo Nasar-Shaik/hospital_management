@@ -19,9 +19,11 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import {
@@ -99,6 +101,73 @@ function invalidTransition(from: OrderStatus, to: OrderStatus): AppError {
 }
 
 /**
+ * The capabilities placing an order rests on. ONE — and the omission is the point.
+ *
+ * ── WHY NOT `idempotent-replay` TOO, AS MAR AND DISPENSING BOTH REQUIRE ─────
+ * Two locks stand between a retry and a second order: the `Idempotency-Key` claim (index 0048)
+ * and `one_order_per_request_id` (index 0013). MAR and dispensing each have a class of
+ * LEGITIMATE write that carries no module identifier — a PRN dose has no `scheduledFor`, a
+ * partial handover has no `requestId` — so for those writes the header claim is the only lock and
+ * its index must be sound. Ordering has no such class: `orderRequests` (mobile) and the web
+ * OrderPad both put the same string in the header AND in `requestId`, and the one non-HTTP caller
+ * sets `requestId: "rx:<prescriptionId>"` explicitly.
+ *
+ * So losing 0048 alone leaves every order write still arbitrated by 0013, and refusing to order
+ * because of it would block a hospital that is demonstrably still safe. Losing 0013 is different,
+ * and worse than it looks — see below.
+ */
+const ORDER_REQUIRES: readonly ClinicalCapability[] = ["ordering"];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * `placeOrder` performs NO read-before-write. It goes straight into the transaction and inserts,
+ * and the `catch` below only consults `findByRequestId` AFTER the database has said E11000. The
+ * index is therefore the sole race arbiter, exactly as `order.repository.ts` states. Without it
+ * the insert simply succeeds twice: a second tube of blood from a real arm, a second exposure for
+ * an X-ray, and a second bill — measured, not assumed (two rows, no error).
+ *
+ * ── AND THE CONSUMER PATH HAS NOTHING ELSE AT ALL ───────────────────────────
+ * `prescription.signed` raises the pharmacy order through this same function, with a `requestId`
+ * and NO HTTP request — so no `Idempotency-Key` middleware exists on that path to fall back on.
+ * Delivery is at-least-once by design and the handler's own comment says it will run twice. With
+ * 0013 gone, every redelivery puts another identical row on the pharmacy counter, and
+ * `setOrderId` repoints the prescription at the newest one, orphaning the rest as work that can
+ * never be completed.
+ *
+ * ── AND IT CANNOT BE UNDONE BY REBUILDING ───────────────────────────────────
+ * Once two rows share a `requestId`, recreating the index is refused (E11000 — measured). The
+ * repair is a destructive delete, which Constitution §3.9 does not permit casually. Refusing is
+ * recoverable in the minutes it takes to run the migration; drift is not.
+ *
+ * Placed before the encounter read purely so the refusal is the FIRST thing the caller hears; the
+ * read itself is harmless and its position is not a safety claim.
+ */
+async function assertOrderingIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), ORDER_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-ORD-001",
+    503,
+    "Ordering is unavailable on this system — order on paper and escalate",
+    {
+      // Named, not counted: whoever is paged needs the rule and the migration, not a number.
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    // A minute: the readiness verdict is re-checked on that cadence anyway, so retrying sooner
+    // cannot produce a different answer.
+    60,
+  );
+}
+
+/**
  * A doctor asks for something.
  *
  * ── AN ORDER REQUIRES AN OPEN ENCOUNTER ─────────────────────────────────────
@@ -109,6 +178,15 @@ function invalidTransition(from: OrderStatus, to: OrderStatus): AppError {
  * encounter in the same episode — which is exactly what an Episode of Care is for.
  */
 export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+  /**
+   * Only PLACING is guarded. The state machine below (accept → start → complete → verify →
+   * release, and cancel) updates a row that already exists and rests on nothing this invariant
+   * provides — so a drifted tenant can still finish the work already on its benches, which is
+   * exactly what you want while somebody runs the migration. Blocking those would strand samples
+   * mid-analysis for a rule that has no bearing on them.
+   */
+  await assertOrderingIsSafe();
+
   const encounter = await getEncounter(input.encounterId);
   if (!encounter) {
     throw new AppError("HMS-GEN-404", 404, "Encounter not found", {

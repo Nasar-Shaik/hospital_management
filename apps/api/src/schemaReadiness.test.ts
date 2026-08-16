@@ -111,7 +111,10 @@ const withoutRule = (rule: string): Record<string, unknown[]> => {
 
 const DOSE_SLOT = "the same scheduled dose cannot be charted twice";
 const CLAIM = "one Idempotency-Key claim survives, so a retry replays instead of repeating";
+const ORDER_RULE = "one order per request id";
 const MAR = ["medication-administration", "idempotent-replay"] as const;
+/** Ordering asks for its OWN constraint and no other — see the isolation block below. */
+const ORDERING = ["ordering"] as const;
 
 beforeEach(() => {
   forgetSchemaReadiness();
@@ -194,6 +197,50 @@ describe("a refusal is scoped to the capability that actually lost its arbiter",
 
     expect((await tenantSchemaReadiness("t-1", db, ["dispensing"])).safe).toBe(true);
     expect((await tenantSchemaReadiness("t-1", db, MAR)).safe).toBe(false);
+  });
+
+  /**
+   * ── ORDERING ASKS FOR LESS THAN THE OTHER TWO, AND THAT IS THE POINT ───────
+   * MAR and dispensing each require `idempotent-replay` as well as their own constraint, because
+   * each has a legitimate write carrying no module identifier — a PRN dose, a partial handover —
+   * for which the `Idempotency-Key` claim is the only lock. Every order write in this system
+   * carries a `requestId`: both clients send it alongside the header, and the `prescription.signed`
+   * consumer sets `rx:<prescriptionId>` explicitly. So losing the claim index alone leaves ordering
+   * still arbitrated by migration 0013, and refusing then would block a hospital that is safe.
+   */
+  it("ordering survives a missing idempotency index, where MAR and dispensing do not", async () => {
+    const { db } = fakeDb(withoutRule(CLAIM));
+
+    expect((await tenantSchemaReadiness("t-1", db, ORDERING)).safe).toBe(true);
+    expect((await tenantSchemaReadiness("t-2", db, MAR)).safe).toBe(false);
+    expect((await tenantSchemaReadiness("t-3", db, ["dispensing", "idempotent-replay"])).safe).toBe(
+      false,
+    );
+  });
+
+  it("a missing ORDER index blocks ordering and nothing else", async () => {
+    const { db } = fakeDb(withoutRule(ORDER_RULE));
+
+    expect((await tenantSchemaReadiness("t-1", db, ORDERING)).safe).toBe(false);
+    // The three capabilities a doctor, a nurse and a pharmacist depend on, unaffected.
+    expect((await tenantSchemaReadiness("t-2", db, MAR)).safe).toBe(true);
+    expect((await tenantSchemaReadiness("t-3", db, ["dispensing", "idempotent-replay"])).safe).toBe(
+      true,
+    );
+    expect((await tenantSchemaReadiness("t-4", db, ["bed-occupancy"])).safe).toBe(true);
+  });
+
+  it("no OTHER capability's missing constraint can stop a doctor ordering", async () => {
+    for (const rule of CLINICAL_SAFETY_INVARIANTS.filter((i) => i.capability !== "ordering")) {
+      const readiness = await tenantSchemaReadiness(
+        "t-1",
+        fakeDb(withoutRule(rule.rule)).db,
+        ORDERING,
+      );
+
+      expect(readiness.safe, `${rule.capability} must not block ordering`).toBe(true);
+      forgetSchemaReadiness();
+    }
   });
 
   /**

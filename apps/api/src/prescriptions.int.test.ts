@@ -1273,4 +1273,32 @@ describe("dispensing refuses when the database cannot enforce one-handover-per-r
     expect(second.body.data.duplicate).toBe(true);
     expect(second.body.data.dispense.id).toBe(first.body.data.dispense.id);
   });
+
+  /**
+   * ── THE ORDER GUARD MUST NOT REACH THE COUNTER ────────────────────────────
+   * `one_order_per_request_id` (migration 0013) protects raising an investigation. Handing over
+   * drugs against an already-signed prescription depends on nothing it provides — dispensing keys
+   * off the prescription, not the order — so a pharmacist must keep working while the lab's
+   * constraint is being repaired.
+   */
+  it("hands over normally when the ORDER index is gone — that is a different capability", async () => {
+    const { id } = await signedFor(pvt);
+
+    await pvt.connection.collection("orders").dropIndex("one_order_per_request_id");
+    forgetSchemaReadiness();
+    try {
+      expect((await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }])).status).toBe(201);
+    } finally {
+      await pvt.connection.collection("orders").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_order_per_request_id",
+        },
+      );
+      forgetSchemaReadiness();
+    }
+  });
 });

@@ -2333,4 +2333,42 @@ describe("charting refuses when the database cannot enforce the dose-duplication
       await restoreSlotIndex();
     }
   });
+
+  /**
+   * ── THE ORDER GUARD MUST NOT REACH THE BEDSIDE ────────────────────────────
+   * `one_order_per_request_id` (migration 0013) protects raising an investigation. Charting a dose
+   * has no dependency on it whatsoever, and a nurse losing the drug round because the lab's
+   * idempotency index was dropped would be a far worse outcome than the drift itself. Asserted at
+   * the HTTP level rather than only in the readiness unit suite, because the claim is about what
+   * the running application does.
+   */
+  it("is untouched when the ORDER index is gone — that is the lab's rule, not the bedside's", async () => {
+    const enc = await admitToWard("Guard Order Bystander");
+    const rx = await signedRx(enc, [PARACETAMOL_TDS]);
+
+    await connection.collection("orders").dropIndex("one_order_per_request_id");
+    forgetSchemaReadiness();
+    try {
+      await chart(enc, { prescriptionId: rx, drugCode: PARACETAMOL_TDS.drugCode }).expect(201);
+
+      await auth(request(app).post(`/api/v1/encounters/${enc}/vitals`), nurseToken)
+        .send({ systolic: 120, diastolic: 78, pulse: 70 })
+        .expect(201);
+
+      await auth(request(app).post(`/api/v1/encounters/${enc}/nursing-notes`), nurseToken)
+        .send({ text: "Round complete; nothing outstanding." })
+        .expect(201);
+    } finally {
+      await connection.collection("orders").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_order_per_request_id",
+        },
+      );
+      forgetSchemaReadiness();
+    }
+  });
 });

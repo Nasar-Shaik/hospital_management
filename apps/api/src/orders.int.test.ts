@@ -56,9 +56,19 @@ const { setPassword } = await import("./modules/auth/index.js");
 const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
 const { canTransition, isOutstanding } = await import("./modules/orders/index.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
+const { readHistory } = await import("./core/db/migrations/runner.js");
 
 const SLUG = "test-orders";
 const HOST = `${SLUG}.medicore.test`;
+/**
+ * A SECOND hospital, on its own database. Only the schema-safety block uses it, and only to prove
+ * the one thing a single-tenant suite cannot: that dropping an index in one hospital's database
+ * does not stop a different hospital ordering. Tenant isolation is the whole premise of
+ * database-per-tenant (ADR-0005), and a guard that broke it would be worse than no guard.
+ */
+const OTHER_SLUG = "test-orders-other";
+const OTHER_HOST = `${OTHER_SLUG}.medicore.test`;
 const PASSWORD = "V4lid!Password#2026";
 
 const app = createApp(createLogger({ service: "orders-int-test" }));
@@ -68,6 +78,9 @@ let tenantConnection: Awaited<ReturnType<typeof getTenantConnection>>;
 /** One token per ROLE. The whole point is that they are not interchangeable. */
 const token: Record<string, string> = {};
 let doctorId = "";
+
+const otherToken: Record<string, string> = {};
+let otherDoctorId = "";
 
 /**
  * Runs a consumer the way the RELAY runs it: inside a tenant-resolved context.
@@ -88,10 +101,15 @@ function as(role: string, req: request.Test): request.Test {
   return req.set("Host", HOST).set("Authorization", `Bearer ${token[role]}`);
 }
 
-async function login(email: string): Promise<string> {
+/** The same, for the second hospital. */
+function asOther(role: string, req: request.Test): request.Test {
+  return req.set("Host", OTHER_HOST).set("Authorization", `Bearer ${otherToken[role]}`);
+}
+
+async function login(email: string, host = HOST): Promise<string> {
   const res = await request(app)
     .post("/api/v1/auth/login")
-    .set("Host", HOST)
+    .set("Host", host)
     .send({ email, password: PASSWORD })
     .expect(200);
   return res.body.data.accessToken as string;
@@ -124,11 +142,26 @@ async function encounterWithDoctor(name: string, phone: string): Promise<string>
   return encounterId;
 }
 
+/** The same, in the second hospital. */
+async function otherEncounter(name: string, phone: string): Promise<string> {
+  const p = await asOther("reception", request(app).post("/api/v1/patients"))
+    .send({ name, gender: "female", contact: { phone } })
+    .expect(201);
+
+  const enc = await asOther("reception", request(app).post("/api/v1/encounters"))
+    .send({ patientId: p.body.data.patient.id, departmentId: otherDoctorId })
+    .expect(201);
+
+  const encounterId = enc.body.data.encounter.id as string;
+  await asOther("doctor", request(app).post(`/api/v1/encounters/${encounterId}/start`)).expect(200);
+  return encounterId;
+}
+
 beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
   await assertMailhogReachable();
-  await dropDatabases(["test_ord_master", `hms_${SLUG}`]);
+  await dropDatabases(["test_ord_master", `hms_${SLUG}`, `hms_${OTHER_SLUG}`]);
   await flushTestCache("orders");
 
   const t = await provisionTenant({
@@ -157,6 +190,9 @@ beforeAll(async () => {
     ["tech", "LAB_TECHNICIAN", "Tech Kumar"],
     ["pathologist", "PATHOLOGIST", "Dr Iyer"],
     ["radiologist", "RADIOLOGIST", "Dr Sharma"],
+    // Observations are the nurse's, and no other role in this suite holds `vitals:record`. The
+    // schema-safety block needs them to EXERCISE the proportionality claim rather than assert it.
+    ["nurse", "NURSE", "Nurse Pillai"],
   ];
 
   await runWithContext(
@@ -175,13 +211,56 @@ beforeAll(async () => {
   );
 
   for (const [key] of ROLES) token[key] = await login(`${key}@${SLUG}.test`);
-}, 180_000);
+
+  /* The second hospital — a reception desk and a doctor, which is all an order needs. */
+  const other = await provisionTenant({
+    hospitalName: "Other General",
+    slug: OTHER_SLUG,
+    planCode: "PLAN_HOSPITAL",
+    organizationType: "government_hospital",
+  });
+
+  const otherConnection = await getTenantConnection({
+    id: other.tenant.id,
+    databaseName: other.tenant.databaseName,
+  });
+
+  await runWithContext(
+    {
+      traceId: `setup-${OTHER_SLUG}`,
+      tenantId: other.tenant.id,
+      tenantSlug: OTHER_SLUG,
+      connection: otherConnection,
+    },
+    async () => {
+      await seedRbac();
+      for (const [key, roleCode, name] of [
+        ["reception", "RECEPTIONIST", "Other Desk"],
+        ["doctor", "DOCTOR", "Dr Other"],
+      ] as [string, string, string][]) {
+        const u = await createUser({
+          email: `${key}@${OTHER_SLUG}.test`,
+          name,
+          status: "invited",
+        });
+        await setPassword(u.id, PASSWORD, { mustChangePassword: false });
+        await assignRoleByCode(u.id, roleCode, []);
+        await transitionStatus(u.id, "active");
+        if (key === "doctor") otherDoctorId = u.id;
+      }
+    },
+  );
+
+  for (const key of ["reception", "doctor"]) {
+    otherToken[key] = await login(`${key}@${OTHER_SLUG}.test`, OTHER_HOST);
+  }
+}, 240_000);
 
 afterAll(async () => {
   await closeAllTenantConnections();
   await closeMaster();
   await closeRedis();
-  await dropDatabases(["test_ord_master", `hms_${SLUG}`]);
+  await dropDatabases(["test_ord_master", `hms_${SLUG}`, `hms_${OTHER_SLUG}`]);
 }, 30_000);
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -696,5 +775,400 @@ describe("an order cannot be raised against a visit that is over", () => {
       .expect(422);
 
     expect(res.body.error.code).toBe("HMS-STATE-001");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 8. RUNTIME SCHEMA SAFETY — the spine refuses to RAISE work it cannot deduplicate
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * ORDERING RUNTIME SCHEMA SAFETY.
+ *
+ * ── WHY PLACING AN ORDER IS THE MOST EXPOSED WRITE OF THE THREE ─────────────
+ * `placeOrder` performs NO read before it writes. It enters the transaction and inserts, and
+ * consults `findByRequestId` only AFTER the database has answered E11000 — so unlike dispensing
+ * there is not even a courtesy pre-check. Measured against Mongo 7 on 2026-08-17 with
+ * `one_order_per_request_id` absent: both inserts of one `requestId` are ACCEPTED, two rows exist,
+ * and recreating the index over them is then REFUSED (11000). A duplicate is a second tube of
+ * blood from a real arm, a second exposure for an X-ray, and a second bill.
+ *
+ * ── AND THE PHARMACY PATH HAS NO SECOND LOCK AT ALL ─────────────────────────
+ * `prescription.signed` reaches this same function from an EVENT — no HTTP request, therefore no
+ * `Idempotency-Key` middleware — carrying `requestId: "rx:<prescriptionId>"`. Delivery is
+ * at-least-once by design. There, the index is not merely the arbiter of a race; it is the only
+ * thing that exists.
+ *
+ * The suite drops a real index on its own throwaway tenant and puts it straight back. Readiness is
+ * cached for a minute, so every transition clears it.
+ */
+describe("ordering refuses when the database cannot enforce one-order-per-request", () => {
+  const ORDER_INDEX = "one_order_per_request_id";
+
+  async function dropOrderIndex(): Promise<void> {
+    await tenantConnection.collection("orders").dropIndex(ORDER_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreOrderIndex(): Promise<void> {
+    await tenantConnection.collection("orders").createIndex(
+      { tenantId: 1, requestId: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { requestId: { $exists: true } },
+        background: true,
+        name: ORDER_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  it("places normally while the invariant it rests on is armed", async () => {
+    const encounterId = await encounterWithDoctor("Guard Normal", "9000000200");
+
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+  });
+
+  /**
+   * ── THE REFUSAL ───────────────────────────────────────────────────────────
+   * 503 rather than 4xx: the request is correct and will work once the schema is repaired. It
+   * names the rule and the migration, because whoever is paged needs those and not a count.
+   */
+  it("answers 503 HMS-ORD-001 with Retry-After when the order index is gone", async () => {
+    const encounterId = await encounterWithDoctor("Guard Refusal", "9000000201");
+
+    await dropOrderIndex();
+    try {
+      const res = await as("doctor", request(app).post("/api/v1/orders")).send({
+        encounterId,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+        requestId: "guard-order-refusal-0001",
+      });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ORD-001");
+      expect(res.headers["retry-after"]).toBe("60");
+
+      const missing = res.body.error.details.missing as { rule: string; migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0013-orders");
+      // It must tell the doctor what to DO, not merely that something failed.
+      expect(String(res.body.error.message)).toMatch(/paper/i);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * The guard runs before the transaction opens, so a refusal cannot leave a half-raised order,
+   * an inflated `activeOrderCount`, or an `order.placed` event the lab would act on.
+   */
+  it("writes NOTHING when it refuses — no order, no visit counter, no outbox event", async () => {
+    const encounterId = await encounterWithDoctor("Guard No Write", "9000000202");
+
+    const outboxBefore = await tenantConnection.collection("outbox").countDocuments({});
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({
+          encounterId,
+          category: "lab",
+          code: "LFT",
+          name: "Liver Function Test",
+          requestId: "guard-order-nowrite-0001",
+        })
+        .expect(503);
+
+      expect(
+        await tenantConnection
+          .collection("orders")
+          .countDocuments({ requestId: "guard-order-nowrite-0001" }),
+      ).toBe(0);
+      expect(await tenantConnection.collection("outbox").countDocuments({})).toBe(outboxBefore);
+    } finally {
+      await restoreOrderIndex();
+    }
+
+    // The visit is still orderable, which is what proves the counter was never bumped: a refusal
+    // that had counted an order would let this visit be sent for tests with nothing ordered.
+    const encounter = await as(
+      "doctor",
+      request(app).get(`/api/v1/encounters/${encounterId}`),
+    ).expect(200);
+    expect(encounter.body.data.activeOrderCount).toBe(0);
+  });
+
+  it("places again the moment the index is restored", async () => {
+    const encounterId = await encounterWithDoctor("Guard Recovery", "9000000203");
+
+    await dropOrderIndex();
+    const refused = await as("doctor", request(app).post("/api/v1/orders")).send({
+      encounterId,
+      category: "lab",
+      code: "CBC",
+      name: "Complete Blood Count",
+    });
+    expect(refused.status).toBe(503);
+
+    await restoreOrderIndex();
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+  });
+
+  /**
+   * ── THE DIVERGENCE FROM MAR AND DISPENSING, TESTED ────────────────────────
+   * Both of those also require `idempotent-replay`, because each has a legitimate write carrying
+   * no module identifier — a PRN dose, a partial handover — for which the `Idempotency-Key` claim
+   * is the only lock. Ordering has no such write: both clients send `requestId` alongside the
+   * header and the pharmacy consumer sets one explicitly. So losing the claim index alone leaves
+   * ordering still arbitrated by 0013, and refusing then would block a hospital that is safe.
+   */
+  it("does NOT refuse when only the idempotency claim index is gone — 0013 still arbitrates", async () => {
+    const encounterId = await encounterWithDoctor("Guard Claim Only", "9000000204");
+
+    await tenantConnection.collection("idempotencyKeys").dropIndex("one_claim_per_idempotency_key");
+    forgetSchemaReadiness();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({
+          encounterId,
+          category: "lab",
+          code: "CBC",
+          name: "Complete Blood Count",
+          requestId: "guard-claim-only-0001",
+        })
+        .expect(201);
+
+      // And the module's own guard is demonstrably still doing the work.
+      const second = await as("doctor", request(app).post("/api/v1/orders"))
+        .send({
+          encounterId,
+          category: "lab",
+          code: "CBC",
+          name: "Complete Blood Count",
+          requestId: "guard-claim-only-0001",
+        })
+        .expect(200);
+      expect(second.body.data.duplicate).toBe(true);
+    } finally {
+      await tenantConnection.collection("idempotencyKeys").createIndex(
+        { tenantId: 1, userId: 1, key: 1 },
+        {
+          unique: true,
+          background: true,
+          name: "one_claim_per_idempotency_key",
+        },
+      );
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── WORK ALREADY ON THE BENCH MUST STILL FINISH ───────────────────────────
+   * The state machine updates a row that exists and rests on nothing this index provides. A
+   * drifted tenant that could not complete or release would strand samples mid-analysis for a
+   * rule with no bearing on them — and would keep patients in `awaiting_results` with no way out.
+   */
+  it("lets the lab accept, run, complete, verify and release while placing is refused", async () => {
+    const encounterId = await encounterWithDoctor("Guard In Flight", "9000000205");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "GLU", name: "Blood Glucose" })
+        .expect(503);
+
+      await as("tech", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+      await as("tech", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+      await as("tech", request(app).post(`/api/v1/orders/${orderId}/complete`))
+        .send({ summary: "Hb 11.9 g/dL" })
+        .expect(200);
+      await as("pathologist", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+      const released = await as(
+        "pathologist",
+        request(app).post(`/api/v1/orders/${orderId}/release`),
+      ).expect(200);
+      expect(released.body.data.status).toBe("released");
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  it("does not touch cancellation either — an order already raised can still be called off", async () => {
+    const encounterId = await encounterWithDoctor("Guard Cancel", "9000000206");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post(`/api/v1/orders/${placed.body.data.order.id}/cancel`))
+        .send({ reason: "ordered in error" })
+        .expect(200);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /** Observations are not ordering. A nurse must not lose the obs round to a lab index. */
+  it("does not block a nurse recording observations", async () => {
+    const encounterId = await encounterWithDoctor("Guard Vitals", "9000000207");
+
+    await dropOrderIndex();
+    try {
+      await as("nurse", request(app).post(`/api/v1/encounters/${encounterId}/vitals`))
+        .send({ pulse: 88, temperature: 37.1 })
+        .expect(201);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /** Reading is not writing. The worklist and the chart stay legible while placing is refused. */
+  it("does not block reads — the existing worklist is still visible", async () => {
+    const encounterId = await encounterWithDoctor("Guard Reads", "9000000208");
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+
+    await dropOrderIndex();
+    try {
+      const list = await as(
+        "tech",
+        request(app).get(`/api/v1/orders?encounterId=${encounterId}`),
+      ).expect(200);
+      expect(list.body.data).toHaveLength(1);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * Database-per-tenant (ADR-0005) means one hospital's drift is one hospital's problem. The
+   * readiness cache is keyed by tenant, and this is the test that would catch it if it were not.
+   */
+  it("does not block a DIFFERENT hospital, whose own index is intact", async () => {
+    const mine = await encounterWithDoctor("Guard Isolation", "9000000209");
+    const theirs = await otherEncounter("Other Hospital", "9000000210");
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId: mine, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(503);
+
+      await asOther("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId: theirs, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(201);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * ── A PENDING MIGRATION IS NOT A REASON TO REFUSE ─────────────────────────
+   * The runtime guard asks whether THIS capability's constraint is enforceable, not whether the
+   * tenant is fully converged — that is the deployment gate's question, and it is asked before a
+   * release rather than in front of a doctor. Un-recording a migration whose index is present
+   * changes nothing here, which is the whole distinction between the two mechanisms.
+   */
+  it("is unmoved by an un-recorded migration whose index is actually present", async () => {
+    const encounterId = await encounterWithDoctor("Guard Pending", "9000000211");
+
+    const history = tenantConnection.collection("migrations");
+    const record = await history.findOne({ _id: "0049-mar" as never });
+    await history.deleteOne({ _id: "0049-mar" as never });
+    forgetSchemaReadiness();
+    try {
+      // The deployment gate sees the tenant as behind. `readHistory` returns RECORDS, not ids —
+      // asserting `toContain("0049-mar")` against them would pass whatever the history said.
+      const applied = (await readHistory(tenantConnection)).map((r) => r._id);
+      expect(applied).toContain("0013-orders");
+      expect(applied).not.toContain("0049-mar");
+
+      // … and the doctor orders anyway, because the constraint itself is armed.
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(201);
+    } finally {
+      if (record) await history.insertOne(record);
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── FAIL CLOSED ───────────────────────────────────────────────────────────
+   * An index that exists on the right fields but is NOT unique enforces nothing. The readiness
+   * inspector must read that as unsafe rather than as "an index called that is present".
+   */
+  it("fails CLOSED when the index exists but has stopped being unique", async () => {
+    const encounterId = await encounterWithDoctor("Guard Not Unique", "9000000212");
+
+    await tenantConnection.collection("orders").dropIndex(ORDER_INDEX);
+    await tenantConnection.collection("orders").createIndex(
+      { tenantId: 1, requestId: 1 },
+      {
+        // No `unique` — the shape is right and the guarantee is gone.
+        partialFilterExpression: { requestId: { $exists: true } },
+        background: true,
+        name: ORDER_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+    try {
+      const res = await as("doctor", request(app).post("/api/v1/orders")).send({
+        encounterId,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ORD-001");
+    } finally {
+      await tenantConnection.collection("orders").dropIndex(ORDER_INDEX);
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * The `orders` collection itself being absent is a different fault from an index being absent,
+   * and it must not read as "everything is fine because the query found nothing".
+   */
+  it("fails CLOSED when the orders collection does not exist at all", async () => {
+    const encounterId = await encounterWithDoctor("Guard No Collection", "9000000213");
+
+    const saved = await tenantConnection.collection("orders").find({}).toArray();
+    await tenantConnection.collection("orders").drop();
+    forgetSchemaReadiness();
+    try {
+      const res = await as("doctor", request(app).post("/api/v1/orders")).send({
+        encounterId,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ORD-001");
+      expect(String(res.body.error.details.missing[0].found)).toMatch(/does not exist/i);
+    } finally {
+      await restoreOrderIndex();
+      await tenantConnection
+        .collection("orders")
+        .createIndex(
+          { tenantId: 1, category: 1, status: 1, priorityRank: 1, orderedAt: 1 },
+          { background: true, name: "department_worklist" },
+        );
+      if (saved.length > 0) await tenantConnection.collection("orders").insertMany(saved);
+      forgetSchemaReadiness();
+    }
   });
 });
