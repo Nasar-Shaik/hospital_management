@@ -167,6 +167,28 @@ migration is RECORDED but whose constraint is gone is **skipped** by `migrate --
 reports success while changing nothing. Those are listed as `drifted` and told to clear the record
 first.
 
+**Made deployable, 2026-08-16.** `--check` is now a release gate with a stable exit contract —
+`0` READY, `1` NOT_READY, `2` ERROR — and `--json` for a deploy step. The full command, the seven
+failure categories and the remedy for each live in **[DEPLOYMENT_GATE.md](./DEPLOYMENT_GATE.md)**;
+they are not repeated here. Four things it can now answer that it could not before, each of which
+had been reporting as something else:
+
+- **"Could not look" is no longer "the schema is wrong."** An unreachable tenant used to exit `1`
+  alongside a tenant that was genuinely behind, and the printed advice for both was "run
+  `migrate --all`" — an instruction to migrate a database nobody can reach.
+- **A history that cannot have happened** — a renumbered id, or an outstanding migration sitting
+  beneath one already recorded — used to read as ordinary lag. Converging it is actively unsafe.
+- **A tenant on a NEWER schema** was invisible: measured, a database holding every known id plus
+  one unknown returned `ok: true` silently. It is now reported, and deliberately still READY —
+  expand→migrate→contract makes it servable, and failing it would block every rollback.
+- **A registry row with no `databaseName`** used to be coerced to the string `"undefined"`, and
+  mongoose opens a real database of that name. The check reported a live hospital as drifted, and
+  `migrate --all` would have created the junk database and run 49 migrations into it. Both paths
+  now refuse the row instead of inventing one.
+
+**T2 still stays open.** All of the above is still a command somebody runs, not a gauge that
+watches.
+
 **Two corrections to this entry's own history.** The predicted mitigation was the metric
 `hms_migration_pending{tenant}`; that metric is listed in OBSERVABILITY_GUIDE alongside ~20 others
 and **none of them exist** — there is no `prom-client`, no `/metrics` endpoint and no registry in

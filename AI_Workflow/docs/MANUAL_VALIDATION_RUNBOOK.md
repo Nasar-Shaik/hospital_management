@@ -145,8 +145,13 @@ pnpm seed:migrate --all        # converge every tenant
 pnpm seed:migrate --check      # read-only: is the fleet ACTUALLY converged?
 ```
 
-**Expected:** every tenant logs `tenant converged`, then `--check` prints
-`fleet converged — every tenant, schema armed` and exits 0.
+**Expected:** every tenant logs `tenant converged`, then `--check` logs `ready` for each and
+`READY — every tenant is on this release's schema, and it is armed`, exiting 0.
+
+A non-zero exit distinguishes **1** (a database was inspected and its schema is wrong — validation
+results taken against it are void) from **2** (the check could not complete, so nothing is known
+either way). Each tenant carries its own remedy, and for three of the seven failure categories the
+remedy is _not_ `seed:migrate` — see [DEPLOYMENT_GATE.md](./DEPLOYMENT_GATE.md).
 
 `--check` writes nothing and is the honest answer: it verifies the migration records **and** that
 the clinical invariants are armed in the database. Any tenant it lists as `drifted` has the
