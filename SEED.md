@@ -52,9 +52,16 @@ pnpm seed:validation
 pnpm seed:validation -- --verify     # 19 read-only checks; run it any time
 ```
 
-`--verify` writes nothing. It reports what the environment contains and, when the ward has no overdue
-dose yet, tells you the wall-clock minute the first one appears — a course runs from `signedAt`, so a
-prescription written at noon has no 08:00 dose to be late for.
+`--verify` writes nothing. **It checks both the clinical test DATA and the database SCHEMA** — the
+unique indexes without which "the same dose cannot be charted twice" and "a retry replays instead of
+repeating" are not rules but hopes. If the schema cannot enforce them it prints `VALIDATION BLOCKED`
+with the remediation and exits non-zero, rather than reporting READY on an environment where the
+thing being validated cannot fail. The seeding run refuses on the same check, so a ward is never
+built into a database that cannot police it.
+
+It also reports what the environment contains and, when the ward has no overdue dose yet, tells you
+the wall-clock minute the first one appears — a course runs from `signedAt`, so a prescription
+written at noon has no 08:00 dose to be late for.
 
 It seeds **no vitals, no nursing notes and no administered doses** on purpose: those are the writes the
 checklists exist to exercise.

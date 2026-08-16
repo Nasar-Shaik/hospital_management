@@ -56,6 +56,18 @@ idempotency replay creating a new row. **Every one was the absence of the safety
 defect in it.** After `pnpm seed:migrate --all`, all seven passed. A human working the M3 checklist
 would have raised duplicate administration as a P0 and been wrong.
 
+**Partially controlled, 2026-08-16.** `seed:validation` (both the seeding run and `--verify`) now
+refuses to touch a tenant that cannot enforce the clinical invariants, checking the canonical
+`pendingCount()` **and** the actual indexes — because a migration record is weaker evidence than the
+constraint, and a dropped index leaves the record behind. Proven by falsification: disabling the
+index inspection turns four controls red. **This gates ONE tenant at validation time and is not the
+metric T2 asks for**; it cannot see the fleet and must not be described as if it could.
+
+It also exposed a sharp edge worth knowing: when a constraint is gone but its record remains,
+`pnpm seed:migrate` **skips the migration and prints "tenant converged" while changing nothing**
+(measured: `migrationsApplied: []`, index still absent). The block message now gives that case its
+own remedy — clear the record, then converge — because the obvious instruction is wrong for it.
+
 **The predicted mitigation is still the right one and is still missing:** a _convergence metric_ —
 something that answers "is every tenant on the current schema?" without being asked. Until it exists:
 

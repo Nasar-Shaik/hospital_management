@@ -42,6 +42,12 @@ import { getTenantConnection, closeAllTenantConnections } from "../core/db/conne
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
 import { dayRangeInZone } from "../core/time/day.js";
+import { tenantMigrations } from "../core/db/migrations/tenantMigrations.js";
+import {
+  verifyTenantSchema,
+  schemaBlockedMessage,
+  CLINICAL_SAFETY_INVARIANTS,
+} from "../seed/schemaGuard.js";
 import { getBySlug } from "../modules/tenants/index.js";
 import { getByEmail } from "../modules/users/index.js";
 import { listBranches, createBranch, updateBranch } from "../modules/branches/index.js";
@@ -728,16 +734,37 @@ async function main(): Promise<void> {
   });
   const ctx: Ctx = { tenantId: tenant.id, tenantSlug: SLUG, connection };
 
+  /**
+   * ── THE SCHEMA IS CHECKED BEFORE ANYTHING ELSE, ON BOTH PATHS ───────────────
+   * Before verifying, because nineteen green data checks against a database that cannot enforce
+   * dose uniqueness is not a partial pass — it is a confident wrong answer, and the reader has no
+   * way to tell. Before SEEDING for the same reason: building a ward into an unenforceable database
+   * manufactures exactly the environment that produced the 2026-08-14 false failures.
+   *
+   * It short-circuits rather than joining the checklist. A missing constraint is not one more red
+   * line among twenty; it invalidates the other nineteen.
+   */
+  const schema = await verifyTenantSchema(connection, tenantMigrations);
+  if (!schema.ok) {
+    process.stdout.write(schemaBlockedMessage(SLUG, schema));
+    process.exitCode = 1;
+    return;
+  }
+
   if (has("--verify")) {
     const checks = await verify(ctx);
     const pad = Math.max(...checks.map((c) => c.what.length));
     const lines = checks.map((c) => `  ${c.ok ? "✓" : "✗"} ${c.what.padEnd(pad)}  ${c.detail}`);
     const failed = checks.filter((c) => !c.ok).length;
+    const armed = CLINICAL_SAFETY_INVARIANTS.map((i) => `  ✓ ${i.rule}`).join("\n");
     process.stdout.write(
-      `\n  Manual-validation environment — ${SLUG}\n${"─".repeat(78)}\n${lines.join("\n")}\n${"─".repeat(78)}\n` +
+      `\n  Manual-validation environment — ${SLUG}\n${"─".repeat(78)}\n` +
+        `  SCHEMA — the database can enforce what is being validated\n${armed}\n` +
+        `  ✓ every migration applied (${String(tenantMigrations.length)})\n\n` +
+        `  DATA\n${lines.join("\n")}\n${"─".repeat(78)}\n` +
         (failed === 0
-          ? "  READY — every check passed.\n\n"
-          : `  ${String(failed)} check(s) failed. Run \`pnpm seed:validation\` (and \`seed:demo\` first if accounts are missing).\n\n`),
+          ? "  READY — schema armed, every data check passed.\n\n"
+          : `  ${String(failed)} data check(s) failed. Run \`pnpm seed:validation\` (and \`seed:demo\` first if accounts are missing).\n\n`),
     );
     if (failed > 0) process.exitCode = 1;
     return;
