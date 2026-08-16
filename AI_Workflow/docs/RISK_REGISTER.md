@@ -7,26 +7,113 @@ Living register. Score = Likelihood (1–5) × Impact (1–5). Review monthly (S
 > a fact do not belong in one list, and the ones in §0 were all found by running the product rather
 > than by reading it.
 
-## 0. Confirmed open defects
+## 0. Confirmed defects
 
-Found by execution, reproducible, **not fixed**. Each names the evidence so the next person does not
-re-investigate.
+Found by execution, reproducible. Each names the evidence so the next person does not re-investigate.
 
-| ID  | Defect                                                                         | Sev | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Status                      |
-| --- | ------------------------------------------------------------------------------ | --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
-| D1  | **Vitals reads ignore row scope entirely** — cross-branch PHI                  | P2  | `vitals.repository.ts` contains **zero** `scopeFilter()` calls (`mar.repository.ts` has 5, `encounter.repository.ts` 7) yet the collection carries `branchId`. Probed 2026-08-14: a nurse with active branch B read a branch-A stay's vitals — **HTTP 200, 2 rows**, while schedule/administrations/notes on the same stay correctly returned 0. Writes are refused (404); reads are not. Because the filter is absent rather than merely un-narrowed, a **branch-confined** user is affected too. | **OPEN** — found 2026-08-14 |
-| D2  | **Reception register resolves `?date=` in `env.DEFAULT_TIMEZONE`**             | P2  | [`encounter.controller.ts:44`](../../apps/api/src/modules/encounters/encounter.controller.ts#L44). Its own comment says "the HOSPITAL's timezone" — true when a hospital was one site. MAR, round, worklist and clinic hours were all moved to the branch's zone; this was not.                                                                                                                                                                                                                    | **OPEN** — found 2026-08-14 |
-| D3  | **Bed-day billing counts calendar days in `env.DEFAULT_TIMEZONE`**             | P2  | [`billing.consumers.ts:393`](../../apps/api/src/modules/billing/billing.consumers.ts#L393) — `chargeBedDays` receives `branchId` and does not use it for the zone. Bed-days bill per calendar day started, so a stay at a differently-zoned site can be one night out. Money.                                                                                                                                                                                                                      | **OPEN** — found 2026-08-14 |
-| D4  | **An unknown `X-Active-Branch` is silently ignored, widening the read**        | P3  | Probed 2026-08-14: garbage, a valid-but-not-a-branch ObjectId, and another tenant's branch id all returned **200 with total=45** (all sites) instead of 42 (branch A). It **cannot exceed the caller's binding** — a confined user stays confined — so this is a correctness/robustness issue, not an escalation. A stale id yields aggregate data under a header claiming one site.                                                                                                               | **OPEN** — found 2026-08-14 |
-| D5  | **Nothing reconciles `limits.maxBranches` with the plan's catalogue limit**    | P3  | `provisionTenant` stamps no cap, so `DEFAULT_MAX_BRANCHES` (1) applies; `changePlan` writes only `subscription.planCode`. A hospital sold PLAN_HOSPITAL's 3 sites is capped at 1, and upgrading the plan does not change it. Worked around in `seed:demo`; the mismatch lives in the subscription module.                                                                                                                                                                                          | **OPEN** — found 2026-08-14 |
-| D6  | **Migration 0048 cannot build over pre-existing duplicate idempotency claims** | P3  | It adds a unique index (`one_claim_per_idempotency_key`) over rows that were previously unconstrained. Observed 2026-08-14: the migration **failed** on `hms_sunrise` until duplicates were cleared. Any tenant already holding a duplicate will fail the same way, with no pre-flight check and no remediation path.                                                                                                                                                                              | **OPEN** — found 2026-08-14 |
-| D7  | **`administeredBy` renders an identifier, not a name**                         | P3  | Confirmed on the MAR payload 2026-08-14. Needs API-side name expansion. Product decision, previously recorded.                                                                                                                                                                                                                                                                                                                                                                                     | **OPEN** — known            |
+> **Reviewed in full on 2026-08-16.** Every entry was re-verified against the code before anything
+> was changed, and three were not what this table said they were: **D4 and D5 describe deliberate,
+> documented designs**, and **D6 was an operability defect rather than the safety defect it reads
+> as**. Those corrections are below with their evidence. Reducing the count was not the goal — two
+> entries stay open on purpose, and one is a product decision nobody has taken yet.
 
-**Rated below P1 deliberately.** None of them creates, alters or loses clinical data, and none affects
-medication safety: the duplicate-administration rule, the 409-as-answer payload, idempotent replay and
-lost-response reconciliation were all verified working on 2026-08-14. D1 is the most serious because
-cross-branch PHI is the exact class multi-branch Phase 0 existed to eliminate — rate it P1 if you hold
-branch isolation to that standard.
+| ID  | Defect                                                        | Sev | Status                                    |
+| --- | ------------------------------------------------------------- | --- | ----------------------------------------- |
+| D1  | Vitals chart read ignored branch scope — cross-branch PHI     | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)       |
+| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`    | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)       |
+| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`            | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)       |
+| D4  | An unknown `X-Active-Branch` is ignored, widening the read    | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below |
+| D5  | `maxBranches` is not derived from the plan                    | P3  | 🔵 **BY DESIGN** + one product decision   |
+| D6  | Migration 0048 over pre-existing duplicate idempotency claims | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)       |
+| D7  | `administeredBy` renders an identifier, not a name            | P3  | 🟡 **OPEN** — product decision, see below |
+
+### D1 — what it was, and why the obvious fix was the wrong one
+
+`recordVitals` resolved the encounter through `getEncounter` (branch-scoped) before writing, so a
+foreign visit refused the WRITE with a 404. `listForEncounter` went straight to the repository. You
+could therefore **read a chart you could neither open nor write to** — asymmetry, not a missing
+filter. Probed 2026-08-14: HTTP 200 with rows at the other branch, while the same stay's schedule,
+administrations and notes correctly returned nothing.
+
+Fixed by resolving the encounter in the read, exactly as the write does. **Not** by adding
+`scopeFilter()` to the repository, which is the obvious fix and is wrong: `vitals.branchId` is
+optional and denormalised, so filtering on it hides any reading charted before that stamping
+existed — from everyone, including the nurse who took it. A falsification test proves this rather
+than asserting it: with the repository filter applied, all seven scope tests pass and only the
+un-stamped-row test goes red.
+
+The patient TREND read stays hospital-wide, which was always deliberate (the same exception
+allergies take) but was documented for one read while three were unscoped. It is now named
+`forPatientAcrossBranches` and pinned by a test.
+
+**The branch-confined case is now proven, not inferred.** It was the open question in this defect's
+severity assessment and the answer is yes — a bound user was affected too.
+
+### D4 — the header is IGNORED, and that is ADR-0015's choice
+
+A caller who sends an `X-Active-Branch` they may not use is **not refused**; the header is dropped
+and the request falls back to the caller's own allowed scope. ADR-0015 chose this deliberately —
+"a stale selection fails SAFE (to the caller's own scope) instead of leaking or 500-ing" — and
+`branchIsolation.int.test.ts` pins it, with a header comment stating that the suite deliberately
+does **not** assert a 4xx because that would test a design the project did not choose.
+
+It cannot exceed the caller's binding: a confined user stays confined. What a hospital-wide caller
+gets is their full scope, which is wider than the single site the stale header names — so a client
+can show one site's name over aggregate data. That is a real UX wart and it is **a product
+decision about client feedback**, not a scope defect. Reclassified; no code change.
+
+### D5 — the edition's `maxBranches` is a catalogue figure, on purpose
+
+`tenant.service.ts` says it outright: "An edition's `limits.maxBranches` is a catalogue figure that
+is never applied to a tenant", and `subscription.service.ts` repeats it — "reading the edition's
+catalogue figure here would print a number the API does not honour, in either direction." The cap
+is a per-tenant PLATFORM control an operator sets, so that the wall and the meter read one
+function. That is coherent and it is not a defect.
+
+**What is genuinely unresolved is narrower**: `provisionTenant` has the plan code in hand and
+stamps no cap, so every new hospital defaults to 1 site whatever tier was sold, and the operator
+must know to call `setLimits` separately. Both `seedDemo` and `seedValidation` carry workarounds
+for exactly this.
+
+**PRODUCT DECISION REQUIRED — not taken here.** Whether buying a 3-site plan should grant 3 sites
+automatically, or whether site count stays a deliberate per-hospital provisioning choice, is
+commercial policy. The code implements the second, with reasons written down. Changing it
+unilaterally would be an engineer deciding what the company sells.
+
+### D6 — the runner was already safe; the message was not
+
+`idempotencyKeys` has existed since 0004 with a TTL and no uniqueness, and the `idempotent()`
+middleware writes to it, so a tenant that served traffic before 0048 landed can hold two rows with
+the same identity and the unique index cannot build. Observed on `hms_sunrise`, 2026-08-14.
+
+Re-verified: **the runner records a migration only after `up` resolves**, so a failed 0048 leaves
+no record and the tenant is not falsely converged. There is a test asserting this and it passed
+before the fix. This was an operability defect, not a safety one — the answer was
+`Index build failed: <uuid>` on a tenant that had silently stopped.
+
+0048 now preflights, names the collision count, says what those rows are (a 24-hour replay cache),
+and gives two deterministic remedies. It **refuses rather than pruning**: deleting rows to make a
+migration pass is destructive (Constitution §3.9), and duplicate claims mean something already
+went wrong.
+
+### D7 — the record is complete; the display is degraded
+
+`administeredBy` is an opaque user id. The user directory needs `user:manage`, which NURSE
+correctly does not hold, so the client cannot resolve a name and says the one thing that changes
+behaviour: "by you" (your own lost attempt) or "by another member of staff" (go and ask).
+
+**Clinical accountability is intact** — the id is authoritative, stored on the MAR and audited.
+What is missing is the name at the point of a duplicate, which makes "go and ask them" harder.
+
+**Left open deliberately.** The correct fix is server-side DTO expansion, the way invoice
+signatories are already expanded — never a user-lookup path in the browser. That is a small
+feature, not a defect fix, and expanding a DTO for UI convenience is explicitly not something to
+do on the way past.
+
+**Rated below P1 deliberately.** None of these creates, alters or loses clinical data. D1 was the
+most serious because cross-branch PHI is the class multi-branch Phase 0 existed to eliminate; it is
+now closed, and whether it should have been rated P1 rather than P2 remains a product/security
+question that the fix does not retroactively answer.
 
 ## Technical
 
@@ -68,11 +155,32 @@ It also exposed a sharp edge worth knowing: when a constraint is gone but its re
 (measured: `migrationsApplied: []`, index still absent). The block message now gives that case its
 own remedy — clear the record, then converge — because the obvious instruction is wrong for it.
 
-**The predicted mitigation is still the right one and is still missing:** a _convergence metric_ —
-something that answers "is every tenant on the current schema?" without being asked. Until it exists:
+**A fleet answer now exists, 2026-08-16 (`fe6f6e7`).** `pnpm seed:migrate --check` walks every
+tenant, runs the per-tenant verdict (canonical `pendingCount` **and** whether the clinical
+invariants are actually armed), names any tenant that is behind and the rule that died, and exits
+non-zero so a deploy step or a cron can read it. It writes nothing — asking must never change the
+answer. Proven against the real fleet: 4/4 and exit 0; index dropped on one tenant → `NOT
+CONVERGED` naming it and exit 1; remediation followed → green.
 
-- `pnpm seed:migrate --all` is a **precondition of any validation run** (now stated in both device
-  checklists and `SEED.md`).
+It separates the two failure modes, because the obvious remedy is wrong for one: a tenant whose
+migration is RECORDED but whose constraint is gone is **skipped** by `migrate --all`, which then
+reports success while changing nothing. Those are listed as `drifted` and told to clear the record
+first.
+
+**Two corrections to this entry's own history.** The predicted mitigation was the metric
+`hms_migration_pending{tenant}`; that metric is listed in OBSERVABILITY_GUIDE alongside ~20 others
+and **none of them exist** — there is no `prom-client`, no `/metrics` endpoint and no registry in
+this API. And a comment on `pendingCount` claimed it fed that metric, which was false. Building a
+Prometheus surface for one gauge would mean standing up the whole observability layer as a side
+effect of a defect fix; that layer is scheduled work (P9) and **owns this problem**.
+
+**T2 STAYS OPEN.** A gauge scraped every minute tells you at 03:00 that a tenant drifted; a command
+tells you when someone runs it. What is closed is the specific failure that happened — a stale
+tenant discovered through a clinical failure. Until the observability layer exists:
+
+- `pnpm seed:migrate --check` answers convergence on demand; `--all` fixes it.
+- `pnpm seed:migrate --all` is a **precondition of any validation run** (stated in both device
+  checklists, the manual validation runbook and `SEED.md`).
 - A tenant that fails to converge must be treated as invalidating every result taken against it.
 
 **Do not treat this as closed by the manual step.** The step is a workaround for a missing control,

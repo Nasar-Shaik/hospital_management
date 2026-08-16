@@ -141,10 +141,17 @@ exist specifically so §8 can be run by two identities rather than one account s
 ### ENV-03 · Schema convergence across every tenant
 
 ```bash
-pnpm seed:migrate --all
+pnpm seed:migrate --all        # converge every tenant
+pnpm seed:migrate --check      # read-only: is the fleet ACTUALLY converged?
 ```
 
-**Expected:** every tenant logs `tenant converged`.
+**Expected:** every tenant logs `tenant converged`, then `--check` prints
+`fleet converged — every tenant, schema armed` and exits 0.
+
+`--check` writes nothing and is the honest answer: it verifies the migration records **and** that
+the clinical invariants are armed in the database. Any tenant it lists as `drifted` has the
+migration recorded but the constraint missing, and `--all` will **skip** it — clear the record for
+the named migration first.
 
 > ⚠️ **This is the step people skip, and skipping it has already cost a day.** Migrations run inside
 > hospital _provisioning_, and `seed:demo` skips provisioning for a hospital that already exists. A
@@ -1061,17 +1068,23 @@ not a side effect of this runbook._
 
 ### 19.2 Known items — record, cite, do not fix, do not re-report
 
-| Ref                 | Item                                                                                        | Sev | Where it shows up                                          | Action                                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------- | --- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **D1**              | Cross-branch **vitals** PHI read                                                            | P2  | **BR-05**                                                  | Confirm the shape, and specifically **whether the UI reaches it**. **Severity remains a product/security decision.** |
-| **D2 / GAP-1**      | Reception register `?date=` in `env.DEFAULT_TIMEZONE`                                       | P2  | **TZ-08**                                                  | Confirm; record                                                                                                      |
-| **D3 / GAP-2**      | Bed-day billing counts days in `env.DEFAULT_TIMEZONE`                                       | P2  | **TZ-09**                                                  | Confirm; record. **Money.**                                                                                          |
-| **D4**              | Unknown `X-Active-Branch` silently ignored                                                  | P3  | **BR-09**                                                  | Record                                                                                                               |
-| **D5**              | `limits.maxBranches` not reconciled with the plan                                           | P3  | ENV-02 (worked around in `seed:demo` via `maxBranches: 3`) | Record if hit                                                                                                        |
-| **D6**              | Migration 0048 cannot build over pre-existing duplicate idempotency claims                  | P3  | **ENV-03**                                                 | If a migration fails here, this is why. Clear duplicate claims, re-run, record. Not a product defect you found.      |
-| **D7**              | `administeredBy` renders an identifier, not a name                                          | P3  | MAR-01/02 evidence, §9                                     | Record. Needs API-side name expansion. **Product decision.**                                                         |
-| **T2**              | Fleet-wide migration convergence has no metric                                              | 12  | **ENV-03/04**                                              | ENV-04 gates **one tenant**. **T2 stays open** and this runbook does not close it.                                   |
-| **`not_available`** | A real `MAR_STATUS` the backend accepts and both clients **display** but neither **offers** | —   | **M3-33**                                                  | **PRODUCT DECISION REQUIRED** — should a nurse be able to select it?                                                 |
+> **Updated 2026-08-16 after a defect-resolution pass.** Four of these are now FIXED, and their
+> rows below became **regression checks**: they used to say "expect this to be wrong", and they now
+> say "this must be right". Read the Action column before running BR-05, BR-09, TZ-08 or TZ-09 —
+> the expected result has inverted. Two entries were reclassified as deliberate design rather than
+> defects, which changes what a tester should do when they meet them.
+
+| Ref                 | Item                                                                                        | Sev | Where it shows up      | Action                                                                                                                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------- | --- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~D1~~              | Cross-branch **vitals** PHI read                                                            | P2  | **BR-05**              | ✅ **FIXED 2026-08-16** (`bdc027f`). BR-05 is now a REGRESSION check — the foreign visit must 404 and the patient trend must still cross sites. **BR-07 is no longer blocked**: the branch-confined case is proven by test.     |
+| ~~D2 / GAP-1~~      | Reception register `?date=` in `env.DEFAULT_TIMEZONE`                                       | P2  | **TZ-08**              | ✅ **FIXED 2026-08-16** (`8330faa`). TZ-08 is now a regression check: the register's day is the BRANCH's day.                                                                                                                   |
+| ~~D3 / GAP-2~~      | Bed-day billing counts days in `env.DEFAULT_TIMEZONE`                                       | P2  | **TZ-09**              | ✅ **FIXED 2026-08-16** (`1719360`). TZ-09 is now a regression check. **Money — still worth eyes on.**                                                                                                                          |
+| **D4**              | Unknown `X-Active-Branch` silently ignored                                                  | —   | **BR-09**              | 🔵 **NOT A DEFECT.** ADR-0015 chose fail-safe-to-own-scope and tests pin it; BR-09 confirms the DESIGN. The UX wart — one site's name over aggregate data — is a product decision.                                              |
+| **D5**              | `limits.maxBranches` not reconciled with the plan                                           | —   | ENV-02                 | 🔵 **BY DESIGN.** The edition figure is a catalogue number deliberately never applied to a tenant. What is open is narrower and is a **PRODUCT DECISION**: should provisioning seed the cap from the plan?                      |
+| ~~D6~~              | Migration 0048 over pre-existing duplicate claims                                           | P3  | **ENV-03**             | ✅ **FIXED 2026-08-16** (`ace9512`). It now refuses with the collision count and two copy-pasteable remedies instead of `Index build failed: <uuid>`.                                                                           |
+| **D7**              | `administeredBy` renders an identifier, not a name                                          | P3  | MAR-01/02 evidence, §9 | 🟡 **OPEN, deliberately.** The record is complete and audited; only the DISPLAY is degraded. Correct fix is server-side DTO expansion. **Product decision.**                                                                    |
+| **T2**              | Fleet-wide migration convergence has no metric                                              | 12  | **ENV-03/04**          | 🟡 **PARTIAL** (`fe6f6e7`) — `pnpm seed:migrate --check` now answers convergence for the whole fleet, read-only and exit-coded. **T2 stays open**: a command is not a scraped gauge, and the observability layer owns the rest. |
+| **`not_available`** | A real `MAR_STATUS` the backend accepts and both clients **display** but neither **offers** | —   | **M3-33**              | **PRODUCT DECISION REQUIRED** — should a nurse be able to select it?                                                                                                                                                            |
 
 ### 19.3 Classifying something new
 

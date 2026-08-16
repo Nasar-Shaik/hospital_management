@@ -23,6 +23,11 @@ pnpm seed:migrate --all
 pnpm seed:clinical
 ```
 
+> Ask whether it worked with `pnpm seed:migrate --check`. It writes nothing, walks every hospital,
+> and says whether each is on the current schema **and** whether the clinical safety indexes are
+> actually there — the two are not the same question, and only the second one stops a dose being
+> charted twice.
+
 Then sign in (see **Logins** at the bottom). That's it — you don't need anything else below.
 
 > ### ⚠️ `seed:migrate --all` is not optional on a database you already had
