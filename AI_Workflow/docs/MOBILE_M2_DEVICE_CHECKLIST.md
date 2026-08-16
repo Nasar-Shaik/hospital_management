@@ -1,8 +1,11 @@
 # MOBILE M2 — REAL-DEVICE VERIFICATION CHECKLIST
 
-**Status:** the M2 doctor app is code-complete and green on CI (1256 mobile tests, 1488 API
-integration tests). **Nothing below has been exercised on physical hardware.** This is the list of
-what CI structurally cannot prove, written so that whoever holds the phone can prove it.
+**Status:** the M2 doctor app is code-complete and green (1,613 mobile tests, 1,690 API integration
+tests). Its server layer — auth, refresh rotation with reuse detection, logout revocation,
+permission-driven navigation, branch selection, chart reads, prescription signing and
+reconciliation — was pre-validated over real HTTP on 2026-08-14, **18 checks, all passing**.
+**Nothing below has been exercised on physical hardware.** This is the list of what CI structurally
+cannot prove, written so that whoever holds the phone can prove it.
 
 > **Why this document exists as a checklist and not as a test run.** The M1/M2 test strategy is
 > that everything worth defending lives outside React, so the suite runs in Node with no renderer,
@@ -18,12 +21,27 @@ skipped is more useful marked "not done" than marked "assumed fine".
 
 ## 0. Before you start
 
-|              |                                                                                                                                                                                                                                                                                 |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Build**    | `pnpm --filter @medicore/mobile start` — Expo Go is sufficient. No development build is needed: `expo-local-authentication@17.0.8` ships inside Expo Go on SDK 54 (it is in Expo's `bundledNativeModules.json` and publishes under `host.exp.exponent`).                        |
-| **API**      | A phone cannot reach `localhost`. Point `EXPO_PUBLIC_TENANT_DOMAIN` at a LAN IP or tunnel — `apps/mobile/README.md` §"A physical phone cannot use `localhost`" has the exact commands and the two-line curl that tells you whether the host resolved a tenant.                  |
-| **Accounts** | One DOCTOR at a hospital with **two active branches** in different cities, and — for §6 — one hospital whose licence is inside its grace window. The second is an operator-console change (`setLicense`, `extendDays: -1` past expiry with grace remaining), not a code change. |
-| **Devices**  | At minimum one iOS with Face ID **and** one Android with a fingerprint reader. The lock's failure modes differ per platform in ways the port deliberately hides from the code.                                                                                                  |
+> ## 🔴 STEP ZERO — converge the database first
+>
+> ```bash
+> pnpm seed:demo
+> pnpm seed:migrate --all          # ← the one people skip
+> pnpm seed:validation             # the ward, two sites, two zones
+> pnpm seed:validation -- --verify # must print READY
+> ```
+>
+> Migrations run inside hospital provisioning and `seed:demo` skips provisioning for a hospital that
+> already exists, so an older database silently runs an older schema. Found on all four local
+> tenants on 2026-08-14; it produced seven false safety failures that were purely the missing
+> indexes. **§2 (branch) is meaningless without `seed:validation`** — it is what creates the second
+> site and puts explicit timezones on both. (Risk register T2.)
+
+|              |                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Build**    | `pnpm --filter @medicore/mobile start` — Expo Go is sufficient. No development build is needed: `expo-local-authentication@17.0.8` ships inside Expo Go on SDK 54 (it is in Expo's `bundledNativeModules.json` and publishes under `host.exp.exponent`).                                                                                                                                                                                                     |
+| **API**      | A phone cannot reach `localhost`. Point `EXPO_PUBLIC_TENANT_DOMAIN` at a LAN IP or tunnel — `apps/mobile/README.md` §"A physical phone cannot use `localhost`" has the exact commands and the two-line curl that tells you whether the host resolved a tenant.                                                                                                                                                                                               |
+| **Accounts** | `drrao@sunrise.test` (`123456`). `seed:validation` gives Sunrise its two active sites with explicit, materially different zones (`Asia/Kolkata` / `America/New_York`). For §6 you also need a hospital whose licence is inside its grace window — an operator-console change (`setLicense`, `extendDays: -1` past expiry with grace remaining), not a code change. **Not yet prepared: §6's five licence rows are BLOCKED until someone works the console.** |
+| **Devices**  | At minimum one iOS with Face ID **and** one Android with a fingerprint reader. The lock's failure modes differ per platform in ways the port deliberately hides from the code.                                                                                                                                                                                                                                                                               |
 
 ---
 

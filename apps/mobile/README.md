@@ -18,10 +18,18 @@ SDK 54 is still supported by Expo, so this is a currency decision rather than a 
 carries a real cost (RN 0.81 rather than 0.86) and it is **temporary**:
 
 - **Upgrade when** the ERP moves to the same SDK, or when this app moves to a development build —
-  which it must do by **M2 anyway**, because `expo-local-authentication` (the biometric gate) does
-  not work in Expo Go, and certainly by M4 for push.
+  needed by **M4** for push, since Expo Go dropped remote push on Android from SDK 53.
 - **Do not raise the SDK alone.** Raising it silently costs whoever is holding a phone the ability
   to run the app. Move both projects, or move to a dev client first.
+
+> **Correction (2026-08-14): this file used to claim M2 forces a development build because
+> `expo-local-authentication` "does not work in Expo Go". That is very likely wrong.** SDK 54's own
+> `bundledNativeModules.json` lists `expo-local-authentication: ~17.0.8`, exactly the version
+> installed here — i.e. it is one of the modules Expo Go ships. The claim was never tested on a
+> device; it propagated into `projectTracker.md` and set the expected setup cost for M2 validation.
+> The M2 device checklist takes the opposite position with that evidence. **Settle it on hardware in
+> the first five minutes of the next device session and correct whichever document is wrong.** On
+> iOS expect the Face ID prompt to be worded as Expo Go's, which is cosmetic.
 
 M0 §1 said "the current supported Expo SDK at M1", which this satisfies — the constraint that
 decided _which_ supported SDK is recorded here.

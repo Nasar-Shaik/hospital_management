@@ -22,18 +22,21 @@ the code won and the difference is recorded in §10.
 
 ## 1. Snapshot
 
-|                       |                                                                                                                                                                  |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Branch**            | `feature/0.1` — **6 commits unpushed**                                                                                                                           |
-| **Phases complete**   | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                   |
-| **API**               | 43 modules · 224 OpenAPI paths · 273 contract operations                                                                                                         |
-| **Web**               | 46 screens                                                                                                                                                       |
-| **Mobile**            | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                     |
-| **Tests passing**     | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                          |
-| **Gates**             | `format` · `lint` 18/18 · `typecheck` 18/18 · `unit` · `integration` · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — all green at `375e4cf` |
-| **Manual validation** | 🔴 **None.** Mobile M2 0/61 · M3 0/45 · no web checklist exists. Everything since M1 is proven by tests only.                                                    |
-| **CI**                | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                          |
-| **Next action**       | **Stage A in §9 — validate on hardware before adding surface area.**                                                                                             |
+|                        |                                                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Branch**             | `feature/0.1` — **8 commits unpushed**, HEAD `70e5a6e`                                                                                                                               |
+| **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                       |
+| **API**                | 43 modules · 224 OpenAPI paths · 273 contract operations                                                                                                                             |
+| **Web**                | 46 screens                                                                                                                                                                           |
+| **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                         |
+| **Tests passing**      | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                                              |
+| **Gates**              | `format` · `lint` 18/18 · `typecheck` 18/18 · `unit` · `integration` · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — all green at `375e4cf`                     |
+| **Test environment**   | ✅ **Ready** — `pnpm seed:validation` builds a 45-bed, 42-patient ward across two sites and two timezones; `--verify` is 19 read-only checks. See `SEED.md`.                         |
+| **API pre-validation** | ✅ 2026-08-14 — **43 server-side safety checks**, two real nurses racing one dose. Duplicate prevention, 409-as-answer, idempotent replay and lost-response reconciliation all hold. |
+| **Manual validation**  | 🔴 **0 of 106 + web.** Mobile M2 0/61 · M3 0/45 · the web checklist is written but unexecuted. **Nothing has been seen on a screen by a person.**                                    |
+| **Open defects**       | 7 — `docs/RISK_REGISTER.md` §0. Worst is **D1**, cross-branch vitals reads. **No P0, no P1.**                                                                                        |
+| **CI**                 | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                                              |
+| **Next action**        | **Stage A in §9 — Phase 2 of manual validation. Web first: it needs no device and D-1/D-2 have never been opened in a browser.**                                                     |
 
 ---
 
@@ -199,16 +202,20 @@ resolution so the next audit does not re-investigate them.
 
 ### Open risks, current
 
-| Risk                                                                                        | Severity                                                                    |
-| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **Nothing has been validated on a device or in a browser by a human** — 106 checks unticked | 🔴 Highest. Everything since M1 rests on tests alone.                       |
-| **CI is billing-locked**; 6 commits unpushed                                                | 🔴 The work exists on one machine and has never been built anywhere else.   |
-| **F5 expiry is captured and never read**                                                    | 🟠 An expired batch can be dispensed with no signal.                        |
-| **A nurse cannot write a nursing note** — ward notes are gated `emr:write`                  | 🟠 The permission boundary is correct; the missing thing is a nursing note. |
-| **`administeredBy` shows an id, not a name** on the MAR                                     | 🟡 API-side name expansion.                                                 |
-| **Allergy screening covers 15 demo drugs and is not a formulary**                           | 🟠 Do not widen the drug list without widening the safety data.             |
-| **Vitals render in the reader's timezone, not the ward's**                                  | 🟡 Display only; the stored instant is correct.                             |
-| Integration suite is **environment-sensitive**, not flaky — the host swaps under load       | 🟡 Re-run before investigating; check Docker memory first.                  |
+**Confirmed defects now live in [`docs/RISK_REGISTER.md` §0](docs/RISK_REGISTER.md)** — D1–D7, each
+with its evidence. A found defect and a predicted risk are different things and no longer share a
+list. What remains here is the standing risk picture.
+
+| Risk                                                                                          | Severity                                                                                                                          |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Nothing has been validated on a device or in a browser by a human** — 106 checks unticked   | 🔴 Highest. The API layer beneath them was pre-validated 2026-08-14; the UI was not.                                              |
+| **Tenant databases do not converge on their own** — risk register T2, materialised 2026-08-14 | 🔴 A stale tenant silently loses its safety indexes. `seed:migrate --all` is a workaround for a missing control, not a fix.       |
+| **CI is billing-locked**; 8 commits unpushed                                                  | 🔴 The work exists on one machine and has never been built anywhere else.                                                         |
+| **F5 expiry is captured and never read**                                                      | 🟠 An expired batch can be dispensed with no signal.                                                                              |
+| **Web has no nursing-note surface** — the ward page gates notes on `emr:write`                | 🟠 Mobile gained `POST /nursing-notes` (`nursing:manage`) at M3-S2; web did not. The boundary is correct; the surface is missing. |
+| **Allergy screening covers 15 demo drugs and is not a formulary**                             | 🟠 Do not widen the drug list without widening the safety data.                                                                   |
+| **Vitals render in the reader's timezone, not the ward's**                                    | 🟡 Display only; the stored instant is correct.                                                                                   |
+| Integration suite is **environment-sensitive**, not flaky — the host swaps under load         | 🟡 Re-run before investigating; check Docker memory first.                                                                        |
 
 ---
 
@@ -226,9 +233,16 @@ resolution so the next audit does not re-investigate them.
 | M7    | Hardening — accessibility, offline reads, store release                   | ⬜                                     |
 | M8    | **Patient app — deferred to the final major phase, lowest priority**      | ⬜ Deferred                            |
 
-**M2 forces a development build.** `expo-local-authentication` does not run in Expo Go. That is
-also the point at which the Expo SDK 54 pin can be lifted — see `apps/mobile/README.md` for why it
-must not be raised on its own.
+**"M2 forces a development build" is probably wrong, and this file said it.** `expo-local-authentication@~17.0.8`
+is listed in SDK 54's own `bundledNativeModules.json` and matches the installed version exactly, so
+Expo Go should run the biometric gate. [`apps/mobile/README.md`](../apps/mobile/README.md) and the
+M2 checklist say opposite things; the checklist has the evidence. **Settle it in the first five
+minutes of the next device session** — the whole setup cost turns on it. The SDK 54 pin must still
+not be raised on its own, for the reason the README gives.
+
+**The API beneath M2 and M3 was pre-validated on 2026-08-14** — 43 server-side checks including two
+real nurses racing one dose. That ticks no device row, but it means a failure on the handset is a
+client failure. See the M3 checklist's closing section.
 
 ---
 
@@ -254,18 +268,34 @@ the safety envelope complete. The next web work is validation, not code.
 
 Ordered by what makes the next stage cheaper or safer, not by what is most interesting.
 
-### Stage A · Prove what exists — **no new features** · S
+### Stage A · Prove what exists — **no new features** · S · 🟨 IN PROGRESS
 
-Everything built since M1 is proven by tests only. 61 + 45 device checks are unticked and web has
-no checklist at all. A defect found now costs one fix; the same defect found after M4 and M5 are
-built on top costs a redesign.
+Everything built since M1 is proven by tests only. A defect found now costs one fix; the same defect
+found after M4 and M5 are built on top costs a redesign.
 
-1. Run `MOBILE_M2_DEVICE_CHECKLIST.md` on hardware → 61/61.
-2. Run `MOBILE_M3_DEVICE_CHECKLIST.md` on hardware → 45/45.
-3. **Write** `WEB_M3_BROWSER_CHECKLIST.md` — the ward, the round, the MAR confirmation, a branch
-   switch, a lost response — and run it.
-4. Resolve the push blocker (SSH unlock or `workflow` scope) and push the 6 commits.
-5. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.
+**Done (2026-08-14):**
+
+- [x] **Test environment built and verified** — `seed:validation`, 19/19 (`70e5a6e`).
+- [x] **Web checklist written** — 30 scenarios, in the Phase 1 plan.
+- [x] **API layer pre-validated** — 43 server-side checks, two nurses racing one dose. **This is
+      where the day's real finding came from:** the first run reported seven catastrophic safety
+      failures that were entirely the missing migrations 0048/0049 (risk register T2). Had a human
+      met that on a handset, duplicate administration would have been raised as a P0 and been wrong.
+
+**Left:**
+
+1. **Web first, not mobile** — it needs no build, no device, no pairing, and D-1/D-2 have _never_
+   been opened in a browser, whereas the mobile MAR has 1,613 tests around it. Highest defect
+   probability per minute.
+2. Run `MOBILE_M2_DEVICE_CHECKLIST.md` on hardware → 61/61. Gate is §1 + §2 + §7[1–3], 17 rows.
+3. Run `MOBILE_M3_DEVICE_CHECKLIST.md` on hardware → 45/45.
+4. Prepare the licence grace/expired states in the operator console — **5 M2 rows are BLOCKED
+   without it**, and it needs no code.
+5. Resolve the push blocker (SSH unlock or `workflow` scope) and push the 8 commits.
+6. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.
+
+**Every session starts with `pnpm seed:migrate --all`.** Not hygiene — T2 will silently reproduce on
+any database that predates M3, and it invalidates results without saying so.
 
 **Exit:** every checklist green, history pushed. **Do not start Stage B until this is done.**
 
@@ -359,7 +389,8 @@ copies another tracker inherits its drift. **Read the code.**
 
 ## 11. Change log for this file
 
-| Date       | Change                                                                                                                                                                                                                  |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-08-12 | Created. Baseline reconciled against the source tree, the gates and `PROJECT-STATUS.md`.                                                                                                                                |
-| 2026-08-14 | Reconciled against 24 commits (mobile M2 + M3, web W1–W4 + closure, API nurse-safety work). Tests 1,722 → 3,661. Five of six §6 gaps closed, three of them found false. Added §8 web slices and §9 stage-wise strategy. |
+| Date       | Change                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08-12 | Created. Baseline reconciled against the source tree, the gates and `PROJECT-STATUS.md`.                                                                                                                                                                                                                                                                                                                                  |
+| 2026-08-14 | Reconciled against 24 commits (mobile M2 + M3, web W1–W4 + closure, API nurse-safety work). Tests 1,722 → 3,661. Five of six §6 gaps closed, three of them found false. Added §8 web slices and §9 stage-wise strategy.                                                                                                                                                                                                   |
+| 2026-08-14 | Post-Phase-1 sync. Confirmed defects moved to `RISK_REGISTER.md` §0 (D1–D7); **T2 recorded as materialised**. Stage A marked in progress with the environment and API pre-validation done. Corrected two claims this file made: the nurse **can** write a nursing note (mobile gained the route at M3-S2 — the gap is web-only), and "M2 forces a development build" is contradicted by SDK 54's own bundled-module list. |

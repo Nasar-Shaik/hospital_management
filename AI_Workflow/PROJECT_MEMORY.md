@@ -285,6 +285,20 @@ Restarting the server cannot help: **the broken state is in the user's cookie ja
 
 **Lesson: an httpOnly cookie the server has invalidated must be actively cleared BY the server, because no one else can. "Presence = authenticated" and "the client can recover on its own" cannot both be true.**
 
+### A safety mechanism absent from the database looks exactly like a safety mechanism that is broken (2026-08-14)
+
+The first server-side safety probe against the local `sunrise` tenant reported seven catastrophic results: **two nurses both succeeded on the same dose**, second attempts created duplicates, and every idempotency replay wrote a new row. Every one of them is the headline property M3 was built to guarantee, and all seven were reported by a probe that was working perfectly.
+
+The product was not wrong. **The database was two migrations behind.** `hms_sunrise` had 47 migrations and no `one_administration_per_dose_slot` index — 0048 and 0049 had never been applied. They had never been applied to **any** of the four local tenants, because migrations run inside `provisionTenant` and `seed:demo` skips provisioning for a hospital that already exists. Nothing else converges a tenant, and nothing warns. After `pnpm seed:migrate --all`, all seven passed.
+
+Two things follow, and the second is the important one.
+
+First: **the risk register predicted this in July and scored it 12** (T2, "mixed schema versions"), with the mitigation "per-tenant migration tracking + convergence metric". The tracking exists. The _metric_ — the thing that answers "is every tenant current?" without being asked — was never built, and its absence is exactly what let this sit unnoticed on a developer machine for weeks.
+
+Second: **a uniqueness constraint is invisible until it is contradicted.** Nothing in the app, the gate, the OpenAPI or the test suite reads differently on a database missing an index — the integration suite passes because it builds its own database, correctly migrated, every run. The only way to see it was to try to violate the rule and watch nothing stop you.
+
+**Lesson: verify the schema, not just the data, before trusting any result taken against a long-lived database.** A validation environment that checks its own contents and not its own schema will certify a database that cannot enforce the thing being validated. The `--verify` in `seed:validation` checked 19 facts about the data and would have passed happily on an unindexed database; that was a real gap in it. And when a safety probe reports that a safety mechanism has failed, **the first hypothesis is that the mechanism is not installed** — a human meeting this on a handset would have raised duplicate administration as a P0 and been wrong.
+
 ## 6. Future Ideas (parking lot, unranked)
 
 Kiosk self-check-in · bedside patient tablet app · RTLS asset tracking · WhatsApp-first booking flows · denial-prediction model · FHIR bulk-export for research · marketplace add-on packs (Doc 07 §4 extensions) · voice-first nursing documentation.

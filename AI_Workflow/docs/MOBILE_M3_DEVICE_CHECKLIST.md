@@ -1,8 +1,10 @@
 # MOBILE M3 — NURSE: REAL-DEVICE VERIFICATION CHECKLIST
 
-**Status at M3-S6:** the nurse app is **engineering-complete on automated and simulator evidence,
-pending manual real-device validation.** 1613 mobile tests, 1672 API integration tests, both green.
-**Nothing below marked MANUAL has been exercised on physical hardware.**
+**Status:** the nurse app is **engineering-complete on automated evidence, pending manual real-device
+validation.** 1,613 mobile tests and 1,690 API integration tests green, and on 2026-08-14 the API
+beneath this checklist was separately pre-validated by a server-side probe — 43 checks including two
+real nurses racing one dose (see the closing section). **Nothing below marked MANUAL has been
+exercised on physical hardware.**
 
 > This is the M2 checklist's sibling and the same rule applies: **do not tick a hardware row you
 > did not perform.** A row marked "not done" is more useful than one marked "assumed fine". M2's
@@ -16,13 +18,36 @@ or **MANUAL REQUIRED** (nothing in CI can see it).
 
 ## 0. Before you start
 
-|                              |                                                                                                                                                                                                                                                                                           |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Build**                    | `pnpm --filter @medicore/mobile start` — Expo Go is sufficient.                                                                                                                                                                                                                           |
-| **API**                      | A phone cannot reach `localhost`; see `apps/mobile/README.md`.                                                                                                                                                                                                                            |
-| **Accounts**                 | One NURSE at a hospital with **two active branches in different timezones** (e.g. Asia/Kolkata and America/New_York) — several rows below are meaningless without the timezone gap.                                                                                                       |
-| **Data**                     | A ward with **more than 40 admitted patients** (the round's page size) so pagination is real; at least one patient with a **severe allergy**; at least one prescription with the SAME drug on a scheduled line AND an SOS line; one patient on a TDS drug so there are three slots today. |
-| **Second device or browser** | Several rows need a **second nurse acting concurrently**. A second phone is ideal; the web app signed in as another nurse also works.                                                                                                                                                     |
+> ## 🔴 STEP ZERO — converge the database, or every result below is void
+>
+> ```bash
+> pnpm seed:demo
+> pnpm seed:migrate --all          # ← the one people skip
+> pnpm seed:validation
+> pnpm seed:validation -- --verify # must print READY, 19/19
+> ```
+>
+> **Migrations run inside hospital provisioning, and `seed:demo` skips provisioning for a hospital
+> that already exists.** A database created before M3 therefore has no
+> `one_administration_per_dose_slot` index — the constraint that stops the same dose being charted
+> twice — and nothing on screen says so.
+>
+> This was found on 2026-08-14 on all four local tenants. A probe against that database reported two
+> nurses both succeeding on one dose, duplicate second attempts, and every idempotency replay
+> creating a new row. **All of it was the missing index, not a defect.** After the migration, all of
+> it passed.
+>
+> **If §9 fails, re-run step zero and repeat before writing a defect report.** A tenant that will not
+> converge invalidates every row on this page. (Risk register T2.)
+
+|                              |                                                                                                                                                                                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Build**                    | `pnpm --filter @medicore/mobile start` — Expo Go is sufficient.                                                                                                                                                                                                                            |
+| **API**                      | A phone cannot reach `localhost`; see `apps/mobile/README.md`.                                                                                                                                                                                                                             |
+| **Accounts**                 | `nurse@sunrise.test` and `nurse2@sunrise.test` (`123456`), both hospital-wide, from `seed:demo`. Sunrise carries two active branches in different zones — Main Branch `Asia/Kolkata` and a second site `America/New_York`, 9½ hours apart, so §11 is testable in office hours.             |
+| **Data**                     | `seed:validation` builds it: **45 beds, 42 admitted** (3 pages at the round's page size of 20), a severe allergy, the same drug on a scheduled AND an SOS line, a 3-line prescription so `lineIndex` identity is a position rather than "the only line", and 30 patients with nothing due. |
+| **Overdue doses**            | A course runs from `signedAt`, so a prescription written at noon has no 08:00 dose to be late for. `--verify` prints the minute the first overdue appears. **Seed before 08:00 ward time** for a full day of natural due→overdue transitions.                                              |
+| **Second device or browser** | Several rows need a **second nurse acting concurrently**. A second phone is ideal; the web app signed in as `nurse2@` also works.                                                                                                                                                          |
 
 ---
 
@@ -129,3 +154,29 @@ than one patient.
 
 **What automation cannot cover, and why this document exists:** a rendered pixel, an OS prompt, a
 real radio, a real second nurse, and a phone whose clock disagrees with the ward's.
+
+---
+
+## Already proven at the API, 2026-08-14 — so a failure here is a UI failure
+
+A server-side probe drove the real API with four sessions, **two of them separate nurses racing the
+same dose**. 43 checks passed on a converged database. This does **not** tick a single row above —
+every one of them is about what the app _shows_ — but it does mean that **if a scenario below fails,
+the fault is in the client, not the server.** That is worth knowing before you start bisecting.
+
+| Proven at the API    | Evidence                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Two nurses, one dose | `201` + `409 HMS-MAR-001`; exactly one administration row                                                                |
+| Second attempt       | `409 HMS-MAR-001` carrying `details.existing` — an answer, not a failure                                                 |
+| Replay of a held key | returns the **same record id**; no duplicate                                                                             |
+| Lost response        | re-read shows `given`; retry with the held key replays                                                                   |
+| Round payload        | 42/42 rows carry name + UHID + bed; 18/18 doses carry drug, dose, route, time, state                                     |
+| D-1 identity         | the long-stay patient is named by the server and IS outside the recent-100 window                                        |
+| Vitals               | server `recordedAt`, server `flags`; pulse 900 refused; key replay no-ops; same key + different body → `409 HMS-REQ-002` |
+| Permissions          | nurse writes a nursing note, is refused the doctor's ward note; doctor and receptionist both refused administration      |
+| Branch isolation     | zero overlap between sites; cross-branch **writes** refused `404`                                                        |
+| Timezone             | TDS lands 08:00/14:00/20:00 on **each ward's own clock**                                                                 |
+
+**One API defect was found and is NOT fixed** — vitals reads ignore row scope, so a branch-A stay's
+vitals are readable while working at branch B (risk register D1). It affects no row here; do not
+report it again.
