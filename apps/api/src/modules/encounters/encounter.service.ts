@@ -18,9 +18,11 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { getPatient, namesByIds } from "../patients/index.js";
@@ -131,6 +133,61 @@ function invalidTransition(from: EncounterStatus, to: EncounterStatus): AppError
 function isBedOccupiedConflict(err: unknown): boolean {
   const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
   return keyPattern ? "bed.bedCode" in keyPattern : false;
+}
+
+/**
+ * The capability that PUTTING A PATIENT IN A BED rests on. One, and only its own.
+ *
+ * ── WHY NOT `open-encounter` AS WELL ────────────────────────────────────────
+ * `one_open_encounter_per_patient` (0012) is what `arrive()` rests on, and admission's own
+ * "already admitted" refusal is an application check on `current.class === "IP"` — not an index.
+ * Losing 0012 lets a patient hold two open encounters, which is a different capability's problem
+ * and is protected separately; it does not make the BED assignment ambiguous, because every
+ * admission still passes through the occupancy key. Requiring it here would block admissions for
+ * a fault that cannot put two patients in one bed.
+ */
+const BED_REQUIRES: readonly ClinicalCapability[] = ["bed-occupancy"];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * Neither `admitPatient` nor `transferBed` reads occupancy before writing it. Both insert or
+ * update and then read E11000 as "somebody is already in that bed" — `getBed` checks the
+ * catalogue's `blocked` flag, which is a maintenance state and says nothing about who is lying
+ * there. `one_open_stay_per_bed_per_branch` (migration 0046, which widened 0020's key) is the
+ * sole arbiter.
+ *
+ * Measured against Mongo 7 on 2026-08-17 with the index absent: two patients are admitted into
+ * ICU/A-12 at the same branch, both ACCEPTED, and the bed board then shows one bed with two
+ * occupants and no way to say which is real. Recreating the index over that pair is REFUSED
+ * (11000), so the drift entrenches exactly as MAR's and dispensing's do.
+ *
+ * ── WHAT THIS DELIBERATELY DOES NOT GUARD ───────────────────────────────────
+ * Discharge, and every other way a stay ends. Closing a stay REMOVES the row from the partial
+ * filter, so it can never violate the key — measured: after `open: false` the bed accepts the
+ * next patient immediately. A drifted hospital must still be able to send people home; refusing
+ * that would fill the ward it was trying to protect. Ward-board reads are untouched for the same
+ * reason — a board that goes dark is a board nobody can use to sort the mess out.
+ */
+async function assertBedAssignmentIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), BED_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-ADM-003",
+    503,
+    "Bed assignment is unavailable on this system — allocate on the ward board and escalate",
+    {
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    60,
+  );
 }
 
 /** The queue a patient is placed in — a named doctor, or a department/OP room. */
@@ -409,6 +466,12 @@ export interface AdmitResult {
  */
 export async function admitPatient(id: string, input: AdmitInput): Promise<AdmitResult> {
   const ctx = getContext();
+
+  /**
+   * Before the transaction opens, so a refusal cannot leave the OP encounter closed with nothing
+   * to admit into — the very state the transaction exists to make impossible.
+   */
+  await assertBedAssignmentIsSafe();
 
   return withTransaction(async (session) => {
     const current = await repo.findById(id);
@@ -692,6 +755,13 @@ export interface TransferBedResult {
  * clinical record of why the patient was moved.
  */
 export async function transferBed(id: string, input: TransferBedInput): Promise<TransferBedResult> {
+  /**
+   * A move is an assignment: it vacates one bed and claims another, and the claim is arbitrated by
+   * the same key. `admissions.transferBed` delegates here, so guarding this function covers the
+   * ward-round wrapper too — there is no second door into a bed.
+   */
+  await assertBedAssignmentIsSafe();
+
   const current = await repo.findById(id);
   if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
 

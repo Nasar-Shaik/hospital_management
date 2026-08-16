@@ -36,6 +36,7 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedTariff } = await import("./seed/tariff.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
 
 const PVT = "test-adm-pvt";
 const GOV = "test-adm-gov";
@@ -1199,5 +1200,298 @@ describe("a ward note honours Idempotency-Key", () => {
 
     expect(res.status).toBe(403);
     expect(await notesOf(ipId)).toHaveLength(0);
+  });
+});
+
+/**
+ * BED-OCCUPANCY RUNTIME SCHEMA SAFETY.
+ *
+ * ── WHY THE INDEX IS THE ONLY THING THAT KNOWS WHO IS IN A BED ──────────────
+ * Neither `admitPatient` nor `transferBed` reads occupancy before writing it. Both write and then
+ * read E11000 as "somebody is already there"; the catalogue check they DO perform reads
+ * `bed.status === "blocked"`, which is a maintenance flag and says nothing about the person lying
+ * in it. `one_open_stay_per_bed_per_branch` (migration 0046, which widened 0020's key so two
+ * sites may each own an "ICU") is the sole arbiter.
+ *
+ * Measured against Mongo 7 on 2026-08-17 with the index absent: two patients admitted into
+ * ICU/A-12 at one branch, both ACCEPTED, two open stays in one bed. Recreating the index over that
+ * pair is then REFUSED (11000), so the drift entrenches exactly as MAR's and dispensing's do.
+ *
+ * ── AND WHY DISCHARGE IS DELIBERATELY NOT GUARDED ───────────────────────────
+ * Closing a stay REMOVES the row from the partial filter, so it can never violate the key —
+ * measured: after `open: false` the bed accepts the next patient immediately. A drifted hospital
+ * must still be able to send people home; refusing that would fill the ward the refusal is
+ * protecting.
+ */
+describe("bed assignment refuses when the database cannot enforce one stay per bed", () => {
+  const BED_INDEX = "one_open_stay_per_bed_per_branch";
+
+  async function dropBedIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("encounters").dropIndex(BED_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreBedIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("encounters").createIndex(
+      { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+      {
+        unique: true,
+        partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+        background: true,
+        name: BED_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  let phone = 9300400000;
+  async function waiting(name: string): Promise<string> {
+    phone += 1;
+    return inConsultation(pvt, name, String(phone));
+  }
+
+  it("admits normally while the invariant it rests on is armed", async () => {
+    const opId = await waiting("Guard Normal");
+
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-01", tariffCode: "BED_GEN" });
+
+    expect(res.status).toBe(201);
+    await discharge(pvt, res.body.data.inpatient.id as string);
+  });
+
+  it("answers 503 HMS-ADM-003 with Retry-After when the occupancy index is gone", async () => {
+    const opId = await waiting("Guard Refusal");
+
+    await dropBedIndex(pvt);
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/encounters/${opId}/admit`),
+        pvt,
+        pvt.doctorToken,
+      ).send({ ward: "GEN", bedCode: "BG-02", tariffCode: "BED_GEN" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ADM-003");
+      expect(res.headers["retry-after"]).toBe("60");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0046-branch-aware-uniqueness");
+      // It must tell the ward what to DO, not merely that something failed.
+      expect(String(res.body.error.message)).toMatch(/ward board/i);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  /**
+   * The guard runs before the transaction opens. That matters more here than anywhere else: the
+   * admission transaction exists so the OP encounter is never left closed with nothing to admit
+   * into, and a refusal must not be the one thing that produces that state.
+   */
+  it("leaves the outpatient encounter untouched when it refuses", async () => {
+    const opId = await waiting("Guard No Write");
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).post(`/api/v1/encounters/${opId}/admit`), pvt, pvt.doctorToken)
+        .send({ ward: "GEN", bedCode: "BG-03", tariffCode: "BED_GEN" })
+        .expect(503);
+
+      const op = await auth(request(app).get(`/api/v1/encounters/${opId}`), pvt).expect(200);
+      // Still the open consultation it was — NOT `admitted`, which is terminal.
+      expect(op.body.data.status).toBe("in_progress");
+      expect(op.body.data.class).toBe("OP");
+
+      expect(
+        await pvt.connection
+          .collection("encounters")
+          .countDocuments({ "bed.bedCode": "BG-03", open: true }),
+      ).toBe(0);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  it("admits again the moment the index is restored", async () => {
+    const opId = await waiting("Guard Recovery");
+
+    await dropBedIndex(pvt);
+    const refused = await auth(
+      request(app).post(`/api/v1/encounters/${opId}/admit`),
+      pvt,
+      pvt.doctorToken,
+    ).send({ ward: "GEN", bedCode: "BG-04", tariffCode: "BED_GEN" });
+    expect(refused.status).toBe(503);
+
+    await restoreBedIndex(pvt);
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-04", tariffCode: "BED_GEN" });
+    expect(res.status).toBe(201);
+    await discharge(pvt, res.body.data.inpatient.id as string);
+  });
+
+  it("refuses a bed TRANSFER too — a move claims a bed by the same key", async () => {
+    const opId = await waiting("Guard Transfer");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-05", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      const moved = await auth(
+        request(app).post(`/api/v1/encounters/${ipId}/transfer-bed`),
+        pvt,
+        pvt.nurseToken,
+      ).send({ ward: "GEN", bedCode: "BG-06", reason: "closer to the nurses' station" });
+
+      expect(moved.status).toBe(503);
+      expect(moved.body.error.code).toBe("HMS-ADM-003");
+
+      // The patient has not moved, and no ward-round note claims they did.
+      const enc = await auth(request(app).get(`/api/v1/encounters/${ipId}`), pvt).expect(200);
+      expect(enc.body.data.bed.bedCode).toBe("BG-05");
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+    await discharge(pvt, ipId);
+  });
+
+  /**
+   * ── THE PATIENT MUST STILL BE ABLE TO GO HOME ─────────────────────────────
+   * Closing a stay removes the row from the partial filter, so discharge cannot violate the key —
+   * and a hospital that could admit nobody AND discharge nobody would simply fill up. This is the
+   * proportionality claim that matters most in this slice.
+   */
+  it("does NOT block discharge — a drifted ward must still empty", async () => {
+    const opId = await waiting("Guard Discharge");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-07", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      const out = await auth(
+        request(app).post(`/api/v1/encounters/${ipId}/discharge`),
+        pvt,
+        pvt.doctorToken,
+      ).send({ text: "For home. Ward drifted; bed freed manually.", diagnosis: "Pneumonia" });
+
+      expect(out.status).toBe(201);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  it("does not block the ward board, the round list, or any other read", async () => {
+    const opId = await waiting("Guard Reads");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-08", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).get("/api/v1/bed-board"), pvt).expect(200);
+      await auth(request(app).get("/api/v1/inpatients"), pvt, pvt.nurseToken).expect(200);
+      await auth(request(app).get(`/api/v1/encounters/${ipId}`), pvt).expect(200);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+    await discharge(pvt, ipId);
+  });
+
+  /** Observations and the nurse's own record are not bed assignment. */
+  it("does not block vitals or nursing notes for a patient already in a bed", async () => {
+    const opId = await waiting("Guard Bystander");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-09", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).post(`/api/v1/encounters/${ipId}/vitals`), pvt, pvt.nurseToken)
+        .send({ systolic: 118, diastolic: 74, pulse: 76 })
+        .expect(201);
+
+      await auth(request(app).post(`/api/v1/encounters/${ipId}/nursing-notes`), pvt, pvt.nurseToken)
+        .send({ text: "Settled. Bed board being corrected by IT." })
+        .expect(201);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+    await discharge(pvt, ipId);
+  });
+
+  /** Database-per-tenant (ADR-0005): one hospital's drift is one hospital's problem. */
+  it("does not block a DIFFERENT hospital, whose own index is intact", async () => {
+    const mine = await waiting("Guard Isolation");
+    const theirs = await inConsultation(gov, "Gov Admission", "9300500001");
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).post(`/api/v1/encounters/${mine}/admit`), pvt, pvt.doctorToken)
+        .send({ ward: "GEN", bedCode: "BG-10", tariffCode: "BED_GEN" })
+        .expect(503);
+
+      const ok = await admit(gov, theirs, {
+        ward: "GEN",
+        bedCode: "GOV-BG-01",
+        tariffCode: "BED_GEN",
+      });
+      expect(ok.status).toBe(201);
+      await discharge(gov, ok.body.data.inpatient.id as string);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  /** An index on the right fields that is not unique enforces nothing. */
+  it("fails CLOSED when the index exists but has stopped being unique", async () => {
+    const opId = await waiting("Guard Not Unique");
+
+    await pvt.connection.collection("encounters").dropIndex(BED_INDEX);
+    await pvt.connection.collection("encounters").createIndex(
+      { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+      {
+        partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+        background: true,
+        name: BED_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/encounters/${opId}/admit`),
+        pvt,
+        pvt.doctorToken,
+      ).send({ ward: "GEN", bedCode: "BG-11", tariffCode: "BED_GEN" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ADM-003");
+    } finally {
+      await pvt.connection.collection("encounters").dropIndex(BED_INDEX);
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  /**
+   * `encounters` carries TWO declared invariants. Losing the OTHER one must not stop admissions:
+   * `one_open_encounter_per_patient` is what `arrive()` rests on, and admission's own "already
+   * admitted" refusal is an application check on the encounter's class, not an index.
+   */
+  it("still admits when the OPEN-ENCOUNTER index is gone — that is a different capability", async () => {
+    const opId = await waiting("Guard Other Index");
+
+    await pvt.connection.collection("encounters").dropIndex("one_open_encounter_per_patient");
+    forgetSchemaReadiness();
+    try {
+      const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-12", tariffCode: "BED_GEN" });
+      expect(res.status).toBe(201);
+      await discharge(pvt, res.body.data.inpatient.id as string);
+    } finally {
+      await pvt.connection.collection("encounters").createIndex(
+        { tenantId: 1, patientId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true } },
+          background: true,
+          name: "one_open_encounter_per_patient",
+        },
+      );
+      forgetSchemaReadiness();
+    }
   });
 });

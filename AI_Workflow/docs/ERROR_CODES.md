@@ -40,6 +40,7 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-APT-002 | 422  | Doctor not available at this time                                               | Check schedule                                                 | no            |
 | HMS-ADM-001 | 409  | Bed already occupied                                                            | Bed board refresh; pick another                                | no            |
 | HMS-ADM-002 | 422  | Discharge blocked: pending items                                                | Clear `details.blockers` (bill/orders/summary)                 | no            |
+| HMS-ADM-003 | 503  | Bed assignment unavailable: this database cannot enforce one-stay-per-bed       | Allocate on the ward board and escalate; respect `Retry-After` | yes (backoff) |
 | HMS-EMR-001 | 403  | Record is signed and immutable                                                  | Create an amendment/new version                                | no            |
 | HMS-RX-001  | 422  | Allergy conflict (`details.allergen`)                                           | Licensed override with reason, or change drug                  | no            |
 | HMS-RX-002  | 422  | Drug interaction (`details.severity`)                                           | Review; override per policy                                    | no            |
@@ -174,3 +175,25 @@ already violate it, so every duplicate raised into a drifted tenant makes the re
 pharmacy path is the sharpest case — it reaches `placeOrder` from an event with no HTTP request,
 so no `Idempotency-Key` middleware exists there to fall back on, and at-least-once delivery is
 guaranteed by design rather than merely possible.
+
+### `HMS-ADM-003` refuses to PUT A PATIENT IN A BED, and only that
+
+`one_open_stay_per_bed_per_branch` (migration 0046, which widened 0020's key so two sites may each
+own an "ICU") is the sole arbiter of who is in a bed. Neither `admitPatient` nor `transferBed`
+reads occupancy first: both write and then read E11000 as "somebody is already there". `getBed`
+checks the catalogue's `blocked` flag, which is a maintenance state and says nothing about who is
+lying in the bed.
+
+Measured with the index absent: two patients are admitted into the same ward and bed at the same
+branch, both accepted, and the ward board then shows one bed with two occupants and no way to say
+which is real — which is also, in a fire, two people in a bay the list says holds one.
+
+It guards **admission and bed transfer**. It deliberately does not guard **discharge**, or any
+other way a stay ends: closing a stay removes the row from the partial filter and can never
+violate the key, so a drifted hospital must still be able to send people home — refusing that
+would fill the ward the refusal was protecting. Ward-board and chart reads are untouched for the
+same reason: a board that goes dark is a board nobody can use to sort the mess out.
+
+It requires `bed-occupancy` alone. `one_open_encounter_per_patient` is what `arrive()` rests on;
+admission's "already admitted" refusal is an application check on the encounter's class, not an
+index, so losing 0012 cannot put two patients in one bed.
