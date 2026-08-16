@@ -596,10 +596,22 @@ describe("branch and tenant isolation", () => {
     expect(res.status).toBe(404);
   });
 
+  /**
+   * The read now answers 404, exactly as the write above does.
+   *
+   * It used to answer `200 []`, and both are safe — neither returns a rival row. But they are
+   * different SENTENCES. `200 []` says "this visit exists and nobody has taken a reading",
+   * which is a clinical claim, and a false one; 404 says "this visit is not yours", which is
+   * the truth. On a chart, the first is the more dangerous thing to be wrong about.
+   *
+   * Changed by the D1 fix: `listForEncounter` resolves the encounter before reading, so GET and
+   * POST on this URL can no longer disagree about whether the visit exists. The assertion that
+   * matters — no rival data — is unchanged and still checked.
+   */
   it("does not leak another hospital's readings on a read either", async () => {
     const res = await readChart(rivalEncounter);
-    expect(res.status).toBe(200);
-    expect(res.body.data).toEqual([]);
+    expect(res.status).toBe(404);
+    expect(res.body.data).toBeUndefined();
   });
 });
 

@@ -161,15 +161,47 @@ export async function recordVitals(input: RecordVitalsInput): Promise<AssessedVi
   return assess(created);
 }
 
-/** Every reading on a visit, oldest first, each assessed. */
+/**
+ * Every reading on a visit, oldest first, each assessed.
+ *
+ * ── THE ENCOUNTER IS RESOLVED FIRST, AND THAT IS THE BRANCH CHECK ───────────
+ * A visit happens at exactly one site, so the encounter — not the observation — is what owns
+ * the branch. `getEncounter` filters through `scopeFilter()`, so a caller working at another
+ * site finds nothing and gets the same 404 the chart itself gives.
+ *
+ * This closes risk-register D1: `recordVitals` below already resolved the encounter, so a
+ * foreign visit refused the WRITE (404) while this read returned its observations with a 200.
+ * You could read a chart you could neither open nor write to, which meant one of the two paths
+ * was lying about the boundary.
+ *
+ * Deliberately NOT done by filtering the observation's own `branchId`: that field is optional
+ * and denormalised, so a filter on it would hide a reading from the very nurse who took it
+ * whenever the stamp was absent — a clinical regression worse than the exposure — and would
+ * create a second answer to "which site does this belong to" that can drift from the first.
+ *
+ * 404 rather than an empty list, because an empty list is a clinical claim: it says this visit
+ * exists and nobody took a reading. That is a different and more dangerous sentence than "this
+ * visit is not yours to read", and it is the one a nurse would act on.
+ */
 export async function listForEncounter(encounterId: string): Promise<AssessedVitals[]> {
-  const readings = await repo.forEncounter(encounterId);
+  const encounter = await getEncounter(encounterId);
+  if (!encounter) {
+    throw new AppError("HMS-GEN-404", 404, "Encounter not found", { encounterId });
+  }
+
+  const readings = await repo.forEncounter(encounter.id);
   return readings.map(assess);
 }
 
-/** This patient's recent readings across visits, newest first, each assessed. */
+/**
+ * This patient's recent readings across visits, newest first, each assessed.
+ *
+ * **Hospital-wide on purpose** — see the repository header. The trend is the clinical point of
+ * this read, and a trend cut at a site boundary is a trend that lies. Same exception allergies
+ * take, and bounded by the same wall: `tenantScopePlugin` keeps it inside this hospital.
+ */
 export async function listForPatient(patientId: string, limit?: number): Promise<AssessedVitals[]> {
-  const readings = await repo.forPatient(patientId, limit);
+  const readings = await repo.forPatientAcrossBranches(patientId, limit);
   return readings.map(assess);
 }
 

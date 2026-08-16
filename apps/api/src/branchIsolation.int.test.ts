@@ -60,6 +60,7 @@ const { getAppointmentModel, getDoctorScheduleModel } =
 const { getWardModel, getRoomModel, getBedModel } = await import("./modules/wards/ward.model.js");
 const { getPatientModel } = await import("./modules/patients/patient.model.js");
 const { getAllergyModel } = await import("./modules/allergies/allergy.model.js");
+const { getVitalsModel } = await import("./modules/vitals/vitals.model.js");
 
 const SLUG = "test-branchiso-apollo";
 const DB = `hms_${SLUG}`;
@@ -1601,5 +1602,220 @@ describe("a tenant-wide catalogue survives having a branch selected", () => {
       .send({ price: 4_000_000 })
       .expect(200);
     expect(res.body.data.price).toBe(4_000_000);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * VITALS — A CHART READ MUST NOT OUTREACH THE CHART (risk register D1)
+ *
+ * The audit of 2026-08-14 found `vitals.repository.ts` making no `scopeFilter()` call at all,
+ * and a probe confirmed it: a caller working at Chennai read a Hyderabad visit's observations,
+ * HTTP 200 with rows, while the same stay's medication schedule, administrations and notes all
+ * correctly returned nothing and the encounter itself correctly 404'd.
+ *
+ * The interesting part is WHICH read is wrong. Two of them are not:
+ *
+ *   - `forPatient` — the trend across visits — is hospital-wide ON PURPOSE, like allergies. A
+ *     weight recorded at one site is the same person's weight at the other, and a trend broken
+ *     at a branch boundary is a trend that lies. That is pinned below so it cannot be "fixed"
+ *     by someone reading only the first half of this comment.
+ *   - `latestForEncounters` is a batch read over ids the caller's own scoped query just produced.
+ *
+ *   - `forEncounter` IS wrong, and the reason is asymmetry rather than absence: recording a
+ *     reading resolves the encounter first (`getEncounter`, branch-scoped, 404 on a foreign
+ *     visit), and reading them back does not. You can therefore READ a chart you cannot WRITE
+ *     to and cannot OPEN. One of those two paths is lying about the boundary, and it is the read.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("vitals reads stop at the branch the visit belongs to (D1)", () => {
+  /** Hospital-wide, so the ACTIVE BRANCH is the only thing narrowing her. */
+  let nurseWide = "";
+  /** Bound to Chennai alone — the case a header cannot widen. */
+  let nurseB = "";
+  let encounterA = "";
+  let encounterB = "";
+
+  beforeAll(async () => {
+    await createUserWithRole("nursewide@branchiso.test", "NURSE", []);
+    nurseWide = await login("nursewide@branchiso.test");
+    await createUserWithRole("nurseb@branchiso.test", "NURSE", [branchB]);
+    nurseB = await login("nurseb@branchiso.test");
+
+    // A visit must route to a doctor or a department; this hospital has neither yet.
+    const dept = await post("/api/v1/departments", tokenAdmin, branchA)
+      .send({ name: "General Medicine", code: "GENMED", kind: "clinical" })
+      .expect(201);
+    const departmentId = dept.body.data.id as string;
+
+    /**
+     * One visit per site. The admin opens them because a nurse holds no `encounter:create`.
+     *
+     * 200 as well as 201: a patient with a visit already open gets that one back rather than a
+     * second, and earlier groups in this file leave one open on these patients. Asserting 201
+     * would make this group depend on running first.
+     */
+    const openVisit = async (patientId: string, branch: string): Promise<string> => {
+      const res = await post("/api/v1/encounters", tokenAdmin, branch).send({
+        patientId,
+        departmentId,
+        reason: "vitals scope fixture",
+      });
+      expect([200, 201], `opening a visit failed: ${JSON.stringify(res.body)}`).toContain(
+        res.status,
+      );
+      return res.body.data.encounter.id as string;
+    };
+
+    encounterA = await openVisit(patientAId, branchA);
+    encounterB = await openVisit(patientBId, branchB);
+
+    // A reading on each, charted at the site the visit belongs to.
+    await post(`/api/v1/encounters/${encounterA}/vitals`, nurseWide, branchA)
+      .send({ pulse: 78, systolic: 120, diastolic: 80 })
+      .expect(201);
+    await post(`/api/v1/encounters/${encounterB}/vitals`, nurseWide, branchB)
+      .send({ pulse: 91, systolic: 132, diastolic: 84 })
+      .expect(201);
+  }, 60_000);
+
+  /**
+   * THE PERMISSIVE CONTROL, FIRST.
+   *
+   * A scope test that only ever denies is indistinguishable from a broken feature, and the
+   * cheapest wrong "fix" here — filtering on the observation's own `branchId`, which is an
+   * OPTIONAL denormalised field — would hide a reading from the very nurse who took it the
+   * moment that field was absent. This must stay green.
+   */
+  it("the nurse at the visit's own site reads it", async () => {
+    const res = await get(`/api/v1/encounters/${encounterA}/vitals`, nurseWide, branchA).expect(
+      200,
+    );
+    expect((res.body.data as unknown[]).length, "the site's own reading vanished").toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("REFUSES A FOREIGN VISIT to a caller working at the other site", async () => {
+    // The headline control, and the exact shape the 2026-08-14 probe caught: 200 with rows.
+    const res = await get(`/api/v1/encounters/${encounterA}/vitals`, nurseWide, branchB);
+
+    if (res.status === 200) {
+      expect(
+        (res.body.data as unknown[]).length,
+        "a Hyderabad visit's observations were readable while working at Chennai",
+      ).toBe(0);
+    } else {
+      expect([403, 404]).toContain(res.status);
+    }
+  });
+
+  it("REFUSES A FOREIGN VISIT to a BRANCH-CONFINED caller", async () => {
+    /**
+     * Distinct from the row above, and the reason D1's blast radius was never settled: a
+     * hospital-wide user is narrowed by a header she chose, a confined user is narrowed by a
+     * binding she cannot change. A filter that is absent rather than merely un-narrowed fails
+     * both, and only this row proves the second.
+     */
+    const res = await get(`/api/v1/encounters/${encounterA}/vitals`, nurseB, branchA);
+
+    if (res.status === 200) {
+      expect(
+        (res.body.data as unknown[]).length,
+        "a nurse bound to Chennai read a Hyderabad visit by naming Hyderabad in the header",
+      ).toBe(0);
+    } else {
+      expect([403, 404]).toContain(res.status);
+    }
+  });
+
+  it("holds in the other direction too", async () => {
+    // Symmetry: a filter that is right for one site and wrong for the other is keyed on the
+    // wrong thing.
+    const res = await get(`/api/v1/encounters/${encounterB}/vitals`, nurseWide, branchA);
+    if (res.status === 200) expect((res.body.data as unknown[]).length).toBe(0);
+    else expect([403, 404]).toContain(res.status);
+  });
+
+  it("matches what the MAR already does on the same foreign visit", async () => {
+    /**
+     * The consistency claim, asserted rather than assumed. `mar.repository.ts` scopes its reads
+     * and `encounter.repository.ts` scopes `findById`; vitals was the one clinical read that did
+     * not. Pinning them together means a future divergence fails here rather than in a probe.
+     */
+    const schedule = await get(
+      `/api/v1/encounters/${encounterA}/medication-schedule`,
+      nurseWide,
+      branchB,
+    );
+    if (schedule.status === 200) expect((schedule.body.data as unknown[]).length).toBe(0);
+    else expect([403, 404]).toContain(schedule.status);
+
+    const chart = await get(`/api/v1/encounters/${encounterA}`, nurseWide, branchB);
+    expect([403, 404]).toContain(chart.status);
+  });
+
+  /**
+   * THE DELIBERATE EXCEPTION, PINNED SO IT IS NOT "FIXED".
+   *
+   * Written as a test rather than a comment because the comment already existed in the
+   * repository header and did not stop the reach being read as accidental.
+   */
+  it("STILL lets the patient trend cross sites — that one is on purpose", async () => {
+    const res = await get(`/api/v1/patients/${patientAId}/vitals`, nurseWide, branchB).expect(200);
+    expect(
+      (res.body.data as unknown[]).length,
+      "the cross-visit trend was branch-filtered — a trend broken at a site boundary is a trend that lies",
+    ).toBeGreaterThan(0);
+  });
+
+  it("and the trend still stops at the TENANT", async () => {
+    // The boundary that is never negotiable. `tenantScopePlugin` forces `tenantId` onto every
+    // query, so a foreign patient id resolves to nothing rather than to another hospital's rows.
+    const foreign = new Types.ObjectId().toString();
+    const res = await get(`/api/v1/patients/${foreign}/vitals`, nurseWide, branchA).expect(200);
+    expect((res.body.data as unknown[]).length).toBe(0);
+  });
+
+  /**
+   * FALSIFICATION — the plausible wrong fix, proven wrong instead of merely asserted.
+   *
+   * The obvious way to close D1 is `scopeFilter()` inside `forEncounter`, filtering on the
+   * observation's own `branchId`. Against rows written today that appears to work, because the
+   * service stamps the encounter's branch onto every new reading — so a test using only fresh
+   * data would go green and the fix would ship.
+   *
+   * `branchId` on this collection is OPTIONAL, and readings charted before that stamping existed
+   * do not have it. A filter keyed on it makes those rows invisible to EVERYONE, including the
+   * nurse standing at the bed where they were taken. That is a worse outcome than the exposure
+   * it set out to close: a chart that silently drops its own history.
+   *
+   * This row inserts exactly such a reading and requires it to still be readable. It is the test
+   * that fails if someone "simplifies" the fix back to a repository filter.
+   */
+  it("still shows a reading that carries NO branchId at all", async () => {
+    const legacyId = await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const doc = await getVitalsModel(conn).create({
+        tenantId: tenant.id,
+        encounterId: new Types.ObjectId(encounterA),
+        patientId: new Types.ObjectId(patientAId),
+        pulse: 64,
+        recordedBy: "legacy-import",
+        recordedAt: new Date(),
+        // branchId deliberately absent — a row from before the stamp existed.
+      });
+      return doc._id.toString();
+    });
+
+    const res = await get(`/api/v1/encounters/${encounterA}/vitals`, nurseWide, branchA).expect(
+      200,
+    );
+    expect(
+      (res.body.data as { id: string }[]).some((r) => r.id === legacyId),
+      "an un-stamped historical reading vanished from its own ward — the boundary is keyed on the wrong field",
+    ).toBe(true);
   });
 });

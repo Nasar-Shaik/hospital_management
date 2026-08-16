@@ -5,10 +5,27 @@
  *   - by ENCOUNTER — "what were the observations on this visit?" (the chart, the IP day sheet);
  *   - by PATIENT — "how has this been trending?" (across visits, newest first, capped).
  *
- * Like allergies, the patient read is NOT branch-scoped: a weight recorded at one branch is the
- * same person's weight at another, and a trend broken by a branch boundary is a trend that lies.
- * `tenantScopePlugin` still forces `tenantId` onto every query, so this reaches every branch of
- * THIS hospital and no other.
+ * ── WHERE THE BRANCH BOUNDARY IS, AND WHERE IT DELIBERATELY IS NOT ──────────
+ * No read here calls `scopeFilter()`, and each one has a different reason. Written out because
+ * the previous header said only that the PATIENT read was hospital-wide, and silence about the
+ * other two was read — reasonably — as the same intent. It was not. (Risk register D1.)
+ *
+ *   `forEncounter`            — branch-scoped, BY ITS CALLER. A visit belongs to exactly one
+ *                               site, so the encounter owns the branch and the service resolves
+ *                               it through `getEncounter` (which does filter) before asking for
+ *                               readings. Filtering here instead would key the boundary on this
+ *                               collection's OPTIONAL `branchId`, which is denormalised and can
+ *                               be absent — hiding a reading from the nurse who took it.
+ *   `forPatientAcrossBranches`— hospital-wide ON PURPOSE, like allergies. A weight recorded at
+ *                               one branch is the same person's weight at another, and a trend
+ *                               broken by a branch boundary is a trend that lies. The name says
+ *                               so at every call site, the way `findByIdUnscoped` and
+ *                               `namesByIds` do in `patients`.
+ *   `latestForEncounters`     — a batch read over ids the caller's own scoped query just
+ *                               produced. It narrows an existing set; it cannot widen one.
+ *
+ * `tenantScopePlugin` forces `tenantId` onto every query regardless, so all three reach every
+ * branch of THIS hospital and no other. That wall is not negotiable and is not what D1 was about.
  *
  * Append-only: there is no update and no delete (see the model).
  */
@@ -118,12 +135,17 @@ export async function forEncounter(encounterId: string): Promise<VitalsReading[]
 }
 
 /**
- * This patient's recent readings across ALL visits, newest first.
+ * This patient's recent readings across ALL visits AND ALL BRANCHES, newest first.
+ *
+ * The name carries the reach so no call site has to come here to learn it (see the header).
  *
  * Capped because a chronic patient accumulates hundreds and a trend view needs the recent tail,
  * not the archive — an uncapped read here is the query that gets slow years after release.
  */
-export async function forPatient(patientId: string, limit = 20): Promise<VitalsReading[]> {
+export async function forPatientAcrossBranches(
+  patientId: string,
+  limit = 20,
+): Promise<VitalsReading[]> {
   if (!Types.ObjectId.isValid(patientId)) return [];
   const docs = await getVitalsModel(getTenantDb())
     .find({ patientId: new Types.ObjectId(patientId) })
