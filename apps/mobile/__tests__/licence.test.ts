@@ -17,6 +17,9 @@
  * ABSENCE of headers as expiry would disable every write button at every perpetual hospital. Both
  * mistakes are one line, and the tests below are the ones that catch them.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { MutationObserver } from "@tanstack/query-core";
 import { BRANCH_HYD, PASSWORD, USER, createHarness } from "./support/harness";
@@ -35,6 +38,10 @@ import { writeGuard } from "../src/lib/guard";
 import type { MobileRuntime } from "../src/lib/runtime";
 
 const PATIENTS = "/api/v1/patients";
+
+/** Reads a source file, relative to `apps/mobile` — the idiom `routes.test.ts` already uses. */
+const MOBILE = join(dirname(fileURLToPath(import.meta.url)), "..");
+const readSource = (path: string): string => readFileSync(join(MOBILE, path), "utf8");
 
 const licenceOf = (runtime: MobileRuntime): Licence => currentLicence(runtime.licence.getState());
 
@@ -404,5 +411,98 @@ describe("11. the server stays the authority", () => {
 
     const written = [...h.preferences.snapshot().entries(), ...h.secureStore.snapshot().entries()];
     expect(JSON.stringify(written)).not.toMatch(/GRACE|licen[cs]e/i);
+  });
+});
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * D8 — THE WARNING HAS TO REACH A SCREEN
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * ── WHAT EVERY TEST ABOVE FAILED TO NOTICE ──────────────────────────────────
+ * Section 4 proves `licenceNotice()` returns the right sentence in the right tone, in five ways.
+ * All five would pass just as happily if the component that renders it were deleted, and
+ * `routes.test.ts` only asserts that the file is ALLOWED to know about the licence, not that
+ * anything mounts it. Between them they look like coverage of a feature and cover only its policy.
+ *
+ * That gap is not hypothetical: an audit of this component on 2026-08-16 searched `src/` and the
+ * ROOT layout, concluded "zero importers", and filed it as dead code. The mount was real and one
+ * directory away, in the `(app)` group layout. A test asserting reachability would have answered
+ * that in a second — so here it is, along with the inset rule the real defect turned out to be.
+ *
+ * Structural, per this suite's house rule: these are React Native components, the runner is Node,
+ * and rendering a navigator here would test a mock. What can be checked exactly is that the wiring
+ * exists and that the two halves of the inset agreement still agree.
+ */
+describe("6. the banner is actually mounted, and owns the notch", () => {
+  const SHELL = readSource("app/(app)/_layout.tsx");
+  const BANNER = readSource("src/components/LicenceNotice.tsx");
+
+  it("is rendered by the signed-in shell, above the navigator", () => {
+    expect(SHELL).toMatch(/import \{ LicenceNotice \}/);
+    // Mounted, not merely imported — an unused import is exactly what the audit thought it found.
+    expect(SHELL).toMatch(/<LicenceNotice\s*\/>/);
+  });
+
+  /**
+   * It must sit ABOVE the navigator, not inside a screen. A banner on the home tab is missed by
+   * everyone who deep-links into a chart, which is most of how this app is used.
+   */
+  it("sits above the tab navigator rather than inside one screen", () => {
+    const banner = SHELL.indexOf("<LicenceNotice");
+    const tabs = SHELL.indexOf("<Tabs");
+
+    expect(banner).toBeGreaterThan(-1);
+    expect(tabs).toBeGreaterThan(-1);
+    expect(banner).toBeLessThan(tabs);
+  });
+
+  /**
+   * ── THE DEFECT THAT WAS ACTUALLY REPORTED ─────────────────────────────────
+   * Mounted above the navigator puts the bar OUTSIDE everything that handles a notch — `Screen`
+   * applies insets per screen and React Navigation's header applies its own, but both are below
+   * this. Without its own top inset the bar paints from y=0, under the clock and the carrier
+   * icons. That is what a user saw and described as the banner being "in the notifications place".
+   */
+  it("pads itself past the status bar, because nothing above it will", () => {
+    expect(BANNER).toMatch(/useSafeAreaInsets/);
+    expect(BANNER).toMatch(/paddingTop:\s*insets\.top/);
+  });
+
+  /**
+   * The other half of the same rule. React Navigation reads `SafeAreaInsetsContext`, so if the
+   * banner consumes the inset AND the navigator consumes it again, the header sits a status bar's
+   * height too low. Exactly one of them may own it, and which one depends on whether the banner is
+   * showing — so the shell must derive that from the same policy the banner uses.
+   */
+  it("stops the navigator consuming the same inset twice", () => {
+    expect(SHELL).toMatch(/SafeAreaInsetsContext\.Provider/);
+    expect(SHELL).toMatch(/top:\s*0/);
+    // From the shared hook, never a second copy of the policy — see `useLicenceNotice`.
+    expect(SHELL).toMatch(/useLicenceNotice/);
+  });
+
+  it("keeps the navigator's own insets untouched when there is no banner", () => {
+    // The ternary, not an unconditional zero: a healthy licence must leave the header exactly as
+    // it was, or this fix would push every header under the status bar on almost every day.
+    expect(SHELL).toMatch(/notice\s*\?\s*\{\s*\.\.\.insets,\s*top:\s*0\s*\}\s*:\s*insets/);
+  });
+
+  /**
+   * The banner and the shell must never disagree about whether it is showing, so both ask one
+   * hook, and that hook delegates to the one derivation `routes.test.ts` protects.
+   */
+  it("derives visibility from the single policy, in both places", () => {
+    const hook = readSource("src/hooks/useLicenceNotice.ts");
+
+    expect(hook).toMatch(/licenceNotice\(useLicence\(\)\)/);
+    /**
+     * The CALL, not the mention. Asserting `/useLicenceNotice/` passes on the leftover import line
+     * alone — proved by falsification: swapping the body back to `licenceNotice(useLicence())` left
+     * this test green. A guard that survives the thing it guards against is not a guard.
+     */
+    expect(BANNER).toMatch(/useLicenceNotice\(\)/);
+    expect(BANNER).not.toMatch(/licenceNotice\(/);
+    expect(SHELL).toMatch(/useLicenceNotice\(\)/);
   });
 });

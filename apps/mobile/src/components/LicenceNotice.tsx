@@ -17,15 +17,25 @@
  * next picks the phone up. It costs a fixed strip of screen for a handful of days per year.
  */
 import { StyleSheet, Text, View } from "react-native";
-import { useLicence } from "../hooks/useStores";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../hooks/useTheme";
-import { licenceNotice } from "../lib/licence";
+import { useLicenceNotice } from "../hooks/useLicenceNotice";
 import { space, typography } from "../theme/tokens";
 
 export function LicenceNotice(): React.JSX.Element | null {
   const theme = useTheme();
-  const licence = useLicence();
-  const notice = licenceNotice(licence);
+  const notice = useLicenceNotice();
+  /**
+   * ── THE BANNER OWNS THE STATUS-BAR INSET, BECAUSE NOTHING ABOVE IT DOES ─────
+   * It is mounted above the tab navigator, which puts it OUTSIDE everything that normally handles
+   * a notch: `Screen` applies its insets per screen and React Navigation's header applies its own,
+   * but both live below this. Left alone the bar therefore paints from y=0, underneath the clock
+   * and the carrier icons — which is exactly where it was reported appearing.
+   *
+   * Padding rather than a wrapping `SafeAreaView`, so the tinted surface extends up behind the
+   * status bar instead of leaving a strip of a different colour above it.
+   */
+  const insets = useSafeAreaInsets();
 
   if (!notice) return null;
 
@@ -36,7 +46,14 @@ export function LicenceNotice(): React.JSX.Element | null {
       // `alert` rather than `text`: a screen reader should announce this on arrival rather than
       // wait to be walked onto it.
       accessibilityRole="alert"
-      style={[styles.bar, { backgroundColor: theme.colors.bgElevated, borderBottomColor: tone }]}
+      style={[
+        styles.bar,
+        {
+          backgroundColor: theme.colors.bgElevated,
+          borderBottomColor: tone,
+          paddingTop: insets.top + space[2],
+        },
+      ]}
     >
       <Text style={[typography.caption, { color: theme.colors.fg }]}>{notice.message}</Text>
     </View>
@@ -46,7 +63,8 @@ export function LicenceNotice(): React.JSX.Element | null {
 const styles = StyleSheet.create({
   bar: {
     paddingHorizontal: space[4],
-    paddingVertical: space[2],
+    // `paddingTop` is set inline from the safe-area inset; this is the bottom half only.
+    paddingBottom: space[2],
     // The colour is the signal, so it is on a border rather than a fill: a full amber or red
     // background behind body text is the least readable thing a ward phone can show in sunlight.
     borderBottomWidth: 2,

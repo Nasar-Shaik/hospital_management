@@ -7,13 +7,15 @@
  * `tabsFor` decides is which ones appear in the BAR. The screen itself re-checks, and the server
  * refuses regardless: the UI hides, it does not enforce.
  */
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, Redirect, Tabs } from "expo-router";
+import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 import { requireRuntime, useRuntime } from "../../src/providers/RuntimeProvider";
 import { useCapabilities, useSession } from "../../src/hooks/useStores";
 import { useTheme } from "../../src/hooks/useTheme";
+import { useLicenceNotice } from "../../src/hooks/useLicenceNotice";
 import { LicenceNotice } from "../../src/components/LicenceNotice";
 import { TABS, splitTabs } from "../../src/navigation/tabsFor";
 
@@ -27,6 +29,18 @@ function AppLayout(): React.JSX.Element {
   const status = useSession((s) => s.status);
   const permissions = useSession((s) => s.permissions);
   const { ready } = useCapabilities();
+
+  /**
+   * ── WHO OWNS THE STATUS-BAR INSET, AND WHY IT CAN ONLY BE ONE OF THEM ───────
+   * `LicenceNotice` sits above the navigator, so when it is showing IT is the thing at the top of
+   * the window and it pads itself past the notch. React Navigation reads this context and would
+   * otherwise pad its header by the same amount again, leaving a status-bar-sized gap between the
+   * banner and the title. Handing the navigator a zeroed top while the banner is up makes the two
+   * agree, and the ternary keeps a healthy licence — almost every day — exactly as it was.
+   */
+  const insets = useSafeAreaInsets();
+  const notice = useLicenceNotice();
+  const belowNotice = useMemo(() => (notice ? { ...insets, top: 0 } : insets), [insets, notice]);
 
   /**
    * A branch-shaped refusal anywhere in the app means the list this phone is holding is out of
@@ -54,50 +68,52 @@ function AppLayout(): React.JSX.Element {
      */
     <View style={styles.shell}>
       <LicenceNotice />
-      <Tabs
-        screenOptions={{
-          headerShown: true,
-          tabBarActiveTintColor: theme.colors.brandStrong,
-          tabBarInactiveTintColor: theme.colors.fgSubtle,
-          tabBarStyle: {
-            backgroundColor: theme.colors.bgElevated,
-            borderTopColor: theme.colors.border,
-          },
-          headerStyle: { backgroundColor: theme.colors.bgElevated },
-          headerTintColor: theme.colors.fg,
-          sceneStyle: { backgroundColor: theme.colors.bg },
-          headerRight: () => (
-            <Link href="/settings" asChild>
-              <Pressable accessibilityRole="button" accessibilityLabel="Settings" hitSlop={12}>
-                <Ionicons name="settings-outline" size={22} color={theme.colors.fgMuted} />
-              </Pressable>
-            </Link>
-          ),
-        }}
-      >
-        {/* The role home. Never in the bar — it only redirects. */}
-        <Tabs.Screen name="index" options={{ href: null, headerShown: false }} />
+      <SafeAreaInsetsContext.Provider value={belowNotice}>
+        <Tabs
+          screenOptions={{
+            headerShown: true,
+            tabBarActiveTintColor: theme.colors.brandStrong,
+            tabBarInactiveTintColor: theme.colors.fgSubtle,
+            tabBarStyle: {
+              backgroundColor: theme.colors.bgElevated,
+              borderTopColor: theme.colors.border,
+            },
+            headerStyle: { backgroundColor: theme.colors.bgElevated },
+            headerTintColor: theme.colors.fg,
+            sceneStyle: { backgroundColor: theme.colors.bg },
+            headerRight: () => (
+              <Link href="/settings" asChild>
+                <Pressable accessibilityRole="button" accessibilityLabel="Settings" hitSlop={12}>
+                  <Ionicons name="settings-outline" size={22} color={theme.colors.fgMuted} />
+                </Pressable>
+              </Link>
+            ),
+          }}
+        >
+          {/* The role home. Never in the bar — it only redirects. */}
+          <Tabs.Screen name="index" options={{ href: null, headerShown: false }} />
 
-        {TABS.map((tab) => (
-          <Tabs.Screen
-            key={tab.name}
-            name={tab.name}
-            options={{
-              title: tab.title,
-              // `href: null` keeps the ROUTE reachable while removing it from the bar, which is
-              // exactly the distinction between hiding and forbidding.
-              href: shown.has(tab.name) ? undefined : null,
-              tabBarIcon: ({ color, size }) => (
-                <Ionicons name={tab.icon as never} size={size} color={color} />
-              ),
-            }}
-          />
-        ))}
+          {TABS.map((tab) => (
+            <Tabs.Screen
+              key={tab.name}
+              name={tab.name}
+              options={{
+                title: tab.title,
+                // `href: null` keeps the ROUTE reachable while removing it from the bar, which is
+                // exactly the distinction between hiding and forbidding.
+                href: shown.has(tab.name) ? undefined : null,
+                tabBarIcon: ({ color, size }) => (
+                  <Ionicons name={tab.icon as never} size={size} color={color} />
+                ),
+              }}
+            />
+          ))}
 
-        {/* Reachable from the header, never from the bar — five tabs is the ceiling (M0 §8). */}
-        <Tabs.Screen name="settings" options={{ title: "Settings", href: null }} />
-        <Tabs.Screen name="branch" options={{ title: "Branch", href: null }} />
-      </Tabs>
+          {/* Reachable from the header, never from the bar — five tabs is the ceiling (M0 §8). */}
+          <Tabs.Screen name="settings" options={{ title: "Settings", href: null }} />
+          <Tabs.Screen name="branch" options={{ title: "Branch", href: null }} />
+        </Tabs>
+      </SafeAreaInsetsContext.Provider>
     </View>
   );
 }

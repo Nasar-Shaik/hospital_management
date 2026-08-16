@@ -17,54 +17,54 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 > as**. Those corrections are below with their evidence. Reducing the count was not the goal — two
 > entries stay open on purpose, and one is a product decision nobody has taken yet.
 
-| ID  | Defect                                                        | Sev | Status                                       |
-| --- | ------------------------------------------------------------- | --- | -------------------------------------------- |
-| D1  | Vitals chart read ignored branch scope — cross-branch PHI     | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)          |
-| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`    | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)          |
-| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`            | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)          |
-| D4  | An unknown `X-Active-Branch` is ignored, widening the read    | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below    |
-| D5  | `maxBranches` is not derived from the plan                    | P3  | 🔵 **BY DESIGN** + one product decision      |
-| D6  | Migration 0048 over pre-existing duplicate idempotency claims | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)          |
-| D7  | `administeredBy` renders an identifier, not a name            | P3  | 🟡 **OPEN** — product decision, see below    |
-| D8  | Mobile licence banner is built but never mounted              | P3  | 🟡 **OPEN** — reported 2026-08-17, see below |
+| ID  | Defect                                                        | Sev | Status                                    |
+| --- | ------------------------------------------------------------- | --- | ----------------------------------------- |
+| D1  | Vitals chart read ignored branch scope — cross-branch PHI     | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)       |
+| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`    | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)       |
+| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`            | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)       |
+| D4  | An unknown `X-Active-Branch` is ignored, widening the read    | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below |
+| D5  | `maxBranches` is not derived from the plan                    | P3  | 🔵 **BY DESIGN** + one product decision   |
+| D6  | Migration 0048 over pre-existing duplicate idempotency claims | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)       |
+| D7  | `administeredBy` renders an identifier, not a name            | P3  | 🟡 **OPEN** — product decision, see below |
+| D8  | Mobile licence banner painted under the status bar            | P3  | ✅ **FIXED** 2026-08-17 — see below       |
 
-### D8 — the mobile licence warning cannot reach a screen
+### D8 — the licence banner painted underneath the status bar
 
-**Reported by a user who said they could see a licence-expiry banner in the mobile app, near the
-notifications area.** The repository evidence does not support a render path, so both the report and
-the evidence are recorded here and the discrepancy is left open rather than resolved by assumption.
+**Reported by a user**: the licence-expiry banner was appearing in the mobile app "at top
+notifications place". They were right, and the first audit of it was wrong in a way worth recording.
 
-What the code shows, as of 2026-08-17:
+**The audit's error.** This entry originally said `LicenceNotice.tsx` had zero importers and was
+never mounted. That conclusion came from grepping `apps/mobile/src` and the ROOT layout
+(`app/_layout.tsx`). The mount is real and one directory away, in the route-group layout
+`app/(app)/_layout.tsx`, which the search never covered. **The reported observation was correct and
+the repository evidence was incomplete** — the discrepancy should have been resolved by widening the
+search, not by trusting the first negative.
 
-- `apps/mobile/src/components/LicenceNotice.tsx` has **zero importers**. Nothing outside the file
-  references it.
-- `apps/mobile/app/_layout.tsx` mounts `PrivacyCover` and `LockGate` above the navigator and nothing
-  else. There is no banner slot in the mobile shell.
-- `licenceNotice()` in `src/lib/licence.ts` is therefore consumed **only** by that unmounted
-  component, so no `EXPIRING` or `GRACE` warning can paint.
+**The actual defect.** The banner is mounted above the `<Tabs>` navigator, which puts it outside
+everything that normally handles a notch: `Screen` applies insets per screen and React Navigation's
+header applies its own, but both live below it. With no inset of its own the bar painted from y=0 —
+under the clock and the carrier icons. That is precisely what "in the notifications place" describes.
 
-What IS wired, and is not this:
+The banner was also correct to be showing at all: `apollo` expired 2026-08-14 with 7 grace days, so
+on 2026-08-17 it is in `GRACE` with four days left, and `harmony` expires 2026-08-24 (`EXPIRING`).
 
-- **Write blocking.** `blocksWrites` → `hooks/useWrite.ts` disables clinical writes on `EXPIRED`.
-  That path is live and correct, and it renders licence wording next to a disabled button — a
-  plausible thing to have seen, in a different place from a top banner.
-- **The web banner.** `apps/web/components/LicenseBanner.tsx` IS mounted, in `AppShell.tsx`.
+**The fix**, in two halves, because exactly one component may own the inset:
 
-Why it was not caught: `__tests__/licence.test.ts` §4 ("the banner says something worth reading, or
-nothing") proves the POLICY thoroughly — tone, day counts, singular/plural, silence when ACTIVE —
-and nothing asserts the component is ever rendered. `__tests__/routes.test.ts` lists the file in an
-ownership allow-list, which passes either way. **This is the `nursing:manage` shape again** (see
-`PERMISSION_LIFECYCLE.md`): a complete, well-designed feature with no caller, and a test suite that
-looks like coverage.
+- `LicenceNotice` pads itself by `insets.top` — padding rather than a wrapping `SafeAreaView`, so
+  the tinted surface extends up behind the status bar instead of leaving a mismatched strip above it.
+- The group layout hands the navigator a `SafeAreaInsetsContext` with `top: 0` **while the banner is
+  showing**, because React Navigation reads that context and would otherwise pad its header by the
+  same amount again, leaving a status-bar-sized gap. A healthy licence passes the insets through
+  untouched. Both halves read one shared hook, so they cannot disagree about whether the bar is up.
 
-Consequence: a hospital gets **no in-app warning on mobile** that its subscription is lapsing — only
-a hard refusal once it already has. That is the specific case the banner was written for, since
-`GRACE` deliberately does not block.
+Licence semantics are unchanged: `blocksWrites`, `licenceNotice` and the ACTIVE/EXPIRING/GRACE/
+EXPIRED policy are all exactly as they were.
 
-**Next slice** (not done here, deliberately kept out of the MAR clinical-safety commit): mount
-`LicenceNotice` in the shell above the navigator, and add the one test the suite is missing — that a
-`GRACE`/`EXPIRING` licence actually produces a rendered warning. Before implementing, get the
-reporter to confirm the screen and platform, in case there is a render path this audit missed.
+**Why no test caught it.** `licence.test.ts` §4 proved the POLICY in five ways — tone, day counts,
+singular/plural, silence when ACTIVE — and every one of them would have passed with the component
+deleted. `routes.test.ts` only asserted the file was ALLOWED to know about the licence. Together
+they looked like coverage of a feature while covering only its policy. §6 now asserts reachability
+and the inset agreement, and each assertion was falsified by removing the thing it checks.
 
 ### D1 — what it was, and why the obvious fix was the wrong one
 
