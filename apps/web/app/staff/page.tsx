@@ -26,6 +26,7 @@ import {
   type StaffProfile,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
 import {
   Alert,
   Badge,
@@ -651,10 +652,22 @@ function StaffDetail({ member, branches }: { member: StaffMember; branches: Bran
 
 type StatusFilter = "all" | "active" | "disabled";
 
+/**
+ * One page, deliberately: the directory of a hospital is hundreds of people at most, and paging
+ * a list somebody is scanning for a colleague costs more than it saves. Named so the count row
+ * can tell the truth if a hospital ever outgrows it.
+ */
+const LIMIT = 100;
+
 function StaffDirectory() {
   const { api, can, user } = useAuth();
+  // The site the header is currently pointing at — the third thing filtering this list, and the
+  // one with no other explanation on screen.
+  const { active: activeBranch } = useBranch();
+  const activeBranchName = activeBranch?.name;
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [total, setTotal] = useState(0);
   const [roles, setRoles] = useState<Role[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [query, setQuery] = useState("");
@@ -683,11 +696,14 @@ function StaffDirectory() {
     setLoading(true);
     try {
       const page = await api.listStaff({
-        limit: 100,
+        limit: LIMIT,
         ...(query ? { q: query } : {}),
         ...(statusFilter !== "all" ? { status: statusFilter } : {}),
       });
       setStaff(page.items);
+      // `total` is what the server counted; falling back to the page length keeps the row honest
+      // rather than showing 0 if a future endpoint stops sending it.
+      setTotal(page.meta.total ?? page.items.length);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load staff.");
@@ -1012,6 +1028,35 @@ function StaffDirectory() {
               </button>
             ))}
           </div>
+
+          {/*
+            The count, and it is not decoration. This list is filtered by three things at once —
+            the search box, the status chips, and (since the directory became branch-scoped) the
+            site in the header. A directory that silently returns a subset looks exactly like a
+            directory that is complete, which is the confusion that prompted this: the same twelve
+            faces at both sites, with nothing on screen to say what the list was answering.
+
+            So it names the scope rather than only the number. `LIMIT` is the ceiling the fetch
+            asks for; if a hospital ever exceeds it the row says so instead of quietly stopping at
+            a hundred, because "100 staff" and "100 of 137 staff" are different facts.
+          */}
+          {!loading && (
+            <p className="ml-auto text-sm text-[var(--color-fg-muted)]">
+              {total > LIMIT ? (
+                <>
+                  Showing <span className="font-medium text-[var(--color-fg)]">{staff.length}</span>{" "}
+                  of <span className="font-medium text-[var(--color-fg)]">{total}</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-[var(--color-fg)]">{total}</span>{" "}
+                  {total === 1 ? "person" : "people"}
+                </>
+              )}
+              {query || statusFilter !== "all" ? " matching" : ""}
+              {activeBranchName ? ` at ${activeBranchName}` : " across all branches"}
+            </p>
+          )}
         </div>
       </Card>
 
