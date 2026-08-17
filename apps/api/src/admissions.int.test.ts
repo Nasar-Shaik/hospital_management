@@ -1562,3 +1562,106 @@ describe("a stay cannot end with two discharge summaries", () => {
     expect(again.body.error.code).toBe("HMS-STATE-001");
   });
 });
+
+/**
+ * TWO PATIENTS REACHING FOR ONE BED AT ONCE.
+ *
+ * ── WHY THIS EXISTS SEPARATELY FROM THE SEQUENTIAL TEST ─────────────────────
+ * "a patient already in a bed cannot be admitted again" proves the SEQUENTIAL case, and the
+ * schema-guard block proves what happens when the index is ABSENT. Neither proves the case the
+ * index was actually installed for: two admissions in flight together, on a healthy hospital.
+ *
+ * That gap matters because it is exactly the shape of the defect the discharge race above closed.
+ * There, the pre-read caught the sequential retry and the interleaved pair surfaced as
+ * `500 Something went wrong`, because nothing turned the duplicate-key error into an answer.
+ * `admitPatient` has the same structure — a state-machine check, then an insert arbitrated by
+ * `one_open_stay_per_bed_per_branch` — so the same question has to be asked of it rather than
+ * assumed from the code reading correctly.
+ *
+ * A 500 here would be worse than the discharge one. The clerk is standing in front of a patient
+ * who needs a bed, and "something went wrong" gives them nothing to do; "that bed is already
+ * occupied — choose a free bed" is an instruction.
+ */
+describe("one bed cannot hold two patients, however the two requests interleave", () => {
+  it("answers 201 and 409, never two admissions and never a 500", async () => {
+    const first = await inConsultation(pvt, "Bed Race One", "9500700001");
+    const second = await inConsultation(pvt, "Bed Race Two", "9500700002");
+    const bed = { ward: "GEN", bedCode: "BR-01", tariffCode: "BED_GEN" };
+
+    const send = (opId: string) =>
+      auth(request(app).post(`/api/v1/encounters/${opId}/admit`), pvt, pvt.doctorToken).send(bed);
+
+    /**
+     * Fired together on purpose. Whether they truly interleave is the scheduler's business, so
+     * this asserts the property that must hold EITHER WAY — one admission, one refusal, and the
+     * refusal is the hospital's answer rather than a stack trace.
+     */
+    const [a, b] = await Promise.all([send(first), send(second)]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+
+    expect(statuses).toEqual([201, 409]);
+
+    const refused = a.status === 409 ? a : b;
+    expect(refused.body.error.code).toBe("HMS-STATE-001");
+    expect(String(refused.body.error.message)).toMatch(/already occupied/i);
+    // The refusal has to name a next action, not just a fault.
+    expect(String(refused.body.error.details.hint)).toMatch(/free bed/i);
+
+    // Exactly one open stay in that bed, whichever way the race fell.
+    expect(
+      await pvt.connection.collection("encounters").countDocuments({
+        open: true,
+        "bed.ward": bed.ward,
+        "bed.bedCode": bed.bedCode,
+      }),
+    ).toBe(1);
+
+    /**
+     * And the loser's OUTPATIENT encounter is still open. The admission runs inside one
+     * transaction precisely so a refusal cannot leave a patient discharged from the OPD into
+     * nothing — if this is `admitted`, the rollback did not hold and the patient has vanished
+     * from both lists.
+     */
+    const loserOp = a.status === 409 ? first : second;
+    const op = await auth(request(app).get(`/api/v1/encounters/${loserOp}`), pvt).expect(200);
+    expect(op.body.data.status).not.toBe("admitted");
+  });
+
+  it("refuses a TRANSFER onto a bed another move is claiming at the same instant", async () => {
+    const oneOp = await inConsultation(pvt, "Move Race One", "9500700003");
+    const twoOp = await inConsultation(pvt, "Move Race Two", "9500700004");
+
+    const one = await admit(pvt, oneOp, { ward: "GEN", bedCode: "BR-10", tariffCode: "BED_GEN" });
+    const two = await admit(pvt, twoOp, { ward: "GEN", bedCode: "BR-11", tariffCode: "BED_GEN" });
+    const oneIp = one.body.data.inpatient.id as string;
+    const twoIp = two.body.data.inpatient.id as string;
+
+    // Both reach for the SAME empty bed. A move claims a bed by the same key an admission does.
+    const move = (ipId: string) =>
+      auth(request(app).post(`/api/v1/encounters/${ipId}/transfer-bed`), pvt, pvt.nurseToken).send({
+        ward: "GEN",
+        bedCode: "BR-12",
+        reason: "closer to the nurses' station",
+      });
+
+    const [a, b] = await Promise.all([move(oneIp), move(twoIp)]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+
+    expect(statuses).toEqual([200, 409]);
+    const refused = a.status === 409 ? a : b;
+    expect(refused.body.error.code).toBe("HMS-STATE-001");
+    expect(String(refused.body.error.message)).toMatch(/already occupied/i);
+
+    // One patient in the destination, and the one who lost is still in the bed they started in.
+    expect(
+      await pvt.connection
+        .collection("encounters")
+        .countDocuments({ open: true, "bed.ward": "GEN", "bed.bedCode": "BR-12" }),
+    ).toBe(1);
+
+    const loser = a.status === 409 ? oneIp : twoIp;
+    const stillThere = a.status === 409 ? "BR-10" : "BR-11";
+    const enc = await auth(request(app).get(`/api/v1/encounters/${loser}`), pvt).expect(200);
+    expect(enc.body.data.bed.bedCode).toBe(stillThere);
+  });
+});
