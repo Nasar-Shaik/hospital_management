@@ -63,6 +63,8 @@ the wildcard host routing are all improvised on the day.
 
 **P2-2 · No log rotation or shipping.** Pino writes to stdout; Docker's default json-file driver
 grows without bound. On a single VPS that ends as a full disk, which takes the database with it.
+_2026-08-17 P2 review: **the only item on this list that fails without anybody touching it.** Two
+lines of daemon config — do it alongside P1-2's production compose rather than scheduling it._
 
 **P2-3 · Backup is entirely manual.** DR §0 is executable and has been run once, but there is no
 cron, no rotation, no retention and no off-site copy. **RPO is the age of the last dump.**
