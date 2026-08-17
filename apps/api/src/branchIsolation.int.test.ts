@@ -2093,11 +2093,24 @@ describe("a diagnostic report file stops at the branch that produced it", () => 
    * is not a control, and it is handed out in full to anyone who legitimately holds ONE report.
    */
   it("REFUSES THE BYTES to a caller working at the other site", async () => {
-    const res = await get(`/api/v1/reports/${hydReportId}/file`, tokenMgrB, branchB);
+    const res = await get(`/api/v1/reports/${hydReportId}/file`, tokenMgrB, branchB).buffer(true);
     expect(
       [403, 404],
       `a Chennai administrator downloaded a Hyderabad report (status ${res.status})`,
     ).toContain(res.status);
+
+    /**
+     * And the response carries none of the document. The status alone is the usual proof, but it
+     * is proof by absence of a success rather than absence of the PHI — a refusal that streamed a
+     * partial body, or a future error envelope that echoed the file it declined, would still be a
+     * disclosure while satisfying the assertion above. Cheap to say what we actually mean.
+     */
+    // Whatever shape the refusal took — a JSON envelope, text, or raw bytes — read it all back.
+    const body = Buffer.isBuffer(res.body)
+      ? res.body.toString()
+      : `${res.text ?? ""}${JSON.stringify(res.body ?? {})}`;
+    expect(body, "the refusal carried PDF bytes").not.toContain("%PDF");
+    expect(body, "the refusal echoed the report's contents").not.toContain("HYDERABAD RESULT");
   });
 
   /** …and not merely because a branch was selected. A confined caller is confined in All mode too. */
