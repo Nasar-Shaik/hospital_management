@@ -125,8 +125,33 @@ selected branch and present in All mode, so it is hidden rather than orphaned.
 repository filter — but that changes a foreign visit's answer from `200 []` to `404` on the MAR
 slice, which is accepted and frozen (`3089041`). Changing an accepted clinical contract for a
 defect that cannot occur in any existing deployment is the wrong trade to make inside an audit.
-**Product decision:** take it when the encounter-resolution change is made deliberately, or
-require `--all` backfill before a second branch may be created.
+
+#### D11 and D12 are the same question — answer it once
+
+The Phase 11 pass enumerated every collection with an **optional** `branchId` whose reads
+**filter** on it. That is the whole trap class, and it has exactly three live members:
+
+| Collection                  | Read that filters               | Entry      |
+| --------------------------- | ------------------------------- | ---------- |
+| `reportFiles`               | `listForPatient` (+ `getBytes`) | **D11**    |
+| `medicationAdministrations` | 3 reads in `mar.repository.ts`  | **D12**    |
+| `wardNotes` (nursing notes) | `listForEncounter`              | same class |
+
+All three are in `seedMainBranch`'s `BACKFILL_COLLECTIONS`, so all three are protected on the
+ordinary rollout path and exposed only in the same narrow window, with the same consequence
+shape: a clinical record that exists reads as absent once a branch is selected.
+
+Three collections that already reasoned their way OUT of the class, and should stay out:
+`vitals` (D1 removed the filter and resolves the encounter instead), `billing` package
+enrollments (deliberately unfiltered so an event-driven charge still finds coverage), and
+`patients` (identity is tenant-wide by ADR-0015).
+
+**The product decision, stated once:** should an un-stamped historical row be treated as
+belonging to **every** branch, or to **none**? Answering it per module is how this became three
+entries. The two candidate mechanisms are (a) resolve the parent record, as D1 did for vitals,
+which is correct but changes `200 []` to `404` on three read contracts, or (b) refuse to create a
+second branch until the backfill has run, which closes the window without touching any clinical
+contract. **(b) is the cheaper answer and the one I would take.**
 
 ### D8 — the licence banner painted underneath the status bar
 
