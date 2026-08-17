@@ -27,6 +27,8 @@
  * here because "refused" and "ignored" look the same from a green test and are very
  * different when you are debugging why a switcher shows one thing and the list another.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { Types, type Connection } from "mongoose";
@@ -62,6 +64,7 @@ const { getPatientModel } = await import("./modules/patients/patient.model.js");
 const { getAllergyModel } = await import("./modules/allergies/allergy.model.js");
 const { getVitalsModel } = await import("./modules/vitals/vitals.model.js");
 const { getReportFileModel } = await import("./modules/reports/report.model.js");
+const { getMarModel } = await import("./modules/mar/mar.model.js");
 
 const SLUG = "test-branchiso-apollo";
 const DB = `hms_${SLUG}`;
@@ -1700,13 +1703,27 @@ describe("resolving a patient grants no access to the other branch's records", (
     expect([403, 404]).toContain(res.status);
   });
 
+  /**
+   * The route is `/medication-administrations`. This row asked for `/administrations`, which is
+   * not a route at all — so it was asserting `[403, 404]` against `notFoundHandler` and would
+   * have stayed green with the medication record wide open. Found by the 2026-08-17 audit while
+   * writing §26. The path is corrected and the expectation widened to what the read actually
+   * does, so it now measures the boundary instead of a typo.
+   */
   it("cannot read the other branch's MEDICATION RECORD for that visit", async () => {
     const res = await get(
-      `/api/v1/encounters/${hyderabadVisit}/administrations`,
+      `/api/v1/encounters/${hyderabadVisit}/medication-administrations`,
       tokenRecepB,
       branchB,
     );
-    expect([403, 404]).toContain(res.status);
+    if (res.status === 200) {
+      expect(
+        (res.body.data as unknown[]).length,
+        "a Hyderabad medication record rendered at Chennai",
+      ).toBe(0);
+    } else {
+      expect([403, 404]).toContain(res.status);
+    }
   });
 
   it("cannot read the other branch's VISIT by id", async () => {
@@ -2358,5 +2375,140 @@ describe("a report with no branchId behaves the same in the list and in the down
     ).toBe(true);
 
     await get(`/api/v1/reports/${legacyReportId}/file`, tokenAdmin).buffer(true).expect(200);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 26. THE BRANCHLESS DOSE — WHAT PROTECTS IT, AND THE WINDOW WHERE NOTHING DOES
+ *
+ * D1 established the rule: a read that filters on an OPTIONAL denormalised `branchId` hides every
+ * row written before that field was stamped. §21 pins it for vitals, where the fix was to resolve
+ * the ENCOUNTER instead of filtering.
+ *
+ * `medicationAdministrations.branchId` is optional too, and three reads in `mar.repository.ts` DO
+ * filter on it. `listAdministrations` is `repo.listByEncounter` directly — no encounter is
+ * resolved — so that filter is the only boundary, and a branchless dose is invisible to it.
+ *
+ * What actually keeps this safe is one layer further out: `seedMainBranch` lists
+ * `medicationAdministrations` among the collections it ADOPTS into the Main Branch, so on the
+ * ordinary rollout path a pre-branch dose is stamped before anyone selects a branch. That is the
+ * protection, and the first test here asserts it rather than trusting it.
+ *
+ * The adoption carries a single-branch guard — it refuses once a hospital has two sites, because
+ * "there was only one site, so it happened there" stops being true. So one window remains: a
+ * hospital that charted doses BEFORE branches existed and created its SECOND branch BEFORE
+ * running the backfill. Those rows stay branchless, the backfill reports them (§17 of this file),
+ * and on the MAR the consequence is specific and severe — a dose that was given reads as never
+ * given, and the next nurse gives it again.
+ *
+ * The second test pins that behaviour as it actually is. It is NOT a passing safety claim; it is
+ * the shape of a known limitation, recorded so the next person meets it here rather than on a
+ * ward. Risk register D12.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a branchless dose: what protects it, and the window that does not", () => {
+  let nurse = "";
+  let encounter = "";
+  let legacyDoseId = "";
+
+  beforeAll(async () => {
+    await createUserWithRole("marlegacy@branchiso.test", "NURSE", []);
+    nurse = await login("marlegacy@branchiso.test");
+
+    const dept = await post("/api/v1/departments", tokenAdmin, branchA)
+      .send({ name: "MAR Legacy Medicine", code: "MARLEG", kind: "clinical" })
+      .expect(201);
+
+    const p = await post("/api/v1/patients", tokenAdmin, branchA)
+      .send({ name: "Legacy Dose Subject", gender: "male", contact: { phone: "9000700066" } })
+      .expect(201);
+
+    const enc = await post("/api/v1/encounters", tokenAdmin, branchA).send({
+      patientId: p.body.data.patient.id as string,
+      departmentId: dept.body.data.id as string,
+      reason: "mar legacy fixture",
+    });
+    expect([200, 201]).toContain(enc.status);
+    encounter = enc.body.data.encounter.id as string;
+
+    // A dose charted before the hospital had branches: everything EXCEPT branchId.
+    legacyDoseId = await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const doc = await getMarModel(conn).create({
+        tenantId: tenant.id,
+        encounterId: new Types.ObjectId(encounter),
+        patientId: p.body.data.patient.id as string,
+        prescriptionId: new Types.ObjectId(),
+        lineIndex: 0,
+        drugCode: "PCM500",
+        drugName: "Paracetamol 500mg",
+        dose: "1 tab",
+        route: "PO",
+        status: "given",
+        administeredAt: new Date(),
+        administeredBy: "legacy-import",
+        // branchId deliberately absent — writeBranchId() returned undefined pre-rollout.
+      });
+      return doc._id.toString();
+    });
+  }, 60_000);
+
+  /**
+   * THE PROTECTION, ASSERTED. If `medicationAdministrations` ever leaves the backfill list, the
+   * ordinary rollout path starts producing permanently branchless doses and the window below
+   * stops being an edge case. This is the row that fails if that happens.
+   */
+  it("is adopted by the Main Branch backfill on the ordinary rollout path", () => {
+    const source = readFileSync(join(__dirname, "seed", "mainBranch.ts"), "utf8");
+    const list = source.slice(
+      source.indexOf("const BACKFILL_COLLECTIONS"),
+      source.indexOf("] as const", source.indexOf("const BACKFILL_COLLECTIONS")),
+    );
+    expect(
+      list,
+      "medicationAdministrations left the backfill list — a pre-branch dose would now stay branchless forever",
+    ).toContain('"medicationAdministrations"');
+  });
+
+  /**
+   * THE WINDOW, PINNED AS IT IS. Not an assertion that this is correct — an assertion that this
+   * is what happens, so the behaviour cannot change silently in either direction.
+   */
+  it("but if it stays branchless, it is absent once a branch is selected (D12)", async () => {
+    const scoped = await get(
+      `/api/v1/encounters/${encounter}/medication-administrations`,
+      nurse,
+      branchA,
+    ).expect(200);
+    expect(
+      (scoped.body.data as { id: string }[]).some((a) => a.id === legacyDoseId),
+      "a branchless dose became visible under a selected branch — good news, and this row plus D12 need updating",
+    ).toBe(false);
+
+    const all = await get(
+      `/api/v1/encounters/${encounter}/medication-administrations`,
+      nurse,
+    ).expect(200);
+    expect(
+      (all.body.data as { id: string }[]).some((a) => a.id === legacyDoseId),
+      "the dose is gone even in All mode — it is orphaned outright, which is worse than D12 says",
+    ).toBe(true);
+  });
+
+  /** The boundary still holds: the other site does not get this visit's record. */
+  it("and the other site still cannot read this visit's record", async () => {
+    const res = await get(
+      `/api/v1/encounters/${encounter}/medication-administrations`,
+      nurse,
+      branchB,
+    );
+    if (res.status === 200) {
+      expect((res.body.data as unknown[]).length, "a Hyderabad chart rendered at Chennai").toBe(0);
+    } else {
+      expect([403, 404]).toContain(res.status);
+    }
   });
 });

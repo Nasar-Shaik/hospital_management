@@ -30,6 +30,7 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 | D9  | Appointment state machine ignored branch scope — cross-branch **write** | P1  | ✅ **FIXED** 2026-08-17 (`4732dd8`)       |
 | D10 | Report file download ignored branch scope — cross-branch PHI            | P2  | ✅ **FIXED** 2026-08-17 (`c02dd09`)       |
 | D11 | An un-stamped report is absent from the branch-scoped list              | P3  | 🟡 **OPEN** — pre-existing, see below     |
+| D12 | A branchless dose is absent from the chart once a branch is selected    | P3  | 🟡 **OPEN** — narrow window, see below    |
 
 ### D9 — the appointment state machine used the unscoped twin
 
@@ -95,6 +96,37 @@ Left open deliberately: it is older than this audit, it loses no data, and the f
 product decision D1 raised — whether an un-stamped historical row should be treated as belonging
 to every branch or to none. Worth answering once, for every optional-`branchId` collection at the
 same time, rather than per module.
+
+### D12 — the branchless dose, and the window the backfill does not cover
+
+Found by the Phase 11 integrity pass on 2026-08-17. `medicationAdministrations.branchId` is
+OPTIONAL, and `mar.repository.ts` filters on it in three reads. `listAdministrations` is
+`repo.listByEncounter` directly — no encounter is resolved first — so that filter is the only
+boundary, and a dose carrying no branch is invisible to it.
+
+**What normally prevents this.** `seedMainBranch` lists `medicationAdministrations` among the
+collections it ADOPTS into the Main Branch, so on the ordinary rollout path a pre-branch dose is
+stamped before anyone has a branch to select. §26 of the branch-isolation suite asserts that
+membership rather than trusting it: if the collection ever leaves that list, the row goes red.
+
+**The window that remains.** Adoption carries a single-branch guard — it refuses once a hospital
+has two sites, because "there was only one site, so it happened there" stops being true. So a
+hospital that charted doses BEFORE branches existed and created its SECOND branch BEFORE running
+the backfill keeps those rows branchless. The backfill reports them rather than silently skipping
+them, which is the mitigation.
+
+**Why it is rated P3 and not higher.** The consequence is severe and specific — a dose that was
+given reads as never given, and the next nurse gives it again — but it requires that exact
+operational sequence, the backfill names the rows when it declines, and **there is no production
+deployment yet**, so no tenant has pre-branch MAR data. Measured: the row is absent under a
+selected branch and present in All mode, so it is hidden rather than orphaned.
+
+**Deliberately NOT fixed here.** The correct fix is D1's — resolve the encounter and drop the
+repository filter — but that changes a foreign visit's answer from `200 []` to `404` on the MAR
+slice, which is accepted and frozen (`3089041`). Changing an accepted clinical contract for a
+defect that cannot occur in any existing deployment is the wrong trade to make inside an audit.
+**Product decision:** take it when the encounter-resolution change is made deliberately, or
+require `--all` backfill before a second branch may be created.
 
 ### D8 — the licence banner painted underneath the status bar
 
