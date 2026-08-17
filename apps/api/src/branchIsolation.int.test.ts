@@ -2205,19 +2205,24 @@ describe("an appointment changes state only at the site that holds it", () => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
- * 24. AN ADVANCE RECEIPT STOPS AT THE COUNTER THAT TOOK THE MONEY
+ * 24. AN ADVANCE RECEIPT IS HOSPITAL-WIDE, LIKE THE BALANCE IT BELONGS TO
  *
- * The third read of the same shape found in this audit, after the report file and the
- * appointment. `wallet:manage` is declared `"branch"`, deposits and refunds are stamped by
- * `writeBranchId()`, and the ledger reads for a patient are scoped — but the single-entry read
- * behind `GET /wallet/entries/:id`, the one a receipt link carries, was a bare `findById`.
+ * This group started life asserting the opposite. The audit found `findEntryById` reading by a
+ * bare id, matched it against the report file and the appointment, and "fixed" it — at which
+ * point the wallet's own design contradicted the fix.
  *
- * Lower stakes than the report: a receipt is a patient name, a date and an amount rather than a
- * clinical result. It is fixed for the same reason a locked ward has locks on every door.
+ * `walletAccounts` carries NO branch: one balance per patient for the whole hospital. An advance
+ * taken at one site is spendable at another, and `listEntries` is hospital-wide to match. So
+ * scoping the single-entry read refused a receipt for a row the SAME cashier could already read
+ * in the statement in front of her — risk-register D1's asymmetry, inverted.
+ *
+ * The reprint is therefore hospital-wide ON PURPOSE, and this group pins it in that direction so
+ * the next reader does not re-apply the pattern without opening the account model.
  * ──────────────────────────────────────────────────────────────────────────── */
 
-describe("an advance receipt stops at the counter that took the money", () => {
+describe("an advance receipt is hospital-wide, like the balance it belongs to", () => {
   let cashierB = "";
+  let payer = "";
   let hydEntryId = "";
 
   beforeAll(async () => {
@@ -2227,17 +2232,14 @@ describe("an advance receipt stops at the counter that took the money", () => {
     const p = await post("/api/v1/patients", tokenMgrA, branchA)
       .send({ name: "Advance Payer", gender: "male", contact: { phone: "9000700044" } })
       .expect(201);
+    payer = p.body.data.patient.id as string;
 
-    const deposit = await post(
-      `/api/v1/patients/${p.body.data.patient.id as string}/wallet/deposits`,
-      tokenMgrA,
-      branchA,
-    )
+    const deposit = await post(`/api/v1/patients/${payer}/wallet/deposits`, tokenMgrA, branchA)
       .send({ amount: 250000, method: "cash", reference: "HYD-ADV-1" })
       .expect(201);
-    // `deposit` answers with the WalletView (balance + ledger), not the entry — the receipt id
-    // is the row it just added. Taking `data.id` here silently produced `undefined`, and the
-    // isolation test below then passed against a 404 that every caller gets.
+    // `deposit` answers with the WalletView (balance + ledger), not the entry — the receipt id is
+    // the row it just added. Reading `data.id` here silently produced `undefined`, and the first
+    // version of this group then "passed" against a 404 that every caller gets.
     const entries = deposit.body.data.entries as { id: string; reference?: string }[];
     hydEntryId = entries.find((e) => e.reference === "HYD-ADV-1")?.id ?? "";
     expect(hydEntryId, "the deposit did not come back in the ledger").not.toBe("");
@@ -2248,11 +2250,27 @@ describe("an advance receipt stops at the counter that took the money", () => {
     expect(res.body.data.amount).toBe(250000);
   });
 
-  it("REFUSES the receipt to a cashier at the other site", async () => {
-    const res = await get(`/api/v1/wallet/entries/${hydEntryId}`, cashierB, branchB);
+  /**
+   * The premise for the row below: the OTHER site can already see this deposit in the statement.
+   * Refusing the receipt while showing the line it belongs to is the asymmetry, whichever way
+   * round it points.
+   */
+  it("already appears in the other site's view of the statement", async () => {
+    const res = await get(`/api/v1/patients/${payer}/wallet`, cashierB, branchB).expect(200);
     expect(
-      [403, 404],
-      `a Chennai cashier reprinted a Hyderabad receipt (status ${res.status})`,
-    ).toContain(res.status);
+      (res.body.data.entries as { id: string }[]).some((e) => e.id === hydEntryId),
+      "the ledger stopped at the branch — then the receipt SHOULD stop too, and this group is wrong",
+    ).toBe(true);
+  });
+
+  it("is therefore reprintable at the other counter too", async () => {
+    const res = await get(`/api/v1/wallet/entries/${hydEntryId}`, cashierB, branchB).expect(200);
+    expect(res.body.data.amount).toBe(250000);
+  });
+
+  /** The wall that does not move: another hospital's entry is unreachable, id or no id. */
+  it("but the balance itself is one hospital's, not one branch's", async () => {
+    const res = await get(`/api/v1/patients/${payer}/wallet`, cashierB, branchB).expect(200);
+    expect(res.body.data.balance).toBe(250000);
   });
 });

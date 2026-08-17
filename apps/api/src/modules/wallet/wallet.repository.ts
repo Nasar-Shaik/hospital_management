@@ -16,7 +16,6 @@
 import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
-import { scopeFilter } from "../../middleware/authorize.js";
 import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import {
   getWalletAccountModel,
@@ -72,15 +71,23 @@ export async function getBalance(patientId: string): Promise<number> {
 /**
  * One ledger row by id — for regenerating an advance receipt later.
  *
- * Scoped, because `wallet:manage` is declared `"branch"` and `credit`/`debit` stamp the branch
- * the money crossed the desk at. This was a bare `findById`, so a receipt link — which carries
- * only the entry id — reprinted another site's receipt: the payer's name, the date and the
- * amount. Smaller than the report leak it was found alongside, and closed the same way.
+ * ── HOSPITAL-WIDE, LIKE THE BALANCE IT BELONGS TO ───────────────────────────
+ * The security audit of 2026-08-17 briefly "fixed" this by adding `scopeFilter()`, on the
+ * pattern that caught the report file and the appointment. It was wrong, and the wallet's own
+ * design is what says so: `walletAccounts` carries NO branch — one balance per patient for the
+ * whole hospital — and `listEntries` is hospital-wide to match. An advance taken at one site is
+ * spendable at another, because money is fungible and a patient does not hold a separate purse
+ * per building.
+ *
+ * So scoping this read refused a receipt for a row the SAME cashier already sees in the
+ * statement she is looking at — risk-register D1's asymmetry, inverted. The reprint stays
+ * hospital-wide on purpose, and this note exists so the next audit does not re-apply the
+ * pattern without reading the account model.
  */
 export async function findEntryById(id: string): Promise<WalletEntry | undefined> {
   if (!Types.ObjectId.isValid(id)) return undefined;
   const doc = await getWalletEntryModel(getTenantDb())
-    .findOne({ _id: new Types.ObjectId(id), ...scopeFilter() })
+    .findById(new Types.ObjectId(id))
     .lean<WalletEntryDoc>();
   return doc ? toEntry(doc) : undefined;
 }

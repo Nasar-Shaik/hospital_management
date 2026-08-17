@@ -2,17 +2,20 @@
  * BARE `findById` IN A REPOSITORY IS A DECISION, SO IT HAS TO BE WRITTEN DOWN.
  *
  * ── WHY THIS CONTROL EXISTS ─────────────────────────────────────────────────
- * The security audit of 2026-08-17 found the same bug three times in three modules, and it
- * looked identical every time: a collection whose LIST read carried `scopeFilter()` and whose
- * BY-ID read did not.
+ * The security audit of 2026-08-17 found the same shape three times and fixed TWO of them:
  *
- *   `reports.getBytes`        — the metadata list stopped at the branch, the PDF did not;
- *   `appointments.findById`   — the read paths used the scoped twin, the STATE MACHINE did not;
- *   `wallet.findEntryById`    — the patient ledger was scoped, the receipt link was not.
+ *   `reports.getBytes`        — the metadata list stopped at the branch, the PDF did not. REAL.
+ *   `appointments.findById`   — the read paths used the scoped twin, the STATE MACHINE did not,
+ *                               so a clerk could cancel another site's clinic list. REAL.
+ *   `wallet.findEntryById`    — looked identical and WAS NOT. The wallet has one hospital-wide
+ *                               balance, so scoping the receipt refused a row the same cashier
+ *                               could already read in the statement. Reverted; see EXEMPT.
  *
- * Each was a one-line omission that reviewed cleanly, because a bare `findById` looks like the
- * most ordinary line of code in a repository. None of them could be caught by reading the file
- * they were in — the tell was always the OTHER read in the same module doing it properly.
+ * That third one is why this list stores a REASON rather than a verdict. Two of these were
+ * one-line omissions that reviewed cleanly, because a bare `findById` looks like the most
+ * ordinary line in a repository; the third was a correct decision that looked identical to the
+ * bugs. Neither could be settled by reading the file it was in — the tell was always what the
+ * OTHER reads in the same module did, and what the model underneath said about ownership.
  *
  * ── WHAT THIS ASSERTS, AND WHY IT IS NOT A STYLE RULE ───────────────────────
  * `tenantScopePlugin` forces `tenantId` onto every query, so no bare read can ever cross a
@@ -48,6 +51,17 @@ const EXEMPT: Record<string, { lines: number; why: string }> = {
   "patients/patient.repository.ts": {
     lines: 1,
     why: "TENANT-WIDE: `findByIdentity` — ADR-0015 §5 makes patient identity hospital-wide on purpose. The branch-isolation suite asserts it resolves ACROSS branches; scoping it would break the ADR.",
+  },
+  /**
+   * The entry this list exists for. The audit scoped `findEntryById` on the pattern that caught
+   * the report file, and the wallet's own design contradicted it: `walletAccounts` carries no
+   * branch, so an advance is one hospital-wide purse and `listEntries` shows it across sites.
+   * Refusing the RECEIPT for a line the same cashier can already read is D1's asymmetry pointing
+   * the other way. Reverted, and written down here so it is not "fixed" a third time.
+   */
+  "wallet/wallet.repository.ts": {
+    lines: 1,
+    why: "TENANT-WIDE: a patient has ONE advance balance for the hospital, not one per site. The branch-isolation suite pins the receipt as readable from either counter, with the statement read as its premise.",
   },
   "allergies/allergy.repository.ts": {
     lines: 1,
@@ -190,7 +204,6 @@ describe("the three reads the audit fixed stay scoped", () => {
   const FIXED = [
     { file: "reports/report.repository.ts", fn: "getBytes" },
     { file: "appointments/appointment.repository.ts", fn: "findById" },
-    { file: "wallet/wallet.repository.ts", fn: "findEntryById" },
   ] as const;
 
   for (const { file, fn } of FIXED) {
