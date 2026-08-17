@@ -755,6 +755,48 @@ All gates, as of **2026-07-16**: integration **658 passing**, typecheck 17/17, l
 
 **Known flake:** seen twice (`1 failed | 437 passed`, then `1 failed | 601 passed`), green on every re-run, and **the name was not captured either time** — which is the actual failure. Suspected the Mailhog timing suite under load, but that has never been confirmed. Recorded as debt in `PROJECT_MEMORY` §5. Next occurrence: pipe the full output to a file BEFORE filtering it. **It must not be "fixed" by deleting the assertion.**
 
+#### 2026-08-17 — the names, at last, and what they rule out
+
+The instruction above was followed and the output kept. **Four consecutive runs, four disjoint sets
+of failures, zero overlap in test names:**
+
+| Run                      | Result                    | Failed                                                                                                                                                                                                                                   |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| full `test:int`          | `1 failed \| 1734 passed` | `mar > lets a doctor read the round…` (`admitToWard` got **404**, expected 201) · `branchIsolation.int.test.ts:180` **`beforeAll` hook timeout**                                                                                         |
+| full `test:int`          | `4 failed \| 1834 passed` | `mar > shows a charted dose as given on the very next read` · `prescriptions > SIGNING … does not charge the patient a paisa` · `rbac > DOCTOR may NOT GET /billing/pending` · `rbac > RECEPTIONIST may NOT GET /reports/patient-visits` |
+| `rbac.int.test.ts` alone | `1 failed \| 1225 passed` | `rbac > PHARMACIST may NOT POST /appointments/:id/reschedule`                                                                                                                                                                            |
+| `rbac.int.test.ts` alone | `1 failed \| 1225 passed` | `rbac > RECEPTIONIST may NOT DELETE /users/:id/roles/:roleCode`                                                                                                                                                                          |
+
+**Every failure is a timeout or a slowness artifact. Not one is a wrong answer.** The RBAC rows
+matter most here and are the most alarming to read in a log — a line saying
+`DOCTOR may NOT GET /api/v1/billing/pending — FAIL` looks exactly like a permission leak. It is
+not. Captured in full, that class of failure reads:
+
+```
+Error: Test timed out in 20000ms.
+ ❯ src/rbac.int.test.ts:1491:7
+```
+
+The request never came back; **no assertion about a permission has ever failed.** Anyone triaging
+this must read the failure body before reacting to the test name.
+
+**What it rules out.** The tracker's standing advice is _"check Docker memory first"_, and it was
+checked **during** a failing run: `medicore-hms-mongo-1` at **3.4 GiB of 7.75 GiB**, **no HMS
+container exited 137**. So this is not the OOM-kill scenario that had been the leading explanation.
+It is not accumulated state either — 14 databases, 5 of them test. And it cannot be a code
+regression: the session that observed it changed **only** files under `AI_Workflow/`.
+
+**What it points at.** Host contention rather than this repository: the 7.75 GiB Docker pool is
+shared with other projects' stacks (`vip-dev-mongodb`, `vip-dev-redis` were both up), and
+`rbac.int.test.ts` alone drives **1,226 sequential requests** against one Mongo in ~38 s. Under
+competition an individual request crosses the 20 s ceiling. That is still a hypothesis — **nobody
+has instrumented it** — and the next occurrence should capture per-suite durations
+(`--reporter=verbose`) with the other stacks stopped, before anything is changed.
+
+**Do not raise `testTimeout`/`hookTimeout` to make this go away.** A test that needs longer under
+load is evidence; a test that is allowed longer is silence. Tracked as **T3** in the risk register,
+because the accepted V1 position is that this suite _is_ the only gate.
+
 ---
 
 ### `Cannot find module './963.js'` — or any Webpack chunk that does not exist

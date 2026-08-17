@@ -5,7 +5,8 @@ document records a result, and no row here may be ticked from automated evidence
 
 **Authoritative for:** how manual validation is prepared, what is tested, what should happen, what
 evidence to capture, and what to escalate. Where this document and an older checklist disagree, this
-one is current — it was reconciled against the implementation on 2026-08-16 at `39e2dff`.
+one is current — it was reconciled against the implementation on 2026-08-16 at `39e2dff`, and again
+on **2026-08-17**, when four instructions were found that had never been executed (§21).
 
 **Companion documents, still worth reading, now narrative rather than procedural:**
 
