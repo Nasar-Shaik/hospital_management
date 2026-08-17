@@ -101,6 +101,69 @@ const BACKFILL_COLLECTIONS = [
   "insuranceClaims",
 ] as const;
 
+/**
+ * The collections where a MISSING `branchId` actually hides the row (risk register D11/D12).
+ *
+ * ── WHY THIS IS A SUBSET AND NOT SIMPLY `BACKFILL_COLLECTIONS` ──────────────
+ * A branchless row is only a problem where something FILTERS on the field. These three declare
+ * `branchId` optional AND narrow their reads through `scopeFilter()`, so a row the backfill never
+ * reached is invisible to anyone with a branch selected:
+ *
+ *   `reportFiles`                 — `listForPatient`            (D11)
+ *   `medicationAdministrations`   — three reads in `mar.repository.ts` (D12)
+ *   `wardNotes`                   — `listForEncounter`
+ *
+ * On the MAR that means a dose that was given reading as never given, and the next nurse giving
+ * it again. That is what `createBranch` refuses over.
+ *
+ * ── THE COLLECTIONS DELIBERATELY LEFT OUT, AND THE ONE THAT PROVED IT ───────
+ * Scanning all of `BACKFILL_COLLECTIONS` was the first attempt and it was wrong. Migration
+ * 0047 states outright that some rows stay branchless FOREVER by design — "a wallet DEPOSIT or
+ * REFUND with no invoice and no encounter (cash at a desk, and which desk is genuinely
+ * unrecorded)… Inventing a site for them would put a number in a financial ledger that nobody
+ * can defend". Measured: the branch-isolation suite hit exactly that, one branchless
+ * `walletEntries` row, and a hospital carrying one would have been blocked from ever opening a
+ * second site. A guard that cannot be satisfied is an outage.
+ *
+ * Those rows are harmless because nothing filters them out: `listEntries` and the balance are
+ * hospital-wide on purpose. Same for the rest of the backfill list — either `branchId` is
+ * `required: true` (so a branchless row cannot exist) or no read narrows on it.
+ *
+ * Keep this list in step with reality: a collection joins it when a read starts filtering on an
+ * optional `branchId`, and leaves it when the field becomes required.
+ */
+const HIDDEN_IF_BRANCHLESS = [
+  "reportFiles",
+  "medicationAdministrations",
+  "wardNotes",
+] as const satisfies readonly (typeof BACKFILL_COLLECTIONS)[number][];
+
+/**
+ * Rows that would be HIDDEN by their own module because they carry no branch.
+ *
+ * `createBranch` calls this before letting a hospital open another site, so the window closes at
+ * the only moment it can still be closed cheaply — before "which site was this?" becomes
+ * unanswerable. The tenant needs no predicate: this is a per-tenant database (ADR-0005).
+ */
+export async function branchlessRows(connection: Connection): Promise<Record<string, number>> {
+  const branchless: Record<string, number> = {};
+  for (const name of HIDDEN_IF_BRANCHLESS) {
+    const n = await connection.collection(name).countDocuments({ branchId: { $exists: false } });
+    if (n > 0) branchless[name] = n;
+  }
+  return branchless;
+}
+
+/** Every unadopted row the backfill would have taken — the broad view, for its own report. */
+async function allBranchlessRows(connection: Connection): Promise<Record<string, number>> {
+  const branchless: Record<string, number> = {};
+  for (const name of BACKFILL_COLLECTIONS) {
+    const n = await connection.collection(name).countDocuments({ branchId: { $exists: false } });
+    if (n > 0) branchless[name] = n;
+  }
+  return branchless;
+}
+
 export interface SeedMainBranchResult {
   /** The Main Branch's id — its `branchId` value, used by the backfill. */
   branchId: string;
@@ -172,13 +235,7 @@ export async function seedMainBranch(
        */
       const branchCount = await branches.countDocuments({ tenantId });
       if (branchCount > 1) {
-        const branchless: Record<string, number> = {};
-        for (const name of BACKFILL_COLLECTIONS) {
-          const n = await connection
-            .collection(name)
-            .countDocuments({ branchId: { $exists: false } });
-          if (n > 0) branchless[name] = n;
-        }
+        const branchless = await allBranchlessRows(connection);
         if (Object.keys(branchless).length > 0) {
           logger.warn(
             { tenantSlug, branchCount, branchless },

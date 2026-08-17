@@ -9,7 +9,8 @@
 import { AppError } from "../../core/errors/appError.js";
 import { env } from "../../config/env.js";
 import { zoneOrDefault } from "../../core/time/zone.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import { branchlessRows } from "../../seed/mainBranch.js";
 import { branchLimit } from "../tenants/index.js";
 import { getEffectiveBranchScope } from "../rbac/index.js";
 import * as repo from "./branch.repository.js";
@@ -75,6 +76,48 @@ export async function createBranch(input: CreateBranchInput): Promise<repo.Branc
       current,
       max: maxBranches,
       hint: "your edition allows this many branches — contact your account manager to raise it",
+    });
+  }
+
+  /**
+   * ── THE SECOND SITE IS THE POINT OF NO RETURN (D11/D12) ─────────────────────
+   * `seedMainBranch` adopts pre-branch rows into the Main Branch on the reasoning "there was only
+   * one site, so it happened there". That reasoning dies the moment a hospital has two branches,
+   * so the backfill DECLINES from then on — and reports what it left behind.
+   *
+   * Nothing stopped a tenant reaching that state. Three collections carry an OPTIONAL `branchId`
+   * and filter reads on it (`reportFiles`, `medicationAdministrations`, `wardNotes`), so a row the
+   * backfill never reached becomes invisible to anyone with a branch selected. On the MAR that is
+   * a dose that was given reading as never given, and the next nurse gives it again.
+   *
+   * ── WHY REFUSE HERE RATHER THAN FIX THE READS ───────────────────────────────
+   * The alternative was D1's shape: resolve the parent encounter and drop the branch filter. It is
+   * correct, and it changes a foreign visit's answer from `200 []` to `404` on three read
+   * contracts — one of them the accepted, frozen MAR slice, with two clients built against it.
+   * This closes the same window while touching no clinical contract at all, and it closes it at
+   * the only moment it is still cheap: before the ambiguity exists.
+   *
+   * ── UNCONDITIONAL, NOT "ONLY THE SECOND BRANCH" ─────────────────────────────
+   * The first version fired only at `current >= 1`, and a falsification exposed why that is wrong.
+   * A legacy hospital with NO branches that creates one through this route gets an ordinary,
+   * non-main branch; `seedMainBranch` then adds the Main Branch as its SECOND, the backfill
+   * declines, and the window it was meant to close is open again. The dangerous act is creating a
+   * branch while history is unadopted — at any count.
+   *
+   * It cannot deadlock the rollout: the Main Branch is upserted by `seedMainBranch` writing to the
+   * collection directly, so the seed never passes through this service.
+   *
+   * Narrow where it matters — it fires only when unadopted rows actually exist, so a hospital
+   * provisioned after ADR-0015 (Main Branch created during provisioning, before any clinical row)
+   * never meets it. The remedy is one command, and it is in the message rather than in somebody's
+   * memory.
+   */
+  const branchless = await branchlessRows(getTenantDb());
+  if (Object.keys(branchless).length > 0) {
+    throw new AppError("HMS-BRANCH-002", 409, "Historical records are not assigned to a site", {
+      branchless,
+      hint: "run `pnpm seed:migrate --all` to adopt them into the Main Branch, then create this branch",
+      why: "once a hospital has more than one site, which site these rows belong to can no longer be inferred — and a record that carries no site is hidden from everyone working at one",
     });
   }
 

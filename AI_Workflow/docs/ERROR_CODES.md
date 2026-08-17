@@ -8,27 +8,28 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 
 ## Platform & Auth
 
-| Code           | HTTP | Message (EN)                                 | Recovery                                       | Retry         |
-| -------------- | ---- | -------------------------------------------- | ---------------------------------------------- | ------------- |
-| HMS-AUTH-001   | 401  | Invalid credentials                          | Re-enter; lockout after N attempts             | no            |
-| HMS-AUTH-002   | 401  | Session expired                              | Refresh token / re-login                       | yes (refresh) |
-| HMS-AUTH-003   | 401  | Refresh token reuse detected                 | Family revoked; force re-login; security alert | no            |
-| HMS-AUTH-004   | 403  | MFA required                                 | Complete MFA challenge                         | no            |
-| HMS-AUTH-005   | 403  | Insufficient permission                      | Request access from admin                      | no            |
-| HMS-TEN-001    | 404  | Organization not found                       | Check subdomain/domain                         | no            |
-| HMS-TEN-002    | 403  | Organization suspended                       | Contact support/billing                        | no            |
-| HMS-TEN-003    | 403  | Tenant mismatch                              | Token does not belong to this domain; re-login | no            |
-| HMS-TEN-004    | 503  | Tenant database unavailable                  | Automatic failover in progress                 | yes (backoff) |
-| HMS-TEN-005    | 403  | Subscription expired (licence past grace)    | Operator must renew the licence (ADR-0016)     | no            |
-| HMS-BRANCH-001 | 400  | No active branch selected for a write        | Pick a branch in the switcher (ADR-0015)       | no            |
-| HMS-PLAN-001   | 402  | Plan limit reached (`details.metric`)        | Upgrade edition or free capacity               | no            |
-| HMS-PLAN-002   | 403  | Feature not in your edition                  | Upgrade path in `details.requiredEdition`      | no            |
-| HMS-VAL-001    | 400  | Validation failed                            | Fix `details.fields`                           | no            |
-| HMS-REQ-001    | 429  | Too many requests                            | Respect `Retry-After`                          | yes           |
-| HMS-REQ-002    | 409  | Duplicate request (idempotency)              | Original response returned in `details`        | no            |
-| HMS-REQ-003    | 409  | Record was modified by someone else          | Reload and reapply changes (version conflict)  | no            |
-| HMS-REQ-004    | 409  | Idempotency-Key still in progress            | Retry shortly; the first attempt is running    | yes (backoff) |
-| HMS-STATE-001  | 422  | Invalid state transition (`details.from→to`) | See STATE_MACHINE_CATALOG                      | no            |
+| Code           | HTTP | Message (EN)                                                     | Recovery                                       | Retry                |
+| -------------- | ---- | ---------------------------------------------------------------- | ---------------------------------------------- | -------------------- |
+| HMS-AUTH-001   | 401  | Invalid credentials                                              | Re-enter; lockout after N attempts             | no                   |
+| HMS-AUTH-002   | 401  | Session expired                                                  | Refresh token / re-login                       | yes (refresh)        |
+| HMS-AUTH-003   | 401  | Refresh token reuse detected                                     | Family revoked; force re-login; security alert | no                   |
+| HMS-AUTH-004   | 403  | MFA required                                                     | Complete MFA challenge                         | no                   |
+| HMS-AUTH-005   | 403  | Insufficient permission                                          | Request access from admin                      | no                   |
+| HMS-TEN-001    | 404  | Organization not found                                           | Check subdomain/domain                         | no                   |
+| HMS-TEN-002    | 403  | Organization suspended                                           | Contact support/billing                        | no                   |
+| HMS-TEN-003    | 403  | Tenant mismatch                                                  | Token does not belong to this domain; re-login | no                   |
+| HMS-TEN-004    | 503  | Tenant database unavailable                                      | Automatic failover in progress                 | yes (backoff)        |
+| HMS-TEN-005    | 403  | Subscription expired (licence past grace)                        | Operator must renew the licence (ADR-0016)     | no                   |
+| HMS-BRANCH-001 | 400  | No active branch selected for a write                            | Pick a branch in the switcher (ADR-0015)       | no                   |
+| HMS-BRANCH-002 | 409  | A second site cannot open while historical records carry no site | Run `pnpm seed:migrate --all`, then retry      | yes (after backfill) |
+| HMS-PLAN-001   | 402  | Plan limit reached (`details.metric`)                            | Upgrade edition or free capacity               | no                   |
+| HMS-PLAN-002   | 403  | Feature not in your edition                                      | Upgrade path in `details.requiredEdition`      | no                   |
+| HMS-VAL-001    | 400  | Validation failed                                                | Fix `details.fields`                           | no                   |
+| HMS-REQ-001    | 429  | Too many requests                                                | Respect `Retry-After`                          | yes                  |
+| HMS-REQ-002    | 409  | Duplicate request (idempotency)                                  | Original response returned in `details`        | no                   |
+| HMS-REQ-003    | 409  | Record was modified by someone else                              | Reload and reapply changes (version conflict)  | no                   |
+| HMS-REQ-004    | 409  | Idempotency-Key still in progress                                | Retry shortly; the first attempt is running    | yes (backoff)        |
+| HMS-STATE-001  | 422  | Invalid state transition (`details.from→to`)                     | See STATE_MACHINE_CATALOG                      | no                   |
 
 ## Patient & Clinical
 

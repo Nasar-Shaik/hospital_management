@@ -2512,3 +2512,178 @@ describe("a branchless dose: what protects it, and the window that does not", ()
     }
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 27. A SECOND SITE CANNOT OPEN OVER UNADOPTED HISTORY (D11/D12 control)
+ *
+ * The decision this implements, stated plainly: an un-stamped historical row belongs to the ONE
+ * site that existed when it was written, and the backfill is what records that. The moment a
+ * second branch exists the answer becomes unknowable, `seedMainBranch` declines, and three
+ * collections that filter reads on an optional `branchId` start hiding those rows from anyone
+ * working at a site — a dose, a nursing note or a report that exists but reads as absent.
+ *
+ * So the window is closed where it is cheap: at the second branch, before the ambiguity exists.
+ * The alternative (D1's shape — resolve the parent, drop the filter) is correct too, and changes
+ * three read contracts including the frozen MAR slice. This changes none.
+ *
+ * These tests run LAST in the file on purpose: the guard is about the hospital's whole history,
+ * and every group above has been writing rows into it.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a second site cannot open while historical records carry no site", () => {
+  /** A hospital of its own — this asserts on a whole-database condition. */
+  const GUARD_SLUG = "test-branchiso-guardco";
+  const GUARD_DB = `hms_${GUARD_SLUG}`;
+  const GUARD_HOST = `${GUARD_SLUG}.medicore.test`;
+  let guardToken = "";
+  let guardTenant: Tenant;
+
+  const guardPost = (path: string, token: string): request.Test =>
+    request(app).post(path).set("Host", GUARD_HOST).set("Authorization", `Bearer ${token}`);
+
+  beforeAll(async () => {
+    const provisioned = await provisionTenant({
+      hospitalName: "Guard Co",
+      slug: GUARD_SLUG,
+      planCode: "PLAN_ENTERPRISE",
+      maxBranches: 5,
+    });
+    guardTenant = {
+      id: provisioned.tenant.id,
+      slug: GUARD_SLUG,
+      databaseName: provisioned.tenant.databaseName,
+    };
+
+    const connection = await getTenantConnection({
+      id: guardTenant.id,
+      databaseName: guardTenant.databaseName,
+    });
+    await runWithContext(
+      {
+        traceId: "guard-setup",
+        tenantId: guardTenant.id,
+        tenantSlug: GUARD_SLUG,
+        connection,
+      },
+      async () => {
+        await seedRbac();
+        const user = await createUser({
+          email: "guard@branchiso.test",
+          name: "Guard",
+          status: "invited",
+        });
+        await setPassword(user.id, PASSWORD, { mustChangePassword: false });
+        await assignRoleByCode(user.id, "TENANT_ADMIN", []);
+        await transitionStatus(user.id, "active");
+      },
+    );
+    // Provisioning seeds the Main Branch, so this hospital starts clean and single-site.
+    await seedMainBranch(guardTenant.id, GUARD_SLUG, connection);
+
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .set("Host", GUARD_HOST)
+      .send({ email: "guard@branchiso.test", password: PASSWORD });
+    guardToken = res.body.data.accessToken as string;
+  }, 120_000);
+
+  afterAll(async () => {
+    await dropDatabases([GUARD_DB]);
+  }, 30_000);
+
+  /**
+   * THE PERMISSIVE CONTROL, FIRST. A hospital provisioned after ADR-0015 gets its Main Branch
+   * during provisioning, before any clinical row exists, so it must NEVER meet this guard. If this
+   * goes red the control is refusing ordinary hospitals and is worse than the defect.
+   */
+  it("opens a second site normally when nothing is unadopted", async () => {
+    const res = await guardPost("/api/v1/branches", guardToken).send({
+      name: "Second Site",
+      code: "SEC",
+    });
+    expect(
+      res.status,
+      `a clean hospital was refused its second site: ${JSON.stringify(res.body)}`,
+    ).toBe(201);
+  });
+
+  /** Now plant the condition the backfill would have cleared, and try for a THIRD site. */
+  it("REFUSES once an un-stamped clinical row exists", async () => {
+    const connection = await getTenantConnection({
+      id: guardTenant.id,
+      databaseName: guardTenant.databaseName,
+    });
+    await connection.collection("wardNotes").insertOne({
+      tenantId: guardTenant.id,
+      encounterId: new Types.ObjectId(),
+      patientId: new Types.ObjectId(),
+      type: "nursing",
+      text: "a note from before this hospital had sites",
+      authorId: "legacy-import",
+      isDeleted: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      // branchId deliberately absent.
+    });
+
+    const res = await guardPost("/api/v1/branches", guardToken).send({
+      name: "Third Site",
+      code: "THI",
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("HMS-BRANCH-002");
+    // The operator must be told WHICH rows and WHAT to run — not merely "no".
+    expect(res.body.error.details.branchless).toHaveProperty("wardNotes", 1);
+    expect(res.body.error.details.hint).toContain("seed:migrate --all");
+  });
+
+  /**
+   * THE OVER-BLOCK CASE, WHICH IS WHY THE GUARD IS UNCONDITIONAL.
+   *
+   * A hospital created before ADR-0015 has NO branches at all. If it creates one through this
+   * route while history is unadopted, it gets an ordinary non-main branch — and `seedMainBranch`
+   * then adds the Main Branch as its SECOND, at which point the backfill declines and the window
+   * is open again. So the dangerous act is creating a branch over unadopted history at ANY count,
+   * not only the second.
+   *
+   * The first version of the guard read `current >= 1` and this case slipped through it.
+   */
+  it("REFUSES the FIRST branch too, on a hospital that predates branches", async () => {
+    const connection = await getTenantConnection({
+      id: guardTenant.id,
+      databaseName: guardTenant.databaseName,
+    });
+    // A hospital from before ADR-0015: unadopted history, and no branches at all.
+    await connection.collection("branches").deleteMany({});
+    await connection.collection("wardNotes").updateMany({}, { $unset: { branchId: "" } });
+
+    const res = await guardPost("/api/v1/branches", guardToken).send({
+      name: "Legacy First Site",
+      code: "LEG",
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("HMS-BRANCH-002");
+  });
+
+  /** And the refusal lifts once the rows are adopted — a guard that cannot be satisfied is an outage. */
+  it("allows it again after the backfill has adopted them", async () => {
+    const connection = await getTenantConnection({
+      id: guardTenant.id,
+      databaseName: guardTenant.databaseName,
+    });
+    /**
+     * The hospital now has two branches, so `seedMainBranch` DECLINES — which is the very state
+     * this guard exists to prevent anyone reaching. Adoption here therefore stands in for the
+     * operator's deliberate assignment, which is what the error message asks for.
+     */
+    await connection
+      .collection("wardNotes")
+      .updateMany({ branchId: { $exists: false } }, { $set: { branchId: "adopted-by-operator" } });
+
+    const res = await guardPost("/api/v1/branches", guardToken).send({
+      name: "Third Site",
+      code: "THI",
+    });
+    expect(res.status, `still refused after adoption: ${JSON.stringify(res.body)}`).toBe(201);
+  });
+});
