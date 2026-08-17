@@ -31,7 +31,8 @@
     "openapi": "pnpm --filter @medicore/api openapi",
     "openapi:check": "pnpm --filter @medicore/api openapi:check",
     "contract:check": "pnpm --filter @medicore/api contract:check",
-    "client:check": "pnpm --filter @medicore/api client:check"
+    "client:check": "pnpm --filter @medicore/api client:check",
+    "seed:licence": "pnpm --filter @medicore/api licence --"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.8.0",

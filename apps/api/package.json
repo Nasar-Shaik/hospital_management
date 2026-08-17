@@ -26,7 +26,8 @@
     "openapi:check": "tsx --env-file-if-exists=.env src/scripts/generateOpenapi.ts --check",
     "contract:check": "tsx src/scripts/checkContract.ts",
     "contract:accept": "tsx src/scripts/checkContract.ts --accept",
-    "client:check": "tsx src/scripts/checkClientContract.ts"
+    "client:check": "tsx src/scripts/checkClientContract.ts",
+    "licence": "tsx --env-file-if-exists=.env src/scripts/setLicenseState.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",

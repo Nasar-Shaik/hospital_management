@@ -300,7 +300,7 @@ document and none may be added to it.**
 | **Doctor**       | `drrao@sunrise.test`     | DOCTOR       | All of M2; permission denials in §15              |
 | **Receptionist** | `reception@sunrise.test` | RECEPTIONIST | §15 denials; D2 reception-register timezone (§12) |
 | **Tenant admin** | `admin@sunrise.test`     | TENANT_ADMIN | Branch config, deactivating a branch (BR-06)      |
-| **Operator**     | `ops@paperlesstech.in`   | SUPERADMIN   | §18 licence states only — console `:3001`         |
+| **Operator**     | `ops@paperlesstech.in`   | SUPERADMIN   | §18 licence states — or use `pnpm seed:licence`   |
 
 Both nurses are **hospital-wide** (no branch binding), which is what makes branch _switching_ testable
 and is why BR-07 — the branch-_confined_ user — is currently BLOCKED.
@@ -331,7 +331,7 @@ The order below differs from the obvious one in three places, each for a reason.
 | **8**  | §11 Branch isolation           | Includes the D1 cross-branch vitals check.                                                                                                                                                                                                                                          |
 | **9**  | §12 Timezone                   | Some rows are only meaningful near a midnight; plan around the clock rather than the checklist order.                                                                                                                                                                               |
 | **10** | §6 M2 remainder                | The biometric lock (largest unverified block in M2), accessibility, network.                                                                                                                                                                                                        |
-| **11** | §18 Licence / edition          | Currently **BLOCKED** — needs console preparation first.                                                                                                                                                                                                                            |
+| **11** | §18 Licence / edition          | LIC-01…05 **PREPARED** (`pnpm seed:licence`, §18.1). LIC-06 still blocked — needs an edition without the nursing module.                                                                                                                                                            |
 
 **Deviate if you have a reason and write the reason down.** If only one device is available on the
 day, run everything except §8 and mark those BLOCKED rather than faking a second nurse with one
@@ -1134,10 +1134,19 @@ development build (ENV-07).
 
 ---
 
-## 18. LICENCE / EDITION — currently BLOCKED
+## 18. LICENCE / EDITION — LIC-01…LIC-05 are now PREPARED
 
-**Five M2 rows and one M3 row cannot run today.** No hospital exists in a grace or expired licence
-state. This needs **operator-console work, not code**.
+**Was blocked; the fixture now exists.** LIC-01…LIC-05 need a hospital that is expiring, in grace,
+or expired, and none of those states can be reached by USING the product — they are a function of
+wall-clock time against `expiresAt` and `graceUntil`, so somebody has to set the dates.
+
+> **The previous instruction here could not have worked.** It said to use `setLicense` with
+> `extendDays: -1`. `hospitalLicenseSchema` declares `extendDays` as `min(1)`, so that call is a 400. It had never been run. Corrected below, and the correction is a command rather than console
+> arithmetic because expiring the WRONG hospital ends the campaign it was meant to serve.
+
+**LIC-06 remains BLOCKED** — it needs a tenant whose edition excludes `module.clinical.nursing`,
+which is a plan/edition question rather than a licence one. Use `pnpm seed:hospital` with a plan
+that omits the nursing module, then `pnpm seed:migrate --slug <slug>`.
 
 | ID         | State                                     | Expected                                                                                                                                                          | Status       |
 | ---------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
@@ -1148,10 +1157,42 @@ state. This needs **operator-console work, not code**.
 | **LIC-05** | **Renewal mid-session**                   | Operator renews while the app is open; pull to refresh clears the block **without a restart**                                                                     | **BLOCKED**  |
 | **LIC-06** | **Edition without the nursing module**    | The round says **"Not in this edition"**, never an empty ward                                                                                                     | **BLOCKED**  |
 
-**To prepare (do not do this during a clinical test run):** in the operator console at
-`http://localhost:3001` as `ops@paperlesstech.in`, use `setLicense` with `extendDays: -1` past expiry
-with grace remaining, on a **dedicated synthetic hospital** — not Sunrise, which every other section
-depends on. LIC-06 needs a tenant whose edition excludes `module.clinical.nursing`.
+### 18.1 Preparing the states — one command each
+
+Provision the dedicated hospital ONCE. Never point this at the validation tenant: every other
+section depends on it still working, and the script refuses any slug that does not contain
+`licence` for exactly that reason.
+
+```bash
+pnpm seed:hospital -- --name "Licence Lab" --slug licence-lab --plan PLAN_ENTERPRISE
+pnpm seed:migrate  -- --slug licence-lab
+```
+
+Then move it between states as the rows require. Each command prints the state the SERVER computed
+(`effectiveLicenseState`, the same function the request gate uses), so the line it prints is the
+state you are actually testing — not what the script intended:
+
+| Row        | Command                                                    | Prints                          |
+| ---------- | ---------------------------------------------------------- | ------------------------------- |
+| **LIC-01** | `pnpm seed:licence -- --slug licence-lab --state active`   | `ACTIVE`, ~3650 days remaining  |
+| **LIC-02** | `pnpm seed:licence -- --slug licence-lab --state expiring` | `ACTIVE`, 5 days remaining      |
+| **LIC-03** | `pnpm seed:licence -- --slug licence-lab --state grace`    | `GRACE`, 6 days remaining       |
+| **LIC-04** | `pnpm seed:licence -- --slug licence-lab --state expired`  | `EXPIRED`, 0 days               |
+| **LIC-05** | `--state expired`, then `--state active` mid-session       | `EXPIRED` → `ACTIVE`            |
+| any        | `pnpm seed:licence -- --slug <slug> --show`                | read-only; safe on any hospital |
+
+Verified end-to-end on 2026-08-17: all four states produced the runtime state named above.
+
+**LIC-02 sits at half the warning window (5 of `LICENSE_WARN_DAYS`=10), deliberately.** A licence
+expiring in exactly `LICENSE_WARN_DAYS` days is the boundary case; a banner that failed to appear
+there would be reported as a broken banner when it is an ambiguous fixture.
+
+**LIC-03's point is the one that is easy to miss:** in GRACE every clinical write must STILL work.
+A red strip AND a working MAR is the pass. If writes are blocked in grace, that is a defect —
+`blocksWrites` deliberately excludes GRACE, because a hospital the server is still serving must
+still be able to record what was done to a patient.
+
+**LIC-05 needs no restart.** Run `--state active` while the app is open, then pull to refresh.
 
 ---
 
@@ -1305,7 +1346,7 @@ Stated so nobody mistakes preparation for coverage.
    **In particular, D10 could never have been found by clicking** — its list was already scoped, so
    the UI correctly hid a document the API would still serve. A tester following screens would have
    reported everything as working.
-4. **§18 is entirely blocked** pending operator-console preparation.
+4. **§18 is prepared for LIC-01…LIC-05** (`pnpm seed:licence`, verified 2026-08-17). **LIC-06 remains blocked** — it needs an edition that excludes the nursing module, which is a plan question, not a licence one.
 5. **Expected results are drawn from the implementation and its comments.** Where the implementation
    is self-consistent but the _intent_ is unstated, the row says `PRODUCT DECISION REQUIRED` rather
    than guessing. Those are decisions for people, not for a tester and not for an agent.
