@@ -26,3 +26,9 @@ coverage/
 # Dev-server build output (separate from .next so a production build cannot
 # clobber a running dev server — see apps/*/next.config.ts).
 .next-dev/
+
+# Playwright
+/e2e/.artifacts/
+/playwright-report/
+/test-results/
+/.playwright-mcp/
