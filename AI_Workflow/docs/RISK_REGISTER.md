@@ -501,10 +501,25 @@ exhaustion (18 current, **101,562 available**, measured mid-symptom), accumulate
 databases), missing `--no-file-parallelism` (already passed by `test:int`), and a repository
 regression (the session that first observed it changed only files under `AI_Workflow/`).
 
-**Strongest untested lead:** the header of `apps/api/src/test/redisTestEnv.ts` records an earlier
-investigation that landed on **Mailhog** — shared by every suite and, unlike Redis and Mongo, not
-partitionable per suite. Nobody has tested it, and nobody has captured per-suite durations.
-**Instrumentation is the next step, not another re-run.**
+**Root-cause cycle run 2026-08-17 — reproduced, cause still unproven.** Two identical back-to-back
+`test:int` runs with nothing changed between them: **A passed 1842/1842, B failed 1**. So it is
+reproducible and it is not the code, not other projects' containers (four containers up throughout),
+and not host load.
+
+**Mailhog is REJECTED**, with the argument in [`TESTING.md`](../../TESTING.md) §9: only `orders` and
+`notifications` use it and no failure has ever been in either; collision needs parallelism and
+`fileParallelism: false` is set in `vitest.config.ts`; and its documented signature is a wrong
+count, whereas every failure here is a 404, 401 or timeout.
+
+**One earlier claim of ours is also corrected:** not every failure is a timeout. Run B's was an
+assertion — `POST /api/v1/ambulances` answered **404 where the RBAC matrix requires 403**.
+
+**The unexplained observation, and the next evidence.** `requestLog` sits second in the middleware
+chain so that every request is logged on `finish`, yet the failing requests have **no log line at
+all** (`adm-int-test`: 337 requests logged, zero 404s, while the test reported one). Either the
+response never went through that Express app, or the line was produced and lost by vitest's output
+capture. **Point the test logger at a file instead of stdout and re-run until it fails** — that
+distinguishes the two, and everything above it is speculation until it is done.
 
 **Why this is P2 and not higher.** It has never failed the same test twice, has never failed an
 assertion about clinical or permission behaviour across six runs, and every failing suite has

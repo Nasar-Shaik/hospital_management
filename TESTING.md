@@ -810,36 +810,56 @@ big variable is exactly what a wandering flake looks like when you want it to be
 
 #### What is actually established
 
-| Claim                                                      | Status                                                                                          |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Failures are timeouts, 404s and 401s — never wrong answers | **Established.** Six runs, no assertion about clinical or permission behaviour has ever failed. |
-| Failing tests differ every run                             | **Established.** Six runs, no test has failed twice.                                            |
-| Everything passes in isolation and in small groups         | **Established**, including the 3-suite group above.                                             |
-| It only appears in the full 21-file run                    | **Established.**                                                                                |
-| OOM / container kill                                       | **Ruled out.** Mongo 1.4–3.4 GiB of 7.75, no `exit 137`.                                        |
-| Connection-pool exhaustion                                 | **Ruled out.** Measured mid-symptom: 18 connections current, **101,562 available**.             |
-| Accumulated database state                                 | **Unlikely.** 14 databases, 5 of them test.                                                     |
-| Contention from other projects' containers                 | ~~Established~~ → **RETRACTED.** It failed again with those containers down.                    |
-| Missing `--no-file-parallelism`                            | **Not applicable.** `test:int` already passes it.                                               |
+Updated after a focused root-cause cycle on 2026-08-17 (eight full runs in total).
 
-**The strongest untested lead is already written down elsewhere in this repository**, and it
-predates all of the above: the header of `apps/api/src/test/redisTestEnv.ts` records a previous
-investigation that reached a different answer — **Mailhog**, which unlike Redis and Mongo cannot be
-partitioned per suite, so every suite shares one instance. That file also warns, in as many words,
-that "a comment that takes credit for a fix it did not make is how the next person mis-diagnoses
-the next outage". The retraction above is that warning coming true; read that file before
-theorising again.
+| Claim                                                        | Status                                                                                                                       |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Reproducible under control**                               | **Established.** Two identical back-to-back `test:int` runs, nothing changed between them: **A 1842/1842 pass, B 1 failed**. |
+| Failing tests differ every run                               | **Established.** Eight runs, no test has failed twice.                                                                       |
+| Everything passes in isolation and in small groups           | **Established**, every time it has been checked.                                                                             |
+| Only appears in the full 21-file run                         | **Established.**                                                                                                             |
+| ~~All failures are timeouts~~                                | **CORRECTED.** Run B's was an assertion: `POST /api/v1/ambulances` returned **404 where 403 was required**.                  |
+| No failure has ever produced a wrong clinical/billing answer | **Established.** Eight runs.                                                                                                 |
+| OOM / container kill                                         | **Ruled out.** No `exit 137`; Mongo 1.35–3.4 GiB of 7.75.                                                                    |
+| Connection-pool exhaustion                                   | **Ruled out.** 18–19 current against **101,562 available**, measured mid-symptom.                                            |
+| Accumulated database state                                   | **Ruled out.** 14 databases before and after; `dropDatabases` opens and closes its own connection.                           |
+| Missing `--no-file-parallelism`                              | **Not applicable.** `fileParallelism: false` is set in `vitest.config.ts`, not merely in the script.                         |
+| Contention from other projects' containers                   | **Ruled out.** A and B above both ran with only HMS's four containers up.                                                    |
+| **Mailhog**                                                  | **REJECTED — see below.**                                                                                                    |
 
-**Triage order when the suite fails:**
+#### Mailhog is rejected, and this is the argument
 
-1. **Read the failure body before the test name.** A row called `DOCTOR may NOT GET …` failing on
-   `Error: Test timed out` is not a permission leak, and that misreading is the expensive one.
-2. Re-run the failing suites in isolation. Every occurrence so far has passed.
-3. Check `docker ps` and `pgrep -f "turbo run dev"` — a quiet host has not been proven to fix it,
-   but a loaded one is still worth removing from the picture.
-4. **Instrument before changing anything.** Nobody has yet captured per-suite durations
-   (`--reporter=verbose`) or tested the Mailhog lead. That is the next real step, not another
-   re-run.
+It was the strongest documented lead, and it does not fit:
+
+1. **Only two suites use it** — `orders` and `notifications` are the sole importers of `mailTestEnv`.
+   **No observed failure has ever been in either.**
+2. **Collision requires parallelism**, and `fileParallelism: false` lives in `vitest.config.ts`, so it
+   holds however the suite is invoked — not only via the `test:int` script's flag.
+3. **The signature does not match.** `mailTestEnv.ts` states the symptom of a shared-inbox race
+   itself: "an assertion that mysteriously finds nothing, in whichever suite happened to lose the
+   race" — a wrong count. Every failure observed here is a 404, a 401, or a timeout.
+
+Mailhog remains the correct explanation for the _historical_ failures that file describes. It is not
+the explanation for these.
+
+#### The one observation nothing yet explains
+
+`requestLog` is registered **second in the chain — before helmet and cors — deliberately, so that
+every request is logged** on `res.finish`. Yet **the failing requests have no log line at all.**
+`adm-int-test` logged 337 requests in the run where it failed, of which **zero were 404s**, while
+the test reported a 404 from `POST /api/v1/encounters`. The only tenant-resolution 404
+(`HMS-TEN-001`, which logs with no `tenant` field) in each run belongs to `auth-int-test`'s
+deliberate unknown-host case.
+
+So either the response never went through this Express app, or the log line was produced and lost.
+**Distinguishing those two is the next piece of evidence, and it is cheap:** point the test logger
+at a _file_ rather than stdout, so vitest's output capture cannot be the explanation, and re-run
+until it fails. Until that is done, every mechanism above it is speculation.
+
+Second measurement worth repeating: Mongo's resident memory grew **+602 MB during the failing run
+and +1 MB during the passing one** (1353 → 1354 → 1956 MB). One pairing is not a cause — that
+mistake has already been made once in this file — but WiredTiger cache behaviour is worth sampling
+per suite next time.
 
 **Do not raise `testTimeout`/`hookTimeout` to make this go away.** A test that needs longer under
 load is evidence; a test that is allowed longer is silence. Tracked as **T3** in the risk register,
