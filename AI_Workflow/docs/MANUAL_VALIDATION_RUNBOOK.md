@@ -1359,14 +1359,18 @@ wall-clock time against `expiresAt` and `graceUntil`, so somebody has to set the
 which is a plan/edition question rather than a licence one. Use `pnpm seed:hospital` with a plan
 that omits the nursing module, then `pnpm seed:migrate --slug <slug>`.
 
-| ID         | State                                     | Expected                                                                                                                                                          | Status       |
-| ---------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| **LIC-01** | Healthy                                   | No banner anywhere                                                                                                                                                | Runnable now |
-| **LIC-02** | **EXPIRING** (inside `LICENSE_WARN_DAYS`) | Amber strip above the tab bar with a day count. **Check the layout** — the banner is new and has never been seen on a device.                                     | **BLOCKED**  |
-| **LIC-03** | **GRACE**                                 | Red strip — **and every clinical write still works.** Deliberate: a hospital the server is still serving must still be able to record what was done to a patient. | **BLOCKED**  |
-| **LIC-04** | **EXPIRED** (past grace)                  | "Subscription expired" as a blocking state; save controls disabled **with that reason**, rather than failing after the tap                                        | **BLOCKED**  |
-| **LIC-05** | **Renewal mid-session**                   | Operator renews while the app is open; pull to refresh clears the block **without a restart**                                                                     | **BLOCKED**  |
-| **LIC-06** | **Edition without the nursing module**    | The round says **"Not in this edition"**, never an empty ward                                                                                                     | **BLOCKED**  |
+| ID         | State                                     | Expected                                                                                                                                                          | Status      |
+| ---------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| **LIC-01** | Healthy                                   | No banner anywhere                                                                                                                                                | ✅ PREPARED |
+| **LIC-02** | **EXPIRING** (inside `LICENSE_WARN_DAYS`) | Amber strip above the tab bar with a day count. **Check the layout** — the banner is new and has never been seen on a device.                                     | ✅ PREPARED |
+| **LIC-03** | **GRACE**                                 | Red strip — **and every clinical write still works.** Deliberate: a hospital the server is still serving must still be able to record what was done to a patient. | ✅ PREPARED |
+| **LIC-04** | **EXPIRED** (past grace)                  | "Subscription expired" as a blocking state; save controls disabled **with that reason**, rather than failing after the tap                                        | ✅ PREPARED |
+| **LIC-05** | **Renewal mid-session**                   | Operator renews while the app is open; pull to refresh clears the block **without a restart**                                                                     | ✅ PREPARED |
+| **LIC-06** | **Edition without the nursing module**    | The round says **"Not in this edition"**, never an empty ward                                                                                                     | 🔴 BLOCKED  |
+
+> **"PREPARED" means the state can be produced on demand and was, on 2026-08-17 — not that anybody
+> has looked at the screen.** Every row is still unexecuted. This column said `BLOCKED` for LIC-02…05
+> until 2026-08-17, contradicting §18.1, §5.1 and §22 in the same document; corrected here.
 
 ### 18.1 Preparing the states — one command each
 
