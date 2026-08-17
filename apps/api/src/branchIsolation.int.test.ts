@@ -2687,3 +2687,82 @@ describe("a second site cannot open while historical records carry no site", () 
     expect(res.status, `still refused after adoption: ${JSON.stringify(res.body)}`).toBe(201);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 28. ONE IDEMPOTENCY KEY DOES NOT CROSS A BRANCH
+ *
+ * `fingerprint()` hashes `branchId` alongside method, path, query and the
+ * validated body — so the same key replayed under a DIFFERENT active branch is
+ * a different request, and must be refused rather than replayed.
+ *
+ * ── WHY THIS BELONGS HERE AND NOT IN THE IDEMPOTENCY SUITE ──────────────────
+ * That suite proves the key is scoped by tenant and by user, and that a changed
+ * body, a changed endpoint or a dead claim each get the right answer. It has no
+ * second BRANCH, so the one dimension this repository has got wrong three times
+ * (D1, D9, D10) is the one dimension its fingerprint was never tested on.
+ *
+ * Both directions are wrong and each is wrong differently. If the branch were
+ * absent from the fingerprint, a key spent at Hyderabad would REPLAY at Chennai
+ * — the caller gets a 200 and Chennai's row is never written, so a receptionist
+ * sees a confirmation for a patient who was never registered at their site. If
+ * the branch were part of the KEY instead, a genuine retry that arrived while
+ * the header happened to differ would execute twice. Refusing is the only
+ * answer that is safe in both directions, and `HMS-REQ-002` says which request
+ * the key was already spent on.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("an idempotency key is spent in the branch that spent it", () => {
+  const KEY_HEADER = "Idempotency-Key";
+
+  it("refuses the same key under a different active branch, and writes nothing", async () => {
+    const key = `branch-fp-${Date.now().toString(36)}`;
+
+    const first = await post("/api/v1/patients", tokenAdmin, branchA)
+      .set(KEY_HEADER, key)
+      .send({ name: "Fingerprint Subject", gender: "female" })
+      .expect(201);
+    const createdId = first.body.data.patient.id as string;
+
+    // Same key, same body, same path — only the active branch differs.
+    const clash = await post("/api/v1/patients", tokenAdmin, branchB)
+      .set(KEY_HEADER, key)
+      .send({ name: "Fingerprint Subject", gender: "female" });
+
+    expect(clash.status, `expected a conflict, got ${JSON.stringify(clash.body)}`).toBe(409);
+    expect(clash.body.error.code).toBe("HMS-REQ-002");
+
+    /**
+     * The refusal must not be mistaken for a replay: a replay would have returned 201 and the
+     * ORIGINAL patient, which is the failure mode that would leave Chennai believing it had
+     * registered somebody. Exactly one patient carries this name, and it is branch A's.
+     */
+    const conn = await getTenantConnection({ id: tenant.id, databaseName: tenant.databaseName });
+    const rows = await conn.collection("patients").find({ name: "Fingerprint Subject" }).toArray();
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0]?._id)).toBe(createdId);
+    expect(String(rows[0]?.branchId)).toBe(branchA);
+  });
+
+  it("replays normally when the branch is the same, so the refusal is about the branch", async () => {
+    const key = `branch-fp-same-${Date.now().toString(36)}`;
+    const body = { name: "Same Branch Replay", gender: "male" };
+
+    const first = await post("/api/v1/patients", tokenAdmin, branchA)
+      .set(KEY_HEADER, key)
+      .send(body)
+      .expect(201);
+
+    // The control for the test above. Without it, a blanket "second call always 409" would
+    // pass the first test while breaking every legitimate retry in the product.
+    const replay = await post("/api/v1/patients", tokenAdmin, branchA)
+      .set(KEY_HEADER, key)
+      .send(body)
+      .expect(201);
+
+    expect(replay.body.data.patient.id).toBe(first.body.data.patient.id);
+    const conn = await getTenantConnection({ id: tenant.id, databaseName: tenant.databaseName });
+    expect(await conn.collection("patients").countDocuments({ name: "Same Branch Replay" })).toBe(
+      1,
+    );
+  });
+});
