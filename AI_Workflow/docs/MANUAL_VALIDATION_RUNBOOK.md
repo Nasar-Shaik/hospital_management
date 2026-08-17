@@ -293,14 +293,28 @@ radio you can kill mid-request.
 All synthetic. Password for every account below is `123456`. **No real credentials appear in this
 document and none may be added to it.**
 
-| Alias            | Account                  | Role         | Used by                                           |
-| ---------------- | ------------------------ | ------------ | ------------------------------------------------- |
-| **Nurse A**      | `nurse@sunrise.test`     | NURSE        | M3, five rights, MAR, vitals, notes, negative     |
-| **Nurse B**      | `nurse2@sunrise.test`    | NURSE        | MAR concurrency (§8), staleness (M3-24)           |
-| **Doctor**       | `drrao@sunrise.test`     | DOCTOR       | All of M2; permission denials in §15              |
-| **Receptionist** | `reception@sunrise.test` | RECEPTIONIST | §15 denials; D2 reception-register timezone (§12) |
-| **Tenant admin** | `admin@sunrise.test`     | TENANT_ADMIN | Branch config, deactivating a branch (BR-06)      |
-| **Operator**     | `ops@paperlesstech.in`   | SUPERADMIN   | §18 licence states — or use `pnpm seed:licence`   |
+| Alias            | Account                    | Role           | Used by                                             |
+| ---------------- | -------------------------- | -------------- | --------------------------------------------------- |
+| **Nurse A**      | `nurse@sunrise.test`       | NURSE          | M3, five rights, MAR, vitals, notes, negative       |
+| **Nurse B**      | `nurse2@sunrise.test`      | NURSE          | MAR concurrency (§8), staleness (M3-24)             |
+| **Doctor**       | `drrao@sunrise.test`       | DOCTOR         | All of M2; permission denials in §15                |
+| **Doctor 2**     | `drkhan@sunrise.test`      | DOCTOR         | **§13A JR-06** — handover, the one test needing two |
+| **Receptionist** | `reception@sunrise.test`   | RECEPTIONIST   | §15 denials; D2 reception timezone (§12); §13A      |
+| **Pharmacist**   | `pharmacy@sunrise.test`    | PHARMACIST     | **DRIFT-03**, §13A dispensing, DUP-01               |
+| **Lab tech**     | `labtech@sunrise.test`     | LAB_TECHNICIAN | **DRIFT-04** (accept/start/complete), §13A          |
+| **Pathologist**  | `pathologist@sunrise.test` | PATHOLOGIST    | **DRIFT-04** (verify/release) — a different person  |
+| **Radiologist**  | `radiologist@sunrise.test` | RADIOLOGIST    | §13A imaging orders                                 |
+| **Cashier**      | `cashier@sunrise.test`     | CASHIER        | **§13A billing**, JR-12/13                          |
+| **Tenant admin** | `admin@sunrise.test`       | TENANT_ADMIN   | Branch config, deactivating a branch (BR-06)        |
+| **Operator**     | `ops@paperlesstech.in`     | SUPERADMIN     | §18 licence states — or use `pnpm seed:licence`     |
+
+> **The lower six were missing from this table until 2026-08-17, and three tests already in this
+> document could not be run without them.** DRIFT-03 says "hand over drugs" — no listed account held
+> `pharmacy:dispense`. DRIFT-04 says "the lab can still accept / start / complete / verify /
+> release" — that is deliberately **two** people (a technician performs, a pathologist verifies;
+> §15's own state machine says collapsing them is a patient-safety failure), and neither was listed.
+> All eleven are created by `pnpm seed:demo` as `<key>@sunrise.test`; none is new. A tester meeting
+> DRIFT-03 with only the original six would have recorded BLOCKED against a working feature.
 
 Both nurses are **hospital-wide** (no branch binding), which is what makes branch _switching_ testable
 and is why BR-07 — the branch-_confined_ user — is currently BLOCKED.
@@ -1095,20 +1109,78 @@ back inside the same session. `forgetSchemaReadiness` is not reachable from outs
 the 60-second cache means a repair can take up to a minute to become visible — that wait is itself
 part of DRIFT-06.
 
-```
-# DROP (one of):
-db.medicationAdministrations.dropIndex("one_administration_per_dose_slot")   # MAR
-db.dispenses.dropIndex("one_dispense_per_request_id")                       # dispensing
-db.orders.dropIndex("one_order_per_request_id")                             # ordering
-db.encounters.dropIndex("one_open_stay_per_bed_per_branch")                 # bed assignment
-db.encounters.dropIndex("one_open_encounter_per_patient")                   # starting a visit
-
-# RESTORE: re-run the tenant migration, which is idempotent:
-pnpm seed:migrate -- --tenant <slug>
+```bash
+# DROP (one of). Mongo is on port 37018 in this dev environment.
+mongosh "mongodb://localhost:37018/hms_<slug>" --quiet --eval '
+  db.medicationAdministrations.dropIndex("one_administration_per_dose_slot")'  # MAR
+  # db.dispenses.dropIndex("one_dispense_per_request_id")                      # dispensing
+  # db.orders.dropIndex("one_order_per_request_id")                            # ordering
+  # db.encounters.dropIndex("one_open_stay_per_bed_per_branch")                # bed assignment
+  # db.encounters.dropIndex("one_open_encounter_per_patient")                  # starting a visit
 ```
 
-Then confirm with the deployment gate (ENV-03) that the tenant is converged again **before moving
-on**. A validation session that leaves a ward drifted is worse than one that never ran.
+#### ⚠️ Restoring: the obvious command does NOT work, and it fails silently
+
+> **`pnpm seed:migrate` will NOT put a dropped index back.** The runner skips any migration already
+> listed in the tenant's `migrations` collection (`runner.ts` — `pending = migrations.filter(m => !done.has(m.id))`),
+> and dropping an index does not remove its record. So the migration is skipped, the CLI reports
+> **"tenant converged"**, and the database is exactly as unsafe as it was. This is measured, not
+> theorised: `seed/schemaGuard.ts` records it against a real tenant on 2026-08-14 —
+> `migrationsApplied: []`, index still absent. It is the `schema_drift` case in
+> [`DEPLOYMENT_GATE.md`](DEPLOYMENT_GATE.md), and it is the single easiest way to end a validation
+> session having quietly disarmed a ward.
+>
+> _(An earlier version of this runbook said to restore with `pnpm seed:migrate -- --tenant <slug>`.
+> That is wrong twice: `--tenant` is not a flag the CLI parses — it accepts `--slug`, `--all`,
+> `--check`, `--json` — so the command exits 1 with a usage error; and the `--slug` form a reader
+> would then reach for restores nothing, per the paragraph above. Corrected 2026-08-17.)_
+
+**Restore by recreating the index you dropped.** You know exactly what removed it — you did, a
+minute ago — so there is nothing to investigate and no data to touch. The gate checks the index's
+**shape**, not its name, so these must match field-for-field and in this order:
+
+```bash
+mongosh "mongodb://localhost:37018/hms_<slug>" --quiet --eval '
+  db.medicationAdministrations.createIndex(
+    { tenantId: 1, prescriptionId: 1, lineIndex: 1, scheduledFor: 1 },
+    { unique: true, partialFilterExpression: { scheduledFor: { $exists: true } },
+      background: true, name: "one_administration_per_dose_slot" });
+
+  db.dispenses.createIndex(
+    { tenantId: 1, requestId: 1 },
+    { unique: true, partialFilterExpression: { requestId: { $exists: true } },
+      background: true, name: "one_dispense_per_request_id" });
+
+  db.orders.createIndex(
+    { tenantId: 1, requestId: 1 },
+    { unique: true, partialFilterExpression: { requestId: { $exists: true } },
+      background: true, name: "one_order_per_request_id" });
+
+  db.encounters.createIndex(
+    { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+    { unique: true,
+      partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+      background: true, name: "one_open_stay_per_bed_per_branch" });
+
+  db.encounters.createIndex(
+    { tenantId: 1, patientId: 1 },
+    { unique: true, partialFilterExpression: { open: { $eq: true } },
+      background: true, name: "one_open_encounter_per_patient" });'
+```
+
+Re-creating an index that is already present is a no-op, so running the whole block is safe and is
+the simplest way to be sure you put back whatever you dropped.
+
+**Then confirm with the deployment gate (ENV-03) before moving on** — this is the step that decides
+whether the restore worked, and it is not optional:
+
+```bash
+pnpm --silent seed:migrate --check --json | jq '.verdict'    # must print "READY"
+```
+
+`NOT_READY` with code `schema_drift` means the index is still absent. **A validation session that
+leaves a ward drifted is worse than one that never ran**, and every clinical result taken against
+that tenant afterwards is void.
 
 | ID           | Attempt                                                                            | Expected                                                                                                               | Notes                                                                                              |
 | ------------ | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -1124,6 +1196,39 @@ on**. A validation session that leaves a ward drifted is worse than one that nev
 | **DRIFT-10** | **Mobile** — repeat DRIFT-01 on the handset                                        | The dose is **not** shown as given. See below.                                                                         | The one row most likely to find a real defect.                                                     |
 | **DRIFT-11** | **Server log** — while any DRIFT test runs, watch the API log                      | One `error` line per refusal carrying `code`, `status`, `tenant`, `traceId` and the missing rule + migration           | An operator must be able to act without asking a clinician to read a screen.                       |
 | **DRIFT-12** | **PHI check** on the same log lines                                                | No patient name, UHID, encounter id, prescription id or drug in the refusal line                                       | Asserted by `errorContract.test.ts`; confirm it in a real log once.                                |
+
+### 16A.1 · Making each row deterministic — who, where, and what to count
+
+The table above says what to attempt. This one removes the guesswork, because **three of these rows
+need a different person than the obvious one** and a tester who reaches a `403` will not be able to
+tell it from the refusal being tested.
+
+**Tenant is `sunrise` and branch is A (Main Branch) for every row except DRIFT-08.**
+
+| ID           | Who — and why that person                                                          | Prerequisite (must be true before you drop anything)                                            | Expected HTTP                                                           | Count this in Mongo afterwards — expected value                                                                               |
+| ------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **DRIFT-01** | **Nurse A** — `mar:administer`                                                     | A **due, unanswered scheduled** dose. Note `prescriptionId`, `lineIndex`, `scheduledFor`.       | `503 HMS-MAR-002` + `Retry-After`                                       | `medicationAdministrations.countDocuments({prescriptionId, lineIndex, scheduledFor})` → **0**                                 |
+| **DRIFT-02** | **Nurse A** — `vitals:record`, `nursing:manage`                                    | Any admitted patient in branch A.                                                               | `201` **both**                                                          | one `vitals` row, one `wardNotes` row → **each 1**                                                                            |
+| **DRIFT-03** | **Pharmacist** ⚠️ — only role with `pharmacy:dispense`                             | A **signed** prescription with quantity still outstanding.                                      | `503 HMS-PHM-004`                                                       | `dispenses.countDocuments({prescriptionId})` **unchanged**; `lines[].dispensedQty` unchanged                                  |
+| **DRIFT-04** | **Doctor** places · **Lab tech** then **Pathologist** move existing work ⚠️        | An open encounter to order against, **and** an order already on the bench to push through.      | Place → `503 HMS-ORD-001`; accept/start/complete/verify/release → `200` | `orders.countDocuments({encounterId})` **unchanged** by the refused placement                                                 |
+| **DRIFT-05** | **Doctor** admits (`admission:create`) · **Nurse A** transfers (`bed:allocate`) ⚠️ | An **open OP encounter**, and a **free bed** (ENV-05 leaves 3 of `GW-1…GW-45`).                 | Both `503 HMS-ADM-003`                                                  | `encounters.countDocuments({class:"IP", open:true})` **unchanged**; the OP encounter still `open:true` and **not** `admitted` |
+| **DRIFT-06** | **Receptionist** — `encounter:create`                                              | A patient with **no open encounter** (register a fresh walk-in — the 42 admitted all have one). | `503 HMS-ENC-001`                                                       | `encounters.countDocuments({patientId, open:true})` → **0**                                                                   |
+| **DRIFT-07** | Whoever ran the refused act                                                        | The index recreated per the block above.                                                        | The original `2xx`                                                      | The row now exists — **1**                                                                                                    |
+| **DRIFT-08** | Same act, tenant **`district`**                                                    | `district` converged (ENV-03 covers the fleet).                                                 | Normal `2xx` throughout                                                 | Written normally in `hms_district`; `hms_sunrise` still refusing                                                              |
+| **DRIFT-09** | —                                                                                  | Any DRIFT refusal has just occurred.                                                            | Re-read is `200`                                                        | **Every count above is the "nothing happened" value.** This row is the whole point.                                           |
+
+⚠️ **The three rows that will otherwise be misread.** DRIFT-03 is refused with `403` for a nurse or
+a doctor, because only PHARMACIST holds `pharmacy:dispense`. DRIFT-04 deliberately splits across a
+technician and a pathologist — the state machine treats collapsing them as a patient-safety failure,
+not a convenience. And in DRIFT-05 **admitting and moving a bed are two different permissions held
+by two different roles** (`admission:create` → DOCTOR, `bed:allocate` → NURSE), so one login cannot
+do both halves. In each case a `403 HMS-AUTH-005` means _wrong account_, not a defect — and it is
+not the refusal this section is testing.
+
+**Recovery is identical for every row** and is the one thing not to improvise: recreate the index
+(block above) → wait up to **60 s** for the readiness cache → retry the same act → then
+`pnpm --silent seed:migrate --check --json | jq '.verdict'` must print `READY`. If the retry needs
+an API restart, that is **DRIFT-07 failing**, and it is a **P1**.
 
 ### What "correct" looks like on mobile (DRIFT-10)
 
