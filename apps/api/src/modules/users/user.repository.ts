@@ -147,6 +147,12 @@ export interface ListUsersFilter {
   limit: number;
   q?: string;
   status?: UserStatus;
+  /**
+   * Ids to leave out, applied BEFORE paging so the page numbers and the total agree with what is
+   * shown. The caller decides who these are — `users` deliberately knows nothing about branches
+   * (the binding lives in `rbac`), so this stays a plain id list rather than a scope concept.
+   */
+  excludeIds?: string[];
 }
 
 export interface UserPage {
@@ -159,6 +165,7 @@ export async function list(filter: ListUsersFilter): Promise<UserPage> {
 
   const query: Record<string, unknown> = {};
   if (filter.status) query.status = filter.status;
+  if (filter.excludeIds && filter.excludeIds.length > 0) query._id = { $nin: filter.excludeIds };
   if (filter.q) {
     // Anchored, escaped: an unescaped user string in a regex is both a
     // correctness bug and a ReDoS vector.

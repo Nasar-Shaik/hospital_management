@@ -191,6 +191,16 @@ export async function listUserIdsWithRoleCode(roleCode: string): Promise<string[
   return repo.findUserIdsWithRole(role.id);
 }
 
+/**
+ * Staff who work somewhere other than this branch — the directory's branch scope.
+ *
+ * Thin on purpose: the rule lives in the repository, next to the binding shape it depends on. See
+ * `repo.userIdsOutsideBranch` for why this answers with who to HIDE rather than who to show.
+ */
+export async function listUserIdsOutsideBranch(branchId: string): Promise<string[]> {
+  return repo.userIdsOutsideBranch(branchId);
+}
+
 /** Drops the cached permissions of everyone holding a role — used when the ROLE changes. */
 export async function invalidateRole(roleId: string): Promise<void> {
   const userIds = await repo.findUserIdsWithRole(roleId);

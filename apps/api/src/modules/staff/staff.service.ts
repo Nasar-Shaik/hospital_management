@@ -19,7 +19,7 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { checkPasswordPolicy, generatePassword } from "../../core/crypto/password.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, tryGetContext } from "../../core/context/requestContext.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import * as auth from "../auth/index.js";
@@ -125,13 +125,44 @@ export async function createStaff(input: CreateStaffInput): Promise<CreateStaffR
   };
 }
 
+/**
+ * The staff directory, narrowed to the branch the caller is working in.
+ *
+ * ── WHY THIS IS NOT `scopeFilter()` LIKE EVERY OTHER LIST ───────────────────
+ * Because a member of staff has no `branchId` to filter on. ADR-0015 is explicit that a tenant has
+ * "one staff directory" — a person belongs to the HOSPITAL — and where they work is a property of
+ * their role binding (`branchScope` + `branchIds[]`), which lives in `rbac`. So the branch scope of
+ * this list has to be assembled from the bindings rather than read off the document.
+ *
+ * The rule, and it is the one a reader would expect:
+ *
+ *   ALL BRANCHES selected  → everyone, exactly as before
+ *   ONE branch selected    → staff bound to that branch, PLUS staff bound to the whole hospital
+ *
+ * The second half is the part worth stating: an admin or a director whose binding is `all` really
+ * does work at that site, so hiding them would be wrong — and in a hospital where most staff are
+ * hospital-wide it would empty the screen. Anyone still visible at two named sites is genuinely
+ * shared between them, which the list now shows rather than leaving to be discovered one profile
+ * at a time.
+ *
+ * `tryGetContext` rather than `getContext`: this is also reachable from seeding, which has no
+ * request and therefore no active branch — there, "no branch selected" is the honest answer.
+ */
 export async function listStaff(filter: {
   page: number;
   limit: number;
   q?: string;
   status?: UserStatus;
 }): Promise<{ users: StaffMember[]; total: number }> {
-  const page = await users.listUsers(filter);
+  const activeBranchId = tryGetContext()?.activeBranchId;
+  const excludeIds = activeBranchId
+    ? await rbac.listUserIdsOutsideBranch(activeBranchId)
+    : undefined;
+
+  const page = await users.listUsers({
+    ...filter,
+    ...(excludeIds && excludeIds.length > 0 ? { excludeIds } : {}),
+  });
 
   // Roles are resolved per user. Fine at directory scale (a page of 20); if a
   // hospital ever pages through thousands, this becomes one batched lookup.

@@ -576,15 +576,30 @@ function DetailRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
+/**
+ * The sites a member of staff works at, named.
+ *
+ * An EMPTY binding is the HOSPITAL-WIDE one, not "nowhere" — and that distinction is the whole
+ * reason this is worth showing in the list rather than only in the detail panel. A director bound
+ * to nothing works everywhere; a receptionist bound to one site works there only; anyone bound to
+ * two or more is genuinely shared between sites. Reading the directory, those three look identical
+ * until something says so.
+ *
+ * Falls back to the raw id if a branch has since been renamed away, because a row that silently
+ * drops a binding it cannot resolve would under-report where someone works.
+ */
+function branchNamesOf(member: StaffMember, branches: Branch[]): string[] {
+  return member.branchIds.map((id) => branches.find((b) => b.id === id)?.name ?? id);
+}
+
 function StaffDetail({ member, branches }: { member: StaffMember; branches: Branch[] }) {
   const p = member.profile ?? {};
-  // Empty binding = the whole hospital; otherwise the named sites (falling back to the id if a
-  // branch was since renamed away). Only worth showing once a hospital actually has branches.
+  // Only worth showing once a hospital actually has branches.
   const branchAccess =
     branches.length > 1
       ? member.branchIds.length === 0
         ? "All branches"
-        : member.branchIds.map((id) => branches.find((b) => b.id === id)?.name ?? id).join(", ")
+        : branchNamesOf(member, branches).join(", ")
       : undefined;
   return (
     <div className="space-y-4">
@@ -843,6 +858,33 @@ function StaffDirectory() {
         </div>
       ),
     },
+    /**
+     * Only once a hospital has more than one site — a single-branch hospital would get a column
+     * that says the same thing on every row. Matches the create/edit form, which hides the branch
+     * control on the same condition.
+     */
+    ...(branches.length > 1
+      ? ([
+          {
+            key: "branch",
+            header: "Branch",
+            render: (member: StaffMember) =>
+              member.branchIds.length === 0 ? (
+                // The hospital-wide binding. Toned differently from a named site because it is a
+                // different KIND of answer, not another place: this person works at all of them.
+                <Badge tone="info">All branches</Badge>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {branchNamesOf(member, branches).map((name) => (
+                    <Badge key={name} tone="neutral">
+                      {name}
+                    </Badge>
+                  ))}
+                </div>
+              ),
+          },
+        ] satisfies Column<StaffMember>[])
+      : []),
     {
       key: "dept",
       header: "Department / specialty",

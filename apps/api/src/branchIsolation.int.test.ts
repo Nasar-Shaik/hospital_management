@@ -2767,3 +2767,80 @@ describe("an idempotency key is spent in the branch that spent it", () => {
     );
   });
 });
+
+/**
+ * The staff directory is the ONE list with no `branchId` to filter on.
+ *
+ * ADR-0015 puts "one staff directory" in the same sentence as one patient identity space, so a
+ * member of staff belongs to the HOSPITAL and where they work is a property of their role binding
+ * — `branchScope` plus `branchIds[]`, over in `rbac`. That makes this the only branch-scoped list
+ * assembled from bindings rather than read off the document, and the only one whose scope can
+ * therefore drift silently: nothing else in the tenantScope plugin or `scopeFilter()` is holding
+ * it up.
+ *
+ * Three things are pinned, and the third is a judgement call worth being able to find later.
+ */
+describe("the staff directory follows the branch you are working in", () => {
+  let admin = "";
+  let confinedToB = "";
+  let unassigned = "";
+
+  beforeAll(async () => {
+    admin = tokenAdmin;
+
+    await createUserWithRole("branchiso-confined-b@sunrise.test", "RECEPTIONIST", [branchB]);
+    confinedToB = "branchiso-confined-b@sunrise.test";
+
+    // No role at all — created, not yet given a job.
+    unassigned = "branchiso-unassigned@sunrise.test";
+    await inTenant(async () => {
+      const user = await createUser({ email: unassigned, name: unassigned, status: "invited" });
+      await setPassword(user.id, PASSWORD, { mustChangePassword: false });
+    });
+  });
+
+  /** Every email the directory returns, at the given branch (or across all of them). */
+  async function directory(activeBranch?: string): Promise<string[]> {
+    const res = await get("/api/v1/users?limit=100", admin, activeBranch).expect(200);
+    return (res.body.data as { email: string }[]).map((u) => u.email);
+  }
+
+  it("shows the whole hospital when no single branch is selected", async () => {
+    const all = await directory();
+    expect(all).toContain(confinedToB);
+    expect(all).toContain("admin@branchiso.test");
+  });
+
+  it("hides someone bound to another site, and keeps the hospital-wide staff", async () => {
+    const atA = await directory(branchA);
+
+    // The receptionist works at B and only at B, so at A they are not staff.
+    expect(atA).not.toContain(confinedToB);
+    // The admin's binding is hospital-wide, which means they work HERE too. Hiding them would
+    // empty the screen in any hospital whose staff are mostly hospital-wide — which is most.
+    expect(atA).toContain("admin@branchiso.test");
+
+    const atB = await directory(branchB);
+    expect(atB).toContain(confinedToB);
+    expect(atB).toContain("admin@branchiso.test");
+  });
+
+  it("counts the page against what it shows, so paging is not a lie", async () => {
+    const res = await get("/api/v1/users?limit=100", admin, branchA).expect(200);
+    expect(res.body.meta.total).toBe((res.body.data as unknown[]).length);
+    expect(res.body.meta.total).toBeLessThan(
+      (await get("/api/v1/users?limit=100", admin).expect(200)).body.meta.total,
+    );
+  });
+
+  /**
+   * The judgement call. An account with no binding belongs to no branch, so a literal reading of
+   * "this branch's staff" would hide it everywhere — and then the person who has to assign it a
+   * role could not find it from any branch. Invisible is worse than misfiled; it stays visible.
+   * If that is ever reversed, this test is where the decision was written down.
+   */
+  it("keeps an unassigned account visible, because nobody could find it otherwise", async () => {
+    expect(await directory(branchA)).toContain(unassigned);
+    expect(await directory(branchB)).toContain(unassigned);
+  });
+});

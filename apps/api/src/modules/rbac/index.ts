@@ -21,6 +21,7 @@ export {
   getUserBranchIds,
   getAuthorizationProfile,
   listUserIdsWithRoleCode,
+  listUserIdsOutsideBranch,
   // administration
   assignRoleByCode,
   revokeRoleByCode,
