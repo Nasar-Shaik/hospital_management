@@ -16,6 +16,7 @@
 import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import { scopeFilter } from "../../middleware/authorize.js";
 import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import {
   getWalletAccountModel,
@@ -68,11 +69,18 @@ export async function getBalance(patientId: string): Promise<number> {
   return doc?.balance ?? 0;
 }
 
-/** One ledger row by id — for regenerating an advance receipt later. */
+/**
+ * One ledger row by id — for regenerating an advance receipt later.
+ *
+ * Scoped, because `wallet:manage` is declared `"branch"` and `credit`/`debit` stamp the branch
+ * the money crossed the desk at. This was a bare `findById`, so a receipt link — which carries
+ * only the entry id — reprinted another site's receipt: the payer's name, the date and the
+ * amount. Smaller than the report leak it was found alongside, and closed the same way.
+ */
 export async function findEntryById(id: string): Promise<WalletEntry | undefined> {
   if (!Types.ObjectId.isValid(id)) return undefined;
   const doc = await getWalletEntryModel(getTenantDb())
-    .findById(new Types.ObjectId(id))
+    .findOne({ _id: new Types.ObjectId(id), ...scopeFilter() })
     .lean<WalletEntryDoc>();
   return doc ? toEntry(doc) : undefined;
 }

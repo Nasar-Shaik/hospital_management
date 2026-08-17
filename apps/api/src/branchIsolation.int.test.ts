@@ -2203,3 +2203,56 @@ describe("an appointment changes state only at the site that holds it", () => {
     expect(res.body.data.status).toBe(hydStatusAtBooking);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 24. AN ADVANCE RECEIPT STOPS AT THE COUNTER THAT TOOK THE MONEY
+ *
+ * The third read of the same shape found in this audit, after the report file and the
+ * appointment. `wallet:manage` is declared `"branch"`, deposits and refunds are stamped by
+ * `writeBranchId()`, and the ledger reads for a patient are scoped — but the single-entry read
+ * behind `GET /wallet/entries/:id`, the one a receipt link carries, was a bare `findById`.
+ *
+ * Lower stakes than the report: a receipt is a patient name, a date and an amount rather than a
+ * clinical result. It is fixed for the same reason a locked ward has locks on every door.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("an advance receipt stops at the counter that took the money", () => {
+  let cashierB = "";
+  let hydEntryId = "";
+
+  beforeAll(async () => {
+    await createUserWithRole("cashb@branchiso.test", "TENANT_ADMIN", [branchB]);
+    cashierB = await login("cashb@branchiso.test");
+
+    const p = await post("/api/v1/patients", tokenMgrA, branchA)
+      .send({ name: "Advance Payer", gender: "male", contact: { phone: "9000700044" } })
+      .expect(201);
+
+    const deposit = await post(
+      `/api/v1/patients/${p.body.data.patient.id as string}/wallet/deposits`,
+      tokenMgrA,
+      branchA,
+    )
+      .send({ amount: 250000, method: "cash", reference: "HYD-ADV-1" })
+      .expect(201);
+    // `deposit` answers with the WalletView (balance + ledger), not the entry — the receipt id
+    // is the row it just added. Taking `data.id` here silently produced `undefined`, and the
+    // isolation test below then passed against a 404 that every caller gets.
+    const entries = deposit.body.data.entries as { id: string; reference?: string }[];
+    hydEntryId = entries.find((e) => e.reference === "HYD-ADV-1")?.id ?? "";
+    expect(hydEntryId, "the deposit did not come back in the ledger").not.toBe("");
+  });
+
+  it("is reprintable at the counter that issued it", async () => {
+    const res = await get(`/api/v1/wallet/entries/${hydEntryId}`, tokenMgrA, branchA).expect(200);
+    expect(res.body.data.amount).toBe(250000);
+  });
+
+  it("REFUSES the receipt to a cashier at the other site", async () => {
+    const res = await get(`/api/v1/wallet/entries/${hydEntryId}`, cashierB, branchB);
+    expect(
+      [403, 404],
+      `a Chennai cashier reprinted a Hyderabad receipt (status ${res.status})`,
+    ).toContain(res.status);
+  });
+});
