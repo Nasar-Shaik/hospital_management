@@ -789,13 +789,43 @@ regression: the session that observed it changed **only** files under `AI_Workfl
 **What it points at.** Host contention rather than this repository: the 7.75 GiB Docker pool is
 shared with other projects' stacks (`vip-dev-mongodb`, `vip-dev-redis` were both up), and
 `rbac.int.test.ts` alone drives **1,226 sequential requests** against one Mongo in ~38 s. Under
-competition an individual request crosses the 20 s ceiling. That is still a hypothesis — **nobody
-has instrumented it** — and the next occurrence should capture per-suite durations
-(`--reporter=verbose`) with the other stacks stopped, before anything is changed.
+competition an individual request crosses the 20 s ceiling.
+
+#### The natural experiment that settled it — same day, later
+
+Docker Desktop crashed a few hours after the runs above. When it came back **only HMS's four
+containers were running** — the other projects' stacks do not restart on their own either, so the
+host went from **~30 containers to 4** with no change to this repository. The working tree carried
+exactly one extra commit, and it touched only files under `AI_Workflow/`.
+
+On that host, the very next run:
+
+```
+Test Files  21 passed (21)
+     Tests  1838 passed (1838)
+```
+
+and the **full `pnpm gate` exited 0** — format, lint 18/18, typecheck 18/18, unit 11/11 (mobile
+1647, web 276, api 231), OpenAPI, contract, client contract 269/274 reachable, integration
+1838/1838, build 11/11, boundaries 0 violations across 769 modules.
+
+**Conclusion: T3 is environmental, and it is not a defect in this repository.** The contended host
+failed 1–4 tests per run across four consecutive runs; the quiet host passed everything on the
+first attempt. One orphaned `turbo run dev` tree was still running during the clean run, so a
+single stray dev server is tolerable — it is the _other projects'_ databases that push it over.
+
+**What to do, in order, when the suite fails:**
+
+1. `docker ps` — if containers from other projects are up, stop them and re-run. That alone has
+   explained every occurrence so far.
+2. `pgrep -f "turbo run dev"` — more than one tree means an orphan; `pnpm dev` leaves its children
+   alive if you kill the wrapper rather than the tree.
+3. Only then read the failure body, and only then suspect the code.
 
 **Do not raise `testTimeout`/`hookTimeout` to make this go away.** A test that needs longer under
 load is evidence; a test that is allowed longer is silence. Tracked as **T3** in the risk register,
-because the accepted V1 position is that this suite _is_ the only gate.
+because the accepted V1 position is that this suite _is_ the only gate — and the mitigation is a
+quiet host, not a bigger number.
 
 ---
 

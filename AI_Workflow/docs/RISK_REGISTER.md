@@ -480,27 +480,41 @@ separately — and P2-2 is the one that fails without anybody touching it.
 
 ### T3 — the only gate is not deterministic (raised 2026-08-17)
 
-| ID  | Risk                                                                       | L×I   | Status                        |
-| --- | -------------------------------------------------------------------------- | ----- | ----------------------------- |
-| T3  | The single quality gate fails intermittently, so "green" is not repeatable | 3×3=9 | 🟡 **OPEN** — accepted for V1 |
+| ID  | Risk                                                                       | L×I   | Status                                             |
+| --- | -------------------------------------------------------------------------- | ----- | -------------------------------------------------- |
+| T3  | The single quality gate fails intermittently, so "green" is not repeatable | 3×3=9 | 🟢 **CAUSE IDENTIFIED 2026-08-17** — environmental |
 
 CI is billing-locked and the accepted V1 position is that `pnpm gate` on one machine **is** the
-gate. That position rests on the gate being trustworthy, and on 2026-08-17 a full run failed
-`1 of 1838` with **both** failures passing in isolation immediately afterwards. Named, with
-evidence and what it rules out, in [`TESTING.md`](../../TESTING.md) §9 — including that Mongo was at
-3.4 GiB of 7.75 GiB with no container OOM-killed, which removes the standing explanation.
+gate. That position rests on the gate being trustworthy, and on 2026-08-17 four consecutive runs
+failed 1–4 tests each, on disjoint test names, every failure a timeout rather than an assertion.
+
+**Cause established the same day, by a natural experiment nobody arranged.** Docker Desktop
+crashed; when it came back only HMS's four containers were running, because no container in this
+project or the others carries a `restart:` policy. The host went from **~30 containers to 4** with
+no change to this repository. The next run was **1838/1838**, and the full `pnpm gate` exited 0 end
+to end. Full evidence in [`TESTING.md`](../../TESTING.md) §9.
+
+**So T3 is environmental and is not a repository defect.** The mitigation is a quiet host, not a
+bigger timeout: stop other projects' containers before running the suite. `TESTING.md` now carries
+that as the first triage step, ahead of reading the failure at all.
 
 **Why this is P2 and not higher.** It has never failed the same test twice, has never failed an
 assertion about clinical behaviour (the two observed failures were a hook timeout and a 404 on a
 just-created row), and the suite is green on re-run and in isolation. Nothing suggests a product
 defect hiding behind it.
 
-**Why it is not zero, either.** A gate that is green on the second attempt trains people to re-run
-rather than to read, and the next real regression will arrive dressed as this. **The mitigation is
-not to raise `hookTimeout`** — that converts evidence into silence. It is to capture per-suite
-durations on the next occurrence, which `TESTING.md` now instructs.
+**Why it is not zero, either.** A gate that is green only on a quiet host is still a gate with a
+precondition, and the precondition is invisible — nothing in `pnpm gate` checks what else is
+running, so the next person meets the same four hours of confusion. **The mitigation is not to
+raise `hookTimeout`** — that converts evidence into silence.
 
 **Interaction with the CI decision.** This does not reopen it — CI is rejected before its first
 step and no workflow change can fix that. It does mean the honest statement of the V1 gate is
-_"green, on one machine, on a re-run"_ rather than _"green"_, and the proportionate mitigation
-remains the one already recorded: run `pnpm gate` once on a second machine before the pilot.
+_"green, on a host running nothing else"_, and the proportionate mitigation remains the one already
+recorded: run `pnpm gate` once on a second machine before the pilot. A second machine would also
+have caught this in a morning rather than a day.
+
+**Left deliberately unfixed:** a preflight that fails the gate when foreign containers are up. It
+is tempting and it is the wrong shape — this repository does not own the host, and a gate that
+refuses to run because of somebody else's project is a gate people learn to bypass. Documented
+triage beats an unenforceable rule.
