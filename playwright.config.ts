@@ -72,7 +72,15 @@ export default defineConfig({
    */
   webServer: {
     command: "pnpm dev",
-    url: "http://localhost:4000/health",
+    /**
+     * Wait on the WEB app, not the API.
+     *
+     * `pnpm dev` starts both, and the API answers `/health` in a couple of seconds while Next is
+     * still compiling — so watching the API declares readiness far too early and every test then
+     * burns its own timeout on a page that is not being served yet. Next only answers this route
+     * once it has compiled it, and by then the API (which boots much faster) is long up.
+     */
+    url: "http://sunrise.localhost:3000/login",
     reuseExistingServer: true,
     timeout: 180_000,
     stdout: "ignore",
