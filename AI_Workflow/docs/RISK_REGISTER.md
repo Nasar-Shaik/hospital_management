@@ -17,16 +17,84 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 > as**. Those corrections are below with their evidence. Reducing the count was not the goal — two
 > entries stay open on purpose, and one is a product decision nobody has taken yet.
 
-| ID  | Defect                                                        | Sev | Status                                    |
-| --- | ------------------------------------------------------------- | --- | ----------------------------------------- |
-| D1  | Vitals chart read ignored branch scope — cross-branch PHI     | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)       |
-| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`    | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)       |
-| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`            | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)       |
-| D4  | An unknown `X-Active-Branch` is ignored, widening the read    | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below |
-| D5  | `maxBranches` is not derived from the plan                    | P3  | 🔵 **BY DESIGN** + one product decision   |
-| D6  | Migration 0048 over pre-existing duplicate idempotency claims | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)       |
-| D7  | `administeredBy` renders an identifier, not a name            | P3  | 🟡 **OPEN** — product decision, see below |
-| D8  | Mobile licence banner painted under the status bar            | P3  | ✅ **FIXED** 2026-08-17 — see below       |
+| ID  | Defect                                                                  | Sev | Status                                    |
+| --- | ----------------------------------------------------------------------- | --- | ----------------------------------------- |
+| D1  | Vitals chart read ignored branch scope — cross-branch PHI               | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)       |
+| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`              | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)       |
+| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`                      | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)       |
+| D4  | An unknown `X-Active-Branch` is ignored, widening the read              | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below |
+| D5  | `maxBranches` is not derived from the plan                              | P3  | 🔵 **BY DESIGN** + one product decision   |
+| D6  | Migration 0048 over pre-existing duplicate idempotency claims           | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)       |
+| D7  | `administeredBy` renders an identifier, not a name                      | P3  | 🟡 **OPEN** — product decision, see below |
+| D8  | Mobile licence banner painted under the status bar                      | P3  | ✅ **FIXED** 2026-08-17 — see below       |
+| D9  | Appointment state machine ignored branch scope — cross-branch **write** | P1  | ✅ **FIXED** 2026-08-17 (`4732dd8`)       |
+| D10 | Report file download ignored branch scope — cross-branch PHI            | P2  | ✅ **FIXED** 2026-08-17 (`c02dd09`)       |
+| D11 | An un-stamped report is absent from the branch-scoped list              | P3  | 🟡 **OPEN** — pre-existing, see below     |
+
+### D9 — the appointment state machine used the unscoped twin
+
+Found by the security audit of 2026-08-17, and the most serious thing it found: **a cross-branch
+WRITE**, which is the line §0 draws when it says the earlier defects were rated below P1 because
+"none of these creates, alters or loses clinical data". This one alters it.
+
+`appointment.repository.ts` shipped TWO reads — `findById` (bare) and `findByIdScoped`. The read
+paths picked the scoped one; the state machine picked the bare one. So every transition it drives
+— confirm, check-in, start, complete, no-show, cancel — resolved an appointment belonging to any
+site in the hospital, while `appointment:update` and `appointment:cancel` are both declared
+`"branch"` in the permission catalogue.
+
+Measured before the fix: a Chennai clerk cancelled a Hyderabad appointment and received **200**,
+and the row came back `cancelled`. The two follow-up exploits (no-show, check-in) then returned
+422 — refused by the _state machine_ for being already cancelled, not by any branch boundary,
+which is exactly how this could have been mistaken for working. A clerk could cancel another
+site's clinic list, or mark a patient sitting in a waiting room 600km away as a no-show, with the
+audit trail recording it as a legitimate action by a legitimate user.
+
+Fixed by collapsing the two reads into one that always scopes. `scopeFilter()` returns `{}` when
+there is no `ctx.scope`, so seeds, migrations and queue consumers are unaffected — the same way
+`writeBranchId` reads an absent scope. Two functions where one is safe and one is not is a choice
+nobody should have to make correctly every time.
+
+### D10 — the report list stopped at the branch and the file did not
+
+D1's sibling, missed when D1 was fixed. `emr:read` is declared `"branch"`, and
+`reports.listForPatient` honours that with `scopeFilter()`. `reports.getBytes` — the same
+collection, the same module, the read that returns the PDF rather than the metadata — used a bare
+`findById`.
+
+So a caller at another site could not have the report _named_ to them and could download it
+anyway: the patient's name, their UHID and the result, on hospital letterhead. Rated P2 to match
+D1, which is the same class (cross-branch PHI read); the payload here is larger than a vitals row,
+and whether that class deserves P1 is the same open product/security question D1 left.
+
+"Unguessable id" was never the control: a report id is an ObjectId — a timestamp, a machine id and
+a counter — and every caller holding one legitimate report holds a valid sample.
+
+Checked against **D1's own warning** rather than assumed: `reportFiles.branchId` is optional, so a
+repository filter could have hidden un-stamped rows from everyone. It does not, because
+`listForPatient` was already filtering — the fix made the download agree with the list rather than
+drawing a new boundary, and in All mode the legacy row stays listed and downloadable. Pinned by
+§25 of the branch-isolation suite as an equality between the two reads.
+
+**A third read of the same shape was investigated and left alone.** `wallet.findEntryById` looked
+identical and was not a defect: `walletAccounts` carries no branch, so a patient has one
+hospital-wide advance balance and `listEntries` shows it across sites. Scoping the receipt refused
+a row the same cashier could already read in the statement — D1's asymmetry inverted. It was
+"fixed", then reverted (`4e724af`) once the account model was read. Recorded because the wrong fix
+looked exactly like the two right ones.
+
+### D11 — an un-stamped report is missing from the branch-scoped list
+
+Pre-existing, and surfaced while checking D10 against D1's trap. `reportFiles.branchId` is
+optional, and `listForPatient` filters on it, so a report written before branch stamping existed
+is absent from the list whenever a caller has a branch selected. It remains reachable in All mode,
+and the download now agrees with the list in both directions, so nothing is inconsistent — the row
+is simply hidden from a narrowed view.
+
+Left open deliberately: it is older than this audit, it loses no data, and the fix is the same
+product decision D1 raised — whether an un-stamped historical row should be treated as belonging
+to every branch or to none. Worth answering once, for every optional-`branchId` collection at the
+same time, rather than per module.
 
 ### D8 — the licence banner painted underneath the status bar
 
@@ -149,10 +217,16 @@ signatories are already expanded — never a user-lookup path in the browser. Th
 feature, not a defect fix, and expanding a DTO for UI convenience is explicitly not something to
 do on the way past.
 
-**Rated below P1 deliberately.** None of these creates, alters or loses clinical data. D1 was the
-most serious because cross-branch PHI is the class multi-branch Phase 0 existed to eliminate; it is
-now closed, and whether it should have been rated P1 rather than P2 remains a product/security
-question that the fix does not retroactively answer.
+**Rated below P1 deliberately — D1 through D8.** None of _those_ creates, alters or loses clinical
+data. D1 was the most serious because cross-branch PHI is the class multi-branch Phase 0 existed to
+eliminate; it is now closed, and whether it should have been rated P1 rather than P2 remains a
+product/security question that the fix does not retroactively answer.
+
+> **Superseded in part on 2026-08-17.** The sentence above was written when every confirmed defect
+> was a read. **D9 is a cross-branch WRITE** — a clerk at one site cancelling another site's
+> appointment — so it crosses the exact line this paragraph draws and is rated P1 on the register's
+> own terms. The paragraph is kept rather than rewritten because the reasoning it records is still
+> the right test; D9 is the first entry to fail it.
 
 ## Technical
 
