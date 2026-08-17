@@ -322,7 +322,21 @@ licence-lab --state <active|expiring|grace|expired>`, verified against a real te
    empirically that risk-register D1 reaches a bound user, which was inferred from the
    code path. Roles UI, no code change.
 6. Resolve the push blocker (SSH unlock or `workflow` scope) and push the outstanding commits.
-7. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.
+7. ~~Unblock CI billing, or record the decision~~ — **DECISION RECORDED 2026-08-17: `pnpm gate` on
+   one machine is the accepted V1 gate.** Reviewed rather than assumed:
+
+   - **A CI change is not justified.** The account is billing-locked, so every job is rejected
+     _before its first step_ — no workflow edit can change that, and none has ever executed.
+   - **Adding the schema gate to CI would be theatre.** `seed:migrate --check` needs a fleet, and
+     CI has no tenants. It would answer READY vacuously, which is worse than not running.
+   - **`pnpm gate` is not a weaker substitute.** It runs format, lint, typecheck, openapi,
+     contract, client-contract, unit, **integration** and build plus boundaries — the same set,
+     against a real Mongo, which a free CI runner would struggle to provide.
+
+   **The residual risk is real and is NOT mitigated:** the work has only ever been built on one
+   machine, so a missing dependency or an environment assumption would not surface until someone
+   else clones it. The cheap mitigation is to run `pnpm gate` once on a second machine before the
+   pilot — not to build CI infrastructure. Tracked as a pilot-deployment item, not a code task.
 
 **Every session starts with `pnpm seed:migrate --all`.** Not hygiene — T2 will silently reproduce on
 any database that predates M3, and it invalidates results without saying so.
