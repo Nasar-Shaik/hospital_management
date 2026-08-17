@@ -94,7 +94,38 @@ schema against the release's migration list, not a demand that the two be identi
 - It does not introspect every schema object. It checks the canonical migration history plus the
   named `CLINICAL_SAFETY_INVARIANTS` — the constraints a clinical rule actually rests on. That list
   is deliberately short and evidence-backed; a list that grows past its evidence stops being read.
-- It does not block clinical writes at runtime. That is a separate control and is not built.
+- It does not block clinical writes at runtime. **That control now exists and is separate from
+  this one** — `tenantSchemaReadiness` refuses the five capability-specific clinical writes with a
+  503 and a `Retry-After` when the index they rest on is missing (HMS-MAR-002, HMS-PHM-004,
+  HMS-ORD-001, HMS-ADM-003, HMS-ENC-001; see ERROR_CODES.md). The two answer different questions
+  and neither replaces the other: this gate says _"do not roll out"_ before traffic moves, the
+  runtime guard says _"chart on paper"_ to a clinician holding a phone when a database drifted
+  after roll-out. A green gate does not disarm the runtime guard, and a firing runtime guard means
+  this gate was either not run or not obeyed.
+
+## The convergence procedure (RISK_REGISTER T2)
+
+`--check` reports; it never repairs. Converging the fleet is two commands in this order, and the
+second is not optional — the first tells you what it _did_, only the second tells you the fleet is
+actually armed.
+
+```bash
+pnpm seed:migrate --all            # converge: migrations + idempotent seeds, per tenant
+pnpm --silent seed:migrate --check --json > gate.json   # verify: exit 0 = READY
+```
+
+Why both:
+
+- `--all` isolates failures deliberately — one hospital that fails must never halt the fleet — so
+  it can exit non-zero having converged most tenants. "It ran" is not "it converged".
+- `--all` reports the migrations it APPLIED. `--check` verifies the migration history _and_ the
+  named `CLINICAL_SAFETY_INVARIANTS` are actually present, which is the property clinical writes
+  rest on.
+- A registry row too malformed to migrate is SKIPPED by `--all` (never repaired into a database
+  called `undefined`) and sets a non-zero exit. Only `--check` will tell you it is still unfixed.
+
+Exit codes are the contract: `0` READY · `1` NOT_READY · `2` ERROR (nothing is known — do not
+converge on the strength of it). An empty fleet and a mistyped `--slug` both answer NOT a pass.
 
 ## When it must run
 
