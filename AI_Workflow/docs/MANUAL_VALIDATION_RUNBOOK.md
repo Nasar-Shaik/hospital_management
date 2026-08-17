@@ -317,21 +317,45 @@ Both are tested in §15.
 
 ## 5. RECOMMENDED EXECUTION ORDER
 
+### 5.0 🔴 RUN THESE FIRST — the 2026-08-17 security audit's regression set
+
+Five rows, roughly an hour, mostly `curl`. They come before everything else because of what that
+audit found: **three cross-branch defects, in code that had passed review with green tests, on
+paths no automated test walked with two branches configured.** One of them was a WRITE. A fourth
+finding was a branch-isolation test that had been asserting against a route that does not exist —
+green, and proving nothing.
+
+That is the argument for this ordering. Automated coverage of the branch dimension was wrong three
+times in one day, so the human should look there first, while fresh.
+
+| Order | Row             | Why it is first                                                                                                                                                                                                                                                           |
+| ----- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1** | **BR-10**       | Cross-branch report **file** (D10). **The least clickable row in this document** — the list was already scoped, so the UI never offered the link while the API served the PDF. A tester following screens would report everything as working. It must be probed directly. |
+| **2** | **BR-11**       | Cross-branch appointment **write** (D9) — the only confirmed cross-branch write. Read its **Trap** row first: before the fix the first exploit succeeded and the next two returned 422, refused by the state machine, which looks exactly like a working boundary.        |
+| **3** | **BR-07**       | The branch-**confined** nurse. The account with the least coverage in the product, and the one the audit's findings all lived behind. Unblock it (§18-style account creation, no code).                                                                                   |
+| **4** | **DRIFT-01…12** | §16A. Five clinical refusals now exist that **no human has ever seen on a screen**, and the phone's wording for them changed on 2026-08-17 — DRIFT-10 is the row most likely to find something real.                                                                      |
+| **5** | **BR-12**       | The negative control: the wallet advance is hospital-wide **on purpose**. It is here so nobody "fixes" it — which is exactly what the audit did before reading the account model.                                                                                         |
+
+**If any of the first three fails, stop and report before continuing.** They are regression checks
+on fixes that are two days old, and a failure means the fix did not hold on a real client.
+
+### 5.1 Then the full campaign
+
 The order below differs from the obvious one in three places, each for a reason.
 
-| #      | Phase                          | Why here                                                                                                                                                                                                                                                                            |
-| ------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1**  | §3 Environment (ENV-01…08)     | A gate. Nothing downstream is meaningful without it.                                                                                                                                                                                                                                |
-| **2**  | §15 Permissions **by API**     | **Moved earlier.** ~15 minutes of `curl`, and it tells you the role model you are about to trust is intact. Finding a permission hole _after_ a day of role-based UI testing invalidates the day.                                                                                   |
-| **3**  | §13 **Web** (WEB-01…22)        | **Moved before mobile.** No build, no device, no pairing, no DNS. And it is the _less_ proven surface: the mobile MAR carries 1,613 tests, whereas web defects D-1 and D-2 were fixed and have **never been opened in a browser**. Highest defect probability per minute of effort. |
-| **4**  | §6 M2 foundation gate          | M2-01…M2-12 only. This is the prerequisite for anything auth-, session- or branch-related in M3.                                                                                                                                                                                    |
-| **5**  | §7 M3 core (worklist → notes)  | The nurse's ordinary shift.                                                                                                                                                                                                                                                         |
-| **6**  | §8 MAR safety + §9 five rights | The reason the product was built this way. Needs two people and full attention — do it fresh, not at 18:00.                                                                                                                                                                         |
-| **7**  | §10 Lost response              | Needs a cooperative radio and steady hands. Do it while still fresh.                                                                                                                                                                                                                |
-| **8**  | §11 Branch isolation           | Includes the D1 cross-branch vitals check.                                                                                                                                                                                                                                          |
-| **9**  | §12 Timezone                   | Some rows are only meaningful near a midnight; plan around the clock rather than the checklist order.                                                                                                                                                                               |
-| **10** | §6 M2 remainder                | The biometric lock (largest unverified block in M2), accessibility, network.                                                                                                                                                                                                        |
-| **11** | §18 Licence / edition          | LIC-01…05 **PREPARED** (`pnpm seed:licence`, §18.1). LIC-06 still blocked — needs an edition without the nursing module.                                                                                                                                                            |
+| #      | Phase                           | Why here                                                                                                                                                                                                                                                                            |
+| ------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1**  | §3 Environment (ENV-01…08)      | A gate. Nothing downstream is meaningful without it.                                                                                                                                                                                                                                |
+| **2**  | §15 Permissions **by API**      | **Moved earlier.** ~15 minutes of `curl`, and it tells you the role model you are about to trust is intact. Finding a permission hole _after_ a day of role-based UI testing invalidates the day.                                                                                   |
+| **3**  | §13 **Web** (WEB-01…22)         | **Moved before mobile.** No build, no device, no pairing, no DNS. And it is the _less_ proven surface: the mobile MAR carries 1,613 tests, whereas web defects D-1 and D-2 were fixed and have **never been opened in a browser**. Highest defect probability per minute of effort. |
+| **4**  | §6 M2 foundation gate           | M2-01…M2-12 only. This is the prerequisite for anything auth-, session- or branch-related in M3.                                                                                                                                                                                    |
+| **5**  | §7 M3 core (worklist → notes)   | The nurse's ordinary shift.                                                                                                                                                                                                                                                         |
+| **6**  | §8 MAR safety + §9 five rights  | The reason the product was built this way. Needs two people and full attention — do it fresh, not at 18:00.                                                                                                                                                                         |
+| **7**  | §10 Lost response               | Needs a cooperative radio and steady hands. Do it while still fresh.                                                                                                                                                                                                                |
+| **8**  | §11 Branch isolation, remainder | BR-01…BR-06, BR-08, BR-09. The security rows (BR-07, BR-10…BR-12) were already run in §5.0. BR-05 is now a **regression** check — D1 is fixed, so expect a refusal, not rows.                                                                                                       |
+| **9**  | §12 Timezone                    | Some rows are only meaningful near a midnight; plan around the clock rather than the checklist order.                                                                                                                                                                               |
+| **10** | §6 M2 remainder                 | The biometric lock (largest unverified block in M2), accessibility, network.                                                                                                                                                                                                        |
+| **11** | §18 Licence / edition           | LIC-01…05 **PREPARED** (`pnpm seed:licence`, §18.1). LIC-06 still blocked — needs an edition without the nursing module.                                                                                                                                                            |
 
 **Deviate if you have a reason and write the reason down.** If only one device is available on the
 day, run everything except §8 and mark those BLOCKED rather than faking a second nurse with one

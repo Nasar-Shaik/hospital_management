@@ -296,15 +296,30 @@ found after M4 and M5 are built on top costs a redesign.
 
 **Left — the runbook is prepared but NOT executed. No manual result exists yet.**
 
+> **Updated 2026-08-17 after a security audit and a pre-validation preparation pass.** Three items
+> below moved. **Item 4 (licence states) is DONE** — `pnpm seed:licence` prepares LIC-01…05 and was
+> verified end to end; only LIC-06 remains, and it needs an edition without the nursing module.
+> **Item 5 (branch-confined nurse) is now the highest-value account in the campaign**, not a
+> nice-to-have: the audit found three cross-branch defects (D9 P1, D10 P2, plus a branch-isolation
+> test that asserted against a route that does not exist), all on paths no test walked with two
+> branches configured. A new **runbook §5.0** puts the five regression rows first.
+> Backup/restore (DR §0) and VPS readiness are now documented and are pilot-deployment blockers,
+> separate from manual validation.
+
 1. **Web first, not mobile** — it needs no build, no device, no pairing, and D-1/D-2 have _never_
    been opened in a browser, whereas the mobile MAR has 1,613 tests around it. Highest defect
    probability per minute. → runbook §13, `WEB-01`…`WEB-24`.
 2. Run `MOBILE_M2_DEVICE_CHECKLIST.md` on hardware → 61/61. Gate is §1 + §2 + §7[1–3], 17 rows.
 3. Run `MOBILE_M3_DEVICE_CHECKLIST.md` on hardware → 45/45.
-4. Prepare the licence grace/expired states in the operator console — **5 M2 rows are BLOCKED
-   without it**, and it needs no code. → runbook §18.
-5. Create a **branch-confined** nurse so runbook `BR-07` can run — it is the only way to prove
-   empirically that risk-register D1 reaches a bound user, which is currently inferred from the
+4. ~~Prepare the licence grace/expired states~~ — **DONE 2026-08-17.** `pnpm seed:licence -- --slug
+licence-lab --state <active|expiring|grace|expired>`, verified against a real tenant; §18.1 has
+   the commands. The old instruction (`extendDays: -1`) could not have worked — the schema declares
+   `min(1)`, so it was a 400 and had never been run. **LIC-06 alone remains blocked**, and needs an
+   edition without the nursing module rather than a licence change.
+5. **🔴 Create a branch-confined nurse so `BR-07` can run — now the highest-value account in the
+   campaign.** D1 is fixed, but the 2026-08-17 audit found three MORE branch-scope defects behind
+   the same blind spot, so this is no longer about one risk-register entry. It was the only way to prove
+   empirically that risk-register D1 reaches a bound user, which was inferred from the
    code path. Roles UI, no code change.
 6. Resolve the push blocker (SSH unlock or `workflow` scope) and push the outstanding commits.
 7. Unblock CI billing, or record the decision that `pnpm gate` on one machine is the accepted gate.

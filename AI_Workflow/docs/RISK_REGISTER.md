@@ -17,20 +17,21 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 > as**. Those corrections are below with their evidence. Reducing the count was not the goal — two
 > entries stay open on purpose, and one is a product decision nobody has taken yet.
 
-| ID  | Defect                                                                  | Sev | Status                                    |
-| --- | ----------------------------------------------------------------------- | --- | ----------------------------------------- |
-| D1  | Vitals chart read ignored branch scope — cross-branch PHI               | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)       |
-| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`              | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)       |
-| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`                      | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)       |
-| D4  | An unknown `X-Active-Branch` is ignored, widening the read              | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below |
-| D5  | `maxBranches` is not derived from the plan                              | P3  | 🔵 **BY DESIGN** + one product decision   |
-| D6  | Migration 0048 over pre-existing duplicate idempotency claims           | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)       |
-| D7  | `administeredBy` renders an identifier, not a name                      | P3  | 🟡 **OPEN** — product decision, see below |
-| D8  | Mobile licence banner painted under the status bar                      | P3  | ✅ **FIXED** 2026-08-17 — see below       |
-| D9  | Appointment state machine ignored branch scope — cross-branch **write** | P1  | ✅ **FIXED** 2026-08-17 (`4732dd8`)       |
-| D10 | Report file download ignored branch scope — cross-branch PHI            | P2  | ✅ **FIXED** 2026-08-17 (`c02dd09`)       |
-| D11 | An un-stamped report is absent from the branch-scoped list              | P3  | 🟡 **OPEN** — pre-existing, see below     |
-| D12 | A branchless dose is absent from the chart once a branch is selected    | P3  | 🟡 **OPEN** — narrow window, see below    |
+| ID  | Defect                                                                  | Sev | Status                                                                |
+| --- | ----------------------------------------------------------------------- | --- | --------------------------------------------------------------------- |
+| D1  | Vitals chart read ignored branch scope — cross-branch PHI               | P2  | ✅ **FIXED** 2026-08-16 (`bdc027f`)                                   |
+| D2  | Reception register resolved `?date=` in `DEFAULT_TIMEZONE`              | P2  | ✅ **FIXED** 2026-08-16 (`8330faa`)                                   |
+| D3  | Bed-day billing counted days in `DEFAULT_TIMEZONE`                      | P2  | ✅ **FIXED** 2026-08-16 (`1719360`)                                   |
+| D4  | An unknown `X-Active-Branch` is ignored, widening the read              | P3  | 🔵 **NOT A DEFECT** — ADR-0015, see below                             |
+| D5  | `maxBranches` is not derived from the plan                              | P3  | 🔵 **BY DESIGN** + one product decision                               |
+| D6  | Migration 0048 over pre-existing duplicate idempotency claims           | P3  | ✅ **FIXED** 2026-08-16 (`ace9512`)                                   |
+| D7  | `administeredBy` renders an identifier, not a name                      | P3  | 🟡 **OPEN** — product decision, see below                             |
+| D8  | Mobile licence banner painted under the status bar                      | P3  | ✅ **FIXED** 2026-08-17 — see below                                   |
+| D9  | Appointment state machine ignored branch scope — cross-branch **write** | P1  | ✅ **FIXED** 2026-08-17 (`4732dd8`)                                   |
+| D10 | Report file download ignored branch scope — cross-branch PHI            | P2  | ✅ **FIXED** 2026-08-17 (`c02dd09`)                                   |
+| D11 | An un-stamped report is absent from the branch-scoped list              | P3  | ✅ **CLOSED** 2026-08-17 (`0eeb882`) — same control as D12            |
+| D12 | A branchless dose is absent from the chart once a branch is selected    | P3  | ✅ **CLOSED** 2026-08-17 (`0eeb882`) — window shut at branch creation |
+| D13 | Mobile discarded the clinical refusal instruction ("chart on paper")    | P2  | ✅ **FIXED** 2026-08-17 (`bd09795`)                                   |
 
 ### D9 — the appointment state machine used the unscoped twin
 
@@ -146,12 +147,48 @@ Three collections that already reasoned their way OUT of the class, and should s
 enrollments (deliberately unfiltered so an event-driven charge still finds coverage), and
 `patients` (identity is tenant-wide by ADR-0015).
 
-**The product decision, stated once:** should an un-stamped historical row be treated as
-belonging to **every** branch, or to **none**? Answering it per module is how this became three
-entries. The two candidate mechanisms are (a) resolve the parent record, as D1 did for vitals,
-which is correct but changes `200 []` to `404` on three read contracts, or (b) refuse to create a
-second branch until the backfill has run, which closes the window without touching any clinical
-contract. **(b) is the cheaper answer and the one I would take.**
+**The product decision, taken 2026-08-17: option (b).** Should an un-stamped historical row be
+treated as belonging to **every** branch, or to **none**? The answer implemented is neither — it
+belongs to the ONE site that existed when it was written, and the backfill is what records that.
+
+`createBranch` now refuses (`HMS-BRANCH-002`) while any of the three collections holds a branchless
+row, so the ambiguity cannot be created. Option (a) — resolve the parent, as D1 did for vitals — is
+also correct and was rejected on blast radius: it changes `200 []` to `404` on three read contracts,
+one of them the accepted frozen MAR slice with two clients built against it.
+
+Two things falsification changed about the control, both worth recording:
+
+- It is **unconditional**, not "second branch onwards". A legacy hospital with no branches that
+  creates one gets an ordinary non-main branch, and `seedMainBranch` then adds Main as its SECOND —
+  backfill declines, window reopens.
+- It scans **three collections, not all 35**. Scanning the whole backfill list was the first
+  attempt and the branch-isolation suite proved it wrong with a single branchless `walletEntries`
+  row — and migration 0047 says outright that those rows stay branchless forever by design, because
+  inventing a desk for a cash deposit "would put a number in a financial ledger that nobody can
+  defend". A hospital holding one would have been blocked from ever opening a second site. **A
+  guard that cannot be satisfied is an outage.**
+
+### D13 — the phone threw away the one instruction that mattered
+
+The five clinical schema refusals exist to tell a clinician what to do when the database cannot
+enforce a safety rule: chart on paper, order on paper, escalate. **None of the five was mapped in
+the mobile client**, so every one fell to the generic 5xx default — "The hospital's system is not
+responding. This is not something you did. Try again, and report it if it continues."
+
+Worse, `HMS-MAR-002` was being reconciled rather than classified, so the MAR screen showed "we
+could not confirm whether this dose was recorded… press again". A nurse at a bedside was told to
+keep pressing a button that could not succeed for another minute, while the sentence that would
+have kept the patient safe was discarded.
+
+Not a data-safety defect — `unknown` can never render as success, never implies a dose was given,
+and reconciliation recovers correctly. It is a clinical-UX defect, and the runtime-safety slice
+exists precisely to deliver the sentence it was dropping.
+
+Fixed in two halves because the clients made opposite choices about server wording: `api-client`
+classifies `HMS-MAR-002` as definitely-not-written (justified by the guard being the FIRST
+statement of `recordAdministration`), which alone fixes **web**, whose refusal path renders the
+server message verbatim; and mobile gained real messages for all five codes, with no retry
+affordance and `blocking` severity.
 
 ### D8 — the licence banner painted underneath the status bar
 
