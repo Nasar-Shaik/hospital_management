@@ -61,6 +61,7 @@ const { getWardModel, getRoomModel, getBedModel } = await import("./modules/ward
 const { getPatientModel } = await import("./modules/patients/patient.model.js");
 const { getAllergyModel } = await import("./modules/allergies/allergy.model.js");
 const { getVitalsModel } = await import("./modules/vitals/vitals.model.js");
+const { getReportFileModel } = await import("./modules/reports/report.model.js");
 
 const SLUG = "test-branchiso-apollo";
 const DB = `hms_${SLUG}`;
@@ -2272,5 +2273,90 @@ describe("an advance receipt is hospital-wide, like the balance it belongs to", 
   it("but the balance itself is one hospital's, not one branch's", async () => {
     const res = await get(`/api/v1/patients/${payer}/wallet`, cashierB, branchB).expect(200);
     expect(res.body.data.balance).toBe(250000);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 25. THE LEGACY ROW, FOR THE REPORT FIX — D1's TRAP, CHECKED RATHER THAN ASSUMED
+ *
+ * D1 records that the obvious fix for a cross-branch read — `scopeFilter()` on the repository —
+ * is WRONG when `branchId` is optional and denormalised, because rows written before the stamp
+ * existed become invisible to everybody, including the person who created them.
+ *
+ * `reportFiles.branchId` IS optional, so the report fix had to be checked against that trap
+ * rather than assumed safe. It differs from vitals in one decisive way: `listForPatient` was
+ * ALREADY filtering, so an un-stamped report was already missing from the list before this audit
+ * touched anything. The fix made the download agree with the list instead of introducing a new
+ * boundary — but "agrees with the list" is only reassuring if the list's behaviour is known, so
+ * this group states it outright.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a report with no branchId behaves the same in the list and in the download", () => {
+  let legacyReportId = "";
+  let subject = "";
+
+  beforeAll(async () => {
+    const p = await post("/api/v1/patients", tokenMgrA, branchA)
+      .send({ name: "Legacy Report Subject", gender: "female", contact: { phone: "9000700055" } })
+      .expect(201);
+    subject = p.body.data.patient.id as string;
+
+    legacyReportId = await inTenant(async () => {
+      const conn = await getTenantConnection({
+        id: tenant.id,
+        databaseName: tenant.databaseName,
+      });
+      const doc = await getReportFileModel(conn).create({
+        tenantId: tenant.id,
+        orderId: new Types.ObjectId(),
+        encounterId: new Types.ObjectId(),
+        patientId: new Types.ObjectId(subject),
+        episodeId: new Types.ObjectId(),
+        category: "lab",
+        testName: "Legacy CBC",
+        visitDate: new Date(),
+        filename: "legacy.pdf",
+        contentType: "application/pdf",
+        size: 9,
+        data: Buffer.from("%PDF-LEG"),
+        uploadedBy: "legacy-import",
+        uploadedAt: new Date(),
+        // branchId deliberately absent — a row from before the stamp existed.
+      });
+      return doc._id.toString();
+    });
+  });
+
+  /**
+   * Whatever the answer is, the two reads must AGREE. A list that offers a report whose download
+   * 404s is a broken link in a chart; a download that works for a report nobody can find is the
+   * hole this audit closed. Asserted as an equality so it stays true if either read changes.
+   */
+  it("the list and the download give the same answer, with a branch selected", async () => {
+    const list = await get(`/api/v1/patients/${subject}/reports`, tokenMgrA, branchA).expect(200);
+    const listed = (list.body.data as { id: string }[]).some((r) => r.id === legacyReportId);
+
+    const file = await get(`/api/v1/reports/${legacyReportId}/file`, tokenMgrA, branchA).buffer(
+      true,
+    );
+    const downloadable = file.status === 200;
+
+    expect(
+      downloadable,
+      listed
+        ? "the report is listed but will not open — a dead link in the chart"
+        : "the report is not listed but downloads anyway — the gap this audit closed",
+    ).toBe(listed);
+  });
+
+  /** And in All mode, where no branch narrows anything, the legacy row is reachable as before. */
+  it("is readable with no branch selected — the un-stamped row is not orphaned", async () => {
+    const list = await get(`/api/v1/patients/${subject}/reports`, tokenAdmin).expect(200);
+    expect(
+      (list.body.data as { id: string }[]).some((r) => r.id === legacyReportId),
+      "an un-stamped report vanished even in All mode — it belongs to nobody now",
+    ).toBe(true);
+
+    await get(`/api/v1/reports/${legacyReportId}/file`, tokenAdmin).buffer(true).expect(200);
   });
 });
