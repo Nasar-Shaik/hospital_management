@@ -20,7 +20,7 @@
  * refusals are CONSTRUCTED, and an integration test would prove them only for the paths it
  * happened to walk.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -132,5 +132,48 @@ describe("a schema refusal never puts patient data in details", () => {
   it("does not log 4xx AppErrors — that would drown the incident in noise", () => {
     const handler = read("src/core/http/errorHandler.ts");
     expect(handler).not.toMatch(/err\.httpStatus >= 400/);
+  });
+
+  /**
+   * ── WHY THE LOG LINE IS SAFE AT ALL, ASSERTED RATHER THAN ASSUMED ──────────
+   * `errorHandler` writes `details` into the log for EVERY 5xx `AppError`, not only the five
+   * named above. That is safe today for one reason and one reason only: those five are the
+   * only 5xx `AppError`s in the codebase. Nothing was holding that true.
+   *
+   * The security audit of 2026-08-17 checked it by hand and found exactly five. A sixth added
+   * later — a payment gateway timeout carrying the invoice, an integration error carrying the
+   * patient — would start writing PHI into a log file the moment it first threw, silently, with
+   * every existing test still green. This is the assertion that turns "we looked once" into a
+   * property, and it is why the PHI checks above can be scoped to a known list.
+   */
+  it("the five are the ONLY 5xx AppErrors — a sixth would log its details unreviewed", () => {
+    const modules = join(root, "src", "modules");
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (entry.name.endsWith(".ts") && !entry.name.includes(".test.")) {
+          const text = readFileSync(full, "utf8");
+          for (const match of text.matchAll(
+            /new AppError\(\s*(?:\/\/[^\n]*\n\s*)*"([\w-]+)",\s*(\d{3})/g,
+          )) {
+            const [, code, status] = match;
+            if (status && Number(status) >= 500 && !REFUSALS.some((r) => r.code === code)) {
+              offenders.push(`${entry.name}: ${String(code)} (${String(status)})`);
+            }
+          }
+        }
+      }
+    };
+    walk(modules);
+
+    expect(
+      offenders,
+      "a 5xx AppError outside the reviewed set — its `details` will be written to the server " +
+        "log verbatim. Either give it a 4xx, or add it to REFUSALS above so the PHI checks cover it.",
+    ).toEqual([]);
   });
 });
