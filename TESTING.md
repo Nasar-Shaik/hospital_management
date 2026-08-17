@@ -791,41 +791,59 @@ shared with other projects' stacks (`vip-dev-mongodb`, `vip-dev-redis` were both
 `rbac.int.test.ts` alone drives **1,226 sequential requests** against one Mongo in ~38 s. Under
 competition an individual request crosses the 20 s ceiling.
 
-#### The natural experiment that settled it — same day, later
+#### A clean run that looked like an answer, and was not
 
 Docker Desktop crashed a few hours after the runs above. When it came back **only HMS's four
-containers were running** — the other projects' stacks do not restart on their own either, so the
-host went from **~30 containers to 4** with no change to this repository. The working tree carried
-exactly one extra commit, and it touched only files under `AI_Workflow/`.
+containers were running** — the other projects' stacks do not restart on their own either — so the
+host went from **~30 containers to 4** with no change to this repository. On that host the next run
+was **1838/1838** and the full `pnpm gate` exited **0** end to end.
 
-On that host, the very next run:
+That looked conclusive, and it was written up here as "the natural experiment that settled it:
+contention from other projects". **It did not survive the next run.** With the host still at four
+containers, the very next full gate failed **4 of 1842** — `admissions` (404 on a just-created
+row), `mar` ×2 (a 404 and a **401**), `mobileContract` (404) — and all three suites then passed
+**158/158** when run together in isolation.
 
-```
-Test Files  21 passed (21)
-     Tests  1838 passed (1838)
-```
+So: **one clean run is not a cause.** The corrected record is below, and the retraction is kept
+rather than edited away because the mistake is instructive — a single green run after changing one
+big variable is exactly what a wandering flake looks like when you want it to be solved.
 
-and the **full `pnpm gate` exited 0** — format, lint 18/18, typecheck 18/18, unit 11/11 (mobile
-1647, web 276, api 231), OpenAPI, contract, client contract 269/274 reachable, integration
-1838/1838, build 11/11, boundaries 0 violations across 769 modules.
+#### What is actually established
 
-**Conclusion: T3 is environmental, and it is not a defect in this repository.** The contended host
-failed 1–4 tests per run across four consecutive runs; the quiet host passed everything on the
-first attempt. One orphaned `turbo run dev` tree was still running during the clean run, so a
-single stray dev server is tolerable — it is the _other projects'_ databases that push it over.
+| Claim                                                      | Status                                                                                          |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Failures are timeouts, 404s and 401s — never wrong answers | **Established.** Six runs, no assertion about clinical or permission behaviour has ever failed. |
+| Failing tests differ every run                             | **Established.** Six runs, no test has failed twice.                                            |
+| Everything passes in isolation and in small groups         | **Established**, including the 3-suite group above.                                             |
+| It only appears in the full 21-file run                    | **Established.**                                                                                |
+| OOM / container kill                                       | **Ruled out.** Mongo 1.4–3.4 GiB of 7.75, no `exit 137`.                                        |
+| Connection-pool exhaustion                                 | **Ruled out.** Measured mid-symptom: 18 connections current, **101,562 available**.             |
+| Accumulated database state                                 | **Unlikely.** 14 databases, 5 of them test.                                                     |
+| Contention from other projects' containers                 | ~~Established~~ → **RETRACTED.** It failed again with those containers down.                    |
+| Missing `--no-file-parallelism`                            | **Not applicable.** `test:int` already passes it.                                               |
 
-**What to do, in order, when the suite fails:**
+**The strongest untested lead is already written down elsewhere in this repository**, and it
+predates all of the above: the header of `apps/api/src/test/redisTestEnv.ts` records a previous
+investigation that reached a different answer — **Mailhog**, which unlike Redis and Mongo cannot be
+partitioned per suite, so every suite shares one instance. That file also warns, in as many words,
+that "a comment that takes credit for a fix it did not make is how the next person mis-diagnoses
+the next outage". The retraction above is that warning coming true; read that file before
+theorising again.
 
-1. `docker ps` — if containers from other projects are up, stop them and re-run. That alone has
-   explained every occurrence so far.
-2. `pgrep -f "turbo run dev"` — more than one tree means an orphan; `pnpm dev` leaves its children
-   alive if you kill the wrapper rather than the tree.
-3. Only then read the failure body, and only then suspect the code.
+**Triage order when the suite fails:**
+
+1. **Read the failure body before the test name.** A row called `DOCTOR may NOT GET …` failing on
+   `Error: Test timed out` is not a permission leak, and that misreading is the expensive one.
+2. Re-run the failing suites in isolation. Every occurrence so far has passed.
+3. Check `docker ps` and `pgrep -f "turbo run dev"` — a quiet host has not been proven to fix it,
+   but a loaded one is still worth removing from the picture.
+4. **Instrument before changing anything.** Nobody has yet captured per-suite durations
+   (`--reporter=verbose`) or tested the Mailhog lead. That is the next real step, not another
+   re-run.
 
 **Do not raise `testTimeout`/`hookTimeout` to make this go away.** A test that needs longer under
 load is evidence; a test that is allowed longer is silence. Tracked as **T3** in the risk register,
-because the accepted V1 position is that this suite _is_ the only gate — and the mitigation is a
-quiet host, not a bigger number.
+which the accepted V1 position leans on: this suite _is_ the only gate.
 
 ---
 

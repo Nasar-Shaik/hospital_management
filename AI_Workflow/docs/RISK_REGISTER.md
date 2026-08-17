@@ -480,41 +480,46 @@ separately — and P2-2 is the one that fails without anybody touching it.
 
 ### T3 — the only gate is not deterministic (raised 2026-08-17)
 
-| ID  | Risk                                                                       | L×I   | Status                                             |
-| --- | -------------------------------------------------------------------------- | ----- | -------------------------------------------------- |
-| T3  | The single quality gate fails intermittently, so "green" is not repeatable | 3×3=9 | 🟢 **CAUSE IDENTIFIED 2026-08-17** — environmental |
+| ID  | Risk                                                                       | L×I   | Status                              |
+| --- | -------------------------------------------------------------------------- | ----- | ----------------------------------- |
+| T3  | The single quality gate fails intermittently, so "green" is not repeatable | 3×3=9 | 🟡 **OPEN** — cause NOT established |
 
 CI is billing-locked and the accepted V1 position is that `pnpm gate` on one machine **is** the
-gate. That position rests on the gate being trustworthy, and on 2026-08-17 four consecutive runs
-failed 1–4 tests each, on disjoint test names, every failure a timeout rather than an assertion.
+gate. That position rests on the gate being trustworthy. On 2026-08-17, six full runs: four failed
+1–4 tests each, one passed 1838/1838, and the next failed 4 of 1842 — every failure a timeout, 404
+or 401, never a wrong answer, and no test failing twice.
 
-**Cause established the same day, by a natural experiment nobody arranged.** Docker Desktop
-crashed; when it came back only HMS's four containers were running, because no container in this
-project or the others carries a `restart:` policy. The host went from **~30 containers to 4** with
-no change to this repository. The next run was **1838/1838**, and the full `pnpm gate` exited 0 end
-to end. Full evidence in [`TESTING.md`](../../TESTING.md) §9.
+**A cause was claimed and then retracted the same day.** The clean run followed a Docker restart
+that took the host from ~30 containers to 4, which looked like proof that other projects' stacks
+were the cause. The next gate failed with the host still at four. That claim is withdrawn; the
+retraction is kept in [`TESTING.md`](../../TESTING.md) §9 rather than edited away, because a single
+green run after changing one big variable is exactly what this flake looks like when somebody wants
+it solved.
 
-**So T3 is environmental and is not a repository defect.** The mitigation is a quiet host, not a
-bigger timeout: stop other projects' containers before running the suite. `TESTING.md` now carries
-that as the first triage step, ahead of reading the failure at all.
+**Ruled out with measurements:** OOM (Mongo 1.4–3.4 GiB of 7.75, no `exit 137`), connection-pool
+exhaustion (18 current, **101,562 available**, measured mid-symptom), accumulated state (14
+databases), missing `--no-file-parallelism` (already passed by `test:int`), and a repository
+regression (the session that first observed it changed only files under `AI_Workflow/`).
+
+**Strongest untested lead:** the header of `apps/api/src/test/redisTestEnv.ts` records an earlier
+investigation that landed on **Mailhog** — shared by every suite and, unlike Redis and Mongo, not
+partitionable per suite. Nobody has tested it, and nobody has captured per-suite durations.
+**Instrumentation is the next step, not another re-run.**
 
 **Why this is P2 and not higher.** It has never failed the same test twice, has never failed an
-assertion about clinical behaviour (the two observed failures were a hook timeout and a 404 on a
-just-created row), and the suite is green on re-run and in isolation. Nothing suggests a product
-defect hiding behind it.
+assertion about clinical or permission behaviour across six runs, and every failing suite has
+passed on re-run and in isolation. Nothing suggests a product defect hiding behind it.
 
-**Why it is not zero, either.** A gate that is green only on a quiet host is still a gate with a
-precondition, and the precondition is invisible — nothing in `pnpm gate` checks what else is
-running, so the next person meets the same four hours of confusion. **The mitigation is not to
+**Why it is not zero, either.** A gate that needs a second attempt trains people to re-run rather
+than read, and the next real regression will arrive dressed as this one. **The mitigation is not to
 raise `hookTimeout`** — that converts evidence into silence.
 
 **Interaction with the CI decision.** This does not reopen it — CI is rejected before its first
 step and no workflow change can fix that. It does mean the honest statement of the V1 gate is
-_"green, on a host running nothing else"_, and the proportionate mitigation remains the one already
-recorded: run `pnpm gate` once on a second machine before the pilot. A second machine would also
-have caught this in a morning rather than a day.
+_"green on a re-run, cause unknown"_, and the proportionate mitigation remains the one already
+recorded: run `pnpm gate` once on a second machine before the pilot.
 
-**Left deliberately unfixed:** a preflight that fails the gate when foreign containers are up. It
-is tempting and it is the wrong shape — this repository does not own the host, and a gate that
-refuses to run because of somebody else's project is a gate people learn to bypass. Documented
-triage beats an unenforceable rule.
+**Left deliberately unfixed:** a preflight that fails the gate when foreign containers are up.
+That was the shape of the retracted theory, and it would now be a control for a cause nobody has
+established — enforcing a precondition that has not been shown to matter, on a host this repository
+does not own.
