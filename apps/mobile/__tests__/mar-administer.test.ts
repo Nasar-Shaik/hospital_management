@@ -369,6 +369,45 @@ describe("recording a dose", () => {
     expect(result.outcome).toBe("unknown");
   });
 
+  /**
+   * ── THE ONE 5xx THAT IS NOT AMBIGUOUS ─────────────────────────────────────
+   * A 5xx normally means "ask the slot": the write may have committed before the connection died.
+   * `HMS-MAR-002` is the exception, because of WHERE it is raised — `assertChartingIsSafe()` is
+   * the first line of `recordAdministration`, so the refusal happens before the service has read
+   * the prescription, let alone written anything.
+   *
+   * Reconciling it was not unsafe (the slot correctly read open) but it cost the nurse the answer.
+   * `unknown` renders "we could not confirm whether this dose was recorded… press again", so she
+   * was told to keep pressing a button that cannot succeed for another minute, while the
+   * instruction the server actually sent — chart on paper and escalate — was thrown away.
+   */
+  it("classifies HMS-MAR-002 as failed, not unknown — the server refused before writing", async () => {
+    const refusal = new ApiClientError(
+      503,
+      "HMS-MAR-002",
+      "Charting is unavailable on this system — chart on paper and escalate",
+      { missing: [{ rule: "one_administration_per_dose_slot", migration: "0049-mar" }] },
+    );
+
+    const result = await attemptAdministration(deps({ record: () => Promise.reject(refusal) }));
+
+    expect(result.outcome).toBe("failed");
+    // And it carries the error through, so the screen can render the paper instruction.
+    expect((result as { error?: unknown }).error).toBe(refusal);
+  });
+
+  /**
+   * The control that keeps the exception narrow. An ordinary 5xx — a proxy, a dropped connection,
+   * a genuine server fault — may well have committed the dose, so it must still ask the slot.
+   * Widening the rule to "any 503" would tell a nurse "not recorded" about a dose already in the
+   * patient, which is the failure this whole classifier exists to prevent.
+   */
+  it("still reconciles an ORDINARY 5xx rather than calling it failed", async () => {
+    const generic = new ApiClientError(503, "HMS-GEN-503", "upstream unavailable");
+    const result = await attemptAdministration(deps({ record: () => Promise.reject(generic) }));
+    expect(result.outcome).toBe("unknown");
+  });
+
   /** The order was stopped, or the ward day rolled over. Nothing may be concluded from that. */
   it("reports unknown when the slot has left today's schedule", async () => {
     const result = await attemptAdministration(deps({ reloadSchedule: () => Promise.resolve([]) }));

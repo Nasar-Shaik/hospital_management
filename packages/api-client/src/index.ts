@@ -1424,6 +1424,33 @@ export interface AdministerDeps {
 }
 
 /**
+ * The clinical schema refusals: the server could not enforce the rule this write rests on.
+ *
+ * Every one is raised by a capability guard that runs as the FIRST statement of its service
+ * function — before the prescription is read, before the transaction opens, before anything is
+ * written. So a response carrying one of these codes is a guarantee that nothing was recorded,
+ * which is a stronger promise than "the request failed" and is why they can be classified rather
+ * than reconciled.
+ *
+ * Exported because the same list decides what the CLIENT tells a clinician to do, and a second
+ * copy of it is a second chance for the two to disagree about whether a dose was charted.
+ */
+export const CLINICAL_SCHEMA_REFUSALS = [
+  "HMS-MAR-002",
+  "HMS-PHM-004",
+  "HMS-ORD-001",
+  "HMS-ADM-003",
+  "HMS-ENC-001",
+] as const;
+
+export function isClinicalSchemaRefusal(error: unknown): boolean {
+  return (
+    error instanceof ApiClientError &&
+    (CLINICAL_SCHEMA_REFUSALS as readonly string[]).includes(error.code ?? "")
+  );
+}
+
+/**
  * Errors decided BEFORE anything could be written.
  *
  * `HMS-REQ-002` — this key was used for a different body — belongs here and is worth the note: the
@@ -1432,6 +1459,18 @@ export interface AdministerDeps {
  *
  * `HMS-REQ-004` (the same key is still in flight) is deliberately NOT here. That first attempt may
  * be committing right now, so the only honest answer comes from the slot.
+ *
+ * ── WHY A 503 IS HERE AT ALL, WHICH LOOKS WRONG ─────────────────────────────
+ * A 5xx normally means "ask the slot": the write may have committed before the connection died.
+ * `HMS-MAR-002` is the exception, and only because of WHERE it is raised — `assertChartingIsSafe()`
+ * is the first line of `recordAdministration`, so the refusal happens before the service has
+ * looked at anything. Reconciling it was not unsafe (the slot correctly read open) but it was
+ * useless, and it cost the nurse the answer: `unknown` renders "we could not confirm… press
+ * again", so she was told to keep pressing a button that cannot succeed for the next minute,
+ * while the instruction the server actually sent — chart on paper and escalate — was discarded.
+ *
+ * Only the refusal for THIS write belongs here. A `HMS-ORD-001` arriving on a dose route would
+ * mean something has gone wrong that no classifier should paper over.
  */
 function isDefinitelyNotWritten(error: unknown): boolean {
   if (!(error instanceof ApiClientError)) return false;
@@ -1441,7 +1480,8 @@ function isDefinitelyNotWritten(error: unknown): boolean {
     error.code === "HMS-VAL-001" ||
     error.code === "HMS-GEN-404" ||
     error.code === "HMS-STATE-001" ||
-    error.code === "HMS-REQ-002"
+    error.code === "HMS-REQ-002" ||
+    error.code === "HMS-MAR-002"
   );
 }
 

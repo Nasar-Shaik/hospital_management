@@ -337,6 +337,68 @@ export function toUserMessage(error: unknown): UserFacingError {
         severity: "notice",
         action: "retry",
       };
+
+    /* ── the clinical schema refusals ───────────────────────────────────────── */
+    /**
+     * ── THE ONE ERROR CLASS THAT IS AN INSTRUCTION, NOT A REPORT ──────────────
+     * These five are raised when the database can no longer enforce the rule a clinical write
+     * rests on — the unique index that stops one dose being charted twice, one order being placed
+     * twice, one bed holding two patients. The server refuses BEFORE writing anything and says so
+     * in words meant for a clinician: chart on paper, order on paper, escalate.
+     *
+     * None of them was mapped here, so all five fell to the generic 5xx default below: "The
+     * hospital's system is not responding… Try again, and report it if it continues." A nurse
+     * standing at a bed was told to keep pressing a button that cannot succeed for the next
+     * minute, and the one instruction that would have kept the patient safe — write it on paper —
+     * never reached the ward. The whole runtime-safety slice exists to deliver that sentence.
+     *
+     * `action` is deliberately absent. Every other 5xx here offers "retry"; offering it on these
+     * would contradict the sentence above it, and the server has already said the verdict cannot
+     * change for 60 seconds (`Retry-After`). The recovery is procedural, not a button.
+     *
+     * `blocking` rather than `notice`: this is not a hiccup to acknowledge and work around. Until
+     * somebody repairs the database, this kind of record cannot be made in the app at all, and a
+     * toast that scrolls away is how a nurse ends up believing it saved.
+     *
+     * The wording is ours, not `error.message`. This file's rule holds — the server's text is
+     * developer-facing and may be reworded without notice — but the ACTION it names is a contract
+     * (ERROR_CODES.md), so the action is what is reproduced here.
+     */
+    case "HMS-MAR-002":
+      return {
+        ...base,
+        title: "Chart this dose on paper",
+        body: "This system cannot safely record medication right now. Give the dose if it is due, record it on the paper chart, and tell the nurse in charge. Do not rely on the app for this dose.",
+        severity: "blocking",
+      };
+    case "HMS-ORD-001":
+      return {
+        ...base,
+        title: "Order on paper",
+        body: "This system cannot safely place orders right now. Write the request on paper, send it to the department as usual, and tell the person in charge.",
+        severity: "blocking",
+      };
+    case "HMS-PHM-004":
+      return {
+        ...base,
+        title: "Hand over on paper",
+        body: "This system cannot safely record dispensing right now. Record the handover on paper and tell the pharmacist in charge.",
+        severity: "blocking",
+      };
+    case "HMS-ADM-003":
+      return {
+        ...base,
+        title: "Allocate the bed on the board",
+        body: "This system cannot safely record bed occupancy right now. Use the ward board, and tell the person in charge before moving the patient.",
+        severity: "blocking",
+      };
+    case "HMS-ENC-001":
+      return {
+        ...base,
+        title: "Register on paper",
+        body: "This system cannot safely start a visit right now. Register the patient on paper and tell the person in charge.",
+        severity: "blocking",
+      };
     default:
       /**
        * An unknown code is still shown as a generic failure with its traceId, never as

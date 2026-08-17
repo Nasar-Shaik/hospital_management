@@ -212,3 +212,63 @@ describe("15. a replayed idempotent response is a success", () => {
     ).rejects.toMatchObject({ code: "HMS-REQ-002" });
   });
 });
+
+/**
+ * THE CLINICAL SCHEMA REFUSALS — the one error class that is an INSTRUCTION.
+ *
+ * `HMS-MAR-002` and its four siblings are raised when the database can no longer enforce the rule
+ * a clinical write rests on. The server refuses before writing anything and sends words meant for
+ * a clinician: chart on paper, order on paper, escalate.
+ *
+ * None of the five was mapped, so all five fell to the generic 5xx default — "The hospital's
+ * system is not responding… Try again, and report it if it continues." A nurse at a bedside was
+ * told to keep pressing a button that could not succeed for another minute, and the sentence that
+ * would have kept the patient safe never reached the ward.
+ */
+describe("a clinical schema refusal tells the clinician what to do instead", () => {
+  const REFUSALS = [
+    { code: "HMS-MAR-002", says: /paper chart/i },
+    { code: "HMS-ORD-001", says: /on paper/i },
+    { code: "HMS-PHM-004", says: /on paper/i },
+    { code: "HMS-ADM-003", says: /ward board/i },
+    { code: "HMS-ENC-001", says: /on paper/i },
+  ] as const;
+
+  for (const { code, says } of REFUSALS) {
+    it(`${code} names the paper fallback and does not offer a retry`, () => {
+      const message = toUserMessage(apiError(503, code));
+
+      // The instruction, which is the whole point of the code existing.
+      expect(message.body).toMatch(says);
+      expect(message.body.toLowerCase()).toMatch(/paper|board/);
+
+      /**
+       * No retry affordance. Every other 5xx in this file offers one; here it would contradict
+       * the instruction, and the server has already said the verdict cannot change for 60s.
+       */
+      expect(message.action).toBeUndefined();
+
+      // Not a toast that scrolls away — until somebody repairs the database, this cannot be done.
+      expect(message.severity).toBe("blocking");
+
+      // The house rule still holds: the server's developer-facing text is never rendered.
+      expect(message.body).not.toContain("developer-facing text");
+      expect(message.code).toBe(code);
+    });
+  }
+
+  /**
+   * The falsification for the whole group: without the mapping these fall to the generic 5xx
+   * branch, which is a perfectly reasonable-looking message that happens to give the wrong
+   * instruction. That is why the assertions above test for the paper wording rather than merely
+   * for "some message".
+   */
+  it("is distinguishable from an ordinary 5xx, which DOES offer a retry", () => {
+    const ordinary = toUserMessage(apiError(500, "HMS-GEN-500"));
+    expect(ordinary.action).toBe("retry");
+    expect(ordinary.body.toLowerCase()).not.toMatch(/paper/);
+
+    const refusal = toUserMessage(apiError(503, "HMS-MAR-002"));
+    expect(refusal.action).toBeUndefined();
+  });
+});

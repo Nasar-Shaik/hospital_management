@@ -391,6 +391,45 @@ describe("5. what the nurse is told — the wording IS the safety feature", () =
     expect(notice.canRecheck).toBe(true);
   });
 
+  /**
+   * ── THE SCHEMA REFUSAL REACHES THE NURSE IN THE SERVER'S OWN WORDS ────────
+   * `HMS-MAR-002` is raised by `assertChartingIsSafe()`, the first line of `recordAdministration`,
+   * so nothing was written and the shared classifier answers `failed` rather than `unknown`.
+   *
+   * That routing is what matters here. `unknown` says "we could not confirm… check the chart",
+   * which is true of a dropped connection and wrong for this: the server knows exactly what
+   * happened and sent an instruction — chart on paper and escalate. `failed` renders that
+   * instruction verbatim, because on WEB the server's message is what a refusal shows.
+   *
+   * (Mobile deliberately never renders server text, so it needed its own mapping of the same five
+   * codes. Same defect, two different fixes, because the two clients made opposite choices about
+   * trusting server wording.)
+   */
+  it("passes a schema refusal through as the instruction it is, not as 'unconfirmed'", () => {
+    const refusal = new ApiClientError(
+      503,
+      "HMS-MAR-002",
+      "Charting is unavailable on this system — chart on paper and escalate",
+    );
+
+    const notice = attemptNotice({ outcome: "failed", error: refusal }, "me", clock);
+    expect(notice.text).toMatch(/chart on paper/i);
+    expect(notice.tone).toBe("danger");
+    // Not an invitation to press again — the verdict cannot change for 60 seconds.
+    expect(notice.canRecheck).toBe(false);
+  });
+
+  /** And the routing itself, through the real attempt path rather than by constructing the result. */
+  it("routes a schema refusal to `failed`, so it never renders as unconfirmed", async () => {
+    const refusal = new ApiClientError(503, "HMS-MAR-002", "chart on paper and escalate");
+    const result = await attemptDose({
+      record: () => Promise.reject(refusal),
+      reloadSchedule: () => Promise.reject(new Error("should not be asked")),
+      ref: { prescriptionId: "rx1", lineIndex: 0, scheduledFor: "2026-06-11T08:00:00.000Z" },
+    });
+    expect(result.outcome).toBe("failed");
+  });
+
   it("renders the existing administration's time through the injected ward clock", () => {
     const notice = attemptNotice(
       {
