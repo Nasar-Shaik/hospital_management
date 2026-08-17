@@ -478,48 +478,60 @@ block **safe** pilot operation_ — and none of them clears it.
 are operational work that should ride along with the P1 environment items rather than be scheduled
 separately — and P2-2 is the one that fails without anybody touching it.
 
-### T3 — the only gate is not deterministic (raised 2026-08-17)
+### T3 — the only gate is not deterministic (raised 2026-08-17, CLOSED 2026-08-17)
 
-| ID  | Risk                                                                       | L×I   | Status                              |
-| --- | -------------------------------------------------------------------------- | ----- | ----------------------------------- |
-| T3  | The single quality gate fails intermittently, so "green" is not repeatable | 3×3=9 | 🟡 **OPEN** — cause NOT established |
+| ID  | Risk                                                                       | L×I   | Status                                      |
+| --- | -------------------------------------------------------------------------- | ----- | ------------------------------------------- |
+| T3  | The single quality gate fails intermittently, so "green" is not repeatable | 3×3=9 | 🟢 **CLOSED** — root cause proven and fixed |
 
 CI is billing-locked and the accepted V1 position is that `pnpm gate` on one machine **is** the
-gate. That position rests on the gate being trustworthy. On 2026-08-17, six full runs: four failed
-1–4 tests each, one passed 1838/1838, and the next failed 4 of 1842 — every failure a timeout, 404
-or 401, never a wrong answer, and no test failing twice.
+gate. That position rests on the gate being trustworthy. Across eight full runs on 2026-08-17, six
+failed 1–4 tests each and two were green — every failure a timeout, 404 or 401, never a wrong
+clinical, billing or permission answer, and no test failing twice.
 
-**A cause was claimed and then retracted the same day.** The clean run followed a Docker restart
-that took the host from ~30 containers to 4, which looked like proof that other projects' stacks
-were the cause. The next gate failed with the host still at four. That claim is withdrawn; the
-retraction is kept in [`TESTING.md`](../../TESTING.md) §9 rather than edited away, because a single
-green run after changing one big variable is exactly what this flake looks like when somebody wants
-it solved.
+**Root cause: the failing requests were answered by a different process on this machine.**
+`request(app)` opens **one HTTP server per request** (supertest calls `app.listen(0)` each time), so
+a full run burns ~8,200 of the 16,384 ephemeral ports macOS offers. `listen(0)` binds the
+**wildcard** address and Node sets `SO_REUSEADDR`, so that bind **succeeds** on a port another
+process already holds on `127.0.0.1` — silently. supertest then connects to `127.0.0.1:<port>`, and
+the kernel gives the connection to the most specific listener: the other process. Five such
+listeners were live on the machine (four editor helpers and a JVM), and **every anomaly across three
+instrumented runs landed on one of those five ports**. Some of those helpers are themselves Express,
+so the reply was a genuine Express 404 for a route they had never heard of; the JVM reset the
+connection instead, giving "socket hang up".
 
-**Ruled out with measurements:** OOM (Mongo 1.4–3.4 GiB of 7.75, no `exit 137`), connection-pool
-exhaustion (18 current, **101,562 available**, measured mid-symptom), accumulated state (14
-databases), missing `--no-file-parallelism` (already passed by `test:int`), and a repository
-regression (the session that first observed it changed only files under `AI_Workflow/`).
+**Fixed** by hoisting one loopback-bound server per suite (`listening()` in
+`apps/api/src/test/appServer.ts`): the kernel will not hand a `127.0.0.1:0` bind a port already in
+LISTEN on that address, so the collision is impossible rather than rare, and the ~4,100 binds per
+run become 21. `noWildcardBinds.setup.ts` makes the old default throw, and
+`src/testServerBinding.test.ts` pins both the guard and the platform behaviour it defends against.
+Verified with a full `pnpm gate` green end to end — integration **1842/1842** — while the five
+foreign listeners were still up.
 
-**Root-cause cycle run 2026-08-17 — reproduced, cause still unproven.** Two identical back-to-back
-`test:int` runs with nothing changed between them: **A passed 1842/1842, B failed 1**. So it is
-reproducible and it is not the code, not other projects' containers (four containers up throughout),
-and not host load.
+**The evidence that broke it open was an absence.** `requestLog` sits second in the chain so that
+every request is logged on `finish`, and the failing requests had **no log line at all**. That was
+read for days as a logging problem. It was the literal truth: the request never arrived. Tracing
+below Express at `node:http`, to a file rather than through vitest's stdout capture, showed the
+responses arriving with **no `x-request-id`** — and since `requestId` is the first middleware, that
+alone proves they did not come from this application. `lsof` at the moment of the anomaly named the
+process that had answered.
 
-**Mailhog is REJECTED**, with the argument in [`TESTING.md`](../../TESTING.md) §9: only `orders` and
-`notifications` use it and no failure has ever been in either; collision needs parallelism and
-`fileParallelism: false` is set in `vitest.config.ts`; and its documented signature is a wrong
-count, whereas every failure here is a 404, 401 or timeout.
+**Two wrong answers were published before the right one, and both are kept on the record**
+in [`TESTING.md`](../../TESTING.md) §9. The first blamed contention from other projects' containers
+on the strength of one green run after a Docker restart, and was retracted when the next gate failed
+with the host unchanged. The second was our own claim that every failure was a timeout; run B's was
+an assertion. Mailhog was the strongest documented lead and was rejected on the evidence: only
+`orders` and `notifications` import `mailTestEnv` and no failure was ever in either.
 
-**One earlier claim of ours is also corrected:** not every failure is a timeout. Run B's was an
-assertion — `POST /api/v1/ambulances` answered **404 where the RBAC matrix requires 403**.
+**Also ruled out with measurements, all correctly, and all irrelevant:** OOM (Mongo 1.4–3.4 GiB of
+7.75, no `exit 137`), connection-pool exhaustion (18 current against 101,562 available, measured
+mid-symptom), accumulated state (14 databases), missing `--no-file-parallelism` (already set in
+`vitest.config.ts`), a repository regression, and WiredTiger cache growth.
 
-**The unexplained observation, and the next evidence.** `requestLog` sits second in the middleware
-chain so that every request is logged on `finish`, yet the failing requests have **no log line at
-all** (`adm-int-test`: 337 requests logged, zero 404s, while the test reported one). Either the
-response never went through that Express app, or the line was produced and lost by vitest's output
-capture. **Point the test logger at a file instead of stdout and re-run until it fails** — that
-distinguishes the two, and everything above it is speculation until it is done.
+**The lesson worth keeping:** every eliminated cause was inside the boundary of this system, and the
+answer was outside it. The one observation that did not fit — a request with no log line — was the
+one pointing at the boundary itself, and it was treated as a measurement artifact for days before it
+was treated as evidence.
 
 **Why this is P2 and not higher.** It has never failed the same test twice, has never failed an
 assertion about clinical or permission behaviour across six runs, and every failing suite has

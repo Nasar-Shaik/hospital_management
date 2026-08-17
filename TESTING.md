@@ -767,103 +767,94 @@ of failures, zero overlap in test names:**
 | `rbac.int.test.ts` alone | `1 failed \| 1225 passed` | `rbac > PHARMACIST may NOT POST /appointments/:id/reschedule`                                                                                                                                                                            |
 | `rbac.int.test.ts` alone | `1 failed \| 1225 passed` | `rbac > RECEPTIONIST may NOT DELETE /users/:id/roles/:roleCode`                                                                                                                                                                          |
 
-**Every failure is a timeout or a slowness artifact. Not one is a wrong answer.** The RBAC rows
-matter most here and are the most alarming to read in a log — a line saying
-`DOCTOR may NOT GET /api/v1/billing/pending — FAIL` looks exactly like a permission leak. It is
-not. Captured in full, that class of failure reads:
+**No failure was ever a wrong answer.** Not one assertion about a permission, a price or a dose has
+failed. The RBAC rows are the most alarming to read in a log — a line saying
+`DOCTOR may NOT GET /api/v1/billing/pending — FAIL` looks exactly like a permission leak — and they
+are the least meaningful. Anyone triaging this must read the failure body before reacting to the
+test name.
 
-```
-Error: Test timed out in 20000ms.
- ❯ src/rbac.int.test.ts:1491:7
-```
-
-The request never came back; **no assertion about a permission has ever failed.** Anyone triaging
-this must read the failure body before reacting to the test name.
-
-**What it rules out.** The tracker's standing advice is _"check Docker memory first"_, and it was
+**What it ruled out.** The tracker's standing advice is _"check Docker memory first"_, and it was
 checked **during** a failing run: `medicore-hms-mongo-1` at **3.4 GiB of 7.75 GiB**, **no HMS
-container exited 137**. So this is not the OOM-kill scenario that had been the leading explanation.
-It is not accumulated state either — 14 databases, 5 of them test. And it cannot be a code
-regression: the session that observed it changed **only** files under `AI_Workflow/`.
-
-**What it points at.** Host contention rather than this repository: the 7.75 GiB Docker pool is
-shared with other projects' stacks (`vip-dev-mongodb`, `vip-dev-redis` were both up), and
-`rbac.int.test.ts` alone drives **1,226 sequential requests** against one Mongo in ~38 s. Under
-competition an individual request crosses the 20 s ceiling.
+container exited 137**. Not the OOM-kill scenario that had been the leading explanation. Not
+accumulated state either — 14 databases, 5 of them test. Not a code regression: the session that
+observed it changed **only** files under `AI_Workflow/`.
 
 #### A clean run that looked like an answer, and was not
 
 Docker Desktop crashed a few hours after the runs above. When it came back **only HMS's four
-containers were running** — the other projects' stacks do not restart on their own either — so the
-host went from **~30 containers to 4** with no change to this repository. On that host the next run
-was **1838/1838** and the full `pnpm gate` exited **0** end to end.
+containers were running**, so the host went from ~30 containers to 4 with no change to this
+repository, and the next run was **1838/1838** with `pnpm gate` exiting 0 end to end.
 
-That looked conclusive, and it was written up here as "the natural experiment that settled it:
-contention from other projects". **It did not survive the next run.** With the host still at four
-containers, the very next full gate failed **4 of 1842** — `admissions` (404 on a just-created
-row), `mar` ×2 (a 404 and a **401**), `mobileContract` (404) — and all three suites then passed
-**158/158** when run together in isolation.
+That was written up here as "the natural experiment that settled it: contention from other
+projects". **It did not survive the next run.** With the host still at four containers, the very
+next gate failed 4 of 1842. The retraction is kept rather than edited away, because the mistake is
+the instructive part: a single green run after changing one big variable is exactly what a
+wandering flake looks like when you want it to be solved. Mailhog was investigated and rejected on
+the same evidence — only `orders` and `notifications` import `mailTestEnv`, no failure was ever in
+either, and a shared-inbox race produces a wrong count, not a 404.
 
-So: **one clean run is not a cause.** The corrected record is below, and the retraction is kept
-rather than edited away because the mistake is instructive — a single green run after changing one
-big variable is exactly what a wandering flake looks like when you want it to be solved.
+#### 2026-08-17 — SOLVED: the request was answered by a different process on this machine
 
-#### What is actually established
+The tell was the thing that had looked like a logging bug. `requestLog` is registered **second in
+the chain, before helmet and cors, precisely so every request is logged** — yet the failing
+requests had **no log line at all**. That was not a lost line. It was the literal truth: the
+request never arrived here.
 
-Updated after a focused root-cause cycle on 2026-08-17 (eight full runs in total).
+Proven by tracing below Express, at `node:http`, writing to a file of its own so nothing depended
+on vitest's stdout capture. Three instrumented full runs, five anomalies, and every one of them
+resolved the same way:
 
-| Claim                                                        | Status                                                                                                                       |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Reproducible under control**                               | **Established.** Two identical back-to-back `test:int` runs, nothing changed between them: **A 1842/1842 pass, B 1 failed**. |
-| Failing tests differ every run                               | **Established.** Eight runs, no test has failed twice.                                                                       |
-| Everything passes in isolation and in small groups           | **Established**, every time it has been checked.                                                                             |
-| Only appears in the full 21-file run                         | **Established.**                                                                                                             |
-| ~~All failures are timeouts~~                                | **CORRECTED.** Run B's was an assertion: `POST /api/v1/ambulances` returned **404 where 403 was required**.                  |
-| No failure has ever produced a wrong clinical/billing answer | **Established.** Eight runs.                                                                                                 |
-| OOM / container kill                                         | **Ruled out.** No `exit 137`; Mongo 1.35–3.4 GiB of 7.75.                                                                    |
-| Connection-pool exhaustion                                   | **Ruled out.** 18–19 current against **101,562 available**, measured mid-symptom.                                            |
-| Accumulated database state                                   | **Ruled out.** 14 databases before and after; `dropDatabases` opens and closes its own connection.                           |
-| Missing `--no-file-parallelism`                              | **Not applicable.** `fileParallelism: false` is set in `vitest.config.ts`, not merely in the script.                         |
-| Contention from other projects' containers                   | **Ruled out.** A and B above both ran with only HMS's four containers up.                                                    |
-| **Mailhog**                                                  | **REJECTED — see below.**                                                                                                    |
+| Run | Symptom the suite reported                                       | What the transport showed                              |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------ |
+| 1   | `billing` — `Error: socket hang up`                              | connected to :49671, **no `request` event ever fired** |
+| 2   | `rbac` — PHARMACIST reached `/reports/discharge-outcomes`: 404   | answered **without an `x-request-id`**                 |
+| 3   | `vitals` ×2 — 404 on `POST /encounters/:id/vitals`               | answered **without an `x-request-id`**                 |
+| 3   | `branchIsolation` — 401 on a request that had just authenticated | answered **without an `x-request-id`**                 |
 
-#### Mailhog is rejected, and this is the argument
+`requestId` is the FIRST middleware, so a response with no `x-request-id` did not come from this
+application. `lsof`, run at the moment of the anomaly, named who it did come from:
 
-It was the strongest documented lead, and it does not fit:
+```
+Code Helper  738   127.0.0.1:49183 (LISTEN)     Code Helper 2007  127.0.0.1:53579 (LISTEN)
+Code Helper  1559  127.0.0.1:49435 (LISTEN)     java        2393  127.0.0.1:49671 (LISTEN)
+Code Helper  1991  127.0.0.1:49715 (LISTEN)
+node        14992  *:49183 (LISTEN)   ← ours, on the same port
+```
 
-1. **Only two suites use it** — `orders` and `notifications` are the sole importers of `mailTestEnv`.
-   **No observed failure has ever been in either.**
-2. **Collision requires parallelism**, and `fileParallelism: false` lives in `vitest.config.ts`, so it
-   holds however the suite is invoked — not only via the `test:int` script's flag.
-3. **The signature does not match.** `mailTestEnv.ts` states the symptom of a shared-inbox race
-   itself: "an assertion that mysteriously finds nothing, in whichever suite happened to lose the
-   race" — a wrong count. Every failure observed here is a 404, a 401, or a timeout.
+**Five foreign listeners, and every anomaly across all three runs landed on one of those five
+ports.** The mechanism, end to end:
 
-Mailhog remains the correct explanation for the _historical_ failures that file describes. It is not
-the explanation for these.
+1. `request(app)` is **one HTTP server per request** — supertest wraps the app in a fresh
+   `http.createServer(app)` and calls `app.listen(0)` every time. A full run makes ~4,100 requests
+   and burns ~8,200 ephemeral ports; the macOS ephemeral range is 16,384 wide (49152–65535). One
+   run sweeps most of it.
+2. `listen(0)` with no host binds the **wildcard** address, and Node sets `SO_REUSEADDR`. On
+   BSD/macOS that bind **succeeds** on a port another process already holds on a specific address —
+   no `EADDRINUSE`, no warning.
+3. supertest then connects to `127.0.0.1:<port>`, and the kernel routes to the **most specific**
+   listener: the other process.
+4. It answers. Plausibly — some of those editor helpers are themselves Express, so what comes back
+   is a real Express 404 (`x-powered-by: Express`) for a route it has never heard of. The JVM
+   accepted the connection and reset it: "socket hang up".
 
-#### The one observation nothing yet explains
+Everything the flake did follows from that. Green in isolation, because a single suite makes ~120
+requests and rarely lands on one of the five. Wandering, because it is positional in the port
+sequence and has nothing to do with any suite's code. Never a wrong clinical answer, because the
+application never processed the request. And invisible in the logs, for the same reason.
 
-`requestLog` is registered **second in the chain — before helmet and cors — deliberately, so that
-every request is logged** on `res.finish`. Yet **the failing requests have no log line at all.**
-`adm-int-test` logged 337 requests in the run where it failed, of which **zero were 404s**, while
-the test reported a 404 from `POST /api/v1/encounters`. The only tenant-resolution 404
-(`HMS-TEN-001`, which logs with no `tenant` field) in each run belongs to `auth-int-test`'s
-deliberate unknown-host case.
+**The fix** is one listening server per suite, bound to `127.0.0.1` — `listening()` in
+`src/test/appServer.ts`. The kernel will not hand a `127.0.0.1:0` bind a port already in LISTEN on
+127.0.0.1, so the collision goes from rare to impossible, and the ~4,100 binds per run become 21.
+`src/test/noWildcardBinds.setup.ts` makes a wildcard ephemeral bind throw, so the default cannot be
+reintroduced quietly; `src/testServerBinding.test.ts` pins both the guard and the platform
+behaviour it defends against.
 
-So either the response never went through this Express app, or the log line was produced and lost.
-**Distinguishing those two is the next piece of evidence, and it is cheap:** point the test logger
-at a _file_ rather than stdout, so vitest's output capture cannot be the explanation, and re-run
-until it fails. Until that is done, every mechanism above it is speculation.
+Verified: full `pnpm gate` green end to end, integration **1842/1842**, with the five foreign
+listeners still up on the machine that had been failing about once a run.
 
-Second measurement worth repeating: Mongo's resident memory grew **+602 MB during the failing run
-and +1 MB during the passing one** (1353 → 1354 → 1956 MB). One pairing is not a cause — that
-mistake has already been made once in this file — but WiredTiger cache behaviour is worth sampling
-per suite next time.
-
-**Do not raise `testTimeout`/`hookTimeout` to make this go away.** A test that needs longer under
-load is evidence; a test that is allowed longer is silence. Tracked as **T3** in the risk register,
-which the accepted V1 position leans on: this suite _is_ the only gate.
+**Do not raise `testTimeout`/`hookTimeout` if something like this returns.** A test that needs
+longer under load is evidence; a test that is allowed longer is silence. And if a failing request
+has no line in the request log, believe the log: it did not arrive.
 
 ---
 
