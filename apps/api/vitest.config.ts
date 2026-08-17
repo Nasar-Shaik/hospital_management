@@ -53,6 +53,13 @@ export default defineConfig({
     fileParallelism: false,
 
     /**
+     * Test servers bind loopback, not the wildcard — see the file for the outage
+     * this prevents. Here for the same reason `fileParallelism` is here: it must
+     * hold for every way of running these tests, not only the scripted one.
+     */
+    setupFiles: ["./src/test/noWildcardBinds.setup.ts"],
+
+    /**
      * ── WHY 20s AND NOT VITEST'S 5s ──────────────────────────────────────────
      * These suites talk to a REAL Mongo in Docker. A single login is ~8 sequential
      * round trips (user, credential, attempt, clear-failures, record-login, audit,

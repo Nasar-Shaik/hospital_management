@@ -25,7 +25,8 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
+import { listening } from "./test/appServer.js";
+import type { Server } from "node:http";
 import { createLogger } from "@medicore/logger";
 import {
   ApiClient,
@@ -61,7 +62,7 @@ const OTHER = "test-mobile-other";
 const PASSWORD = "V4lid!Password#2026";
 const BASE = "http://api.local";
 
-const app = createApp(createLogger({ service: "mobile-contract-test" }));
+const app = await listening(createApp(createLogger({ service: "mobile-contract-test" })));
 
 /**
  * A `fetch` that answers out of the Express app.
@@ -70,7 +71,7 @@ const app = createApp(createLogger({ service: "mobile-contract-test" }));
  * shape matters: in, a `Request`-ish URL and init; out, a real `Response` whose `headers.get()`,
  * `json()` and `blob()` all behave. Anything less would test a fetch we do not ship against.
  */
-function fetchViaApp(target: Express): typeof fetch {
+function fetchViaApp(target: Server): typeof fetch {
   return (async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(String(input));
     const method = (init.method ?? "GET").toLowerCase();

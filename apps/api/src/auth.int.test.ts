@@ -17,6 +17,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { TOTP, Secret } from "otpauth";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -52,7 +53,7 @@ const ADMIN_EMAIL = "admin@apollo.test";
 const ADMIN_PASSWORD = "Str0ng!Admin#Pass1";
 const GOOD_PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "auth-int-test" }));
+const app = await listening(createApp(createLogger({ service: "auth-int-test" })));
 
 interface Tenant {
   id: string;

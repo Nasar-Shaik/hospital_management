@@ -44,6 +44,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { DEFAULT_ROLES, PERMISSIONS, ALL_PERMISSION_CODES } from "@medicore/permissions";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -76,7 +77,8 @@ const HOST_B = `${SLUG_B}.medicore.test`;
 
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "rbac-int-test" }));
+const expressApp = createApp(createLogger({ service: "rbac-int-test" }));
+const app = await listening(expressApp);
 
 interface Tenant {
   id: string;
@@ -1414,7 +1416,7 @@ afterAll(async () => {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("route coverage (the unprotected-route problem)", () => {
-  const routes = routeInventory(app).filter((r) => r.path.startsWith("/api/v1"));
+  const routes = routeInventory(expressApp).filter((r) => r.path.startsWith("/api/v1"));
   const key = (r: { method: string; path: string }): string => `${r.method} ${r.path}`;
 
   it("finds the tenant API surface (guards against the inventory silently returning nothing)", () => {
@@ -1476,7 +1478,9 @@ describe("route coverage (the unprotected-route problem)", () => {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("the matrix: role × route", () => {
-  const routes = routeInventory(app).filter((r) => r.path.startsWith("/api/v1") && r.permission);
+  const routes = routeInventory(expressApp).filter(
+    (r) => r.path.startsWith("/api/v1") && r.permission,
+  );
 
   for (const role of ROLES_UNDER_TEST) {
     const held = permissionsOf(role);

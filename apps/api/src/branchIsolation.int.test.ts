@@ -31,6 +31,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { Types, type Connection } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -73,7 +74,7 @@ const NEWCO_DB = "hms_test-branchiso-newco";
 const HOST = `${SLUG}.medicore.test`;
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "branch-iso-int-test" }));
+const app = await listening(createApp(createLogger({ service: "branch-iso-int-test" })));
 
 interface Tenant {
   id: string;

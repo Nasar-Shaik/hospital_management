@@ -18,6 +18,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -46,7 +47,7 @@ const GOV = "test-rx-gov";
 const CLINIC = "test-rx-clinic";
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "rx-int-test" }));
+const app = await listening(createApp(createLogger({ service: "rx-int-test" })));
 
 interface Hospital {
   id: string;

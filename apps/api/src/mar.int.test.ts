@@ -26,6 +26,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 /** Only for the fan-out probe below — `mongoose.set("debug")` counts collection operations. */
 import mongoose from "mongoose";
 import { createLogger } from "@medicore/logger";
@@ -65,7 +66,7 @@ const WARD_ZONE = "America/New_York";
 const TENANT_DB = `hms_${SLUG}`;
 const RIVAL_DB = `hms_${RIVAL_SLUG}`;
 
-const app = createApp(createLogger({ service: "mar-int-test" }));
+const app = await listening(createApp(createLogger({ service: "mar-int-test" })));
 
 let tenantId = "";
 let host = "";

@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 import express, { Router } from "express";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { deprecate, DEPRECATION_DOC_URL, MIN_SUNSET_WINDOW_DAYS } from "./middleware/deprecate.js";
 import { buildOpenApiSpec } from "./core/http/openapi.js";
@@ -42,7 +43,9 @@ function appWithDeprecatedRoute() {
 
 describe("a deprecated operation tells the caller, in the response", () => {
   it("sends Deprecation, Sunset and the Link relations", async () => {
-    const res = await request(appWithDeprecatedRoute()).get("/api/v1/legacy-example").expect(200);
+    const res = await request(await listening(appWithDeprecatedRoute()))
+      .get("/api/v1/legacy-example")
+      .expect(200);
 
     /**
      * RFC 9745: `Deprecation` is a structured-field Item — an integer with an `@` sigil, in
@@ -75,7 +78,9 @@ describe("a deprecated operation tells the caller, in the response", () => {
     );
     app.use(router);
 
-    const res = await request(app).get("/api/v1/paged-legacy").expect(200);
+    const res = await request(await listening(app))
+      .get("/api/v1/paged-legacy")
+      .expect(200);
     // Both relations survive. Assigning would have deleted pagination from a list endpoint —
     // silently, and only on the endpoints that were being retired.
     expect(res.headers.link).toContain('rel="next"');

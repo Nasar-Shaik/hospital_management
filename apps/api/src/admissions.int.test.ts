@@ -14,6 +14,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { Types } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -42,7 +43,7 @@ const PVT = "test-adm-pvt";
 const GOV = "test-adm-gov";
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "adm-int-test" }));
+const app = await listening(createApp(createLogger({ service: "adm-int-test" })));
 
 interface Hospital {
   id: string;
