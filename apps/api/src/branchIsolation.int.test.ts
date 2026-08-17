@@ -1995,3 +1995,95 @@ describe("vitals reads stop at the branch the visit belongs to (D1)", () => {
     ).toBe(true);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 22. THE REPORT FILE IS A CLINICAL READ, AND STOPS AT THE BRANCH (§18's gap)
+ *
+ * §18 pins that resolving a patient grants no access to another branch's visits, vitals or
+ * medication record. The diagnostic REPORT — the scanned PDF that is the actual document a
+ * lab produces — was never asked the same question, and it is the one that carries the
+ * patient's name, their UHID and the result printed on hospital letterhead.
+ *
+ * `emr:read` is declared `"branch"` in the permission catalogue, and `listForPatient` honours
+ * that with `scopeFilter()`. `getBytes` — the same collection, the same module, the read that
+ * returns the bytes rather than the metadata — did not. So the LIST stopped at the branch and
+ * the FILE did not, which is the worse half to leave open.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a diagnostic report file stops at the branch that produced it", () => {
+  /** A Chennai administrator: every permission, confined to the other site. */
+  let tokenMgrB = "";
+  let hydPatient = "";
+  let hydReportId = "";
+
+  beforeAll(async () => {
+    await createUserWithRole("mgrb@branchiso.test", "TENANT_ADMIN", [branchB]);
+    tokenMgrB = await login("mgrb@branchiso.test");
+
+    const p = await post("/api/v1/patients", tokenMgrA, branchA)
+      .send({ name: "Report Subject", gender: "female", contact: { phone: "9000700022" } })
+      .expect(201);
+    hydPatient = p.body.data.patient.id as string;
+
+    const enc = await post("/api/v1/encounters", tokenMgrA, branchA)
+      .send({ patientId: hydPatient, departmentId: DOCTOR })
+      .expect(201);
+    const encounterId = enc.body.data.encounter.id as string;
+
+    const order = await post("/api/v1/orders", tokenMgrA, branchA)
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    const orderId = order.body.data.order.id as string;
+
+    // A real upload through the real route — the bytes are what the exploit reads back.
+    const uploaded = await post(`/api/v1/orders/${orderId}/reports`, tokenMgrA, branchA)
+      .send({
+        filename: "cbc.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 HYDERABAD RESULT").toString("base64"),
+      })
+      .expect(201);
+    hydReportId = uploaded.body.data.id as string;
+  });
+
+  /**
+   * The premise. If this failed, everything below would pass for the wrong reason.
+   *
+   * `.buffer()` because supertest only accumulates a body for the content types it knows, and
+   * `application/pdf` is not one — without it `res.body` is an empty object and the bytes that
+   * are the whole point of this group are never examined.
+   */
+  it("is readable by the site that produced it", async () => {
+    const res = await get(`/api/v1/reports/${hydReportId}/file`, tokenMgrA, branchA)
+      .buffer(true)
+      .expect(200);
+    expect(Buffer.from(res.body as Buffer).toString()).toContain("HYDERABAD RESULT");
+  });
+
+  it("does NOT appear in the other branch's report list — the metadata read was always scoped", async () => {
+    const res = await get(`/api/v1/patients/${hydPatient}/reports`, tokenMgrB, branchB).expect(200);
+    expect(
+      (res.body.data as { id: string }[]).some((r) => r.id === hydReportId),
+      "a Hyderabad report was listed to a Chennai caller",
+    ).toBe(false);
+  });
+
+  /**
+   * THE EXPLOIT. The list above refuses to name the report; this asks for it by id anyway.
+   * A report id is a Mongo ObjectId — a timestamp, a machine id and a counter — so "unguessable"
+   * is not a control, and it is handed out in full to anyone who legitimately holds ONE report.
+   */
+  it("REFUSES THE BYTES to a caller working at the other site", async () => {
+    const res = await get(`/api/v1/reports/${hydReportId}/file`, tokenMgrB, branchB);
+    expect(
+      [403, 404],
+      `a Chennai administrator downloaded a Hyderabad report (status ${res.status})`,
+    ).toContain(res.status);
+  });
+
+  /** …and not merely because a branch was selected. A confined caller is confined in All mode too. */
+  it("REFUSES THE BYTES with no branch selected either", async () => {
+    const res = await get(`/api/v1/reports/${hydReportId}/file`, tokenMgrB);
+    expect([403, 404]).toContain(res.status);
+  });
+});

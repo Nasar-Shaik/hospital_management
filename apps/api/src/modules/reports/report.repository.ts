@@ -103,11 +103,28 @@ export async function listForPatient(patientId: string): Promise<ReportMeta[]> {
   return docs.map(toMeta);
 }
 
-/** The bytes for one report — the only read that touches `data`. */
+/**
+ * The bytes for one report — the only read that touches `data`.
+ *
+ * ── THE FILTER IS THE SAME ONE `listForPatient` USES, DELIBERATELY ──────────
+ * This was a bare `findById`, and it was the one clinical read in the module that answered
+ * without asking whose it was. `tenantScopePlugin` still forced `tenantId`, so no other
+ * hospital was ever reachable — but `emr:read` is declared `"branch"` in the permission
+ * catalogue, and inside one hospital the metadata list stopped at the branch while the FILE
+ * did not. The list refused to name a report the caller may not see; asking for it by id
+ * returned the PDF anyway, with the patient's name and result on it.
+ *
+ * "Unguessable id" was never the control: a report id is an ObjectId — a timestamp, a machine
+ * id and a counter — and every caller holding one legitimate report holds a valid sample.
+ *
+ * So the bytes now carry EXACTLY the scope of the metadata, which is the invariant worth
+ * stating: you can open precisely what you can list. Using the identical `scopeFilter`
+ * argument is what keeps the two from drifting apart again.
+ */
 export async function getBytes(id: string): Promise<ReportBytes | undefined> {
   if (!Types.ObjectId.isValid(id)) return undefined;
   const doc = await getReportFileModel(getTenantDb())
-    .findById(new Types.ObjectId(id))
+    .findOne({ _id: new Types.ObjectId(id), ...scopeFilter("uploadedBy") })
     .lean<ReportFileDoc>();
   if (!doc) return undefined;
   return { filename: doc.filename, contentType: doc.contentType, data: toBuffer(doc.data) };
