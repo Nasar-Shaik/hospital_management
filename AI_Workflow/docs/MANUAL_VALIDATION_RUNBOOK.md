@@ -753,14 +753,17 @@ meaningless until you know whether the commit landed. Use the MAR-03 query.
 
 **Know this before you report anything**, or you will file a bug against a design decision.
 
-| Data                                   | Scope                                   | Why                                                          |
-| -------------------------------------- | --------------------------------------- | ------------------------------------------------------------ |
-| Encounters, admissions, ward lists     | **Branch**                              | A stay happens at a site                                     |
-| Medication schedule, administrations   | **Branch**                              | A dose is given at a site                                    |
-| Nursing notes                          | **Branch**                              | "                                                            |
-| Patient identity lookup (`namesByIds`) | **Hospital-wide, deliberate**           | A name is not site-specific; used to render identity         |
-| **Allergies**                          | **Hospital-wide, deliberate**           | _"An allergy does not stop at a site boundary."_ Documented. |
-| **Vitals**                             | **Should be branch. Currently is not.** | → **BR-05 / risk register D1**                               |
+| Data                                   | Scope                                     | Why                                                                        |
+| -------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------- |
+| Encounters, admissions, ward lists     | **Branch**                                | A stay happens at a site                                                   |
+| Medication schedule, administrations   | **Branch**                                | A dose is given at a site                                                  |
+| Nursing notes                          | **Branch**                                | "                                                                          |
+| Patient identity lookup (`namesByIds`) | **Hospital-wide, deliberate**             | A name is not site-specific; used to render identity                       |
+| **Allergies**                          | **Hospital-wide, deliberate**             | _"An allergy does not stop at a site boundary."_ Documented.               |
+| **Vitals**                             | **Branch** — fixed 2026-08-16 (`bdc027f`) | Was the D1 exposure. BR-05 is now a REGRESSION check.                      |
+| **Report files (the PDF itself)**      | **Branch** — fixed 2026-08-17 (`c02dd09`) | Was the D10 exposure. → **BR-10**                                          |
+| **Appointment transitions**            | **Branch** — fixed 2026-08-17 (`4732dd8`) | Was the D9 cross-branch WRITE. → **BR-11**                                 |
+| **Wallet balance and receipts**        | **Hospital-wide, deliberate**             | One advance purse per patient; an advance moves between sites. → **BR-12** |
 
 ### BR-01 · A → B, clinical surfaces
 
@@ -793,18 +796,17 @@ meaningless until you know whether the commit landed. Use the MAR-03 query.
 | **Expected** | Both refused, `404 HMS-GEN-404`.                                                                                                                |
 | **Status**   | Already verified at the API on 2026-08-14. **Re-confirm through the UI** — this row is about whether the client can be talked into it.          |
 
-### BR-05 · 🔶 Cross-branch **vitals** — known open defect **D1**
+### BR-05 · Cross-branch **vitals** — **D1 is FIXED; this is now a regression check**
 
-|                                             |                                                                                                                                                                                                                                                                                                     |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Purpose**                                 | Confirm the known exposure through the UI and record its user-visible shape. **This is a validation target, not a discovery.**                                                                                                                                                                      |
-| **Precondition**                            | A branch-A stay that has vitals (record some in M3-12 first).                                                                                                                                                                                                                                       |
-| **Steps**                                   | 1. As Nurse A, switch to **branch B**. 2. Read the branch-A stay's vitals — via the chart if the UI reaches it, otherwise `GET /encounters/:id/vitals` with `X-Active-Branch` set to B. 3. On the same stay, also request medication-schedule, medication-administrations and notes.                |
-| **Expected — what is actually there today** | **Vitals return `HTTP 200` with rows.** Schedule, administrations and notes correctly return **0 rows**. Chart and patient correctly `404`. All **writes** correctly refused.                                                                                                                       |
-| **Evidence**                                | The 200 with row count; the contrasting 0-row responses; whether the **UI** surfaces it or only the API does.                                                                                                                                                                                       |
-| **Classification**                          | **KNOWN DEFECT — risk register D1.** Do not re-report as new. **Do record whether it is reachable through the UI**, which is not yet known and materially changes the exposure.                                                                                                                     |
-| **Cause**                                   | `vitals.repository.ts` makes **zero** `scopeFilter()` calls (`mar.repository.ts` has 5, `encounter.repository.ts` 7) although the collection carries `branchId`. Because the filter is _absent_ rather than merely un-narrowed, a **branch-confined** user is affected too.                         |
-| **Severity**                                | Currently **P2**. Read-only; no writes; lists are scoped so there is no enumeration; single-branch hospitals unaffected. Against that: it is cross-branch PHI, the exact class multi-branch Phase 0 existed to eliminate. **Severity remains a product/security decision. Do not resolve it here.** |
+|                         |                                                                                                                                                                                                                                                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Purpose**             | D1 was FIXED on 2026-08-16 (`bdc027f`). This row no longer confirms an exposure — it confirms the fix holds on a real device, and that the fix did not hide un-stamped historical readings. **Expect refusal, not rows.**                                                                            |
+| **Precondition**        | A branch-A stay that has vitals (record some in M3-12 first).                                                                                                                                                                                                                                        |
+| **Steps**               | 1. As Nurse A, switch to **branch B**. 2. Read the branch-A stay's vitals — via the chart if the UI reaches it, otherwise `GET /encounters/:id/vitals` with `X-Active-Branch` set to B. 3. On the same stay, also request medication-schedule, medication-administrations and notes.                 |
+| **Expected (post-fix)** | Vitals now refuse the foreign visit like everything else — `403`/`404`, **not** 200-with-rows. Schedule, administrations and notes still return **0 rows**; chart and patient still `404`; all **writes** still refused. A **200 with rows is a REGRESSION** and is a P1 report, not a known defect. |
+| **Evidence**            | The 200 with row count; the contrasting 0-row responses; whether the **UI** surfaces it or only the API does.                                                                                                                                                                                        |
+| **Also check**          | On the patient TREND view, a reading taken at the other site must still appear — that read is hospital-wide on purpose (`forPatientAcrossBranches`). Losing it is the D1 fix over-applied, and is its own defect.                                                                                    |
+| **Classification**      | Any failure here is a **new P1 regression**, not risk-register D1. D1 is closed.                                                                                                                                                                                                                     |
 
 ### BR-06 · Branch deactivated underneath you
 
@@ -815,12 +817,12 @@ meaningless until you know whether the commit landed. Use the MAR-03 query.
 
 ### BR-07 · Branch-confined user — **BLOCKED**
 
-|                    |                                                                                                                                                                                                           |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Purpose**        | D1's blast radius. A user _bound_ to one branch, rather than a hospital-wide user with an active-branch header.                                                                                           |
-| **Status**         | **BLOCKED** — no branch-confined account exists. `assignRole(userId, roleId, branchIds)` sets `branchScope = "branches"` when `branchIds` is non-empty; both seeded nurses have it empty (hospital-wide). |
-| **To unblock**     | Create a third synthetic nurse bound to branch B only, via the roles UI as tenant admin. **No code change needed.**                                                                                       |
-| **Why it matters** | The claim that a confined user is also affected by D1 is **inferred from the code path and has not been proven empirically.** Proving it moves D1's severity conversation onto evidence.                  |
+|                    |                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Purpose**        | D1's blast radius. A user _bound_ to one branch, rather than a hospital-wide user with an active-branch header.                                                                                                                                                                                                                                                                                |
+| **Status**         | **BLOCKED** — no branch-confined account exists. `assignRole(userId, roleId, branchIds)` sets `branchScope = "branches"` when `branchIds` is non-empty; both seeded nurses have it empty (hospital-wide).                                                                                                                                                                                      |
+| **To unblock**     | Create a third synthetic nurse bound to branch B only, via the roles UI as tenant admin. **No code change needed.**                                                                                                                                                                                                                                                                            |
+| **Why it matters** | Raised sharply by the 2026-08-17 audit. D1 is closed, but that audit found **three more** branch-scope defects (D9, D10, D11) in code that had passed review, and every one lived on a path no test walked with two branches configured. The confined user is the case with the least coverage in the entire product. Unblocking this is now the highest-value single account in the campaign. |
 
 ### BR-08 · Stale UI across a switch
 
@@ -837,6 +839,45 @@ meaningless until you know whether the commit landed. Use the MAR-03 query.
 | **Steps**            | API-level. Send garbage, a valid-but-not-a-branch ObjectId, and another tenant's branch id.                                                      |
 | **Expected — today** | All return `200` with `total=45` (**all** sites) instead of 42 (branch A). The header is silently ignored.                                       |
 | **Classification**   | **KNOWN DEFECT — D4, P3.** It **cannot exceed the caller's binding**, so it is a correctness issue, not an escalation. Record; do not re-report. |
+
+### BR-10 · 🔴 Cross-branch **report file** — regression check for **D10**
+
+Highest-value row in this section. D10 was a cross-branch PHI disclosure of the actual clinical
+document, and the LIST was already scoped — so the UI never offered the link and the defect was
+invisible to anyone clicking around. It has to be probed directly.
+
+|                  |                                                                                                                                                                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Precondition** | A lab or radiology order at branch **A** with a report uploaded against it (M6/web lab flow, or the order worklist). Note the report id from `GET /patients/:id/reports` **as an A user**.                                 |
+| **Steps**        | 1. As a **branch-B** user holding `emr:read`, call `GET /api/v1/patients/:patientId/reports` — the id must **not** appear. 2. Then request `GET /api/v1/reports/:id/file` for the id you noted, with `X-Active-Branch: B`. |
+| **Expected**     | Step 1 omits it. Step 2 refuses — `404 HMS-GEN-404`. **A `200` returning PDF bytes is a P1 regression.**                                                                                                                   |
+| **Evidence**     | Both responses. For step 2 record the status and the first bytes (`%PDF` means it served the file).                                                                                                                        |
+| **Also check**   | The A user can still open it. A refusal in **both** directions is the fix over-applied and is its own defect.                                                                                                              |
+| **Why by hand**  | The automated test proves the API. This row proves that no client — a stale tab, a bookmarked link, a shared URL, a mobile deep link — can still reach the bytes.                                                          |
+
+### BR-11 · 🔴 Cross-branch **appointment write** — regression check for **D9**
+
+The only confirmed **write** across a branch boundary. A read leaking is bad; this changed another
+site's clinic list.
+
+|                  |                                                                                                                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Precondition** | An appointment booked at branch **A**, in `requested` or `confirmed`. Note its id.                                                                                                                   |
+| **Steps**        | As a **branch-B** clerk holding `appointment:cancel` / `appointment:update`, POST each of `/cancel`, `/no-show`, `/check-in` against the branch-A appointment id, with `X-Active-Branch: B`.         |
+| **Expected**     | All three refuse — `404 HMS-GEN-404`. **Then re-read the appointment as an A user: it must still be in the state it started in.**                                                                    |
+| **Trap**         | Before the fix, the FIRST call succeeded (200, `cancelled`) and the next two returned **422** — refused by the state machine for being already cancelled. Do not read a 422 as the boundary working. |
+| **Evidence**     | All three statuses **and** the appointment's state afterwards, read as an A user. The second half is what actually proves it.                                                                        |
+
+### BR-12 · Wallet advance is hospital-wide — a **negative** check
+
+Not every cross-branch read is a leak, and this row exists so nobody "fixes" one that is not. A
+patient has ONE advance balance for the hospital; an advance taken at A is spendable at B.
+
+|                    |                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Steps**          | Take an advance at branch **A**. As a **branch-B** cashier, open the patient's wallet, then reprint the receipt via `GET /api/v1/wallet/entries/:id`.             |
+| **Expected**       | Balance and statement show the A deposit; the receipt reprints, `200`. **A refusal here is a defect**, not a security improvement.                                |
+| **Why it is here** | During the 2026-08-17 audit this read was "fixed" to be branch-scoped and then reverted. The statement showing a line whose receipt will not open is the failure. |
 
 ---
 
@@ -1131,6 +1172,11 @@ not a side effect of this runbook._
 
 ### 19.2 Known items — record, cite, do not fix, do not re-report
 
+> **Updated 2026-08-17 after the security audit.** D9, D10 and D11 are new. D9 is the first **P1**
+> on this list and the first cross-branch WRITE — read BR-11's "Trap" row before running it, because
+> the failure mode returns a 422 that looks like the boundary working. D10 cannot be found by
+> clicking: its list was already scoped, so the UI never offered the link.
+>
 > **Updated 2026-08-16 after a defect-resolution pass.** Four of these are now FIXED, and their
 > rows below became **regression checks**: they used to say "expect this to be wrong", and they now
 > say "this must be right". Read the Action column before running BR-05, BR-09, TZ-08 or TZ-09 —
@@ -1140,6 +1186,9 @@ not a side effect of this runbook._
 | Ref                 | Item                                                                                        | Sev | Where it shows up      | Action                                                                                                                                                                                                                          |
 | ------------------- | ------------------------------------------------------------------------------------------- | --- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ~~D1~~              | Cross-branch **vitals** PHI read                                                            | P2  | **BR-05**              | ✅ **FIXED 2026-08-16** (`bdc027f`). BR-05 is now a REGRESSION check — the foreign visit must 404 and the patient trend must still cross sites. **BR-07 is no longer blocked**: the branch-confined case is proven by test.     |
+| ~~D9~~              | Appointment state machine ignored branch scope — cross-branch **WRITE**                     | P1  | **BR-11**              | ✅ **FIXED 2026-08-17** (`4732dd8`). The only confirmed cross-branch WRITE. BR-11 is a regression check, and its second half — re-reading the appointment's state as an A user — is what actually proves it.                    |
+| ~~D10~~             | Report **file** download ignored branch scope — cross-branch PHI                            | P2  | **BR-10**              | ✅ **FIXED 2026-08-17** (`c02dd09`). D1's sibling. The list was already scoped, so the UI never offered the link — **this one must be probed directly, not clicked toward.**                                                    |
+| **D11**             | An un-stamped legacy report is absent from the branch-scoped list                           | P3  | **BR-10** (also check) | 🟡 **OPEN, pre-existing.** Loses no data and the download agrees with the list. The fix is the same product decision D1 raised: does an un-stamped historical row belong to every branch or to none? Answer once, for all.      |
 | ~~D2 / GAP-1~~      | Reception register `?date=` in `env.DEFAULT_TIMEZONE`                                       | P2  | **TZ-08**              | ✅ **FIXED 2026-08-16** (`8330faa`). TZ-08 is now a regression check: the register's day is the BRANCH's day.                                                                                                                   |
 | ~~D3 / GAP-2~~      | Bed-day billing counts days in `env.DEFAULT_TIMEZONE`                                       | P2  | **TZ-09**              | ✅ **FIXED 2026-08-16** (`1719360`). TZ-09 is now a regression check. **Money — still worth eyes on.**                                                                                                                          |
 | **D4**              | Unknown `X-Active-Branch` silently ignored                                                  | —   | **BR-09**              | 🔵 **NOT A DEFECT.** ADR-0015 chose fail-safe-to-own-scope and tests pin it; BR-09 confirms the DESIGN. The UX wart — one site's name over aggregate data — is a product decision.                                              |
@@ -1248,8 +1297,14 @@ Stated so nobody mistakes preparation for coverage.
 1. **No result in this document is a result.** Every row is unexecuted.
 2. **The environment gate covers one tenant at one moment.** Risk register **T2** — a fleet-wide
    convergence metric — remains open and is not addressed here.
-3. **BR-07 is blocked**, so the claim that a _branch-confined_ user is also affected by risk-register
-   D1 remains **inferred from the code path and empirically unproven**.
+3. **BR-07 is blocked**, so the branch-_confined_ user — the account with the least coverage in the
+   whole product — remains **empirically unproven through a UI**. D1's confined case is now proven
+   by test, but the 2026-08-17 audit then found three MORE branch-scope defects (D9, D10, D11) on
+   paths no test walked with two branches configured. Automated coverage of this dimension has been
+   wrong three times in one day; unblocking BR-07 is the single highest-value account here.
+   **In particular, D10 could never have been found by clicking** — its list was already scoped, so
+   the UI correctly hid a document the API would still serve. A tester following screens would have
+   reported everything as working.
 4. **§18 is entirely blocked** pending operator-console preparation.
 5. **Expected results are drawn from the implementation and its comments.** Where the implementation
    is self-consistent but the _intent_ is unstated, the row says `PRODUCT DECISION REQUIRED` rather
