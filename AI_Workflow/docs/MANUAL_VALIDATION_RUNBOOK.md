@@ -1,5 +1,26 @@
 # MANUAL VALIDATION RUNBOOK — M2, M3 and Web
 
+> # ⚠️ SUPERSEDED AS A CAMPAIGN — 2026-08-18
+>
+> **The manual campaign this document describes was deliberately replaced by automated engineering
+> validation.** Nobody is expected to execute the 232 rows below.
+>
+> Every scenario was audited against the existing suites and re-homed at the lowest layer that can
+> actually prove it: security, clinical state, schema drift, concurrency, idempotency and timezone
+> logic are proven by API and integration tests; browser-dependent behaviour is proven by a
+> Playwright critical-path suite (`pnpm test:e2e`). **The audit, the layer chosen for each row, and
+> the scenarios that remain genuinely un-automatable are in [`TESTING.md`](../../TESTING.md) §11.**
+>
+> **This document is still the authority for WHAT each ID means** — its invariants, expected
+> results, error codes, fixtures and traps are what the automated tests were written from, and
+> several of them are quoted verbatim in test comments. Read it to understand a scenario. Do not
+> work through it as a checklist.
+>
+> **No row here has ever been executed by a human, and none may be marked PASS.** Automated
+> coverage is recorded as `AUTOMATED — PROVEN` / `STRENGTHENED` / `PLAYWRIGHT`, never as a manual
+> pass. Two places where this document and the implementation disagree were found while automating
+> it; both are recorded in `TESTING.md` §11 rather than silently resolved in either direction.
+
 **Status: PREPARED, NOT EXECUTED.** Every test below is written to be run later. Nothing in this
 document records a result, and no row here may be ticked from automated evidence.
 

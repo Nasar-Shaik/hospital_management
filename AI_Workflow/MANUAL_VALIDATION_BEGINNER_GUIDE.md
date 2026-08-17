@@ -1,5 +1,19 @@
 # MediCore HMS — Beginner Manual Validation Guide
 
+> # ⚠️ SUPERSEDED — 2026-08-18
+>
+> **You are not expected to execute this campaign.** The day after this guide was written, the
+> validation strategy changed: the manual rows were converted into automated engineering
+> validation instead. See [`TESTING.md`](../TESTING.md) §11 for the audit and what now proves what.
+>
+> **The guide is kept, and is still worth reading**, for two reasons. Its explanations of tenant,
+> branch, hospital-wide versus branch-confined, and why a `404` is often the correct answer are the
+> shortest introduction to this system's security model that exists. And if a human ever does need
+> to reproduce a scenario by hand — to confirm an automated finding, or to look at something no
+> test can see — the procedures here are accurate and were checked against the implementation.
+>
+> **What has changed is only the expectation.** Nothing in the tracker at §30 needs to be filled in.
+
 > **This document is a companion, not a replacement.**
 > [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md) owns the test IDs and the
 > expected results. Everything here explains **how to actually perform them** if you have never done

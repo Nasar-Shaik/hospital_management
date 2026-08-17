@@ -885,7 +885,123 @@ pnpm dev
 
 ---
 
-## 11. What you cannot test yet (updated 2026-07-16)
+## 11. Validation strategy — automated, not manual (2026-08-18)
+
+**The manual validation campaign was deliberately replaced by automated engineering validation.**
+Browser-dependent scenarios are covered by Playwright where a browser genuinely adds coverage;
+security, clinical, business and persistence scenarios are covered at the lowest layer that can
+prove them. `MANUAL_VALIDATION_RUNBOOK.md` remains the authority for **what each scenario means** —
+it is what the tests were written from — but it is no longer a checklist anybody works through.
+
+### What the audit found
+
+The runbook's 232 IDs were audited against the existing suites before a line of test code was
+written. The headline is that **the API was already far better covered than the runbook implies**:
+
+| Manual scenario                          | Invariant                                     | Existing coverage                                                                                                       | Browser needed?      | Action                                                           |
+| ---------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------- |
+| **BR-10** cross-branch report file       | The bytes stop at the branch                  | `branchIsolation.int.test.ts` §22 — real upload, list check, exploit by id, All-branches mode, and the positive control | No                   | **Strengthened** — also asserts the refusal carries no PDF bytes |
+| **BR-11** cross-branch appointment write | A foreign site cannot drive the state machine | §23 — all three transitions, the positive control, **and the re-read** the runbook's "trap" demands                     | No                   | **Keep** — already stronger than the manual row                  |
+| **BR-07** branch-confined user           | A bound user cannot exceed their binding      | §2, plus confined NURSEs in `mar` and `nursing`                                                                         | No                   | **Keep**                                                         |
+| **BR-12** wallet is hospital-wide        | A deliberate non-boundary                     | §24, pinned in that direction on purpose                                                                                | No                   | **Keep**                                                         |
+| **TEN-01** tenant isolation              | Separate databases (ADR-0005)                 | `tenancy.int.test.ts`, plus cross-tenant refusals in `mar`                                                              | No                   | **Keep**                                                         |
+| **DRIFT-01…12** schema guards            | Refuse when the rule cannot be enforced       | Five capabilities × refusal + code + `Retry-After` + **row count** + proportionality + cross-tenant + recovery          | No                   | **Keep**                                                         |
+| **JR-01…22** clinical journey            | The state machine                             | `encounters`, `admissions`, `orders`, `prescriptions`, `billing`                                                        | Partly               | **Keep** API; Playwright for the browser seams                   |
+| **WEB-01…24**                            | Mixed                                         | jsdom suites cover rendering with a mocked `fetch`                                                                      | **Yes, for several** | **Playwright**                                                   |
+| Mobile M2/M3                             | Mixed                                         | 1647 mobile tests + the client contract suite                                                                           | Device-only for some | **Keep** + documented limits                                     |
+
+**Two "gaps" in the first pass were artifacts of a keyword search, not real.** Proportionality
+(DRIFT-02), cross-tenant independence (DRIFT-08) and the DRIFT-05 database-state check all already
+existed under names the search missed — `"does not block vitals, nursing notes, or reads while
+charting is refused"`, `"refuses only the tenant whose index is missing"`, `"leaves the outpatient
+encounter untouched when it refuses"`. Duplicates written before that was noticed were **removed**:
+the existing tests are stronger, because they also cover reads and the other tenant actually
+writes. Recorded because "add a test" is the cheap answer and "the test is already there under a
+better name" is the correct one.
+
+### What was genuinely missing: the browser
+
+**Every one of the fifteen web suites runs in jsdom with `fetch` mocked.** They prove a component
+renders what it is handed; none proves the assembled application, talking to a real API over real
+cookies, hands it the right thing. That is the whole of what the manual campaign was really for,
+and it is now `e2e/`.
+
+```bash
+pnpm test:e2e        # the browser suite (starts the stack if it is not already up)
+pnpm gate            # everything else — now also typechecks e2e/
+pnpm gate:full       # both, in order. This is the release gate.
+```
+
+**Ten tests, deliberately not a mirror of the checklist.** Each one is a thing only a browser can
+see:
+
+| Spec                     | What it proves                                                                                                                   | What it would catch                                                                                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `auth.spec.ts`           | Sign-in lands in a named hospital with navigation; an unknown host blames the **address**; a wrong password keeps the email      | A permission→navigation break; a whole hospital resetting passwords over a DNS error                                        |
+| `branchSwitch.spec.ts`   | Switching sites repaints the ward, **no bed from the previous site survives**, and the choice outlives a reload                  | The original defect this design exists to prevent — a header naming one site over another site's patients                   |
+| `clinicalSafety.spec.ts` | A doctor's round renders with every dose row **inert**, a nurse's does not; every ward row is named and the chart carries a UHID | A doctor able to chart a dose from the UI (P1); web defect **D-1** returning — `Patient: —` at the moment of administration |
+| `staffDirectory.spec.ts` | The directory narrows to the active site, says which scope it counted, and shows each person's branch binding                    | The staff branch scope silently going away — nothing in the tenantScope plugin holds it up                                  |
+
+`workers: 1`, `retries: 0`, no `waitForTimeout` anywhere, and site names are **discovered from the
+switcher** rather than hardcoded, because `seed:validation` names the second site differently when
+it adopts an existing branch. Run three times back to back: 10/10 each time, identical duration.
+
+### Falsification — these tests were proven able to fail
+
+| Protection removed                                             | Test result                                                                                                  |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Branch scope on the single-report read (**reintroducing D10**) | 🔴 _"a Chennai administrator downloaded a Hyderabad report (status 200)"_                                    |
+| Branch scope on the appointment read (**reintroducing D9**)    | 🔴 all four, including _"leaves the Hyderabad appointment untouched"_ — the half the runbook's trap is about |
+| `BranchScope`'s subtree key                                    | 🔴 _"beds from Main Branch survived a switch to apollo golconda"_                                            |
+| The staff-directory branch exclusion                           | 🔴 2 of 4 integration tests                                                                                  |
+| The staff count reading the server total                       | 🔴 _"expected '100 people at Main Branch' to match /Showing 100 of 137/"_                                    |
+| The loopback test-server guard (T3)                            | 🔴 binds `::`                                                                                                |
+
+Production code was restored after each, and the gate re-run green.
+
+### Two places the runbook and the implementation disagree
+
+Found while automating, and **recorded rather than resolved in either direction** — changing the
+product to satisfy a test, or weakening a documented expectation to satisfy the product, are both
+worse than saying so.
+
+1. **WEB-02** reads as though browsing an unknown hospital's address is enough to be told. It is
+   not: the message is mapped from the login **response**, so it appears on submit. The invariant
+   the row exists to protect — the address is blamed, not the credentials — holds, and that is what
+   the test asserts.
+2. **WEB-04** reads "Name + UHID on every row". The ward puts the **name** on the row and the
+   **UHID** on the chart the row opens. The five rights apply where a drug is given, and that
+   surface carries both. The test asserts what the product guarantees and names the difference.
+
+Neither is a defect; both are **PRODUCT DECISION** candidates if anyone wants the runbook and the
+UI brought into line.
+
+### Not automatable — stated plainly, not quietly dropped
+
+These were **never** manually executed either, so nothing is being lost. They are recorded so a
+green suite is not mistaken for coverage of them:
+
+- **Biometrics** (M2-35…M2-47) — no enrolled fingerprint or Face ID exists in CI or in a
+  simulator. The lock's _logic_ is covered by the mobile suite; the **OS prompt** is not.
+- **A real radio** — cellular handover mid-save (NET-08). A mocked failure is a decision; a lost
+  packet is an accident, and only the second one tests reconciliation honestly.
+- **App-switcher snapshots**, sunlight legibility, and layout at the largest OS text size — these
+  need eyes and a device.
+- **Two physical devices in two hands** (MAR-02). The concurrency invariant _is_ proven — two real
+  HTTP clients race the same dose in `mar.int.test.ts` — but two nurses reaching for the same
+  drug is a human scenario, not a client one.
+- **Twelve web pages** (`/mrd`, `/mortuary`, `/theatres`, `/ambulance`, `/assets`, `/insurance`,
+  `/packages`, `/tariff`, `/feedback`, `/audit`, `/subscription`, `/reports`) have no browser
+  coverage. Some are operator surfaces; the rest are simply untested by hand and by browser.
+
+**Status vocabulary.** Automated coverage is recorded as `AUTOMATED — PROVEN`,
+`AUTOMATED — STRENGTHENED`, `AUTOMATED — PLAYWRIGHT`, or
+`NOT AUTOMATABLE — DOCUMENTED LIMITATION`. **"Manual PASS" is never used**, because no human has
+executed any row.
+
+---
+
+## 12. What you cannot test yet (updated 2026-07-16)
 
 Not bugs — **not built**, each for a stated reason. The reasons are recorded in
 `AI_Workflow/PROJECT_MEMORY.md` §4 and §5. Do not demo anything in this list.
@@ -934,7 +1050,7 @@ Not bugs — **not built**, each for a stated reason. The reasons are recorded i
 
 ---
 
-## 12. Manual Verification — enhancement tracks (2026-07-16)
+## 13. Manual Verification — enhancement tracks (2026-07-16)
 
 Short, hands-on checks for the admin/clinical enhancements. Log in at `sunrise.localhost:3000`; every dev account is `123456` (the demo admin `admin@sunrise.test` is now `123456` too — a seed bug that left it on the provisioning password is fixed).
 
