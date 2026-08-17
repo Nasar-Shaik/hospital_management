@@ -99,18 +99,31 @@ export async function create(
   return toAppointment(doc);
 }
 
+/**
+ * One appointment by id, at the sites the caller may actually work in.
+ *
+ * ── WHY THERE IS NO LONGER AN UNSCOPED TWIN ─────────────────────────────────
+ * This module used to ship two reads: `findById` (bare) and `findByIdScoped`. The read paths
+ * picked the scoped one and the STATE MACHINE picked the bare one, so every transition it
+ * drives — confirm, check-in, start, complete, no-show, cancel — resolved an appointment
+ * belonging to any site in the hospital. `appointment:update` and `appointment:cancel` are
+ * both declared `"branch"`, so that contradicted the permission catalogue, and it did it on a
+ * WRITE: a clerk at one site could cancel another site's clinic list, or mark a patient
+ * sitting in a waiting room 600km away as a no-show, with the audit trail recording it as a
+ * legitimate action. Proven by the branch-isolation suite, which failed on exactly this.
+ *
+ * Two functions where one is safe and one is not is a choice nobody should have to make
+ * correctly every time, so there is now one. `scopeFilter()` returns `{}` when there is no
+ * `ctx.scope` — seeds, migrations, queue consumers — so internal callers are unaffected,
+ * exactly as `writeBranchId` treats an absent scope.
+ */
 export async function findById(
   id: string,
   session?: ClientSession,
 ): Promise<Appointment | undefined> {
   const doc = await getAppointmentModel(getTenantDb())
-    .findById(id)
+    .findOne({ _id: id, ...scopeFilter() })
     .session(session ?? null);
-  return doc ? toAppointment(doc) : undefined;
-}
-
-export async function findByIdScoped(id: string): Promise<Appointment | undefined> {
-  const doc = await getAppointmentModel(getTenantDb()).findOne({ _id: id, ...scopeFilter() });
   return doc ? toAppointment(doc) : undefined;
 }
 

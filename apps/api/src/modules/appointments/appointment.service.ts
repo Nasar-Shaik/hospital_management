@@ -446,7 +446,7 @@ export async function rescheduleAppointment(
   startAt: Date,
   reason: string,
 ): Promise<{ cancelled: repo.Appointment; booked: repo.Appointment }> {
-  const current = await repo.findByIdScoped(id);
+  const current = await repo.findById(id);
   if (!current) throw new AppError("HMS-GEN-404", 404, "Appointment not found", { id });
 
   if (!canTransition(current.status, "rescheduled")) {
@@ -477,7 +477,7 @@ export async function rescheduleAppointment(
 }
 
 export async function getAppointment(id: string): Promise<repo.Appointment> {
-  const appointment = await repo.findByIdScoped(id);
+  const appointment = await repo.findById(id);
   if (!appointment) throw new AppError("HMS-GEN-404", 404, "Appointment not found", { id });
   return appointment;
 }

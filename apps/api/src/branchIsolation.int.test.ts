@@ -2087,3 +2087,119 @@ describe("a diagnostic report file stops at the branch that produced it", () => 
     expect([403, 404]).toContain(res.status);
   });
 });
+/* ────────────────────────────────────────────────────────────────────────────
+ * 23. AN APPOINTMENT CHANGES STATE ONLY AT THE SITE THAT HOLDS IT
+ *
+ * `appointment:update` and `appointment:cancel` are both declared `"branch"` in the permission
+ * catalogue, and the repository ships TWO reads — `findById` and `findByIdScoped`. The state
+ * machine used the unscoped one, so every transition it drives (confirm, check-in, start,
+ * complete, no-show, cancel) resolved an appointment belonging to any site in the hospital.
+ *
+ * A read leaking is bad; this is a WRITE. A clerk at one site could cancel another site's
+ * clinic list, or mark a patient who is sitting in a waiting room 600km away as a no-show —
+ * and the audit trail would record it as a legitimate action by a legitimate user.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("an appointment changes state only at the site that holds it", () => {
+  /**
+   * Its own doctor and its own clinics. The group above books against `DOCTOR`, whose schedule
+   * is created inside an `it` — so running this file with `-t` skipped the setup and the booking
+   * 400'd. A group that only passes when the whole file runs is not a regression test.
+   */
+  const APPT_DOCTOR = "aaaaaaaaaaaaaaaaaaaaaa02";
+  let hydAppointment = "";
+  /** Read from the response rather than assumed — a booking starts `requested`, not `booked`. */
+  let hydStatusAtBooking = "";
+  let chnPatient = "";
+
+  beforeAll(async () => {
+    // Hyderabad mornings, Chennai afternoons — the same shape section 8 uses.
+    await put("/api/v1/doctors/schedule", tokenAdmin, branchA)
+      .send({
+        doctorId: APPT_DOCTOR,
+        weekday: 1,
+        startMinute: 600,
+        endMinute: 720,
+        slotMinutes: 15,
+      })
+      .expect(201);
+    await put("/api/v1/doctors/schedule", tokenAdmin, branchB)
+      .send({
+        doctorId: APPT_DOCTOR,
+        weekday: 1,
+        startMinute: 840,
+        endMinute: 1020,
+        slotMinutes: 15,
+      })
+      .expect(201);
+
+    const p = await post("/api/v1/patients", tokenRecepA, branchA)
+      .send({ name: "Appointment Subject", gender: "male", contact: { phone: "9000700033" } })
+      .expect(201);
+
+    // Booked at Hyderabad, in Hyderabad's own morning session.
+    const appt = await post("/api/v1/appointments", tokenRecepA, branchA)
+      .send({
+        patientId: p.body.data.patient.id as string,
+        doctorId: APPT_DOCTOR,
+        startAt: slotAt(nextMonday(), 630),
+      })
+      .expect(201);
+    hydAppointment = appt.body.data.id as string;
+    hydStatusAtBooking = appt.body.data.status as string;
+    expect(appt.body.data.branchId).toBe(branchA);
+
+    const cp = await post("/api/v1/patients", tokenRecepB, branchB)
+      .send({ name: "Chennai Booker", gender: "female", contact: { phone: "9000700034" } })
+      .expect(201);
+    chnPatient = cp.body.data.patient.id as string;
+  });
+
+  /** The premise: the Chennai clerk is a working clerk, not one who is refused everything. */
+  it("lets the Chennai clerk work on her OWN site's appointments", async () => {
+    const mine = await post("/api/v1/appointments", tokenRecepB, branchB)
+      .send({ patientId: chnPatient, doctorId: APPT_DOCTOR, startAt: slotAt(nextMonday(), 900) })
+      .expect(201);
+    await post(`/api/v1/appointments/${mine.body.data.id as string}/confirm`, tokenRecepB, branchB)
+      .send({})
+      .expect(200);
+  });
+
+  it("REFUSES A FOREIGN APPOINTMENT to the cancel route", async () => {
+    const res = await post(
+      `/api/v1/appointments/${hydAppointment}/cancel`,
+      tokenRecepB,
+      branchB,
+    ).send({ reason: "cancelled from the wrong city" });
+    expect(
+      [403, 404],
+      `a Chennai clerk cancelled a Hyderabad appointment (status ${res.status})`,
+    ).toContain(res.status);
+  });
+
+  it("REFUSES A FOREIGN APPOINTMENT to the no-show route", async () => {
+    const res = await post(
+      `/api/v1/appointments/${hydAppointment}/no-show`,
+      tokenRecepB,
+      branchB,
+    ).send({ reason: "not here — 600km away" });
+    expect([403, 404]).toContain(res.status);
+  });
+
+  it("REFUSES A FOREIGN APPOINTMENT to the check-in route", async () => {
+    const res = await post(
+      `/api/v1/appointments/${hydAppointment}/check-in`,
+      tokenRecepB,
+      branchB,
+    ).send({});
+    expect([403, 404]).toContain(res.status);
+  });
+
+  /** And the appointment is still standing afterwards — the refusals refused, they did not half-apply. */
+  it("leaves the Hyderabad appointment untouched", async () => {
+    const res = await get(`/api/v1/appointments/${hydAppointment}`, tokenRecepA, branchA).expect(
+      200,
+    );
+    expect(res.body.data.status).toBe(hydStatusAtBooking);
+  });
+});
