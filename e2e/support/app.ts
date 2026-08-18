@@ -18,6 +18,12 @@ export const ACCOUNTS = {
   receptionist: "reception@sunrise.test",
   /** The bench. Holds `order:read` + `order:perform`, and deliberately NOT `order:verify`. */
   labtech: "labtech@sunrise.test",
+  /**
+   * The imaging console. Unlike the lab bench it DOES hold `order:verify` and `order:release`,
+   * because a hospital with no consultant radiologist still has to get the report to the doctor.
+   * It does NOT hold `emr:read` — see `AI_Workflow/docs/RADIOLOGY.md`.
+   */
+  radiographer: "radiographer@sunrise.test",
 } as const;
 
 /**

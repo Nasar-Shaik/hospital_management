@@ -1049,3 +1049,153 @@ describe("a cashier can find, bill and collect for care nobody has billed yet", 
     );
   });
 });
+
+/**
+ * ── SETTLING AN ADMITTED PATIENT'S TEST FROM AN ADVANCE THAT CANNOT COVER IT ──
+ *
+ * WHAT DEFECT WOULD THIS CATCH? The one that was live when this was written.
+ *
+ * `debitForInvoice` takes `allowNegative` for one documented reason: "so an inpatient's test is
+ * never held for want of advance (the shortfall is collected later)". That path could not
+ * succeed. The account went negative — its `min: 0` does not run on the `$inc` that moves it —
+ * and then the LEDGER refused to record the balance the account had just reached, because
+ * `walletEntries.balanceAfter` carried `min: 0`. Mongoose threw a ValidationError from inside the
+ * transaction, it escaped as an unhandled **HMS-GEN-500**, and the whole settlement rolled back.
+ *
+ * So the button the lab and imaging worklists both offer — "Proceed — deduct ₹x" — crashed for
+ * every admitted patient whose advance was short, which includes every admitted patient whose
+ * advance is zero. It had no behavioural test: `settle-from-advance` was covered by an RBAC probe
+ * and nothing else, and a probe asserts who is refused, never that the thing works.
+ *
+ * Found by the radiology browser spec, which is the first test in this repository ever to press
+ * that button. It is a BILLING defect and it was never radiology's — imaging only walked the path
+ * first.
+ */
+describe("an admitted patient's test settles even when the advance is short", () => {
+  let encounterId = "";
+  let patientId = "";
+  let episodeId = "";
+  let orderId = "";
+
+  const oid = (): string =>
+    [...Array<number>(24)].map(() => Math.floor(Math.random() * 16).toString(16)).join("");
+
+  beforeAll(async () => {
+    const arrived = await arrive(pvt, "Advance Short", "9000009901");
+    encounterId = arrived.encounterId;
+    patientId = arrived.patientId;
+    episodeId = arrived.event.payload.episodeId as string;
+
+    /**
+     * ADMITTED. The whole path is inpatient-only by design — an outpatient with no advance is
+     * asked to pay at the counter, and `settleOrderFromAdvance` refuses them with a 422 saying
+     * exactly that. The bed is free text: no bed inventory is needed to be an inpatient.
+     *
+     * Admission opens a NEW encounter (ADR-0013 §4: same episode, different visit), so the charge
+     * below hangs off the IP one. Raising it against the OP encounter would have produced a charge
+     * on a visit whose class is `OP`, and the settlement would have refused it — correctly, and
+     * for a reason that has nothing to do with what this block is testing.
+     */
+    // The visit has to be UNDER WAY: `admit` moves a live consultation onto a ward, and an
+    // encounter still sitting at `arrived` has not begun.
+    await auth(request(app).post(`/api/v1/encounters/${encounterId}/start`), pvt).expect(200);
+
+    const admitted = await auth(request(app).post(`/api/v1/encounters/${encounterId}/admit`), pvt)
+      .send({ ward: "General Ward", bedCode: "GW-11", tariffCode: "BED_GEN" })
+      .expect(201);
+    encounterId = admitted.body.data.inpatient.id as string;
+
+    // A charge, raised the way the relay raises one when a doctor's order commits.
+    orderId = oid();
+    await asRelay(pvt, () =>
+      dispatchEventInline({
+        eventId: `evt-adv-${orderId}`,
+        name: "order.order.placed",
+        version: 1,
+        tenantId: pvt.id,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          orderId,
+          encounterId,
+          patientId,
+          episodeId,
+          code: "XRAY_CHEST_PA",
+          name: "X-ray Chest PA View",
+          category: "radiology",
+        },
+      }),
+    );
+  }, 60_000);
+
+  /** The premise: a real, unpaid, priced charge. Without it the settlement below settles nothing. */
+  it("has something to settle, and the patient has nothing to settle it with", async () => {
+    const state = await auth(
+      request(app).get(`/api/v1/billing/order-payments?orderIds=${orderId}`),
+      pvt,
+    ).expect(200);
+    expect(["unpaid", "unbilled"]).toContain((state.body.data as Record<string, string>)[orderId]);
+
+    const wallet = await auth(request(app).get(`/api/v1/patients/${patientId}/wallet`), pvt).expect(
+      200,
+    );
+    expect(wallet.body.data.balance).toBe(0);
+  });
+
+  it("settles it, and says how far into the red it went", async () => {
+    const settled = await auth(
+      request(app).post(`/api/v1/billing/orders/${orderId}/settle-from-advance`),
+      pvt,
+    ).expect(200);
+
+    // The X-ray is ₹450. An empty advance therefore ends at −₹450, which is a debt, not an error.
+    expect(settled.body.data.advanceBalance).toBeLessThan(0);
+    expect(settled.body.data.orderId).toBe(orderId);
+  });
+
+  /**
+   * ── THE TWO COLLECTIONS AGREE ───────────────────────────────────────────────
+   * `wallet.model.ts` opens by saying the account and the ledger move together, in one
+   * transaction. The defect broke exactly that: the account reached a balance the ledger was
+   * forbidden to write down. Asserting the number in BOTH places is what makes this a test of the
+   * invariant rather than of the endpoint's status code.
+   */
+  it("records the negative balance in the ledger as well as the account", async () => {
+    const wallet = await auth(request(app).get(`/api/v1/patients/${patientId}/wallet`), pvt).expect(
+      200,
+    );
+    expect(wallet.body.data.balance).toBeLessThan(0);
+
+    const debit = (wallet.body.data.entries as { type: string; balanceAfter: number }[]).find(
+      (e) => e.type === "debit",
+    );
+    expect(
+      debit,
+      "the wallet was debited with no ledger row — the money left no trace",
+    ).toBeTruthy();
+    expect(debit!.balanceAfter).toBe(wallet.body.data.balance);
+  });
+
+  /** And the test is paid for, which is the point of the button. */
+  it("leaves the study paid, so the worklist stops holding it", async () => {
+    const state = await auth(
+      request(app).get(`/api/v1/billing/order-payments?orderIds=${orderId}`),
+      pvt,
+    ).expect(200);
+    expect((state.body.data as Record<string, string>)[orderId]).toBe("paid");
+  });
+
+  /** Pressing it twice must not debit twice — the settlement is keyed on the invoice. */
+  it("is safe to press twice", async () => {
+    const before = await auth(request(app).get(`/api/v1/patients/${patientId}/wallet`), pvt).expect(
+      200,
+    );
+    await auth(
+      request(app).post(`/api/v1/billing/orders/${orderId}/settle-from-advance`),
+      pvt,
+    ).expect(200);
+    const after = await auth(request(app).get(`/api/v1/patients/${patientId}/wallet`), pvt).expect(
+      200,
+    );
+    expect(after.body.data.balance).toBe(before.body.data.balance);
+  });
+});

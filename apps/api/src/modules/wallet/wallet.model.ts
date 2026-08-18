@@ -34,7 +34,14 @@ export interface WalletAccountDoc {
   _id: Types.ObjectId;
   tenantId: string;
   patientId: Types.ObjectId;
-  /** Paise. Never negative — a conditional update is what keeps it so. */
+  /**
+   * Paise. Non-negative on every path a patient SPENDS on, and a conditional update is what keeps
+   * it so — never the `min` below, which does not run on the `$inc` that moves this field.
+   *
+   * The one exception is deliberate: an admitted patient's bill may be drawn against an advance
+   * that cannot cover it (`debitAllowNegative`), leaving a debt settled at discharge rather than a
+   * test held at the bench.
+   */
   balance: number;
   createdAt: Date;
   updatedAt: Date;
@@ -106,7 +113,24 @@ const walletEntrySchema = new Schema<WalletEntryDoc>(
 
     type: { type: String, enum: WALLET_ENTRY_TYPES, required: true },
     amount: { type: Number, required: true, min: 1 },
-    balanceAfter: { type: Number, required: true, min: 0 },
+    /**
+     * ── DELIBERATELY UNBOUNDED BELOW ────────────────────────────────────────
+     * This carried `min: 0` and it made the admitted-patient path unreachable. `debitForInvoice`
+     * takes `allowNegative` precisely so "an inpatient's test is never held for want of advance
+     * (the shortfall is collected later)" — and that debit ends here, writing the balance it left
+     * behind. A floor of zero refused to RECORD the very state the caller had just created.
+     *
+     * The two collections then disagreed, which is the one thing this model's header says must
+     * never happen: the ACCOUNT went negative (its own `min` does not run on the `$inc` that moves
+     * it), the LEDGER threw a Mongoose ValidationError, and the whole transaction rolled back as an
+     * unhandled 500. Found by the radiology browser spec, on a path the lab worklist offers too —
+     * "Proceed — deduct" had never been clicked by a test against a patient with no advance.
+     *
+     * A negative `balanceAfter` is not a corrupt row. It is an admitted patient who owes the
+     * hospital money, which is an ordinary state settled at discharge, and refusing to write it
+     * down does not make it untrue.
+     */
+    balanceAfter: { type: Number, required: true },
 
     method: { type: String, trim: true, maxlength: 40 },
     reference: { type: String, trim: true, maxlength: 120 },
