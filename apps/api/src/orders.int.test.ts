@@ -55,6 +55,9 @@ const { createUser, transitionStatus } = await import("./modules/users/index.js"
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
+const { seedTariff } = await import("./seed/tariff.js");
+const { seedLabTests, STARTER_LAB_TEST_COUNT, STARTER_LAB_TEST_CODES } =
+  await import("./seed/labTests.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
 const { canTransition, isOutstanding } = await import("./modules/orders/index.js");
 const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
@@ -184,6 +187,14 @@ beforeAll(async () => {
   // every notification in this suite would fail with "no such template", and the
   // critical-result alert would have nowhere to go.
   await seedNotificationTemplates(t.tenant.id, SLUG, connection);
+
+  /**
+   * The laboratory's two masters, for the same reason the templates are here: `provisionTenant`
+   * (the module service) runs migrations but seeds nothing, so without these the catalogue block
+   * below would assert against an empty collection and pass for the wrong reason.
+   */
+  await seedTariff(t.tenant.id, SLUG, connection);
+  await seedLabTests(t.tenant.id, SLUG, connection);
 
   const ROLES: [key: string, roleCode: string, name: string][] = [
     ["reception", "RECEPTIONIST", "Front Desk"],
@@ -1171,5 +1182,117 @@ describe("ordering refuses when the database cannot enforce one-order-per-reques
       if (saved.length > 0) await tenantConnection.collection("orders").insertMany(saved);
       forgetSchemaReadiness();
     }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE LAB TEST CATALOGUE (D6) — the master that stops a range being retyped
+ *
+ * `labTests` shipped empty on every hospital, so `getLabTest(order.code)` found nothing and result
+ * entry fell back to a blank grid — the exact re-typing the module exists to end. These prove the
+ * starter catalogue is actually there, that it JOINS the tariff on `code` (an order carries one
+ * code that billing, the lab and the result grid must all agree on), and that re-seeding a
+ * hospital never rewrites reference ranges it has curated.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the laboratory catalogue a hospital starts with", () => {
+  it("lists the starter tests to the technician who will enter results against them", async () => {
+    const res = await as("tech", request(app).get("/api/v1/lab-tests")).expect(200);
+    const codes = (res.body.data as { code: string }[]).map((t) => t.code);
+
+    expect(codes, "the catalogue is empty — the analyte grid will be blank").toHaveLength(
+      STARTER_LAB_TEST_COUNT,
+    );
+    expect(codes).toEqual(expect.arrayContaining([...STARTER_LAB_TEST_CODES]));
+  });
+
+  /**
+   * WHAT DEFECT WOULD THIS CATCH?
+   * The catalogue and the tariff drifting apart. An order carries ONE `code`: billing prices it
+   * (`serviceItems`), the lab defines it (`labTests`), and the result grid pre-fills from it. A
+   * catalogue keyed on anything else is a second master that agrees with the first only by luck —
+   * and the symptom is a test that bills correctly and pre-fills nothing, which reads as "the
+   * catalogue is broken" rather than "the two codes differ".
+   */
+  it("uses the same codes the tariff prices, so one order means one thing to both", async () => {
+    // `/services/catalogue`, not `/services`: the rate card needs `billing:read`, which a doctor
+    // deliberately lacks — the distinction PROJECT_MEMORY records as breaking the order pad once.
+    const tariff = await as(
+      "doctor",
+      request(app).get("/api/v1/services/catalogue?category=lab"),
+    ).expect(200);
+    const priced = new Set((tariff.body.data as { code: string }[]).map((s) => s.code));
+
+    for (const code of STARTER_LAB_TEST_CODES) {
+      expect(priced.has(code), `${code} is in the lab catalogue but has no tariff entry`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("carries the analytes, their units and a printable range for each", async () => {
+    const res = await as("tech", request(app).get("/api/v1/lab-tests/CBC")).expect(200);
+    const test = res.body.data as {
+      name: string;
+      specimenType?: string;
+      analytes: { code: string; label: string; unit?: string; refText?: string }[];
+    };
+
+    expect(test.name).toBe("Complete Blood Count");
+    expect(test.specimenType, "the phlebotomy desk is told which tube to draw").toBeTruthy();
+
+    const hb = test.analytes.find((a) => a.code === "HB");
+    expect(hb?.label).toBe("Haemoglobin");
+    expect(hb?.unit).toBe("g/dL");
+    // Derived from the numeric bounds — the form a clinician reads a range in.
+    expect(hb?.refText).toBe("12–17");
+  });
+
+  /**
+   * A one-sided limit is not an interval, and rendering it as one would be wrong in the direction
+   * that matters: "0–200" invites a reading of a cholesterol of 0 as normal.
+   */
+  it("renders a one-sided limit as a limit, not as an interval starting at zero", async () => {
+    const res = await as("tech", request(app).get("/api/v1/lab-tests/LIPID")).expect(200);
+    const analytes = res.body.data.analytes as { code: string; refText?: string }[];
+
+    expect(analytes.find((a) => a.code === "CHOL")?.refText).toBe("< 200");
+    expect(analytes.find((a) => a.code === "HDL")?.refText).toBe("> 40");
+  });
+
+  /**
+   * WHAT DEFECT WOULD THIS CATCH?
+   * A deploy resetting a laboratory's own reference intervals. A lab sets its ranges against its
+   * own method and analyser; a seed that overwrote them on the next migrate would silently replace
+   * clinical configuration with our defaults, and the report that came out would be wrong in a way
+   * nobody looks for. `$setOnInsert` is the whole promise, and this is what holds it.
+   */
+  it("never overwrites a range the hospital has curated, however often it is re-seeded", async () => {
+    const before = await as("pathologist", request(app).get("/api/v1/lab-tests/GLU")).expect(200);
+    const id = before.body.data.id as string;
+
+    await as("pathologist", request(app).patch(`/api/v1/lab-tests/${id}`))
+      .send({
+        analytes: [
+          { code: "FPG", label: "Fasting Plasma Glucose", unit: "mg/dL", refLow: 74, refHigh: 106 },
+        ],
+      })
+      .expect(200);
+
+    const added = await seedLabTests(tenantId, SLUG, tenantConnection);
+    expect(added, "a re-seed inserted a test that already existed").toBe(0);
+
+    const after = await as("pathologist", request(app).get("/api/v1/lab-tests/GLU")).expect(200);
+    const fpg = (after.body.data.analytes as { code: string; refLow?: number }[]).find(
+      (a) => a.code === "FPG",
+    );
+    expect(fpg?.refLow, "the re-seed reverted the hospital's own reference range").toBe(74);
+  });
+
+  /** The catalogue is clinical config, not PHI — but it is still not public. */
+  it("is closed to a role with no part in ordering or running a test", async () => {
+    await as("nurse", request(app).post("/api/v1/lab-tests"))
+      .send({ code: "SNEAK", name: "Unauthorised Test" })
+      .expect(403);
   });
 });

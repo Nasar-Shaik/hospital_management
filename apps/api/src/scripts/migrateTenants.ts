@@ -31,6 +31,7 @@ import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedIcdCodes } from "../seed/icdCodes.js";
 import { seedFormulary } from "../seed/formulary.js";
+import { seedLabTests } from "../seed/labTests.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedMainBranch } from "../seed/mainBranch.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
@@ -116,6 +117,7 @@ interface Outcome {
   tariffAdded: number;
   formularyAdded: number;
   icdAdded: number;
+  labTestsAdded: number;
   siteSeeded: boolean;
   mainBranchBackfilled?: number;
   error?: string;
@@ -167,6 +169,10 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
   // this release, was all of them: the code master shipped empty, so Medical Records was a blank
   // page and the disease register could only report zero. Insert-only, so a curated master is safe.
   const icdAdded = await seedIcdCodes(tenant.id, tenant.slug, connection);
+  // The lab test master. Backfills every hospital provisioned before it existed — which, until
+  // this release, was all of them: `labTests` shipped empty, so the analyte grid never pre-filled
+  // and the module did nothing anywhere. Insert-only, so a curated catalogue is safe.
+  const labTestsAdded = await seedLabTests(tenant.id, tenant.slug, connection);
 
   return {
     slug: tenant.slug,
@@ -177,6 +183,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     tariffAdded,
     formularyAdded,
     icdAdded,
+    labTestsAdded,
     siteSeeded,
     mainBranchBackfilled: Object.values(mainBranch.backfilled).reduce((a, b) => a + b, 0),
   };
@@ -362,6 +369,7 @@ async function main(): Promise<void> {
         tariffAdded: 0,
         formularyAdded: 0,
         icdAdded: 0,
+        labTestsAdded: 0,
         siteSeeded: false,
         error: err instanceof Error ? err.message : String(err),
       });

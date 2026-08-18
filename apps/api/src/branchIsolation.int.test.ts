@@ -57,6 +57,7 @@ const { seedMainBranch } = await import("./seed/mainBranch.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
 const { markRetryOrFail } = await import("./core/events/outbox.js");
 const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
+const { seedLabTests } = await import("./seed/labTests.js");
 const { getEncounterModel } = await import("./modules/encounters/encounter.model.js");
 const { getAppointmentModel, getDoctorScheduleModel } =
   await import("./modules/appointments/appointment.model.js");
@@ -212,6 +213,13 @@ beforeAll(async () => {
       databaseName: tenant.databaseName,
     });
     await seedNotificationTemplates(tenant.id, tenant.slug, connection);
+    /**
+     * The starter lab catalogue — seeded here for the case that matters most in production and
+     * that a test creating its own rows cannot reach: the seed writes NO `branchId`, so a
+     * branch-filtered read matches nothing and every hospital's catalogue is invisible the moment
+     * a site is selected. See the lab-catalogue block.
+     */
+    await seedLabTests(tenant.id, tenant.slug, connection);
   }
 
   // The admin is hospital-wide: an EMPTY branchIds list with `branchScope: "all"`, which is
@@ -1797,6 +1805,104 @@ describe("a tenant-wide catalogue survives having a branch selected", () => {
       .send({ price: 4_000_000 })
       .expect(200);
     expect(res.body.data.price).toBe(4_000_000);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE LAB TEST CATALOGUE IS THE SAME SHAPE OF MASTER, AND HAD THE SAME BUG
+ *
+ * `labTests` wrote `branchId` on create and applied `scopeFilter()` on every read, while migration
+ * 0041 makes the code unique per TENANT. The two halves contradict each other: the site that did
+ * not define a CBC cannot see it, and cannot define its own either — it gets 409 "That test code
+ * already exists" for a test its own list says is not there.
+ *
+ * And in the ordinary case it is simply invisible: the web app always has a branch selected, so
+ * `scopeFilter()` returns `{ branchId: <active> }` and a catalogue SEEDED for the hospital carries
+ * no such key. Every test vanishes and result entry silently falls back to a blank grid — which is
+ * precisely the re-typing the module was built to end.
+ *
+ * These are the packages tests above, applied to the master that had not yet been checked.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the lab test catalogue is the hospital's, not a site's", () => {
+  const code = `PANEL${Date.now().toString().slice(-6)}`;
+  let testId = "";
+
+  /**
+   * THE PRODUCTION CASE. The starter catalogue is seeded for the HOSPITAL and carries no
+   * `branchId` at all — so a branch-filtered read matches nothing and every hospital opens the
+   * result grid blank. A test that only creates its own rows never sees this, because a create
+   * under the old code stamped the active branch and then found it again from the same branch.
+   */
+  it("shows the SEEDED starter tests at a site, though the seed names no site", async () => {
+    const listed = await get("/api/v1/lab-tests", tokenAdmin, branchA).expect(200);
+    const codes = (listed.body.data as { code: string }[]).map((t) => t.code);
+    expect(codes, "the seeded catalogue is invisible with a branch selected").toEqual(
+      expect.arrayContaining(["CBC", "LFT", "RFT", "GLU", "LIPID"]),
+    );
+  });
+
+  it("is listed at the branch it was defined at", async () => {
+    const created = await post("/api/v1/lab-tests", tokenAdmin, branchA)
+      .send({
+        code,
+        name: "Branch-scope panel",
+        specimenType: "Serum",
+        analytes: [{ code: "NA", label: "Sodium", unit: "mmol/L", refLow: 135, refHigh: 145 }],
+      })
+      .expect(201);
+    testId = created.body.data.id as string;
+
+    const listed = await get("/api/v1/lab-tests", tokenAdmin, branchA).expect(200);
+    expect((listed.body.data as { id: string }[]).map((t) => t.id)).toContain(testId);
+  });
+
+  /**
+   * THE ASSERTION THAT EARNS THIS BLOCK. A test defined at one site is run at both — and it must
+   * be, because the unique index means the other site cannot define its own.
+   */
+  it("is listed at the OTHER branch too", async () => {
+    const listed = await get("/api/v1/lab-tests", tokenAdmin, branchB).expect(200);
+    expect((listed.body.data as { id: string }[]).map((t) => t.id)).toContain(testId);
+  });
+
+  it("is listed with no branch selected", async () => {
+    const listed = await get("/api/v1/lab-tests", tokenAdmin).expect(200);
+    expect((listed.body.data as { id: string }[]).map((t) => t.id)).toContain(testId);
+  });
+
+  /**
+   * The lookup result entry makes. A grid that pre-fills at one site and not the other is the
+   * failure a technician reports as "the ranges are gone", on the site nobody tested on.
+   */
+  it("is found by code from the other branch, so the analyte grid pre-fills at both sites", async () => {
+    const found = await get(`/api/v1/lab-tests/${code}`, tokenAdmin, branchB).expect(200);
+    expect(found.body.data.analytes).toHaveLength(1);
+    expect(found.body.data.analytes[0].refText).toBe("135–145");
+  });
+
+  it("can be edited from a branch other than the one that defined it", async () => {
+    const res = await request(app)
+      .patch(`/api/v1/lab-tests/${testId}`)
+      .set("Host", HOST)
+      .set("Authorization", `Bearer ${tokenAdmin}`)
+      .set("X-Active-Branch", branchB)
+      .send({ name: "Branch-scope panel (revised)" })
+      .expect(200);
+    expect(res.body.data.name).toBe("Branch-scope panel (revised)");
+  });
+
+  /**
+   * The other half of the contradiction, stated as a test: the code is unique per HOSPITAL, so a
+   * second site is refused a duplicate rather than quietly given one. This is what makes the
+   * tenant-wide READ correct rather than merely convenient — if the second site could define its
+   * own CBC, a branch-scoped read would have been defensible.
+   */
+  it("refuses the same code at a second site — one hospital, one definition", async () => {
+    const res = await post("/api/v1/lab-tests", tokenAdmin, branchB)
+      .send({ code, name: "A second CBC" })
+      .expect(409);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
   });
 });
 

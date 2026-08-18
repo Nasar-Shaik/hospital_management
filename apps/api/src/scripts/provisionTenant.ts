@@ -21,6 +21,7 @@ import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
+import { seedLabTests } from "../seed/labTests.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedMainBranch } from "../seed/mainBranch.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
@@ -125,6 +126,12 @@ async function main(): Promise<void> {
   // shelf. Reference data only (zero stock) — a pharmacist receives the actual quantities.
   const formulary = await seedFormulary(result.tenant.id, result.tenant.slug, connection);
   logger.info({ formulary }, "formulary seeded");
+
+  // The laboratory's test master, keyed on the SAME codes as the lab tariff above. Without it,
+  // result entry falls back to a blank grid and the technician re-types every reference range —
+  // which is the failure the catalogue module was built to end.
+  const labTests = await seedLabTests(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ labTests }, "lab test catalogue seeded");
 
   // The hospital's own public website — a presentable landing page from the first minute, so a
   // brand-new tenant at <slug>.<domain> shows a real page rather than a bare login.
