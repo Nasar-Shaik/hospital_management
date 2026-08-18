@@ -110,7 +110,18 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
       `prescriptionId + lineIndex + scheduledFor` (migration 0049 unique index), `HMS-MAR-001`
       returns the existing row as an **answer** rather than a failure, and PRN is deliberately
       unconstrained. The ±4h slot tolerance that was a duplicate-administration escape path is gone.
-- [x] **D6 Laboratory** — catalogue (4) + order-to-result pipeline (9) with the two-person rule
+- [x] **D6 Laboratory — LIS v1 complete (2026-08-18).** Doctor orders → charge raised → cashier
+      collects → lab worklist → accept/start → result or uploaded report → pathologist verifies →
+      releases → doctor reads it. Catalogue (4 routes) **now seeded** — CBC, LFT, RFT, Glucose,
+      Lipid Profile with analytes and reference ranges, on the same codes the tariff prices — and
+      read tenant-wide, so both sites see one definition (it was branch-filtered against a
+      per-tenant unique index, which made a seeded catalogue invisible the moment a site was
+      selected). Order-to-result pipeline (9 routes) with the two-person rule and category
+      authority. Payment is **advisory at the API and held at the web worklist** — written up in
+      [`docs/PAYMENT_POLICY.md`](docs/PAYMENT_POLICY.md). Browser coverage on the worklist;
+      branch isolation pinned both directions.
+      **NOT built, deliberately:** specimen tracking, barcodes, analyser interfacing, QC/EQAS.
+      `lab:collect` and `lab:result` remain correctly `future()` — there is no specimen entity.
 
 ### E–F · Front office & financial
 

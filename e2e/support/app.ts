@@ -16,6 +16,8 @@ export const ACCOUNTS = {
   doctor: "drrao@sunrise.test",
   admin: "admin@sunrise.test",
   receptionist: "reception@sunrise.test",
+  /** The bench. Holds `order:read` + `order:perform`, and deliberately NOT `order:verify`. */
+  labtech: "labtech@sunrise.test",
 } as const;
 
 /**
