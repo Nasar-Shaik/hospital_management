@@ -1382,3 +1382,74 @@ describe("a lab technician can see the reports on the orders in front of them", 
     expect((res.body.data as { id: string }[]).map((r) => r.id)).toContain(reportId);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * PAYMENT IS VISIBLE TO THE LAB, AND GATES NOTHING (AI_Workflow/docs/PAYMENT_POLICY.md)
+ *
+ * The API has no payment check anywhere on the order state machine, and that is a decision rather
+ * than an omission: a hard gate refuses a stat troponin over an unfinalized bill, and a zero-tariff
+ * government hospital — a target segment, and the organization type THIS suite provisions — could
+ * never run a test at all.
+ *
+ * The web worklist does hold unpaid outpatient work, which is a web policy with its own relief
+ * valves and its own tests. These prove the layer underneath it stays open, so that policy remains
+ * a product choice rather than something baked into the state machine where nobody can change it.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("payment is visible to the lab, and gates nothing", () => {
+  let orderId = "";
+
+  beforeAll(async () => {
+    const encounterId = await encounterWithDoctor("Unpaid Bhatt", "9000000410");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    orderId = placed.body.data.order.id as string;
+  });
+
+  /**
+   * The premise. Without it the whole block proves only that a FREE test can be run, which is not
+   * the question. This hospital is `government_hospital` (zero tariff), so the honest reading is
+   * "nothing has been paid here" — and that is precisely the case a gate would strand forever.
+   */
+  it("tells the technician the payment state, without telling them the amount", async () => {
+    const res = await as(
+      "tech",
+      request(app).get(`/api/v1/billing/order-payments?orderIds=${orderId}`),
+    ).expect(200);
+
+    const state = (res.body.data as Record<string, string>)[orderId];
+    expect(["paid", "unpaid", "unbilled", "free"]).toContain(state);
+    // A status flag, not a bill. This is why a technician may read it at all.
+    expect(JSON.stringify(res.body.data)).not.toMatch(/amount|price|total/i);
+  });
+
+  /**
+   * THE ASSERTION THAT EARNS THIS BLOCK. Every rung of the machine, on a test nobody has paid for.
+   * If any of these ever returns 402 or 403, a payment gate has been introduced into the state
+   * machine and a hospital that charges nothing has lost its laboratory.
+   */
+  it("runs an unpaid test all the way from the bench to the doctor", async () => {
+    await as("tech", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Haemoglobin 13.1 g/dL." })
+      .expect(200);
+    await as("pathologist", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+    const released = await as(
+      "pathologist",
+      request(app).post(`/api/v1/orders/${orderId}/release`),
+    ).expect(200);
+
+    expect(released.body.data.status).toBe("released");
+  });
+
+  /**
+   * And knowing the payment state grants no reach. The technician can see whether a test is paid
+   * for; they still cannot see the bill, which is the counter's.
+   */
+  it("does not become a way to read the money", async () => {
+    const res = await as("tech", request(app).get("/api/v1/billing/pending"));
+    expect(res.status, "a lab technician read the billing queue").toBe(403);
+  });
+});

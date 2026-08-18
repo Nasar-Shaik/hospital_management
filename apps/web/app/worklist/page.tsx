@@ -55,6 +55,7 @@ import {
 } from "../../components/ui";
 import { rupees } from "../../lib/money";
 import { groupByPatient, waited } from "../../lib/worklist";
+import { isHeldForPayment, type PaymentState } from "../../lib/payment";
 
 /** Per-order settle-from-advance info for admitted patients. */
 interface Settlement {
@@ -74,11 +75,22 @@ function priorityTone(p: OrderPriority): "danger" | "brand" | "neutral" {
 }
 
 /**
- * PAID / UNPAID for the test in front of the technician. Advisory, not a gate: an unpaid emergency
- * still gets run, and a zero-tariff government patient shows "free", never "unpaid". Absent (no
- * data) renders nothing rather than a misleading "unpaid".
+ * PAID / UNPAID for the test in front of the technician.
+ *
+ * ── THIS BADGE IS A LABEL; THE HOLD IS FORTY LINES BELOW ────────────────────
+ * This comment used to read "Advisory, not a gate: an unpaid emergency still gets run" — and that
+ * was not true of this page. `unpaid` on a `placed`/`accepted`/`in_progress` order replaces the
+ * action buttons with "Awaiting payment", with no exemption for `stat` or `emergency`. The badge is
+ * advisory; the BUTTONS are gated, and describing the file by its badge hid the actual rule.
+ *
+ * What genuinely does proceed: `paid`, `free` (a zero-tariff government patient, never shown as
+ * "unpaid" and turned away), `unbilled` (no charge raised yet), an admitted patient settling from
+ * their advance, and cancel. The API itself gates nothing — the order state machine has no payment
+ * check — so this hold is a WEB policy, not a system invariant. See `AI_Workflow/docs/PAYMENT_POLICY.md`.
+ *
+ * Absent (no data) renders nothing rather than a misleading "unpaid".
  */
-function PaymentBadge({ state }: { state?: "paid" | "unpaid" | "unbilled" | "free" }) {
+function PaymentBadge({ state }: { state?: PaymentState }) {
   if (!state) return null;
   if (state === "paid") return <Badge tone="success">paid</Badge>;
   if (state === "free") return <Badge tone="neutral">no charge</Badge>;
@@ -339,9 +351,7 @@ function Worklist() {
   const [pages, setPages] = useState(1);
   const [entering, setEntering] = useState<string | null>(null);
 
-  const [payment, setPayment] = useState<Record<string, "paid" | "unpaid" | "unbilled" | "free">>(
-    {},
-  );
+  const [payment, setPayment] = useState<Record<string, PaymentState>>({});
   // Admitted-patient settle-from-advance info, keyed by order id (empty for OP patients).
   const [settlement, setSettlement] = useState<Record<string, Settlement>>({});
   /**
@@ -873,15 +883,23 @@ function Worklist() {
 
                           <div className="flex flex-wrap gap-1.5">
                             {/*
-                             * ── PAY BEFORE THE LAB RUNS ────────────────────────────────────
-                             * An UNPAID test is held: the technician cannot accept, start, record
-                             * or upload against it until the patient has paid at billing. `free`
-                             * (zero-tariff government patient), `unbilled` (no charge raised yet)
-                             * and `paid` all proceed — only a real, raised, unpaid charge holds the
-                             * work. Cancel is always allowed.
+                             * ── PAY BEFORE THE LAB RUNS — A WEB POLICY, NOT A SYSTEM RULE ──
+                             * An UNPAID test is held here: the technician cannot accept, start,
+                             * record or upload against it until the patient has paid at billing.
+                             * `free` (zero-tariff government patient), `unbilled` (no charge raised
+                             * yet) and `paid` all proceed — only a real, raised, unpaid charge
+                             * holds the work. Cancel is always allowed, and an admitted patient is
+                             * relieved immediately by settling from their advance.
+                             *
+                             * The API enforces NONE of this: the order state machine has no
+                             * payment check, so any other client proceeds. That is deliberate — a
+                             * hard server gate would refuse a stat troponin over an unfinalized
+                             * bill — and it is written down in `AI_Workflow/docs/PAYMENT_POLICY.md`, along with
+                             * the one thing this hold does NOT yet exempt: `stat` and `emergency`
+                             * priorities are held like any other. That is an open product decision,
+                             * recorded rather than quietly patched here.
                              */}
-                            {payment[o.id] === "unpaid" &&
-                            ["placed", "accepted", "in_progress"].includes(o.status) ? (
+                            {isHeldForPayment(payment[o.id], o.status) ? (
                               settlement[o.id]?.admitted ? (
                                 /* Admitted patient: draw the test straight from their advance so it
                                    never waits. Shows the balance (red when negative) and the
