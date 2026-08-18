@@ -491,11 +491,19 @@ function FeedbackPage() {
   }, [api, kindFilter, statusFilter]);
   useEffect(load, [load]);
 
-  // The staff list drives assignment + name display. It needs `user:read`; a desk that only holds
-  // `feedback:manage` will 403 here, so we fail soft — ids simply show unresolved.
+  /**
+   * The staff list drives assignment + name display. It needs `user:read`; a desk that only holds
+   * `feedback:manage` will 403 here, so we fail soft — ids simply show unresolved.
+   *
+   * `limit: 100` because 100 is the API's ceiling on every list. This asked for 200 and was
+   * therefore refused with `HMS-VAL-001` on EVERY load — and the soft catch above, written for
+   * the permission case, swallowed it so completely that no ticket has ever shown an assignee's
+   * name. A hospital past a hundred staff still truncates here; that is the page size, and the
+   * fallback is the same unresolved id rather than a wrong name.
+   */
   useEffect(() => {
     api
-      .listStaff({ limit: 200 })
+      .listStaff({ limit: 100 })
       .then((p) => setStaff(p.items))
       .catch(() => setStaff([]));
   }, [api]);

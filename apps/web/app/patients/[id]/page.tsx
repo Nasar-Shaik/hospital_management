@@ -172,7 +172,11 @@ function Profile() {
           items: [] as Encounter[],
           meta: { page: 1, limit: 0 },
         }),
-        soft(api.listOrders({ patientId: id, limit: 200 }), {
+        // 100 is the API's ceiling on every list. This asked for 200, was refused with
+        // `HMS-VAL-001` on every chart, and `soft` turned that into an empty Tests tab — so a
+        // patient with three orders read "Tests 0". The strand still tolerates a real refusal
+        // (a desk without `order:read`); it no longer manufactures one.
+        soft(api.listOrders({ patientId: id, limit: 100 }), {
           items: [] as OrderRow[],
           meta: { page: 1, limit: 0 },
         }),
