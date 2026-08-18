@@ -26,7 +26,7 @@ the code won and the difference is recorded in §10.
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Branch**             | `feature/0.1` — **28 commits unpushed**, HEAD `0356f89`, tree clean                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **API**                | 43 modules · 228 OpenAPI paths · 277 contract operations · 51 tenant migrations                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **API**                | 43 modules · 228 OpenAPI paths · 277 contract operations · 51 tenant migrations · **13 default roles**                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Web**                | 47 screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **Tests passing**      | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -133,6 +133,20 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
       **NOT built, deliberately:** specimen tracking, barcodes, analyser interfacing, QC/EQAS.
       `lab:collect` and `lab:result` remain correctly `future()` — there is no specimen entity.
 
+- [x] **D7 Radiology — RIS v1 complete (2026-08-18).** Doctor orders a study → charge raised →
+      imaging worklist → accept/start → **narrative report** (findings and impression) with the
+      film attached through the existing reports module → verify → release → doctor reads it on the
+      chart. It rides the Order spine wholesale; no new pipeline and no second catalogue — the
+      tariff is the study list, because imaging has no analytes to hold.
+      **A radiologist is NOT required**, which is the milestone: `radiology:sign` gated verification
+      and only RADIOLOGIST held it, so a hospital without a consultant could take the film, type the
+      report and deliver neither. `RADIOLOGY_TECHNICIAN` now carries a study the whole way, without
+      `emr:read`. A hospital that DOES employ radiologists gets the two-person model by editing
+      roles — no code. `module.clinical.ris` now gates ordering (it gated nothing).
+      Written up in [`docs/RADIOLOGY.md`](docs/RADIOLOGY.md).
+      **NOT built, deliberately:** PACS, DICOM, modality integration, RIS scheduling, mandatory
+      sign-off, second reader, structured imaging templates. `radiology:report` stays `future()`.
+
 ### E–F · Front office & financial
 
 - [x] **E1 Appointments, queue, token** (22) — clinic hours now resolve in the **branch** timezone
@@ -179,7 +193,9 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 - [ ] **D5** Nursing depth — **intake/output, wound care, care plan, handover, and the nurse's own
       note permission.** The M3 audit named all five out of scope; they are the rest of a shift.
 - [ ] **D6** LIS depth — specimen collection/accession state, panels, delta checks
-- [ ] **D7** Radiology (RIS) · **D9** Blood bank · **D10** Emergency & triage
+- [ ] **D7** RIS depth — PACS/DICOM, modality worklists, structured templates, and radiologist
+      sign-off as a hospital-configurable policy rather than a role edit
+- [ ] **D9** Blood bank · **D10** Emergency & triage _(D7 Radiology v1 landed 2026-08-18)_
 - [ ] **D11** Critical care · **D12** Dialysis · **D13** Physiotherapy · **D14** Dietetics
 - [ ] **D4** Teleconsultation
 - [ ] **D8** Theatre depth — anaesthetist/team, pre-op checklist, utilisation
@@ -449,7 +465,9 @@ Recorded so the correction is not lost, and so the next audit knows what was alr
 | `channels/inapp.ts`: "the inbox is polled today (GET /notifications/me)"                                   | The route did not exist until 2026-08-18. Now true.                                                                                                                                                                                                                                                              |
 | `notificationTemplates.ts`: pointing a template at another channel is "a template edit, not a code change" | `updateTemplate` accepts subject, body and enabled — **not** `channel`. Moving one is a seed value plus a migration, which is how 0051 did it. Corrected in place.                                                                                                                                               |
 | This file §1: 224 paths · 3,661 tests · 144 permissions · 41 migrations                                    | **228 · 4,155 · 161 · 51.** Counted 2026-08-18.                                                                                                                                                                                                                                                                  |
-| Editions sell eight flags that gate no code                                                                | `portal.patient` (every edition), `module.clinical.ris`, `module.clinical.emergency`, `module.finance.{opBilling,ipBilling,packages,preAuth}`, `module.analytics.groupDashboards`. Same class as a permission granted to nobody, one layer up. **Open.**                                                         |
+| This file §5.2: D7 Radiology listed as not started                                                         | It ran end to end on the order spine before this milestone; what was missing was a role that could FINISH a study. Closed 2026-08-18.                                                                                                                                                                            |
+| `wallet.model.ts`: the account and the ledger "move together, in one transaction"                          | **They did not.** `walletEntries.balanceAfter` carried `min: 0` while the account was allowed to go negative, so the admitted-patient settle path threw a ValidationError from inside the transaction and escaped as an unhandled 500. Fixed 2026-08-18; the route had no behavioural test at all.               |
+| Editions sell eight flags that gate no code                                                                | `portal.patient` (every edition), ~~`module.clinical.ris`~~ (closed 2026-08-18), `module.clinical.emergency`, `module.finance.{opBilling,ipBilling,packages,preAuth}`, `module.analytics.groupDashboards`. Same class as a permission granted to nobody, one layer up. **Open.**                                 |
 
 Three of this file's own six "gaps" were false when it was written on 2026-08-12 — they were
 inherited from `00-PROGRESS-TRACKER.md`'s prose rather than read from the code. A tracker that
