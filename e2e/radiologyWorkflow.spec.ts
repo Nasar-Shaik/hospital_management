@@ -287,13 +287,24 @@ test.describe("radiology, from the console to the chart", () => {
     };
 
     const openIn = async (bucket: RegExp, control: string) => {
+      /**
+       * ── EACH ATTEMPT IS GIVEN TIME TO SETTLE ────────────────────────────
+       * The inner wait was three seconds, and under a loaded suite that was self-defeating: every
+       * retry re-clicked the tab and the patient, each click started another fetch, and the next
+       * attempt gave up before any of them landed. It thrashed for the full thirty seconds while
+       * the study sat there, and the run went red on a workflow the server had already completed —
+       * every "failed" study in that run reached `released`.
+       *
+       * Ten seconds per attempt instead of three, so a retry waits for the fetch it just started
+       * rather than racing it.
+       */
       await expect(async () => {
         await main.getByRole("button", { name: bucket }).click();
         await row.first().click();
         await expect(study().getByRole("button", { name: control })).toBeVisible({
-          timeout: 3_000,
+          timeout: 10_000,
         });
-      }).toPass({ timeout: 30_000 });
+      }).toPass({ timeout: 45_000 });
     };
 
     /**
