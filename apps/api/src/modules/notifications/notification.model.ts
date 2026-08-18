@@ -118,6 +118,19 @@ export interface NotificationDoc {
   /** Why it is not `sent` — the sentence a support agent reads. */
   error?: string;
 
+  /**
+   * When the RECIPIENT opened it. Absent means unread — which is what the badge counts.
+   *
+   * Deliberately not a `read: boolean`. "When" answers a question a boolean cannot: a critical
+   * alert that sat unopened for forty minutes is a different event from one read immediately, and
+   * that difference is the only evidence anybody will have when the case is reviewed.
+   *
+   * Only ever set by the person named in `recipientId` (see `markRead`), never by an admin
+   * clearing somebody else's inbox — a message marked read by another party is not a message
+   * anybody read.
+   */
+  readAt?: Date;
+
   /** The event that caused it, when there was one. For tracing a message home. */
   eventId?: string;
   traceId?: string;
@@ -149,6 +162,8 @@ const notificationSchema = new Schema<NotificationDoc>(
     claimedAt: { type: Date },
     sentAt: { type: Date },
     error: { type: String },
+
+    readAt: { type: Date },
 
     eventId: { type: String },
     traceId: { type: String },

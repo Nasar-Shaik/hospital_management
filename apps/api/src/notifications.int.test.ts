@@ -66,6 +66,7 @@ const app = await listening(createApp(createLogger({ service: "notify-int-test" 
 let tenant: { id: string; slug: string; databaseName: string };
 let connection: Awaited<ReturnType<typeof getTenantConnection>>;
 let token = "";
+let doctorToken = "";
 let doctorId = "";
 let patientId = "";
 let patientNoEmailId = "";
@@ -73,6 +74,11 @@ let clinicDay: Date;
 
 function auth(req: request.Test): request.Test {
   return req.set("Host", HOST).set("Authorization", `Bearer ${token}`);
+}
+
+/** The same request, signed as the DOCTOR — the person the order messages are addressed to. */
+function asDoctor(req: request.Test): request.Test {
+  return req.set("Host", HOST).set("Authorization", `Bearer ${doctorToken}`);
 }
 
 function slotAt(hour: number, minute = 0): Date {
@@ -146,6 +152,9 @@ beforeAll(async () => {
         name: "Dr Rao",
         status: "invited",
       });
+      // The doctor signs in too. An inbox suite with one identity cannot tell "scoped to me"
+      // apart from "returns everything" — both look identical from a single account.
+      await setPassword(doctor.id, PASSWORD, { mustChangePassword: false });
       await assignRoleByCode(doctor.id, "DOCTOR", []);
       await transitionStatus(doctor.id, "active");
       doctorId = doctor.id;
@@ -159,6 +168,12 @@ beforeAll(async () => {
     .set("Host", HOST)
     .send({ email: "admin@notify.test", password: PASSWORD });
   token = login.body.data.accessToken as string;
+
+  const docLogin = await request(app)
+    .post("/api/v1/auth/login")
+    .set("Host", HOST)
+    .send({ email: "doc@notify.test", password: PASSWORD });
+  doctorToken = docLogin.body.data.accessToken as string;
 
   clinicDay = new Date();
   clinicDay.setDate(clinicDay.getDate() + ((8 - clinicDay.getDay()) % 7 || 7));
@@ -480,5 +495,266 @@ describe('the ledger is the answer to "did they get it?"', () => {
     await auth(request(app).put("/api/v1/notifications/templates/not.a.real.key"))
       .send({ body: "hello" })
       .expect(404);
+  });
+});
+
+/**
+ * ── THE INBOX ────────────────────────────────────────────────────────────────
+ *
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * The ledger has been able to record a message addressed to a named user since Phase 1, and until
+ * now no user could read one. The alert with the most at stake in the product — a critical result,
+ * sent inline so it beats the outbox — rendered on `email`, and `email.isEnabled()` is
+ * `NOTIFY_EMAIL_ENABLED && SMTP_HOST`. On a deployment with no SMTP host, which is the default,
+ * that alert was recorded `suppressed` and reached nobody. The mechanism was faultless and the
+ * last hop did not exist.
+ *
+ * These tests pin the hop. Specifically they would catch: an inbox that returns the hospital's
+ * mail rather than the caller's (the failure that looks completely normal until two doctors
+ * compare screens); a `recipientId` parameter creeping back in, which is how a self-scoped route
+ * becomes a directory; a forged id marking somebody else's alert as read; a re-read rewriting the
+ * timestamp that says how long a critical value sat unopened; and an inbox that lists messages
+ * the system recorded as never sent.
+ */
+describe("a person can read the messages addressed to them", () => {
+  /** Sends one real message to a user through the real door, and returns its ledger row. */
+  async function sendTo(
+    userId: string,
+    address: string | undefined,
+    key: string,
+    dedupe: string,
+  ): Promise<string> {
+    await asTenant(() =>
+      notify({
+        templateKey: key,
+        recipient: { ...(address ? { address } : {}), name: "Dr Rao", type: "user", id: userId },
+        data: {
+          doctorName: "Dr Rao",
+          patientName: "Meera Nair",
+          uhid: "UH-1",
+          testName: "Serum Potassium",
+          result: "K 7.2 mmol/L",
+          hospital: "Apollo Notify",
+        },
+        dedupeKey: dedupe,
+      }),
+    );
+
+    const { items } = await asTenant(() =>
+      listNotifications({ recipientId: userId, limit: 50, skip: 0 }),
+    );
+    const row = items.find((n) => n.dedupeKey === dedupe);
+    expect(row, `nothing was recorded for ${dedupe}`).toBeTruthy();
+    return row!.id;
+  }
+
+  it("delivers a released result to the doctor who ordered it, and to nobody else", async () => {
+    await sendTo(
+      doctorId,
+      "doc@notify.test",
+      "order.result.released",
+      `inbox:released:${Date.now()}`,
+    );
+
+    const mine = await asDoctor(request(app).get("/api/v1/notifications/me")).expect(200);
+    expect(mine.body.data.length).toBeGreaterThan(0);
+    expect(mine.body.data[0].body).toContain("Serum Potassium");
+
+    /**
+     * The administrator is not the recipient. This is the assertion that separates "scoped to the
+     * caller" from "returns everything" — and TENANT_ADMIN is the right account to prove it with,
+     * because it holds every permission in the catalogue and still must see none of this.
+     */
+    const theirs = await auth(request(app).get("/api/v1/notifications/me")).expect(200);
+    expect(theirs.body.data.some((m: { body: string }) => m.body.includes("Serum Potassium"))).toBe(
+      false,
+    );
+  });
+
+  it("needs no permission — every role has an inbox", async () => {
+    // The doctor holds neither `notification:manage` nor anything resembling it, and the ledger
+    // route below proves that in the same breath.
+    await asDoctor(request(app).get("/api/v1/notifications/me")).expect(200);
+    await asDoctor(request(app).get("/api/v1/notifications")).expect(403);
+  });
+
+  it("will not take a recipient from the caller", async () => {
+    // `.strict()`, so this is a 400 and not a silently ignored parameter. An ignored one would be
+    // worse: the caller believes they asked for somebody else's mail and got an empty answer.
+    await asDoctor(request(app).get(`/api/v1/notifications/me?recipientId=${doctorId}`)).expect(
+      400,
+    );
+  });
+
+  it("counts what is unread, and stops counting it once it is opened", async () => {
+    const id = await sendTo(
+      doctorId,
+      "doc@notify.test",
+      "order.critical",
+      `inbox:crit:${Date.now()}`,
+    );
+
+    const before = await asDoctor(
+      request(app).get("/api/v1/notifications/me?unread=true&limit=5"),
+    ).expect(200);
+    const unreadBefore = before.body.meta.total as number;
+    expect(unreadBefore).toBeGreaterThan(0);
+    expect(before.body.data.every((m: { readAt?: string }) => m.readAt === undefined)).toBe(true);
+
+    const opened = await asDoctor(request(app).post(`/api/v1/notifications/${id}/read`)).expect(
+      200,
+    );
+    expect(opened.body.data.readAt).toBeTruthy();
+
+    const after = await asDoctor(
+      request(app).get("/api/v1/notifications/me?unread=true&limit=5"),
+    ).expect(200);
+    expect(after.body.meta.total).toBe(unreadBefore - 1);
+
+    // Still in the inbox — opening a message files it, it does not delete it.
+    const all = await asDoctor(request(app).get("/api/v1/notifications/me")).expect(200);
+    expect(all.body.data.some((m: { id: string }) => m.id === id)).toBe(true);
+  });
+
+  /**
+   * `?unread=false` must mean "everything", not "unread only".
+   *
+   * The obvious spelling of this parameter is `z.coerce.boolean()`, which turns every non-empty
+   * string true — so the honest-looking request `?unread=false` would return the exact opposite of
+   * what it asks for, with no error. The schema uses a two-value enum instead; this is the test
+   * that says why.
+   */
+  it("reads `unread=false` as the caller meant it", async () => {
+    const id = await sendTo(
+      doctorId,
+      "doc@notify.test",
+      "order.result.released",
+      `inbox:false:${Date.now()}`,
+    );
+    await asDoctor(request(app).post(`/api/v1/notifications/${id}/read`)).expect(200);
+
+    const all = await asDoctor(request(app).get("/api/v1/notifications/me?unread=false")).expect(
+      200,
+    );
+    expect(all.body.data.some((m: { id: string }) => m.id === id)).toBe(true);
+
+    await asDoctor(request(app).get("/api/v1/notifications/me?unread=maybe")).expect(400);
+  });
+
+  /**
+   * A critical alert that sat unopened for forty minutes is a different event from one read
+   * immediately, and `readAt` is the only evidence of which happened. A second click must not
+   * quietly move it forward.
+   */
+  it("keeps the time a message was FIRST opened", async () => {
+    const id = await sendTo(
+      doctorId,
+      "doc@notify.test",
+      "order.critical",
+      `inbox:first:${Date.now()}`,
+    );
+
+    const first = await asDoctor(request(app).post(`/api/v1/notifications/${id}/read`)).expect(200);
+    await new Promise((r) => setTimeout(r, 25));
+    const second = await asDoctor(request(app).post(`/api/v1/notifications/${id}/read`)).expect(
+      200,
+    );
+
+    expect(second.body.data.readAt).toBe(first.body.data.readAt);
+  });
+
+  it("refuses to open somebody else's message, and does not mark it read", async () => {
+    const id = await sendTo(
+      doctorId,
+      "doc@notify.test",
+      "order.critical",
+      `inbox:theirs:${Date.now()}`,
+    );
+
+    // The administrator holds every permission there is. It makes no difference: the recipient is
+    // in the WHERE clause, not in a check that a privileged caller could pass.
+    await auth(request(app).post(`/api/v1/notifications/${id}/read`)).expect(404);
+
+    const still = await asDoctor(
+      request(app).get("/api/v1/notifications/me?unread=true&limit=100"),
+    );
+    expect(still.body.data.some((m: { id: string }) => m.id === id)).toBe(true);
+  });
+
+  it("answers 404 for an id that does not exist, and 400 for one that could not", async () => {
+    await asDoctor(request(app).post("/api/v1/notifications/64b7f0000000000000000009/read")).expect(
+      404,
+    );
+    await asDoctor(request(app).post("/api/v1/notifications/not-an-id/read")).expect(400);
+  });
+
+  /**
+   * A message the system recorded as NOT sent must not appear in the inbox. Listing it would
+   * deliver, after the fact, something the ledger already says was withheld — and it would make
+   * the read receipt meaningless. The administrator's ledger is where suppressed messages belong,
+   * because they are that person's problem to fix.
+   */
+  it("does not show the recipient a message that was never sent", async () => {
+    await asTenant(() => updateTemplate("order.result.released", { enabled: false }));
+    const dedupe = `inbox:suppressed:${Date.now()}`;
+
+    try {
+      const id = await sendTo(doctorId, "doc@notify.test", "order.result.released", dedupe);
+
+      const mine = await asDoctor(request(app).get("/api/v1/notifications/me?limit=100")).expect(
+        200,
+      );
+      expect(mine.body.data.some((m: { id: string }) => m.id === id)).toBe(false);
+
+      // It is not lost — it is where an administrator can see it and act on the cause.
+      const ledger = await auth(
+        request(app).get("/api/v1/notifications?status=suppressed&limit=100"),
+      ).expect(200);
+      expect(ledger.body.data.some((n: { id: string }) => n.id === id)).toBe(true);
+
+      // And it cannot be opened, which would put a read receipt on an unsent message.
+      await asDoctor(request(app).post(`/api/v1/notifications/${id}/read`)).expect(404);
+    } finally {
+      await asTenant(() => updateTemplate("order.result.released", { enabled: true }));
+    }
+  });
+
+  it("shows the newest message first", async () => {
+    const stamp = Date.now();
+    await sendTo(doctorId, "doc@notify.test", "order.result.released", `inbox:order-a:${stamp}`);
+    await new Promise((r) => setTimeout(r, 15));
+    await sendTo(doctorId, "doc@notify.test", "order.critical", `inbox:order-b:${stamp}`);
+
+    const mine = await asDoctor(request(app).get("/api/v1/notifications/me?limit=2")).expect(200);
+    const times = (mine.body.data as { createdAt: string }[]).map((m) => Date.parse(m.createdAt));
+    expect(times[0]).toBeGreaterThanOrEqual(times[1]!);
+  });
+
+  /**
+   * The inbox is reached with no permission at all, so its SHAPE is part of its safety argument.
+   * The ledger record carries an address, a dedupe key, a retry count and an SMTP error string;
+   * none of that is the reader's business, and a field added to the ledger contract must not
+   * arrive here by inheritance.
+   */
+  it("returns the reader's message, not the operator's delivery record", async () => {
+    await sendTo(doctorId, "doc@notify.test", "order.critical", `inbox:shape:${Date.now()}`);
+
+    const mine = await asDoctor(request(app).get("/api/v1/notifications/me?limit=1")).expect(200);
+    const message = mine.body.data[0] as Record<string, unknown>;
+
+    // Every key present must be one the inbox contract declares. Asserted this way round rather
+    // than as a fixed list, because `branchId` and `readAt` are legitimately absent here and a
+    // list would go red for the wrong reason the day a message carries one.
+    const ALLOWED = ["id", "templateKey", "subject", "body", "branchId", "readAt", "createdAt"];
+    for (const key of Object.keys(message)) {
+      expect(ALLOWED, `the inbox returned an undeclared field \`${key}\``).toContain(key);
+    }
+
+    // And the ledger's operational fields by name — these are the ones that would ride along if
+    // anybody went back to returning the full record and trusted `responds()` to trim it.
+    for (const leaked of ["to", "dedupeKey", "attempts", "error", "status", "recipientId"]) {
+      expect(message, `the inbox exposed \`${leaked}\``).not.toHaveProperty(leaked);
+    }
   });
 });

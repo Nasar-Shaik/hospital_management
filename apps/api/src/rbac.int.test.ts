@@ -132,6 +132,12 @@ const SELF_SERVICE_ROUTES = new Set([
   // The API's own OpenAPI contract — authenticated, unpermissioned; the route map is not data
   // and any integration may read it (A9). See app.ts.
   "GET /api/v1/openapi.json",
+  // The caller's OWN inbox, and opening one of their own messages. The recipient is the session
+  // and cannot be named in the request, so there is nothing to over-reach for. A permission here
+  // would mean a hospital could build a role whose staff cannot read their own alerts — see
+  // notification.routes.ts.
+  "GET /api/v1/notifications/me",
+  "POST /api/v1/notifications/:id/read",
 ]);
 
 /** A concrete, callable request for each protected route — the matrix's probes. */

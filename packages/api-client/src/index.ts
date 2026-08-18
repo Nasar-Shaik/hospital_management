@@ -484,9 +484,32 @@ export interface NotificationRecord {
   sentAt?: string;
   error?: string;
   eventId?: string;
+  /** When the recipient opened it in their inbox. Absent means unread. */
+  readAt?: string;
   createdAt: string;
   /** The site this belongs to (ADR-0015). Absent on pre-branch rows. */
   branchId?: string;
+}
+
+/**
+ * One message as its RECIPIENT sees it — a deliberately smaller thing than `NotificationRecord`.
+ *
+ * The ledger record answers an operator's question ("did it go, what did SMTP say?"). This
+ * answers the reader's ("what do I need to know, and have I seen it?"). They are served by
+ * different routes with different authorization, and keeping the types apart is what stops the
+ * unpermissioned one from quietly inheriting a field added to the other.
+ */
+export interface InboxMessage {
+  id: string;
+  /** Which template rendered it — how the client decides where the message points. */
+  templateKey: string;
+  subject?: string;
+  body: string;
+  /** The site the message was raised at (ADR-0015). Shown, never used as a filter. */
+  branchId?: string;
+  /** Absent means unread. */
+  readAt?: string;
+  createdAt: string;
 }
 
 export interface NotificationTemplate {
@@ -6181,6 +6204,36 @@ export class ApiClient {
     }
     const qs = query.toString();
     return this.paged<NotificationRecord>(`/api/v1/notifications${qs ? `?${qs}` : ""}`);
+  }
+
+  /**
+   * The signed-in user's own inbox.
+   *
+   * ── ONE CALL SERVES THE BELL AND THE PAGE ───────────────────────────────
+   * With `unread: true` the page meta's `total` IS the unread count, so the badge and its
+   * dropdown come from a single request (`{ unread: true, limit: 5 }`); the full inbox asks
+   * without the filter. There is deliberately no `recipientId` parameter — the server takes the
+   * recipient from the session, which is what makes the route safe without a permission.
+   */
+  myNotifications(params?: {
+    unread?: boolean;
+    page?: number;
+    limit?: number;
+  }): Promise<Paged<InboxMessage>> {
+    const query = new URLSearchParams();
+    if (params?.unread !== undefined) query.set("unread", params.unread ? "true" : "false");
+    if (params?.page !== undefined) query.set("page", String(params.page));
+    if (params?.limit !== undefined) query.set("limit", String(params.limit));
+    const qs = query.toString();
+    return this.paged<InboxMessage>(`/api/v1/notifications/me${qs ? `?${qs}` : ""}`);
+  }
+
+  /**
+   * Opening one message. Safe to repeat — the server keeps the FIRST `readAt`, so a double-click
+   * or a retry cannot rewrite when the alert was actually seen.
+   */
+  markNotificationRead(id: string): Promise<InboxMessage> {
+    return this.request<InboxMessage>("POST", `/api/v1/notifications/${id}/read`);
   }
 
   listNotificationTemplates(): Promise<NotificationTemplate[]> {

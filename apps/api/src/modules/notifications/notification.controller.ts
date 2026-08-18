@@ -4,7 +4,11 @@
 import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as notifications from "./notification.service.js";
-import type { ListNotificationsQuery, UpdateTemplateBody } from "./notification.schema.js";
+import type {
+  InboxQuery,
+  ListNotificationsQuery,
+  UpdateTemplateBody,
+} from "./notification.schema.js";
 import { ok } from "../../core/http/respond.js";
 
 /**
@@ -28,6 +32,42 @@ export const listNotifications: RequestHandler = async (req, res) => {
     total,
     hasMore: query.page * query.limit < total,
   });
+};
+
+/**
+ * The caller's own inbox.
+ *
+ * The bell and the inbox are the SAME route. `?unread=true&limit=5` gives the badge its number
+ * (`meta.total` under that filter is the unread count) and the dropdown its newest few, in one
+ * request; the full page asks without the filter. Nothing here needed an endpoint of its own.
+ */
+export const inbox: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as InboxQuery;
+
+  const { items, total } = await notifications.inbox({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+    ...(query.unread ? { unreadOnly: true } : {}),
+  });
+
+  ok(res, items, 200, {
+    page: query.page,
+    limit: query.limit,
+    total,
+    hasMore: query.page * query.limit < total,
+  });
+};
+
+/** Opening one message. Re-opening is not an error — it is the same fact, already recorded. */
+export const markRead: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const message = await notifications.markRead(id);
+
+  // Not yours, or no such message. Deliberately the same answer for both: telling a caller that a
+  // message exists but belongs to someone else is more than they are entitled to know.
+  if (!message) throw new AppError("HMS-GEN-404", 404, "No such message", { id });
+
+  ok(res, message);
 };
 
 export const listTemplates: RequestHandler = async (_req, res) => {

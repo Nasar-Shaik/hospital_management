@@ -2172,4 +2172,58 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0050-notification-inbox",
+    description: "The staff inbox — read state, and the index the unread badge is counted on",
+    /**
+     * ── THE LEDGER HAD A READER-SHAPED HOLE ─────────────────────────────────────
+     * Migration 0011 already built `{tenantId, recipientId, createdAt: -1}` for the question "did
+     * they get it?", asked at a front desk. What it could not answer is "how many have I not
+     * opened?" — the badge, rendered for every signed-in user on every page load, which makes it
+     * the most frequent query this collection will ever serve.
+     *
+     * ── THE PARTIAL FILTER IS ON `status`, NOT ON `readAt` ──────────────────────
+     * The obvious index is a partial one over the unread rows themselves, and **MongoDB refuses
+     * it**: `partialFilterExpression: { readAt: { $exists: false } }` is rejected with
+     * "Expression not supported in partial index: $not", because `$exists: false` desugars to a
+     * negation and partial filters admit only positive predicates. Worth writing down — it is the
+     * first thing anyone will try, and the error names `$not` for an expression that does not
+     * contain the word.
+     *
+     * So the filter is `status: "sent"`, which is an equality and is supported, and which happens
+     * to be exactly the right restriction anyway: the inbox reads delivered messages only (see
+     * `listForRecipient`), so the pending, failed, unreachable and suppressed rows have no reason
+     * to be in this index at all. `readAt` then sits in the KEY, where a scan for the unread ones
+     * is a narrow range rather than a walk through a consultant's entire correspondence.
+     *
+     * ── SAFE ON EXISTING DATA ───────────────────────────────────────────────────
+     * `readAt` is new, so every historical row lacks it and sorts as unread. That is the correct
+     * outcome and not an accident: messages sent before there was an inbox genuinely have not
+     * been read by anybody. A hospital upgrading sees its existing alerts arrive unread, which is
+     * what its staff would expect — the alternative is silently marking a year of critical
+     * results as "seen".
+     *
+     * Not unique. Nothing here arbitrates a race: two tabs opening the same message is not a
+     * conflict, it is the same fact written twice (see `markRead`).
+     */
+    up: async (db) => {
+      await db.createCollection("notifications").catch(() => undefined);
+
+      await db.collection("notifications").createIndex(
+        { tenantId: 1, recipientId: 1, readAt: 1, createdAt: -1 },
+        {
+          partialFilterExpression: { status: "sent" },
+          background: true,
+          name: "inbox_per_recipient",
+        },
+      );
+    },
+    /** Drops only what this migration added; 0011 still owns the collection and its three indexes. */
+    down: async (db) => {
+      await db
+        .collection("notifications")
+        .dropIndex("inbox_per_recipient")
+        .catch(() => undefined);
+    },
+  },
 ];

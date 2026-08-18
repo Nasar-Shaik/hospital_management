@@ -25,8 +25,10 @@ import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
 import { responds } from "../../middleware/responds.js";
 import * as controller from "./notification.controller.js";
-import { notification, notificationTemplate } from "./notification.contract.js";
+import { inboxMessage, notification, notificationTemplate } from "./notification.contract.js";
 import {
+  inboxQuerySchema,
+  notificationIdParamSchema,
   listNotificationsQuerySchema,
   templateKeyParamSchema,
   updateTemplateSchema,
@@ -41,6 +43,44 @@ export function notificationRouter(): Router {
    * `notification:manage` (an administrative permission), NOT something every
    * clerk holds by default.
    */
+  /**
+   * ── THE PERSON'S OWN INBOX ──────────────────────────────────────────────────
+   * Authenticated, and DELIBERATELY UNPERMISSIONED. The recipient is taken from the session and
+   * cannot be named in the query, so there is nothing here a caller could over-reach for: the
+   * route can only ever return what the domain already decided to send to them.
+   *
+   * A permission would be actively harmful. Every role in a hospital receives messages — the
+   * technician gets none today and will get stock alerts tomorrow — so gating this would mean any
+   * hospital that built its own role from scratch would have staff who cannot read their own
+   * alerts, and the symptom would be an inbox that is simply always empty. Same reasoning, and
+   * the same list in `rbac.int.test.ts`, as `GET /reports/my-activity` and `GET /me/branches`.
+   *
+   * It must be declared in that suite's `SELF_SERVICE_ROUTES` — "no permission" has to be a
+   * decision somebody wrote down, never a line somebody forgot.
+   */
+  router.get(
+    "/notifications/me",
+    authenticate(),
+    validate(inboxQuerySchema, "query"),
+    responds(inboxMessage.array(), { meta: true }),
+    asyncHandler(controller.inbox),
+  );
+
+  /**
+   * Opening one. Not `idempotent()` — that middleware replays a stored RESPONSE for a client
+   * retrying one intent, and this needs something stronger and cheaper: the write itself only
+   * matches an unread row, so a second call is a no-op that returns the same message with the
+   * original `readAt` intact. Idempotent by the query, for every caller, forever — not just for
+   * the one that remembered to send a key.
+   */
+  router.post(
+    "/notifications/:id/read",
+    authenticate(),
+    validate(notificationIdParamSchema, "params"),
+    responds(inboxMessage),
+    asyncHandler(controller.markRead),
+  );
+
   router.get(
     "/notifications",
     authenticate(),
