@@ -69,8 +69,11 @@ test.describe("the medication round, as a viewer who may not chart", () => {
      * ANYONE — proving the round is broken rather than that permissions work.
      */
     await signIn(page, ACCOUNTS.nurse);
+    // One site, not All-branches: the round is a ward round, and `preflight.setup.ts` has already
+    // proved this site has doses scheduled today.
     const sites = await branchNames(page);
-    if (sites.length > 0) await switchToBranch(page, sites[0] as string);
+    expect(sites.length, "the switcher offered no site to work in").toBeGreaterThan(0);
+    await switchToBranch(page, sites[0] as string);
     await page.goto("/medication-round");
 
     await expect(page.getByRole("heading", { name: /medication round/i })).toBeVisible();
@@ -101,8 +104,11 @@ test.describe("patient identity on the surfaces a nurse reads before giving a dr
    */
   test("names every admitted patient on the ward, and gives the chart a UHID", async ({ page }) => {
     await signIn(page, ACCOUNTS.nurse);
+    // One site, not All-branches: a ward belongs to a site, and an aggregate ward list is a
+    // different screen from the one a nurse works from.
     const sites = await branchNames(page);
-    if (sites.length > 0) await switchToBranch(page, sites[0] as string);
+    expect(sites.length, "the switcher offered no site to work in").toBeGreaterThan(0);
+    await switchToBranch(page, sites[0] as string);
     await page.goto("/ward");
 
     const list = page.getByRole("main").getByRole("list").first();
@@ -122,14 +128,70 @@ test.describe("patient identity on the surfaces a nurse reads before giving a dr
     }
 
     /**
-     * ── A DIFFERENCE FROM THE RUNBOOK, RECORDED NOT ASSERTED AWAY ───────────
-     * WEB-04 reads "Name + UHID on every row". The implementation puts the name on the row and the
-     * UHID on the chart the row opens — a navigation list beside a patient panel. The five rights
-     * apply where a drug is given, and that surface does carry both, so this asserts what the
-     * product actually guarantees rather than inventing a requirement it never claimed. The
-     * difference is written up in TESTING.md.
+     * ── WEB-04, DECIDED ─────────────────────────────────────────────────────
+     * The runbook row reads "Name + UHID on every row" of the ward. The implementation puts the
+     * name on the row and the UHID on the chart the row opens.
+     *
+     * That is the correct behaviour, and the runbook row is over-specified. §9 scopes the five
+     * rights to "every ADMINISTERING surface … the confirmation screen a nurse reads at the moment
+     * of giving" — and the ward list is not one: no drug can be given from it. It is a navigation
+     * rail beside a patient panel, and the panel carries both identifiers. The surfaces that ARE
+     * administering — the medication round and its confirmation — carry name and UHID on the row
+     * itself, which the next test pins.
+     *
+     * So this asserts what the product guarantees, the runbook has been amended to say where the
+     * requirement applies, and no production code was changed to satisfy a test.
      */
     await list.getByRole("button").first().click();
     await expect(page.getByRole("main")).toContainText(/UH-?\d+/i, { timeout: 15_000 });
+  });
+
+  /**
+   * FR-02 / WEB-05 — the administering surface, where "name + UHID on every row" IS the rule.
+   *
+   * WHAT DEFECT WOULD THIS CATCH?
+   * D-1 returning where it actually hurt. The round is the screen a nurse reads with a drug in her
+   * hand, so a row that names a patient but loses the UHID leaves her with one identifier where
+   * the five rights require two — and two patients with the same name on one ward is not a rare
+   * hospital, it is a Tuesday.
+   *
+   * This is deliberately EVERY row, and deliberately the round rather than the ward: `uhid` is
+   * resolved server-side per row, so a regression in that resolution shows up on the oldest
+   * admissions first — exactly the ones a spot check skips.
+   */
+  test("gives every dose row a name AND a UHID, on the screen a drug is given from", async ({
+    page,
+  }) => {
+    await signIn(page, ACCOUNTS.nurse);
+    const sites = await branchNames(page);
+    expect(sites.length, "the switcher offered no site to work in").toBeGreaterThan(0);
+    await switchToBranch(page, sites[0] as string);
+    await page.goto("/medication-round");
+
+    await expect(page.getByRole("heading", { name: /medication round/i })).toBeVisible();
+
+    /**
+     * The patient cards, and only those. Each card holds a nested list of its dose slots, so a
+     * bare `getByRole("listitem")` would also return every slot — none of which carries a UHID,
+     * and all of which would fail this check for the wrong reason. `:scope > li` is the direct
+     * children of the round's own list.
+     */
+    const patientRows = page.getByRole("main").getByRole("list").first().locator(":scope > li");
+
+    await expect(async () => {
+      // One round trip: the first paragraph of each card is its identity line.
+      const lines = await patientRows.evaluateAll((rows) =>
+        rows.map((row) => (row.querySelector("p")?.textContent ?? "").trim()),
+      );
+      expect(lines.length, "the round rendered no patients — nothing to prove").toBeGreaterThan(0);
+
+      for (const line of lines) {
+        expect(line, "a dose row carried no UHID beside the patient's name").toMatch(/UH-?\d+/i);
+        const name = line.replace(/UH-?\d+/i, "").trim();
+        expect(name, `a dose row read "${line}" where a patient's name belongs`).not.toMatch(
+          /^(—|-|)$/,
+        );
+      }
+    }).toPass({ timeout: 25_000 });
   });
 });

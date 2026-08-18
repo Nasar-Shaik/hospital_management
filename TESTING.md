@@ -941,10 +941,56 @@ see:
 | `branchSwitch.spec.ts`   | Switching sites repaints the ward, **no bed from the previous site survives**, and the choice outlives a reload                  | The original defect this design exists to prevent — a header naming one site over another site's patients                   |
 | `clinicalSafety.spec.ts` | A doctor's round renders with every dose row **inert**, a nurse's does not; every ward row is named and the chart carries a UHID | A doctor able to chart a dose from the UI (P1); web defect **D-1** returning — `Patient: —` at the moment of administration |
 | `staffDirectory.spec.ts` | The directory narrows to the active site, says which scope it counted, and shows each person's branch binding                    | The staff branch scope silently going away — nothing in the tenantScope plugin holds it up                                  |
+| `pageHealth.spec.ts`     | The eleven back-office pages, and the patient chart, load against the real API and are **refused nothing they did not expect**   | A page being told "no" and drawing a zero. **It found two live defects doing exactly that** — see below                     |
+| `reportsExport.spec.ts`  | Export CSV hands over a file named for the period, with rows under its header                                                    | The Blob → object URL → anchor → revoke path breaking: a button that spins, succeeds, and delivers nothing                  |
 
 `workers: 1`, `retries: 0`, no `waitForTimeout` anywhere, and site names are **discovered from the
 switcher** rather than hardcoded, because `seed:validation` names the second site differently when
-it adopts an existing branch. Run three times back to back: 10/10 each time, identical duration.
+it adopts an existing branch.
+
+### What the page sweep found: two pages showing a refusal as emptiness
+
+The eleven pages this document previously listed as having no coverage at any layer — `/mrd`,
+`/mortuary`, `/theatres`, `/ambulance`, `/assets`, `/packages`, `/tariff`, `/feedback`, `/audit`,
+`/subscription`, `/reports` — now have one test each. (An earlier revision of that list also named
+`/insurance`; **there is no such page** — insurance is a tab on the patient chart.)
+
+The sweep is deliberately not eleven CRUD flows. It asserts something narrower and much harder to
+fake: **every request the page made came back, and none was refused unless the refusal is declared
+in the spec with its reason.** Writing it turned up two live defects of a single shape:
+
+| Where         | The request                       | What the user saw                                                         |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------- |
+| `/feedback`   | `GET /users?limit=200` → **400**  | Every ticket's assignee shown as an unresolved id. Never a name. Ever.    |
+| Patient chart | `GET /orders?limit=200` → **400** | **"Tests 0"** on a patient holding three orders — a short clinical record |
+
+The cap on every list is **100**. Both callers asked for 200, both were refused with
+`HMS-VAL-001`, and both pages had a `catch` written for the _permission_ case — `.catch(() =>
+setStaff([]))` and `soft(…)` — which folded a validation error into ordinary emptiness.
+
+Neither is visible from below. The API is correct and its tests pass; the jsdom suites mock `fetch`
+and never send the bad request. Only a browser against a real server can watch a page be told "no"
+and draw a zero. Both call sites now request 100, and reverting either turns the sweep red.
+
+The one **declared** refusal is `/mortuary`: `module.support.mortuary` is not in `PLAN_HOSPITAL`,
+so the API answers `HMS-PLAN-002` and the page says "Feature not in your edition" with a reference.
+That is the entitlement gate working, and it is swept precisely so a plan refusal keeps reading as
+an explanation rather than as a blank register.
+
+### A missing seed is now a failure, not a pass
+
+`preflight.setup.ts` is a **setup project every other project depends on**. It checks over HTTP, in
+about a second, that the hospital `seed:validation` builds is actually present: the four demo
+accounts can sign in, the nurse can work in two open sites, **both sites have occupied beds and
+their bed codes are disjoint**, doses are scheduled today, and the directory has people. Each
+failure names `pnpm docker:dev && pnpm seed:migrate && pnpm seed:validation`.
+
+The third check is the one that matters. `branchSwitch.spec.ts` asserts that no bed from site A
+survives a switch to site B — and on a hospital whose second site is empty, that compares against
+nothing and **passes for free**. The specs used to guard this with `test.skip(sites.length < 2)`,
+which reports a missing environment as a PASS: the gate would have said 10/10 having never
+exercised cross-branch display of PHI in a browser. Every skip has been replaced by a hard
+assertion, and the environment is now proved once, out loud, before the browser opens.
 
 ### Falsification — these tests were proven able to fail
 
@@ -956,25 +1002,59 @@ it adopts an existing branch. Run three times back to back: 10/10 each time, ide
 | The staff-directory branch exclusion                           | 🔴 2 of 4 integration tests                                                                                  |
 | The staff count reading the server total                       | 🔴 _"expected '100 people at Main Branch' to match /Showing 100 of 137/"_                                    |
 | The loopback test-server guard (T3)                            | 🔴 binds `::`                                                                                                |
+| The `limit: 100` fix on `/feedback` and the patient chart      | 🔴 _"400 HMS-VAL-001 /api/v1/users?limit=200"_, _"…/orders?…&limit=200"_                                     |
+| The UHID beside the name on a medication-round row (FR-02)     | 🔴 _"a dose row carried no UHID beside the patient's name"_                                                  |
+| `hostIsUnknown` on the branding call (**WEB-02**)              | 🔴 the address is never blamed before a password is submitted                                                |
+| The preflight's disjoint-bed check, pointed at one site twice  | 🔴 _"… use the same bed codes … indistinguishable from a legitimate one"_                                    |
+| The preflight, run at a tenant without the demo accounts       | 🔴 _"these demo accounts cannot sign in at http://district.localhost:4000 — run `pnpm …`"_                   |
 
 Production code was restored after each, and the gate re-run green.
 
-### Two places the runbook and the implementation disagree
+### Two disagreements between the runbook and the implementation — now decided
 
-Found while automating, and **recorded rather than resolved in either direction** — changing the
-product to satisfy a test, or weakening a documented expectation to satisfy the product, are both
-worse than saying so.
+Both were found while automating and left open as PRODUCT DECISION candidates. They have since
+been investigated against the implementation, ADR-0005, §9 of the runbook and the existing tests,
+and **decided in opposite directions** — which is the point: neither "the doc wins" nor "the code
+wins" is a rule.
 
-1. **WEB-02** reads as though browsing an unknown hospital's address is enough to be told. It is
-   not: the message is mapped from the login **response**, so it appears on submit. The invariant
-   the row exists to protect — the address is blamed, not the credentials — holds, and that is what
-   the test asserts.
-2. **WEB-04** reads "Name + UHID on every row". The ward puts the **name** on the row and the
-   **UHID** on the chart the row opens. The five rights apply where a drug is given, and that
-   surface carries both. The test asserts what the product guarantees and names the difference.
+#### WEB-02 — the runbook was right. **Product changed.**
 
-Neither is a defect; both are **PRODUCT DECISION** candidates if anyone wants the runbook and the
-UI brought into line.
+The row says: browse a slug that does not exist, and be told _"This address does not belong to any
+hospital"_. The implementation only said it **on submit**, mapped from the login response.
+
+What settled it was finding that the app **already had the answer and discarded it**.
+`BrandingProvider` calls the public `GET /site` on every page load, and on an unknown host that
+returns exactly `HMS-TEN-001` — the API's code for "this hostname matches no tenant in the
+registry", distinct from suspended (`002`), licence lapsed (`005`) and registry unreachable
+(`004`). The provider caught it and set `loaded: true`.
+
+So the only way to learn you were at the wrong address was **to type your real password into a host
+that is not your hospital's**. The hostname IS the tenant (ADR-0005): a wrong address is not a typo
+in a form, it is a different machine. Withholding an answer the app already holds, until after the
+credential has been sent, is the wrong order.
+
+The fix publishes one flag, `hostIsUnknown`, and is deliberately narrow — **`HMS-TEN-001` only**. A
+network blip or a restarting API must never tell a working hospital that it does not exist, and
+`e2e/auth.spec.ts` asserts that negative directly ("does not accuse a real hospital's address of
+being wrong") alongside the positive.
+
+#### WEB-04 — the runbook was over-specified. **Product unchanged; the row amended.**
+
+The row says "Name + UHID on every row" of `/ward`. The ward puts the name on the row and the UHID
+on the chart the row opens.
+
+The row points at **§9**, and §9 is explicit about where the five rights apply: _"every
+administering surface … the confirmation screen a nurse reads at the moment of giving."_ **A ward
+list is not one** — no drug can be given from it. It is a navigation rail beside a patient panel,
+and the panel carries both identifiers. The surfaces that ARE administering already satisfy the
+rule on the row itself: `/medication-round` renders `patientName` and `uhid` together, resolved
+server-side, and passes both into the confirmation.
+
+Changing the ward row would have been changing the product to satisfy a document that was stricter
+than its own safety rule. Instead the runbook row now says where the requirement applies — and the
+requirement is now **tested where it matters**, which it previously was not:
+`clinicalSafety.spec.ts` asserts every dose row on the round carries a name AND a UHID. That is
+FR-02's actual claim, and until now no test made it in a browser.
 
 ### Not automatable — stated plainly, not quietly dropped
 
@@ -990,9 +1070,14 @@ green suite is not mistaken for coverage of them:
 - **Two physical devices in two hands** (MAR-02). The concurrency invariant _is_ proven — two real
   HTTP clients race the same dose in `mar.int.test.ts` — but two nurses reaching for the same
   drug is a human scenario, not a client one.
-- **Twelve web pages** (`/mrd`, `/mortuary`, `/theatres`, `/ambulance`, `/assets`, `/insurance`,
-  `/packages`, `/tariff`, `/feedback`, `/audit`, `/subscription`, `/reports`) have no browser
-  coverage. Some are operator surfaces; the rest are simply untested by hand and by browser.
+- **Writes on the back-office registers.** `e2e/pageHealth.spec.ts` loads all eleven of them
+  (see below) but creates nothing: driving a theatre booking or an ambulance dispatch through a
+  browser would leave rows in the shared seeded hospital and make the suite's second run differ
+  from its first. Those writes are proven at the integration layer against a real Mongo.
+- **The activity trail's CSV export.** `/reports` proves the Blob-and-anchor download path;
+  `/audit` uses the same mechanism, and a second browser test of it would re-prove the same
+  plumbing at the cost of a minute per run. Its rows and columns are the API's, and the API's
+  tests own them.
 
 **Status vocabulary.** Automated coverage is recorded as `AUTOMATED — PROVEN`,
 `AUTOMATED — STRENGTHENED`, `AUTOMATED — PLAYWRIGHT`, or
