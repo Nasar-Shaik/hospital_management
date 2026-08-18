@@ -4932,6 +4932,13 @@ export class ApiClient {
       encounterId?: string;
       patientId?: string;
       outstanding?: boolean;
+      /**
+       * `queue` (default) is a WORKLIST — sickest first, then longest-waiting. `recent` is a
+       * CHART — newest first. The difference matters at the 100-row ceiling: asking the worklist
+       * question of a long-stay patient's history cuts off the newest results, which are exactly
+       * the ones a doctor is waiting for.
+       */
+      sort?: "queue" | "recent";
       page?: number;
       limit?: number;
     } = {},

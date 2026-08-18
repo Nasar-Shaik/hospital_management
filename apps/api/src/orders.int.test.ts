@@ -1963,3 +1963,101 @@ describe("radiology is gated on the module the hospital bought", () => {
     });
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 14. A WORKLIST AND A CHART ARE DIFFERENT QUESTIONS
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * One that hides the newest result on a long-stay patient's chart, silently, and reports a smaller
+ * number than the truth while doing it.
+ *
+ * `GET /orders` served both the department bench and the patient chart with one order: sickest
+ * first, then oldest. That is correct for a bench — an emergency must not queue behind a routine,
+ * and the longest wait comes next — and it is exactly wrong for a history, where "what has just
+ * come back" is the whole question.
+ *
+ * It only becomes a DEFECT at the ceiling. `limit` is capped at 100 by the schema, so a patient
+ * with more than 100 orders — an ICU stay of a few weeks, easily — had their newest results fall
+ * off the end of the page and never appear on the chart at all. Found while running this
+ * milestone's browser suite repeatedly against one patient, which is how a slow real-world problem
+ * showed up in an afternoon.
+ */
+describe("the order list can be read as a queue or as a history", () => {
+  let chartPatientId = "";
+  let firstName = "";
+  let lastName = "";
+
+  beforeAll(async () => {
+    const encounterId = await encounterWithDoctor("Chart Order", "9000000300");
+    const enc = await as("doctor", request(app).get(`/api/v1/encounters/${encounterId}`)).expect(
+      200,
+    );
+    chartPatientId = enc.body.data.patientId as string;
+
+    // Three studies, in a known order, with the LAST one deliberately the lowest priority — so a
+    // list that sorts by priority cannot accidentally agree with a list that sorts by time.
+    firstName = "First Study";
+    lastName = "Last Study";
+    for (const [name, priority] of [
+      [firstName, "stat"],
+      ["Middle Study", "urgent"],
+      [lastName, "routine"],
+    ] as const) {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "radiology", code: "XRAY_LIMB", name, priority })
+        .expect(201);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }, 60_000);
+
+  it("works a bench sickest-first by default — the existing behaviour, unchanged", async () => {
+    const res = await as(
+      "radiographer",
+      request(app).get(`/api/v1/orders?patientId=${chartPatientId}&category=radiology&limit=10`),
+    ).expect(200);
+
+    const names = (res.body.data as { name: string }[]).map((o) => o.name);
+    expect(names[0], "the stat study lost its place at the top of the bench").toBe(firstName);
+    expect(names[names.length - 1]).toBe(lastName);
+  });
+
+  it("reads a chart newest-first when asked to", async () => {
+    const res = await as(
+      "doctor",
+      request(app).get(
+        `/api/v1/orders?patientId=${chartPatientId}&category=radiology&limit=10&sort=recent`,
+      ),
+    ).expect(200);
+
+    const names = (res.body.data as { name: string }[]).map((o) => o.name);
+    expect(names[0], "the chart did not put the most recent study first").toBe(lastName);
+    expect(names[names.length - 1]).toBe(firstName);
+  });
+
+  /**
+   * THE ASSERTION THAT EARNS THIS BLOCK. At the page ceiling the two orders drop opposite ends,
+   * and only one of them is survivable: a chart that loses its OLDEST entry is a chart with
+   * history to page through, and a chart that loses its NEWEST is a doctor who cannot see the
+   * result that just came back.
+   */
+  it("keeps the newest on the first page when the history is longer than the page", async () => {
+    const page = await as(
+      "doctor",
+      request(app).get(
+        `/api/v1/orders?patientId=${chartPatientId}&category=radiology&limit=1&sort=recent`,
+      ),
+    ).expect(200);
+
+    expect((page.body.data as { name: string }[])[0]!.name).toBe(lastName);
+    // And it says how much more there is, so a truncated page is never mistaken for the whole.
+    expect(page.body.meta.total).toBeGreaterThan(1);
+    expect(page.body.meta.hasMore).toBe(true);
+  });
+
+  it("refuses a sort it does not implement rather than silently picking one", async () => {
+    await as("doctor", request(app).get("/api/v1/orders?sort=alphabetical")).expect(400);
+  });
+});

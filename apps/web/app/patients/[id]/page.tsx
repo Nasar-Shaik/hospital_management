@@ -182,7 +182,13 @@ function Profile() {
         // `HMS-VAL-001` on every chart, and `soft` turned that into an empty Tests tab — so a
         // patient with three orders read "Tests 0". The strand still tolerates a real refusal
         // (a desk without `order:read`); it no longer manufactures one.
-        soft(api.listOrders({ patientId: id, limit: 100 }), {
+        /**
+         * `sort: "recent"` — this is a HISTORY, not a bench. The default is the worklist order
+         * (sickest first, then oldest), and asking for it here meant that once a patient passed
+         * 100 orders the page silently dropped the NEWEST ones: a long-stay patient's most recent
+         * result was never shown, and the tab counted 100 while the chart held more.
+         */
+        soft(api.listOrders({ patientId: id, limit: 100, sort: "recent" }), {
           items: [] as OrderRow[],
           meta: { page: 1, limit: 0 },
         }),

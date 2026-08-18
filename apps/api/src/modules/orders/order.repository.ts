@@ -2,7 +2,7 @@
  * Order repository — the ONLY code that queries `orders` (Constitution §6).
  */
 import type { ClientSession } from "mongoose";
-import { Types } from "mongoose";
+import { Types, type SortOrder } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { isDuplicateKey } from "../../core/db/mongoErrors.js";
 import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
@@ -299,6 +299,8 @@ export interface ListOrdersFilter {
   priority?: OrderPriority;
   /** The department worklist: everything not yet released or cancelled. */
   outstandingOnly?: boolean;
+  /** `queue` (default) works a bench; `recent` reads a chart. See the sort below. */
+  sort?: "queue" | "recent";
   limit: number;
   skip: number;
 }
@@ -327,14 +329,19 @@ export async function list(filter: ListOrdersFilter): Promise<{ items: Order[]; 
     ...(filter.outstandingOnly ? { status: { $in: OUTSTANDING } } : {}),
   };
 
+  /**
+   * A worklist and a chart are different questions, and one order does not serve both.
+   *
+   * `queue` — sickest first, then oldest. Never the other way round: a list worked from the top
+   *           must put the emergency above the routine, and the longest wait above the newest.
+   * `recent` — newest first, for a patient's history, where "what has just come back" is the
+   *           whole point and priority is irrelevant to a result already in hand.
+   */
+  const order: Record<string, SortOrder> =
+    filter.sort === "recent" ? { orderedAt: -1 } : { priorityRank: 1, orderedAt: 1 };
+
   const [docs, total] = await Promise.all([
-    model
-      // Sickest first, then oldest. Never the other way round.
-      .find(query)
-      .sort({ priorityRank: 1, orderedAt: 1 })
-      .skip(filter.skip)
-      .limit(filter.limit)
-      .lean<OrderDoc[]>(),
+    model.find(query).sort(order).skip(filter.skip).limit(filter.limit).lean<OrderDoc[]>(),
     model.countDocuments(query),
   ]);
 

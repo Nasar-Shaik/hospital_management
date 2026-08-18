@@ -75,7 +75,18 @@ async function arrange(request: APIRequestContext, baseURL: string): Promise<Fix
     stays.length,
     `no open admission at ${site.name} to hang a study on — run pnpm seed:validation`,
   ).toBeGreaterThan(0);
-  const stay = stays[0]!;
+
+  /**
+   * ── A DIFFERENT ADMISSION EACH RUN ──────────────────────────────────────────
+   * `stays[0]` was the obvious choice and it is the wrong one: every run of every browser spec
+   * then hangs its order on the SAME patient. Eight runs later that chart held 104 orders, and the
+   * page's own 100-row ceiling started cutting the newest ones off — which is how the sort defect
+   * in `GET /orders` was found, but it also meant this suite was slowly breaking itself.
+   *
+   * Rotating by the clock spreads them over the seeded ward. It is not cleanup — the teardown
+   * below does that — it is refusing to concentrate the load on one record.
+   */
+  const stay = stays[Math.floor(Date.now() / 1000) % stays.length]!;
 
   const stamp = Date.now().toString();
   const placed = await apiPost<PlacedOrder>(

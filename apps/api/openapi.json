@@ -12933,6 +12933,16 @@
             }
           },
           {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["queue", "recent"],
+              "default": "queue"
+            }
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,

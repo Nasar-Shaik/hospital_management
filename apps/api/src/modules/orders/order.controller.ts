@@ -38,6 +38,8 @@ export const listOrders: RequestHandler = async (req, res) => {
     ...(query.encounterId ? { encounterId: query.encounterId } : {}),
     ...(query.patientId ? { patientId: query.patientId } : {}),
     ...(query.outstanding ? { outstandingOnly: true } : {}),
+    // Defaulted in the schema, so every existing caller keeps the worklist order untouched.
+    sort: query.sort,
   });
 
   ok(res, items, 200, {
