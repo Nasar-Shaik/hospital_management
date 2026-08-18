@@ -38,6 +38,7 @@ interface Fixture {
   adminToken: string;
   site: { id: string; name: string };
   orderId: string;
+  encounterId: string;
   studyName: string;
   patientName: string;
   uhid: string;
@@ -97,6 +98,7 @@ async function arrange(request: APIRequestContext, baseURL: string): Promise<Fix
     adminToken,
     site,
     orderId: placed.order.id,
+    encounterId: stay.id,
     studyName: placed.order.name,
     patientName: stay.patientName,
     uhid: stay.uhid,
@@ -108,6 +110,25 @@ test.describe.configure({ mode: "serial" });
 test.describe("radiology, from the console to the chart", () => {
   test.beforeAll(async ({ request, baseURL }) => {
     fixture = await arrange(request, baseURL ?? "http://sunrise.localhost:3000");
+  });
+
+  /**
+   * A run that finishes leaves a RELEASED study, which is terminal and sits on no worklist. A run
+   * that fails halfway leaves a `placed` one, which sits on the imaging board forever and makes
+   * the next run pick between two — so it is called off here. Cancel is legal from `placed` and
+   * `accepted`, reverses the charge, and is refused once the study is under way, which is correct:
+   * by then the patient has taken the dose.
+   */
+  test.afterAll(async ({ request }) => {
+    await request
+      .post(`${fixture.api}/api/v1/orders/${fixture.orderId}/cancel`, {
+        headers: {
+          authorization: `Bearer ${fixture.adminToken}`,
+          "x-active-branch": fixture.site.id,
+        },
+        data: { reason: "end of browser test — leaving the imaging board as it was found" },
+      })
+      .catch(() => undefined);
   });
 
   test("a radiographer performs, reports and releases a study — no radiologist", async ({
@@ -138,6 +159,31 @@ test.describe("radiology, from the console to the chart", () => {
     await expect(main.getByText(fixture.studyName).first()).toBeVisible({ timeout: 15_000 });
 
     /**
+     * ── EVERY ACTION IS SCOPED TO THIS RUN'S STUDY ──────────────────────────
+     * One patient can have several studies open, and a failed earlier run leaves one behind. The
+     * first version of this reached for `.first()` on each button and, the moment there were two
+     * rows, settled and performed somebody ELSE's study while asserting about its own — green or
+     * red for reasons unrelated to the code. Identity, not position.
+     */
+    const study = () => main.locator("li").filter({ hasText: fixture.studyName }).last();
+
+    /**
+     * ── AND FOLLOWS IT BETWEEN THE STATUS BUCKETS ───────────────────────────
+     * The worklist is split into Pending / In progress / Completed, which is the console's real
+     * shape: what is waiting, what is on the machine, what is written up. So a study LEAVES the
+     * list the moment it is started, and the next control lives on another tab.
+     *
+     * That is worth walking rather than working around. A spec that stayed on one tab would be
+     * testing a screen nobody uses, and the tab switch is the step a radiographer takes dozens of
+     * times a shift — if it stopped carrying the selected patient across, the work would look lost.
+     */
+    const openIn = async (bucket: RegExp) => {
+      await main.getByRole("button", { name: bucket }).click();
+      await row.first().click();
+      await expect(study()).toBeVisible({ timeout: 15_000 });
+    };
+
+    /**
      * ── THE MONEY STEP APPLIES TO IMAGING TOO ───────────────────────────────
      * The web worklist holds unpaid work (`AI_Workflow/docs/PAYMENT_POLICY.md`), and it holds a CT
      * exactly as it holds a blood count — which is right, and is why this step is walked rather
@@ -147,26 +193,23 @@ test.describe("radiology, from the console to the chart", () => {
      * Branching on what the SERVER says, not on a guess: the seeded hospital may be zero-tariff
      * (`free`), pre-billed (`paid`) or mid-flight (`unbilled`), and all of those are legitimate.
      */
-    const settle = main.getByRole("button", { name: /Proceed — deduct/ });
-    if (
-      await settle
-        .first()
-        .isVisible()
-        .catch(() => false)
-    ) {
-      await settle.first().click();
+    const settle = study().getByRole("button", { name: /Proceed — deduct/ });
+    if (await settle.isVisible().catch(() => false)) {
+      await settle.click();
     }
     await expect(
-      main.getByText("Awaiting payment — held until paid at billing"),
-      "the study was held for payment with no way to release it — an inpatient should settle from advance",
+      study().getByText("Awaiting payment — held until paid at billing"),
+      "the study was held for payment with no way to release it — an inpatient settles from advance",
     ).toHaveCount(0, { timeout: 20_000 });
 
     // ── perform ──────────────────────────────────────────────────────────────
-    await main.getByRole("button", { name: "Accept" }).first().click();
-    await main.getByRole("button", { name: "Start" }).first().click();
+    await study().getByRole("button", { name: "Accept" }).click();
+    await study().getByRole("button", { name: "Start" }).click();
 
     // ── report ───────────────────────────────────────────────────────────────
-    await main.getByRole("button", { name: "Enter result" }).first().click();
+    // Started work is on the machine, so it is on the In-progress tab now.
+    await openIn(/^In progress/);
+    await study().getByRole("button", { name: "Enter result" }).click();
 
     /**
      * THE ASSERTION THIS SPEC EXISTS FOR. An imaging study must be asked for prose, not for a grid
@@ -174,26 +217,28 @@ test.describe("radiology, from the console to the chart", () => {
      * radiographer to fill it is asking them to file an X-ray as a blood count.
      */
     await expect(
-      main.getByText("Report — findings and impression"),
+      study().getByText("Report — findings and impression"),
       "the imaging console was shown the laboratory's result form",
     ).toBeVisible();
-    await expect(main.getByText("Measurements — most studies have none")).toBeVisible();
+    await expect(study().getByText("Measurements — most studies have none")).toBeVisible();
 
     const REPORT =
       "PA chest, adequate inspiration. Lung fields clear, no focal consolidation. " +
       "Impression: no acute cardiopulmonary abnormality.";
-    await main.getByRole("textbox").first().fill(REPORT);
-    await main.getByRole("button", { name: "Record result" }).click();
+    await study().getByRole("textbox").first().fill(REPORT);
+    await study().getByRole("button", { name: "Record result" }).click();
 
     // ── and carries it to the doctor, alone ──────────────────────────────────
-    const verify = main.getByRole("button", { name: "Verify" }).first();
+    // Written up: the running is done, so it sits under Completed awaiting sign-off.
+    await openIn(/^Completed/);
+    const verify = study().getByRole("button", { name: "Verify" });
     await expect(
       verify,
       "the radiographer could report the study but not sign it off — a radiologist would be required",
     ).toBeVisible({ timeout: 15_000 });
     await verify.click();
 
-    const release = main.getByRole("button", { name: "Release to doctor" }).first();
+    const release = study().getByRole("button", { name: "Release to doctor" });
     await expect(release).toBeVisible({ timeout: 15_000 });
     await release.click();
 
@@ -225,17 +270,35 @@ test.describe("radiology, from the console to the chart", () => {
    * The boundary that made the narrow role worth building. `emr:read` would have made the whole
    * workflow above pass and handed a radiographer the admissions register, the drug chart and the
    * death register with it.
+   *
+   * ── AND WHY IT IS HERE RATHER THAN ONLY IN THE INTEGRATION SUITE ──────────
+   * `orders.int.test.ts` proves the same three refusals, and it proves them about a role IT
+   * created. This proves them about the role a real hospital actually has — the one
+   * `seedRbac`/`DEFAULT_ROLES` puts in a provisioned tenant. A grant added to the shipped default
+   * without being added to the test's own fixture would slip past the integration suite entirely.
    */
-  test("the radiographer cannot open a patient's chart", async ({ page }) => {
-    await signIn(page, ACCOUNTS.radiographer);
+  test("the radiographer the hospital actually has cannot open a chart", async ({
+    request,
+    baseURL,
+  }) => {
+    const api = apiOrigin(baseURL ?? "http://sunrise.localhost:3000");
+    // A REAL token. `page.request` carries no bearer — the app holds it in memory, not a cookie —
+    // so asserting through it produced a 401 and would have passed against any role at all.
+    const bearer = await token(request, api, ACCOUNTS.radiographer);
+    const patientId = await patientOf(request, fixture);
 
-    const refused = await page.request.get(
-      `${fixture.api}/api/v1/patients/${await patientOfOrder(page, fixture)}/reports`,
-      { headers: { "x-active-branch": fixture.site.id } },
+    const headers = { authorization: `Bearer ${bearer}`, "x-active-branch": fixture.site.id };
+
+    const chartReports = await request.get(`${api}/api/v1/patients/${patientId}/reports`, {
+      headers,
+    });
+    expect(chartReports.status(), "imaging staff reached the chart-wide report list").toBe(403);
+
+    const consultation = await request.get(
+      `${api}/api/v1/encounters/${fixture.encounterId}/consultation`,
+      { headers },
     );
-    expect(refused.status(), "imaging staff reached the patient's chart-wide report list").toBe(
-      403,
-    );
+    expect(consultation.status(), "imaging staff read the doctor's own note").toBe(403);
   });
 });
 
@@ -250,6 +313,15 @@ async function statusOf(page: Page, f: Fixture): Promise<string> {
 
 async function patientOfOrder(page: Page, f: Fixture): Promise<string> {
   const res = await page.request.get(`${f.api}/api/v1/orders/${f.orderId}`, {
+    headers: { authorization: `Bearer ${f.adminToken}`, "x-active-branch": f.site.id },
+  });
+  const body = (await res.json()) as { data: { patientId: string } };
+  return body.data.patientId;
+}
+
+/** The same, off the plain request fixture. */
+async function patientOf(request: APIRequestContext, f: Fixture): Promise<string> {
+  const res = await request.get(`${f.api}/api/v1/orders/${f.orderId}`, {
     headers: { authorization: `Bearer ${f.adminToken}`, "x-active-branch": f.site.id },
   });
   const body = (await res.json()) as { data: { patientId: string } };
