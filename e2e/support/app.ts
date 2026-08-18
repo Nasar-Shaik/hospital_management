@@ -24,6 +24,8 @@ export const ACCOUNTS = {
    * It does NOT hold `emr:read` — see `AI_Workflow/docs/RADIOLOGY.md`.
    */
   radiographer: "radiographer@sunrise.test",
+  /** The counter. Holds `pharmacy:dispense` and `pharmacy:stock`, and no EMR write. */
+  pharmacist: "pharmacy@sunrise.test",
 } as const;
 
 /**

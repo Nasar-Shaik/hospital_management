@@ -416,6 +416,19 @@ async function seed(ctx: Ctx, nurseId: string, doctorId: string): Promise<SiteB>
 
   if (already >= ADMISSIONS_A) {
     logger.info({ already }, "ward already populated — skipping patients");
+    /**
+     * ── BUT THE DOSES ARE PERISHABLE, AND THE PATIENTS ARE NOT ────────────────
+     * Returning here was the whole of the re-seed, and it made this script unable to fix the one
+     * thing that actually goes wrong with age. A prescription is signed for `durationDays: 5`; a
+     * week later the ward is still full, so this early return fires, and the medication round is
+     * empty. The Playwright preflight then fails with "no doses are scheduled today — run
+     * `pnpm seed:validation`", the tester runs it, it says "environment ready", and nothing
+     * changes. A remedy that does not work is worse than no remedy: it costs the next person an
+     * afternoon before they stop believing the message.
+     *
+     * So a populated ward still gets its medication topped up when today has no doses on it.
+     */
+    await topUpDoses(ctx, doctorId, branchAId);
     return siteB;
   }
 
@@ -490,6 +503,56 @@ async function seed(ctx: Ctx, nurseId: string, doctorId: string): Promise<SiteB>
   });
 
   return siteB;
+}
+
+/**
+ * Re-signs today's medication on a ward that is already populated.
+ *
+ * Only when there is nothing scheduled — a ward with live doses is left exactly alone, because
+ * re-signing over a working dataset would pile duplicate prescriptions onto the same patients
+ * every time anybody ran the script.
+ */
+async function topUpDoses(ctx: Ctx, doctorId: string, branchAId: string): Promise<void> {
+  await asActor(ctx, doctorId, branchAId, async () => {
+    const page = await listInpatients({ limit: 100, skip: 0 });
+    const items = page.items.filter((e) => e.branchId === branchAId);
+    if (items.length === 0) return;
+
+    const zone = ZONE_A;
+    const { from, before } = dayRangeInZone(dayKey(zone), zone);
+    const encounterIds = items.map((e) => e.id);
+    const prescriptions = await listForEncounters(encounterIds);
+    const administrations = await listByEncounters(encounterIds);
+
+    const slots = items.reduce(
+      (n, stay) =>
+        n +
+        slotsForStay({
+          prescriptions: prescriptions.filter((p) => p.encounterId === stay.id),
+          administrations: administrations.filter((a) => a.encounterId === stay.id),
+          zone,
+          from,
+          before,
+          now: Date.now(),
+        }).length,
+      0,
+    );
+
+    if (slots > 0) {
+      logger.info({ slots }, "doses already scheduled today — leaving medication alone");
+      return;
+    }
+
+    let charted = 0;
+    for (const [i, stay] of items.slice(0, MEDICATED).entries()) {
+      const shape = RX_SHAPES[i % RX_SHAPES.length];
+      if (!shape) continue;
+      const rx = await createPrescription({ encounterId: stay.id, lines: shape.lines });
+      await signPrescription(rx.id);
+      charted += 1;
+    }
+    logger.info({ charted }, "medication topped up — the previous prescriptions had run out");
+  });
 }
 
 /* ─────────────────────────── read-only verification ─────────────────────── */
