@@ -22,7 +22,10 @@ test.describe("the staff directory", () => {
     await signIn(page, ACCOUNTS.admin);
 
     const sites = await branchNames(page);
-    test.skip(sites.length < 2, "needs a hospital with two sites — run pnpm seed:validation");
+    expect(
+      sites.length,
+      "the switcher offered fewer sites than the account can work in",
+    ).toBeGreaterThanOrEqual(2);
     const [siteA, siteB] = sites as [string, string];
 
     await page.goto("/staff");
@@ -69,7 +72,10 @@ test.describe("the staff directory", () => {
   test("shows which sites each person works at", async ({ page }) => {
     await signIn(page, ACCOUNTS.admin);
     const sites = await branchNames(page);
-    test.skip(sites.length < 2, "needs a hospital with two sites");
+    expect(
+      sites.length,
+      "the switcher offered fewer sites than the account can work in",
+    ).toBeGreaterThanOrEqual(2);
 
     await page.goto("/staff");
     await expect(page.getByRole("heading", { name: "Staff" })).toBeVisible();

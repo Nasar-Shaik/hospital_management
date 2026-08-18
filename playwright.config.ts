@@ -62,7 +62,24 @@ export default defineConfig({
     timezoneId: "Asia/Kolkata",
   },
 
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  /**
+   * `preflight` runs first and everything else depends on it.
+   *
+   * The suite needs the hospital `seed:validation` builds — two open sites, patients in beds at
+   * both, doses on the ward, the demo accounts. When that was checked inside the tests it was
+   * checked with `test.skip`, which reports a missing environment as a PASS: the run went green
+   * having never exercised branch isolation at all. As a dependency it fails once, says which
+   * prerequisite is absent and how to restore it, and Playwright marks the rest not-run.
+   */
+  projects: [
+    { name: "preflight", testMatch: /preflight\.setup\.ts$/ },
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      dependencies: ["preflight"],
+      testIgnore: /preflight\.setup\.ts$/,
+    },
+  ],
 
   /**
    * Starts the stack if it is not already up, so `pnpm test:e2e` works from a cold checkout and

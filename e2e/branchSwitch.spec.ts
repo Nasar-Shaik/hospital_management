@@ -32,8 +32,17 @@ test.describe("switching sites", () => {
   test("repaints the ward, and leaves nothing of the previous site behind", async ({ page }) => {
     await signIn(page, ACCOUNTS.nurse);
 
+    /**
+     * A hard assertion, not a skip. `preflight.setup.ts` has already proved the hospital has two
+     * open sites with disjoint occupied beds, so reaching here with fewer means the switcher is
+     * not offering what the account can reach — which is a defect in the product, not a reason to
+     * report this test as passed.
+     */
     const sites = await branchNames(page);
-    test.skip(sites.length < 2, "needs a hospital with two sites — run pnpm seed:validation");
+    expect(
+      sites.length,
+      "the switcher offered fewer sites than the account can work in",
+    ).toBeGreaterThanOrEqual(2);
     const [siteA, siteB] = sites as [string, string];
 
     // ── Site A ────────────────────────────────────────────────────────────
@@ -76,7 +85,10 @@ test.describe("switching sites", () => {
   test("keeps the choice across a full page load", async ({ page }) => {
     await signIn(page, ACCOUNTS.nurse);
     const sites = await branchNames(page);
-    test.skip(sites.length < 2, "needs a hospital with two sites");
+    expect(
+      sites.length,
+      "the switcher offered fewer sites than the account can work in",
+    ).toBeGreaterThanOrEqual(2);
     const siteB = sites[1] as string;
 
     await switchToBranch(page, siteB);
