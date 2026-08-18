@@ -188,10 +188,52 @@ test.describe("radiology, from the console to the chart", () => {
      * testing a screen nobody uses, and the tab switch is the step a radiographer takes dozens of
      * times a shift — if it stopped carrying the selected patient across, the work would look lost.
      */
-    const openIn = async (bucket: RegExp) => {
-      await main.getByRole("button", { name: bucket }).click();
-      await row.first().click();
-      await expect(study()).toBeVisible({ timeout: 15_000 });
+    /**
+     * Switches bucket, re-opens the patient, and waits for the CONTROL — not merely for the row.
+     *
+     * The first version asserted the study row was visible and then clicked the button inside it,
+     * which failed about one run in five: the worklist refetches after every transition, so a
+     * re-render landing between the tab click and the button click replaced the row and the click
+     * found nothing. Retrying the whole open until the control is actually there makes the step
+     * depend on the DATA having arrived rather than on one render happening to survive.
+     */
+    /**
+     * One transition, safe against the re-render that follows it.
+     *
+     * Every action calls `load()` when it returns, so the row is replaced and the button is both
+     * briefly DISABLED (`busy`) and then detached. A plain click raced that: Playwright would
+     * resolve the element, wait for it to become enabled, watch it detach, retry — and on a loaded
+     * machine exhaust its timeout. About one run in five.
+     *
+     * So the click is attempted only while its control is still on screen, and the step succeeds
+     * when the NEXT control appears. Re-entering after a click that already landed is therefore a
+     * no-op rather than a second transition, which matters: clicking Accept twice is a 422, and a
+     * test that could send one would be testing its own retry logic.
+     */
+    const step = async (control: string, until: string | null) => {
+      await expect(async () => {
+        const button = study().getByRole("button", { name: control });
+        if (await button.isVisible().catch(() => false)) {
+          await button.click({ timeout: 5_000 }).catch(() => undefined);
+        }
+        if (until === null) {
+          await expect(button).toHaveCount(0, { timeout: 3_000 });
+        } else {
+          await expect(study().getByRole("button", { name: until })).toBeVisible({
+            timeout: 3_000,
+          });
+        }
+      }).toPass({ timeout: 40_000 });
+    };
+
+    const openIn = async (bucket: RegExp, control: string) => {
+      await expect(async () => {
+        await main.getByRole("button", { name: bucket }).click();
+        await row.first().click();
+        await expect(study().getByRole("button", { name: control })).toBeVisible({
+          timeout: 3_000,
+        });
+      }).toPass({ timeout: 30_000 });
     };
 
     /**
@@ -214,12 +256,12 @@ test.describe("radiology, from the console to the chart", () => {
     ).toHaveCount(0, { timeout: 20_000 });
 
     // ── perform ──────────────────────────────────────────────────────────────
-    await study().getByRole("button", { name: "Accept" }).click();
-    await study().getByRole("button", { name: "Start" }).click();
+    await step("Accept", "Start");
+    await step("Start", null);
 
     // ── report ───────────────────────────────────────────────────────────────
     // Started work is on the machine, so it is on the In-progress tab now.
-    await openIn(/^In progress/);
+    await openIn(/^In progress/, "Enter result");
     await study().getByRole("button", { name: "Enter result" }).click();
 
     /**
@@ -241,17 +283,13 @@ test.describe("radiology, from the console to the chart", () => {
 
     // ── and carries it to the doctor, alone ──────────────────────────────────
     // Written up: the running is done, so it sits under Completed awaiting sign-off.
-    await openIn(/^Completed/);
-    const verify = study().getByRole("button", { name: "Verify" });
+    await openIn(/^Completed/, "Verify");
     await expect(
-      verify,
+      study().getByRole("button", { name: "Verify" }),
       "the radiographer could report the study but not sign it off — a radiologist would be required",
     ).toBeVisible({ timeout: 15_000 });
-    await verify.click();
-
-    const release = study().getByRole("button", { name: "Release to doctor" });
-    await expect(release).toBeVisible({ timeout: 15_000 });
-    await release.click();
+    await step("Verify", "Release to doctor");
+    await step("Release to doctor", null);
 
     // The server is the truth, not the screen: a button that greys out without persisting looks
     // identical to a released study.
