@@ -21,6 +21,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { ThemeToggle } from "@medicore/ui";
+import { AlertBell } from "./AlertBell";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { LicenseBanner } from "./LicenseBanner";
 import { useAuth } from "./AuthProvider";
@@ -56,7 +57,16 @@ interface NavSection {
 const NAVIGATION: NavSection[] = [
   {
     title: "Overview",
-    items: [{ label: "Dashboard", href: "/dashboard", icon: "dashboard" }],
+    items: [
+      { label: "Dashboard", href: "/dashboard", icon: "dashboard" },
+      /**
+       * No `permission`, and that is the decision rather than an omission: every signed-in person
+       * receives messages, and the route scopes to the caller's own. Gating it would mean a
+       * hospital that built its own role could have staff unable to reach their own alerts — and
+       * the symptom would be a missing menu entry, which nobody reports as a bug.
+       */
+      { label: "Alerts", href: "/alerts", icon: "bell" },
+    ],
   },
   {
     title: "Administration",
@@ -530,6 +540,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/*
+             * Left of the branch switcher on purpose. The inbox is NOT branch-scoped — a message
+             * is addressed to a person, not a site — so putting the bell to the switcher's right
+             * would read as belonging to it, and imply that switching sites changes what is in it.
+             * See `AI_Workflow/docs/COMMUNICATION_POLICY.md`.
+             */}
+            <AlertBell />
             <BranchSwitcher />
             <ThemeToggle />
 
