@@ -43,6 +43,7 @@ import {
   type VitalsReading,
   type DoctorRef,
   type DiagnosisType,
+  type MedicineAvailability,
 } from "@medicore/api-client";
 import { VitalsPanel } from "../../components/Vitals";
 import { useAuth } from "../../components/AuthProvider";
@@ -730,6 +731,21 @@ function PatientReports({ reports }: { reports: ReportMeta[] }) {
   );
 }
 
+/**
+ * How much of a drug the hospital pharmacy could hand over today.
+ *
+ * Silent when the lookup has not answered — an absent line is honest, and a "0" printed because a
+ * request is still in flight would tell a doctor the pharmacy is empty when it is not.
+ */
+function Availability({ of }: { of?: MedicineAvailability }) {
+  if (!of) return null;
+
+  if (of.units <= 0) {
+    return <span className="ml-1.5 font-medium text-[var(--color-danger)]">· out of stock</span>;
+  }
+  return <span className="ml-1.5 text-[var(--color-fg-subtle)]">· {of.units} in stock</span>;
+}
+
 function RxPad({
   encounter,
   drugs,
@@ -758,6 +774,35 @@ function RxPad({
     const q = filter.trim().toLowerCase();
     return q ? drugs.filter((d) => d.name.toLowerCase().includes(q)) : drugs;
   }, [drugs, filter]);
+
+  /**
+   * ── WHAT THE PHARMACY COULD ACTUALLY GIVE THIS PATIENT ──────────────────
+   * INFORMATION, never permission. Nothing below consumes this to disable a button or refuse a
+   * line, and nothing should: a doctor prescribes what the patient needs, and if the hospital is
+   * out they buy it outside — the prescription is what they take to the shop. A stock check that
+   * could block prescribing would turn an inventory problem into a clinical one.
+   *
+   * Asked for the whole visible list in ONE request rather than per drug, and re-asked when the
+   * filter changes the list. It fails silently on purpose: a prescriber who cannot see stock is
+   * mildly worse off, and an error banner over a prescribing pad because an inventory lookup
+   * timed out would be far worse than not knowing.
+   */
+  const [stock, setStock] = useState<Record<string, MedicineAvailability>>({});
+  useEffect(() => {
+    const codes = shown.map((d) => d.code);
+    if (codes.length === 0) return;
+    let live = true;
+    api
+      .medicineAvailability(codes)
+      .then((rows) => {
+        if (!live) return;
+        setStock((prev) => ({ ...prev, ...Object.fromEntries(rows.map((r) => [r.code, r])) }));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [api, shown]);
 
   /**
    * Editing the lines invalidates any pending safety review — it was screened against
@@ -883,6 +928,12 @@ function RxPad({
             className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] hover:bg-[var(--color-brand-50)]"
           >
             {d.name}
+            {/*
+             * Out of stock is said in WORDS, not by a colour or a disabled button. The drug is
+             * still one tap away — this tells the doctor to warn the patient they will be buying
+             * it outside, which is the entire point of showing it.
+             */}
+            <Availability of={stock[d.code]} />
           </button>
         ))}
         {shown.length === 0 && (

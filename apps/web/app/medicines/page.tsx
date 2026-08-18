@@ -22,6 +22,7 @@ import {
   type StockMovement,
   type StockReportRow,
   type StockStatus,
+  type MedicineBatch,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, Field, Modal } from "../../components/ui";
@@ -271,6 +272,16 @@ function ReceiveForm({
           onChange={(e) => setExpiry(e.target.value)}
         />
       </div>
+      {/*
+       * The pair, or neither. A batch number with no expiry cannot be expired out; an expiry with
+       * no batch number cannot be recalled. The server refuses one without the other — this says
+       * so before the pharmacist finds out by being refused.
+       */}
+      <p className="text-xs text-[var(--color-fg-subtle)]">
+        Give a batch number <strong>and</strong> an expiry date to track this delivery as a batch —
+        dispensing will then use the earliest expiry first and never touch expired stock. Leave both
+        blank to add to the running total only.
+      </p>
       <div className="flex justify-end">
         <Button type="submit" loading={saving}>
           Receive stock
@@ -336,6 +347,65 @@ function AdjustForm({
   );
 }
 
+/**
+ * The lots of one drug — the shelf, as the person who keeps it has to see it.
+ *
+ * ── EXPIRED LOTS ARE SHOWN, LOUDLY ──────────────────────────────────────────
+ * They are excluded from every dispensing path, which is the safety half. This is the other
+ * half: somebody has to physically pull that box and write it off, and a screen that hides
+ * expired stock guarantees it stays on the shelf. Hiding it would make the software tidy and the
+ * pharmacy wrong.
+ */
+function Shelf({ batches }: { batches: MedicineBatch[] }) {
+  if (batches.length === 0) {
+    return (
+      <p className="text-sm text-[var(--color-fg-muted)]">
+        No batches recorded. Stock received without a batch number and expiry date sits on the
+        running total only — it cannot be expired out or recalled.
+      </p>
+    );
+  }
+
+  const TONE: Record<
+    MedicineBatch["state"],
+    { tone: "danger" | "warning" | "success"; label: string }
+  > = {
+    expired: { tone: "danger", label: "Expired — pull and write off" },
+    near_expiry: { tone: "warning", label: "Near expiry" },
+    ok: { tone: "success", label: "In date" },
+  };
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="text-xs uppercase text-[var(--color-fg-muted)]">
+          <tr>
+            <th className="px-3 py-2">Batch</th>
+            <th className="px-3 py-2">Expiry</th>
+            <th className="px-3 py-2 text-right">Remaining</th>
+            <th className="px-3 py-2">State</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-[var(--color-border)]">
+          {batches.map((b) => (
+            <tr key={b.id}>
+              <td className="px-3 py-2 font-mono text-xs">{b.batchNo}</td>
+              <td className="px-3 py-2">{new Date(b.expiry).toLocaleDateString()}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{b.remaining}</td>
+              <td className="px-3 py-2">
+                <Badge tone={TONE[b.state].tone}>{TONE[b.state].label}</Badge>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 text-xs text-[var(--color-fg-subtle)]">
+        Dispensing takes the earliest expiry first, and never takes from an expired batch.
+      </p>
+    </div>
+  );
+}
+
 function MovementHistory({ movements }: { movements: StockMovement[] }) {
   if (movements.length === 0) {
     return <p className="text-sm text-[var(--color-fg-muted)]">No movements yet.</p>;
@@ -378,7 +448,7 @@ function MovementHistory({ movements }: { movements: StockMovement[] }) {
   );
 }
 
-type ModalKind = "create" | "edit" | "receive" | "adjust" | "history";
+type ModalKind = "create" | "edit" | "receive" | "adjust" | "history" | "batches";
 
 function MedicinesPage() {
   const { api, can } = useAuth();
@@ -394,6 +464,7 @@ function MedicinesPage() {
   const [modal, setModal] = useState<ModalKind | null>(null);
   const [active, setActive] = useState<Medicine | null>(null);
   const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [batches, setBatches] = useState<MedicineBatch[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | undefined>(undefined);
 
@@ -450,6 +521,12 @@ function MedicinesPage() {
         .listStockMovements(m.id)
         .then(setMovements)
         .catch(() => setMovements([]));
+    }
+    if (kind === "batches") {
+      void api
+        .medicineBatches(m.code)
+        .then(setBatches)
+        .catch(() => setBatches([]));
     }
   }
   function close() {
@@ -617,6 +694,9 @@ function MedicinesPage() {
                           <Button variant="ghost" onClick={() => openFor("adjust", m)}>
                             Adjust
                           </Button>
+                          <Button variant="ghost" onClick={() => openFor("batches", m)}>
+                            Batches
+                          </Button>
                           <Button variant="ghost" onClick={() => openFor("history", m)}>
                             History
                           </Button>
@@ -673,6 +753,11 @@ function MedicinesPage() {
       {modal === "history" && active && (
         <Modal title={`Stock history — ${active.name}`} onClose={close} width="max-w-2xl">
           <MovementHistory movements={movements} />
+        </Modal>
+      )}
+      {modal === "batches" && active && (
+        <Modal title={`Batches — ${active.name}`} onClose={close} width="max-w-2xl">
+          <Shelf batches={batches} />
         </Modal>
       )}
     </div>
