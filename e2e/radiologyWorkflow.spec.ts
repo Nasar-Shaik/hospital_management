@@ -131,15 +131,41 @@ test.describe("radiology, from the console to the chart", () => {
    * by then the patient has taken the dose.
    */
   test.afterAll(async ({ request }) => {
-    await request
-      .post(`${fixture.api}/api/v1/orders/${fixture.orderId}/cancel`, {
-        headers: {
-          authorization: `Bearer ${fixture.adminToken}`,
-          "x-active-branch": fixture.site.id,
-        },
-        data: { reason: "end of browser test — leaving the imaging board as it was found" },
-      })
+    const headers = {
+      authorization: `Bearer ${fixture.adminToken}`,
+      "x-active-branch": fixture.site.id,
+    };
+    const move = (step: string, data?: unknown) =>
+      request
+        .post(`${fixture.api}/api/v1/orders/${fixture.orderId}/${step}`, {
+          headers,
+          ...(data ? { data } : {}),
+        })
+        .catch(() => undefined);
+
+    const res = await request
+      .get(`${fixture.api}/api/v1/orders/${fixture.orderId}`, { headers })
       .catch(() => undefined);
+    const status = res ? ((await res.json()) as { data?: { status?: string } }).data?.status : "";
+
+    /**
+     * Cancel is legal from `placed` and `accepted` and reverses the charge. It is REFUSED once the
+     * study is under way, and rightly: by then the patient has taken the dose. A run that failed
+     * mid-walk therefore cannot be cleaned up by cancelling — the first version tried, the cancel
+     * 422'd into a `.catch`, and three started studies sat on the imaging board for the rest of the
+     * session. A started study is closed out the way a real one would be instead.
+     */
+    if (status === "placed" || status === "accepted") {
+      await move("cancel", {
+        reason: "end of browser test — leaving the imaging board as it was found",
+      });
+    } else if (status === "in_progress" || status === "completed" || status === "verified") {
+      if (status === "in_progress") {
+        await move("complete", { summary: "Closed out after an interrupted browser test." });
+      }
+      if (status !== "verified") await move("verify");
+      await move("release");
+    }
   });
 
   test("a radiographer performs, reports and releases a study — no radiologist", async ({
