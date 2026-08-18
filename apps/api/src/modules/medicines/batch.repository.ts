@@ -153,15 +153,6 @@ export async function listForMedicine(medicineCode: string): Promise<MedicineBat
   return docs.map(toBatch);
 }
 
-/** One lot by id, for an explicit pick or a write-off. */
-export async function findById(id: string): Promise<MedicineBatch | undefined> {
-  if (!Types.ObjectId.isValid(id)) return undefined;
-  const doc = await getMedicineBatchModel(getTenantDb())
-    .findById(new Types.ObjectId(id))
-    .lean<MedicineBatchDoc>();
-  return doc ? toBatch(doc) : undefined;
-}
-
 /**
  * Batched stock on hand per drug, for the availability the prescribing screen shows.
  *
