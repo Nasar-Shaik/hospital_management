@@ -2122,6 +2122,202 @@ describe("vitals reads stop at the branch the visit belongs to (D1)", () => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
+ * THE LABORATORY WORKLIST STOPS AT THE BRANCH
+ *
+ * The worklist is not a screen with a query behind it — it IS the query
+ * (`?category=lab&outstanding=true`), and it is the single most-read list in the laboratory. It
+ * names the patient and their UHID on every row, because a technician deciding whose sample to run
+ * next cannot work from a list that will not say whose it is.
+ *
+ * That makes it a cross-branch disclosure of PHI if it is wrong, and until now nothing asked. The
+ * order repository does call `scopeFilter("orderedBy")`, so the behaviour was there — but "the
+ * behaviour is there" and "the behaviour is pinned" are different claims, and the second is the one
+ * that survives a refactor. Every other read in this file learned that the hard way.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the laboratory worklist shows only the site being worked in", () => {
+  /** A technician confined to each site — the role that actually reads this list. */
+  let techA = "";
+  let techB = "";
+  let orderAId = "";
+  let orderBId = "";
+  /** Kept so the payment probe below can raise a real charge through the real consumer. */
+  let encounterBId = "";
+  let episodeBId = "";
+  let labPatientBId = "";
+
+  beforeAll(async () => {
+    await createUserWithRole("techa@branchiso.test", "LAB_TECHNICIAN", [branchA]);
+    await createUserWithRole("techb@branchiso.test", "LAB_TECHNICIAN", [branchB]);
+    techA = await login("techa@branchiso.test");
+    techB = await login("techb@branchiso.test");
+
+    /**
+     * Its OWN patients, not the suite's shared pair.
+     *
+     * `POST /encounters` RESUMES an open visit rather than opening a second one (200, not 201), so
+     * reusing a patient another block has already seen makes this block's setup depend on the order
+     * the file happens to run in — which is how it passed alone and failed in the full suite.
+     */
+    const pa = await post("/api/v1/patients", tokenMgrA, branchA)
+      .send({ name: "Hyderabad Lab Subject", gender: "female", contact: { phone: "9000800031" } })
+      .expect(201);
+    const pb = await post("/api/v1/patients", tokenAdmin, branchB)
+      .send({ name: "Chennai Lab Subject", gender: "male", contact: { phone: "9000800032" } })
+      .expect(201);
+
+    orderAId = await labOrderAt(branchA, tokenMgrA, pa.body.data.patient.id as string);
+    labPatientBId = pb.body.data.patient.id as string;
+    orderBId = await labOrderAt(branchB, tokenAdmin, labPatientBId);
+  });
+
+  /** A lab order on an open visit at one site. Returns its id. */
+  async function labOrderAt(branch: string, token: string, patientId: string): Promise<string> {
+    const enc = await post("/api/v1/encounters", token, branch)
+      .send({ patientId, departmentId: DOCTOR })
+      .expect(201);
+    const order = await post("/api/v1/orders", token, branch)
+      .send({ encounterId: enc.body.data.encounter.id, category: "lab", code: "CBC", name: "CBC" })
+      .expect(201);
+    if (branch === branchB) {
+      encounterBId = enc.body.data.encounter.id as string;
+      episodeBId = order.body.data.order.episodeId as string;
+    }
+    return order.body.data.order.id as string;
+  }
+
+  const worklist = (token: string, branch?: string) =>
+    get("/api/v1/orders?category=lab&outstanding=true", token, branch);
+
+  /**
+   * The premise. If a technician could not see their OWN site's work, every assertion below would
+   * pass against an empty list and this whole block would prove nothing.
+   */
+  it("shows a technician the work at their own site", async () => {
+    const res = await worklist(techA, branchA).expect(200);
+    expect((res.body.data as { id: string }[]).map((o) => o.id)).toContain(orderAId);
+  });
+
+  /** THE ASSERTION THAT EARNS THIS BLOCK. */
+  it("does NOT show them the other site's work", async () => {
+    const res = await worklist(techA, branchA).expect(200);
+    expect(
+      (res.body.data as { id: string }[]).map((o) => o.id),
+      "a Chennai lab order reached a Hyderabad technician's worklist",
+    ).not.toContain(orderBId);
+  });
+
+  it("holds in the other direction too — a cache can be wrong one way only", async () => {
+    const res = await worklist(techB, branchB).expect(200);
+    const ids = (res.body.data as { id: string }[]).map((o) => o.id);
+    expect(ids).toContain(orderBId);
+    expect(ids, "a Hyderabad lab order reached a Chennai technician's worklist").not.toContain(
+      orderAId,
+    );
+  });
+
+  /**
+   * ADR-0015: a stale or forged `X-Active-Branch` is IGNORED, not refused — the request falls back
+   * to the caller's own allowed scope. So the security property is "no other site's data arrives",
+   * and this asserts that rather than a 4xx the project deliberately did not choose.
+   */
+  it("ignores a header naming a site the technician may not work in", async () => {
+    const res = await worklist(techA, branchB).expect(200);
+    const ids = (res.body.data as { id: string }[]).map((o) => o.id);
+    expect(ids, "naming another branch in the header widened the worklist").not.toContain(orderBId);
+    expect(ids, "the fallback dropped the caller's own work as well").toContain(orderAId);
+  });
+
+  /** With no branch chosen, a confined technician still sees only what their binding allows. */
+  it("gives a confined technician the same answer with no branch selected", async () => {
+    const res = await worklist(techA).expect(200);
+    const ids = (res.body.data as { id: string }[]).map((o) => o.id);
+    expect(ids).toContain(orderAId);
+    expect(ids).not.toContain(orderBId);
+  });
+
+  /**
+   * The identity a worklist row carries is the reason this matters. A leak here is not an id — it
+   * is a name and a UHID, resolved server-side onto every row.
+   */
+  it("carries patient identity, which is what makes a leak here a disclosure", async () => {
+    const res = await worklist(techA, branchA).expect(200);
+    const row = (res.body.data as { id: string; patientName: string; uhid: string }[]).find(
+      (o) => o.id === orderAId,
+    );
+    expect(row?.patientName).toBe("Hyderabad Lab Subject");
+    expect(row?.uhid).toBeTruthy();
+  });
+
+  /**
+   * A hospital-wide reader aggregating across sites is CORRECT — it is what "All branches" means —
+   * and asserting it here stops somebody "fixing" the tests above by making the list always empty.
+   */
+  it("still lets a hospital-wide caller see both sites in aggregate", async () => {
+    const res = await worklist(tokenAdmin).expect(200);
+    const ids = (res.body.data as { id: string }[]).map((o) => o.id);
+    expect(ids).toEqual(expect.arrayContaining([orderAId, orderBId]));
+  });
+
+  /**
+   * ── A KNOWN, NARROW DISCLOSURE — PINNED AT ITS CEILING, NOT AT ZERO ─────────
+   * `orderPaymentStatus` answers per id the CALLER supplies, and `chargesForSources` — the read
+   * behind it — carries no `scopeFilter`. So a technician holding another site's order id can
+   * learn that order's payment flag. Reading the code is what establishes this; the value seen
+   * here happens to be `free`, because this suite seeds no tariff and an unpriced code posts ₹0.
+   *
+   * It is not fixed in this change, deliberately: the filter belongs on `chargesForSources`, whose
+   * other callers include reversal and the deliberately hospital-wide advance path (§24), and that
+   * is a billing decision about every one of them rather than a laboratory one.
+   *
+   * What IS asserted is the ceiling — a status word and nothing else — plus the test below, which
+   * shows the worklist never hands a technician a foreign order id to ask about in the first place.
+   */
+  it("answers a payment flag for a foreign order id, and no more than a flag", async () => {
+    await inTenant(() =>
+      dispatchEventInline({
+        eventId: `evt-pay-${orderBId}`,
+        name: "order.order.placed",
+        version: 1,
+        tenantId: tenant.id,
+        branchId: branchB,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          orderId: orderBId,
+          encounterId: encounterBId,
+          patientId: labPatientBId,
+          episodeId: episodeBId,
+          code: "CBC",
+          name: "Complete Blood Count",
+          category: "lab",
+        },
+      } as never),
+    );
+
+    const res = await get(
+      `/api/v1/billing/order-payments?orderIds=${orderBId}`,
+      techA,
+      branchA,
+    ).expect(200);
+    const state = (res.body.data as Record<string, string>)[orderBId];
+
+    /**
+     * A STATUS WORD AND NOTHING ELSE. Whatever it says, it must never carry the patient, the test
+     * or the money — that is the property the route was designed around and the one worth pinning:
+     * a flag is reachable, a bill is not.
+     */
+    expect(["paid", "unpaid", "unbilled", "free"]).toContain(state);
+    expect(JSON.stringify(res.body.data)).not.toMatch(/amount|price|total|patient|uhid/i);
+  });
+
+  /** And the WORKLIST — the only place a technician gets order ids — still names none of them. */
+  it("never hands a technician another site's order id in the first place", async () => {
+    const res = await worklist(techA, branchA).expect(200);
+    expect((res.body.data as { id: string }[]).map((o) => o.id)).not.toContain(orderBId);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
  * 22. THE REPORT FILE IS A CLINICAL READ, AND STOPS AT THE BRANCH (§18's gap)
  *
  * §18 pins that resolving a patient grants no access to another branch's visits, vitals or
