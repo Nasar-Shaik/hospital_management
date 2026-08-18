@@ -162,19 +162,26 @@ test.describe("the laboratory worklist", () => {
      * other — that is the version where work is held for a bill somebody already settled.
      */
     /**
-     * Polled, because both sides move. The charge is raised by the outbox consumer a moment after
-     * the order commits, so the state walks `unbilled → unpaid` while this page is open: sampling
-     * the server once and asserting the badge once could compare an answer from after the charge
-     * posted against a screen painted before it. The CLAIM is that the two agree, so the honest
-     * assertion is to wait until they do — and to fail if they never do.
+     * ── POLLED, AND THE PAGE IS RELOADED WHILE POLLING ──────────────────────
+     * Both sides move, and only one of them moves on its own. The charge is raised by the outbox
+     * consumer a moment AFTER the order commits, so the state walks `unbilled → unpaid` while this
+     * screen is open — and the screen does not refetch by itself, so a badge painted before the
+     * charge posted stays wrong until something reloads it. Re-reading the server alone therefore
+     * never converged: it just compared a fresh answer against a stale paint, for the full timeout.
+     *
+     * Reloading inside the poll is what a technician does, and it is the only way the two CAN
+     * agree. The claim is unchanged — screen and server must say the same thing — and it still
+     * fails if they never do.
      */
     let state = "unbilled" as keyof typeof BADGE;
     await expect(async () => {
       state = await paymentState(page, fixture);
+      await page.reload();
+      await row.first().click();
       await expect(queue.getByText(BADGE[state], { exact: true }).first()).toBeVisible({
-        timeout: 2_000,
+        timeout: 3_000,
       });
-    }).toPass({ timeout: 25_000 });
+    }).toPass({ timeout: 30_000 });
 
     /**
      * ── AND THE CONTROL THAT MATCHES IT ─────────────────────────────────────
