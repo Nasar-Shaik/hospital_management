@@ -218,6 +218,25 @@ export const NON_CLINICAL_UNIQUE_INDEXES: readonly ExemptUniqueIndex[] = [
     reason: "formulary data; a duplicate medicine is visible in the picker and editable",
   },
   {
+    collection: "medicineBatches",
+    index: "one_row_per_batch",
+    /**
+     * Weighed rather than assumed, because the recall argument pulls the other way: two rows for
+     * one physical box would let FEFO hand the same tablets out twice and would make a recall miss
+     * half the stock, and a recall is unquestionably about patients.
+     *
+     * It is still not a CLINICAL-SAFETY invariant in the sense the other list means. The rule that
+     * keeps expired stock away from a patient is the query filter in `allocatableFor`, which holds
+     * whether or not a lot is duplicated; the rule that stops a lot being over-drawn is the
+     * conditional take. This index protects the BOOKS — it keeps one box as one row — and a
+     * duplicate is visible on the pharmacist's Batches view as two lots with the same number,
+     * which is exactly the "visible and editable" test the entries above apply.
+     */
+    reason:
+      "stock bookkeeping; a duplicate lot is visible on the batches view as two rows with the " +
+      "same number, and neither the expiry refusal nor the over-draw guard depends on it",
+  },
+  {
     collection: "serviceItems",
     index: "tenantId_1_code_1",
     reason: "tariff data; a duplicate service line is visible on the price list",
