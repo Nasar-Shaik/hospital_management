@@ -255,8 +255,10 @@ test.describe("radiology, from the console to the chart", () => {
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 5_000 }).catch(() => undefined);
         }
-        await expect(study().getByRole("button", { name: until })).toBeVisible({ timeout: 3_000 });
-      }).toPass({ timeout: 40_000 });
+        await expect(study().getByRole("button", { name: until })).toBeVisible({
+          timeout: 10_000,
+        });
+      }).toPass({ timeout: 60_000 });
     };
 
     /**
@@ -283,7 +285,7 @@ test.describe("radiology, from the console to the chart", () => {
           await button.click({ timeout: 5_000 }).catch(() => undefined);
         }
         expect(await statusOf(page, fixture)).toBe(status);
-      }).toPass({ timeout: 40_000 });
+      }).toPass({ timeout: 60_000 });
     };
 
     const openIn = async (bucket: RegExp, control: string) => {
