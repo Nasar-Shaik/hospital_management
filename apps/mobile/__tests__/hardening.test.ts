@@ -208,7 +208,9 @@ describe("2. no two query keys collide", () => {
     record("prescriptions()", queryKeys.prescriptions(scope));
     record("inpatients()", queryKeys.inpatients(scope));
     record("bedBoard()", queryKeys.bedBoard(scope));
-    record("notifications()", queryKeys.notifications(scope));
+    // Tenant-scoped, not branch-scoped — an inbox follows the person (see keys.ts).
+    record("notifications()", queryKeys.notifications(SLUG));
+    record("notifications(unread)", queryKeys.notifications(SLUG, "unread"));
 
     for (const id of IDS) {
       record(`patient(${id})`, queryKeys.patient(scope, id));

@@ -211,7 +211,13 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
    * added without a classification fails `covers every key` and there is nowhere to add it that
    * does not also state which side of the branch boundary it sits on.
    */
-  const HOSPITAL_WIDE = ["me", "myBranches", "patientAllergies"] as const;
+  /**
+   * `notifications` joined this list at M4 and was branch-scoped before it. That was safe only
+   * because nothing read it: an inbox is addressed to a PERSON, so keying it per branch would
+   * drop a doctor's unread badge to zero the moment they switched sites — which looks exactly
+   * like "nothing needs you".
+   */
+  const HOSPITAL_WIDE = ["me", "myBranches", "patientAllergies", "notifications"] as const;
 
   /** How to call each key with placeholder arguments. The MAP is what must stay complete. */
   function invoke(scope: {
@@ -224,6 +230,9 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       me: queryKeys.me(t),
       myBranches: queryKeys.myBranches(t),
       patientAllergies: queryKeys.patientAllergies(t, "p1"),
+      // An inbox is addressed to a person, not a site: branch-scoping it would empty the badge
+      // on every switch. Moved here from the branch-scoped group when M4 gave it a real reader.
+      notifications: queryKeys.notifications(t),
 
       // Branch-scoped: everything clinical or operational.
       patients: queryKeys.patients(scope),
@@ -232,7 +241,6 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       encounter: queryKeys.encounter(scope, "e1"),
       orders: queryKeys.orders(scope),
       order: queryKeys.order(scope, "o1"),
-      notifications: queryKeys.notifications(scope),
       inpatients: queryKeys.inpatients(scope),
       encounterVitals: queryKeys.encounterVitals(scope, "e1"),
       patientVitals: queryKeys.patientVitals(scope, "p1"),
@@ -347,7 +355,7 @@ describe("5. every branch-sensitive key carries the branch, and matches the head
       queryKeys.catalogue(scope),
       queryKeys.catalogue(scope, "pharmacy"),
       queryKeys.inpatients(scope),
-      queryKeys.notifications(scope),
+      queryKeys.notifications(SLUG),
       queryKeys.encounterVitals(scope, ""),
       queryKeys.patientVitals(scope, ""),
       queryKeys.consultation(scope, ""),

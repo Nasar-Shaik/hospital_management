@@ -29,6 +29,7 @@ import type {
   DoseSlot,
   Encounter,
   EncounterStatus,
+  InboxMessage,
   MedicationAdministration,
   MedicationRoundRow,
   Order,
@@ -442,6 +443,31 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
       return {
         queryKey: queryKeys.prescriptions(scope, filters),
         queryFn: () => api.listPrescriptions({ patientId, current: true, limit: 50 }),
+      };
+    },
+
+    /**
+     * The signed-in person's own inbox (M4).
+     *
+     * ── THE ONLY READ HERE KEYED ON THE TENANT, NOT THE SCOPE ───────────────
+     * Every other descriptor in this file passes `scope`, which carries the branch. This one
+     * passes `scope.tenantSlug` alone, because `GET /notifications/me` applies no branch filter:
+     * a message is addressed to a person, and a doctor who switches sites must not watch their
+     * unread count fall to zero. Keying it per branch would also cache one answer under two names
+     * and re-fetch it on every switch. See `keys.ts` and `COMMUNICATION_POLICY.md`.
+     */
+    notifications(filter: { unread?: boolean } = {}): InfiniteRead<InboxMessage> {
+      const filters = filterKey({ ...filter, limit: PAGE_SIZE });
+      return {
+        queryKey: queryKeys.notifications(scope.tenantSlug, filters),
+        queryFn: ({ pageParam }) =>
+          api.myNotifications({
+            ...(filter.unread ? { unread: true } : {}),
+            page: pageParam,
+            limit: PAGE_SIZE,
+          }),
+        initialPageParam: 1,
+        getNextPageParam: nextPage,
       };
     },
   };

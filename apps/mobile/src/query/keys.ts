@@ -59,6 +59,23 @@ export const queryKeys = {
     [tenantSlug, "patient", patientId, "allergies"] as const,
 
   /**
+   * The person's own inbox — and the SECOND clinical key without a branch.
+   *
+   * This one was branch-scoped when it was speculative (nothing read it before M4), and that was
+   * wrong. A notification is addressed to a PERSON, not to a site: `GET /notifications/me` applies
+   * no branch filter, so keying it per branch would cache one answer under two names, and a
+   * doctor's badge would drop to zero the moment they switched the picker to look at another site.
+   * Zero unread is exactly what "nothing needs you" looks like, which is why this is worth a
+   * paragraph rather than a line.
+   *
+   * `filters` still segments it, because the bell asks for the unread five and the inbox screen
+   * pages through everything — same endpoint, different requests, so different cache entries.
+   * See `AI_Workflow/docs/COMMUNICATION_POLICY.md`.
+   */
+  notifications: (tenantSlug: string, filters?: string) =>
+    [tenantSlug, "notifications", filters ?? ""] as const,
+
+  /**
    * ── A LIST AND A RECORD NEVER SHARE A SEGMENT ───────────────────────────────
    * Lists are PLURAL (`"encounters"`), single records are SINGULAR (`"encounter"`). It reads
    * nicely and that is not why it is done.
@@ -74,7 +91,6 @@ export const queryKeys = {
   patient: (scope: QueryScope, id: string) => scoped(scope, "patient", id),
   encounters: (scope: QueryScope, filters?: string) => scoped(scope, "encounters", filters ?? ""),
   orders: (scope: QueryScope, filters?: string) => scoped(scope, "orders", filters ?? ""),
-  notifications: (scope: QueryScope) => scoped(scope, "notifications"),
 
   /* ── M2, the doctor's read-only surface ─────────────────────────────────── */
 
