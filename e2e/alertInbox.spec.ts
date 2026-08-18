@@ -43,6 +43,7 @@ interface PlacedOrder {
 interface Fixture {
   api: string;
   adminToken: string;
+  doctorToken: string;
   siteId: string;
   orderId: string;
   testName: string;
@@ -110,7 +111,14 @@ async function arrange(request: APIRequestContext, baseURL: string): Promise<Fix
   await walk("verify");
   await walk("release");
 
-  return { api, adminToken, siteId, orderId: placed.order.id, testName: placed.order.name };
+  return {
+    api,
+    adminToken,
+    doctorToken,
+    siteId,
+    orderId: placed.order.id,
+    testName: placed.order.name,
+  };
 }
 
 test.describe.configure({ mode: "serial" });
@@ -118,6 +126,28 @@ test.describe.configure({ mode: "serial" });
 test.describe("the alert inbox", () => {
   test.beforeAll(async ({ request, baseURL }) => {
     fixture = await arrange(request, baseURL ?? "http://sunrise.localhost:3000");
+  });
+
+  /**
+   * Leave the doctor's badge as it was found. The test marks its own message read through the UI,
+   * which is the point of it — this is for the run that is interrupted before it gets there, so a
+   * crashed run does not leave an unread alert on the demo hospital forever.
+   */
+  test.afterAll(async ({ request }) => {
+    await request
+      .get(`${fixture.api}/api/v1/notifications/me?unread=true&limit=100`, {
+        headers: { authorization: `Bearer ${fixture.doctorToken}` },
+      })
+      .then(async (res) => {
+        const body = (await res.json()) as { data?: { id: string; body: string }[] };
+        const mine = (body.data ?? []).filter((m) => m.body.includes(fixture.testName));
+        for (const m of mine) {
+          await request.post(`${fixture.api}/api/v1/notifications/${m.id}/read`, {
+            headers: { authorization: `Bearer ${fixture.doctorToken}` },
+          });
+        }
+      })
+      .catch(() => undefined);
   });
 
   test("tells the doctor their result is ready, and stops telling them once read", async ({
@@ -128,28 +158,27 @@ test.describe("the alert inbox", () => {
     const bell = page.getByRole("button", { name: /^Alerts/ });
     await expect(bell).toBeVisible();
 
+    const message = page.getByRole("button", { name: new RegExp(escapeRe(fixture.testName)) });
+
     /**
+     * ── THE WAIT IS ON THIS MESSAGE, NOT ON A BADGE ─────────────────────────
      * `toPass` because release publishes through the OUTBOX: the relay polls, so the message is
-     * raised a moment after the API call returned. The wait is on the DATA arriving, never a timer
-     * — and the badge is the thing under test, so waiting on it is the assertion.
+     * raised a moment after the API call returned.
+     *
+     * The first version of this waited for `Alerts — \d+ unread` and then opened the bell, which
+     * passed intermittently for the WRONG REASON: any unread message left by an earlier run
+     * satisfies that badge instantly, so the click happened before the relay had delivered THIS
+     * one, and the assertion below failed on a fully working system. Waiting on the specific
+     * message makes the poll about the data the test is actually about.
      */
     await expect(async () => {
       await page.reload();
-      await expect(page.getByRole("button", { name: /^Alerts — \d+ unread/ })).toBeVisible({
-        timeout: 5_000,
-      });
+      await bell.click();
+      await expect(message.first()).toBeVisible({ timeout: 5_000 });
     }).toPass({ timeout: 45_000 });
 
     const before = await unreadCount(page);
-    expect(before, "the badge showed no unread messages at all").toBeGreaterThan(0);
-
-    // The dropdown names the test the doctor actually ordered.
-    await bell.click();
-    const message = page.getByRole("button", { name: new RegExp(escapeRe(fixture.testName)) });
-    await expect(
-      message.first(),
-      "the released result never reached the doctor's inbox",
-    ).toBeVisible({ timeout: 15_000 });
+    expect(before, "the badge did not count the message it was showing").toBeGreaterThan(0);
 
     /**
      * Opening it must reach the SERVER, not just the screen. So the badge is re-read after a full
