@@ -212,6 +212,19 @@ test.describe("radiology, from the console to the chart", () => {
      */
     const step = async (control: string, until: string | null) => {
       await expect(async () => {
+        // Re-select first. The worklist reloads after every action, and the detail panel is
+        // `groups.find(g => g.patientId === selectedPatient) ?? groups[0]` — so if this patient
+        // momentarily drops out of the bucket being viewed, the panel silently falls back to
+        // SOMEBODY ELSE and the study row is not merely detached, it is absent. Clicking the
+        // patient back is what a person does, and it makes the step recover instead of waiting
+        // forty seconds for a row that is never coming.
+        if ((await study().count()) === 0) {
+          await row
+            .first()
+            .click({ timeout: 5_000 })
+            .catch(() => undefined);
+        }
+
         const button = study().getByRole("button", { name: control });
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 5_000 }).catch(() => undefined);
