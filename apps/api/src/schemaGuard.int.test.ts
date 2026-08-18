@@ -201,25 +201,39 @@ describe("2. falsification — the guard must refuse what it is there to refuse"
     }
   });
 
+  /**
+   * ── THE MIGRATION IS DERIVED, NOT NAMED ─────────────────────────────────────
+   * This pinned `0049-one-administration-per-dose-slot` by hand, which was correct exactly as long
+   * as 0049 was the last migration in the file. It stopped being so at 0050, and the test went red
+   * for a reason that had nothing to do with what it tests: un-recording a middle migration is a
+   * GAP (`history_inconsistent`), which the guard rightly reports differently from "simply behind".
+   *
+   * The scenario under test is "the tenant has not caught up yet", and the only migration that can
+   * produce it without also producing a gap is the LAST one. Taking it from the array means the
+   * next migration added does not break this, and — more useful — it means this keeps testing the
+   * thing it was written for rather than a state the guard classifies another way.
+   */
   it("CONTROL 5 · a migration is un-recorded → BLOCKED and NAMED, not merely counted", async () => {
+    const latest = tenantMigrations[tenantMigrations.length - 1]!.id;
+
     // The 2026-08-14 shape: the tenant is simply behind. Deleting the record makes the canonical
     // runner consider it pending, exactly as it would on a database that never ran it.
-    await db.collection("migrations").deleteOne({ _id: "0049-one-administration-per-dose-slot" });
+    await db.collection("migrations").deleteOne({ _id: latest });
     try {
       const verdict = await verifyTenantSchema(db, tenantMigrations);
 
       expect(verdict.ok).toBe(false);
-      expect(verdict.pending).toEqual(["0049-one-administration-per-dose-slot"]);
+      expect(verdict.pending).toEqual([latest]);
 
       // The OTHER remedy: nothing is recorded, so `seed:migrate` genuinely does fix this one and
       // the message must say so plainly rather than sending the reader to edit the database.
       const message = schemaBlockedMessage(SLUG, verdict);
-      expect(message).toContain("0049-one-administration-per-dose-slot");
+      expect(message).toContain(latest);
       expect(message).toContain(`pnpm seed:migrate --slug ${SLUG}`);
       expect(message).not.toContain("deleteOne");
     } finally {
       await db.collection("migrations").insertOne({
-        _id: "0049-one-administration-per-dose-slot",
+        _id: latest,
         description: "restored by schemaGuard.int.test",
         appliedAt: new Date(),
       } as never);
@@ -466,21 +480,26 @@ describe("5. the deployment gate, against a real tenant database", () => {
    */
   it("predicts that converging will FAIL, read-only, when 0048 would refuse", async () => {
     const MIGRATION_ID = "0048-idempotency-key-claims";
-    const DOSE_SLOT = "0049-one-administration-per-dose-slot";
     await db
       .collection("idempotencyKeys")
       .dropIndex("one_claim_per_idempotency_key")
       .catch(() => undefined);
     /**
-     * BOTH records go, not just 0048's. Removing 0048 alone leaves 0049 recorded above it, which
-     * is a genuine GAP — and `history_inconsistent` rightly outranks a blocked preflight, so the
-     * fixture would be testing the wrong thing while appearing to test this one. (It did, first
-     * time round.) The honest shape of "0048 is next and it will refuse" is: nothing after it has
-     * run either.
+     * EVERY record from 0048 onwards goes, not just its own. Removing 0048 alone leaves later
+     * migrations recorded above it, which is a genuine GAP — and `history_inconsistent` rightly
+     * outranks a blocked preflight, so the fixture would be testing the wrong thing while
+     * appearing to test this one. (It did, first time round.) The honest shape of "0048 is next
+     * and it will refuse" is: nothing after it has run either.
+     *
+     * DERIVED from the array rather than listed. It was `[0048, 0049]` by hand, which was right
+     * until 0050 was added and then silently reconstructed the very gap this comment warns about
+     * — the fixture rotting into the failure mode it documents.
      */
-    await db
-      .collection("migrations")
-      .deleteMany({ _id: { $in: [MIGRATION_ID, DOSE_SLOT] } as never });
+    const from = tenantMigrations.findIndex((m) => m.id === MIGRATION_ID);
+    expect(from, `${MIGRATION_ID} is no longer in the migration list`).toBeGreaterThanOrEqual(0);
+    const AFTER = tenantMigrations.slice(from).map((m) => m.id);
+
+    await db.collection("migrations").deleteMany({ _id: { $in: AFTER } as never });
     const shared = { tenantId: "t-gate", userId: "u-gate", key: "receipt-gate" };
     await db.collection("idempotencyKeys").insertMany([
       { ...shared, state: "in_progress", claimedAt: new Date() },
@@ -492,7 +511,7 @@ describe("5. the deployment gate, against a real tenant database", () => {
 
       // The FIRST outstanding migration is the one asked, and only it — a later one's preflight
       // would be answering about a database state that does not exist yet.
-      expect(verdict.pending).toEqual([MIGRATION_ID, DOSE_SLOT]);
+      expect(verdict.pending).toEqual(AFTER);
       expect(verdict.history.inconsistent).toEqual([]);
       expect(verdict.blockedBy?.migration).toBe(MIGRATION_ID);
       expect(verdict.blockedBy?.reason).toMatch(/1 \(tenantId, userId, key\) group/);
@@ -519,9 +538,10 @@ describe("5. the deployment gate, against a real tenant database", () => {
       ).rejects.toThrow(verdict.blockedBy!.reason.split("\n")[0]!);
     } finally {
       await db.collection("idempotencyKeys").deleteMany({ key: "receipt-gate" });
+      // Re-apply everything the fixture un-recorded, so the next test finds a converged tenant.
       await migrateTenantDb(
         db,
-        tenantMigrations.filter((m) => m.id === MIGRATION_ID || m.id === DOSE_SLOT),
+        tenantMigrations.filter((m) => AFTER.includes(m.id)),
       );
     }
   });

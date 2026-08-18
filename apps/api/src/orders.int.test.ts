@@ -29,8 +29,9 @@ import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redis
 import {
   assertMailhogReachable,
   clearMailbox,
-  inbox,
-  waitForMail,
+  // `mailbox()` is now used to assert that NOTHING was mailed: the staff alerts moved to the
+  // in-app channel, and the point of the move is that they no longer need a transport.
+  inbox as mailbox,
   TEST_SMTP_HOST,
   TEST_SMTP_PORT,
 } from "./test/mailTestEnv.js";
@@ -342,12 +343,28 @@ describe("the order carries work to the lab and the result back to the doctor", 
     // ── THE RESULT REACHES THE DOCTOR WHO ASKED ──────────────────────────────
     await asRelay(() => dispatchEventInline(releasedEvent(orderId)));
 
-    const mail = await waitForMail(1);
-    expect(mail[0]?.to).toContain(`doctor@${SLUG}.test`);
-    expect(mail[0]?.subject).toContain("Complete Blood Count");
-    expect(mail[0]?.body).toContain("Dr Rao");
+    /**
+     * ── IT ARRIVES IN THE DOCTOR'S INBOX, NOT IN THEIR EMAIL ─────────────────
+     * This read `waitForMail(1)` until 2026-08-18, and that was the defect: the template rendered
+     * on `email`, `email.isEnabled()` is `NOTIFY_EMAIL_ENABLED && SMTP_HOST`, and this suite
+     * happens to run against Mailhog. So the test passed on a configuration most deployments do
+     * not have, while a hospital with no mail server had the message recorded `suppressed` and
+     * delivered to nobody.
+     *
+     * Reading the doctor's own inbox is the stronger assertion of the same claim — it needs no
+     * transport at all, so it holds everywhere the product runs. `COMMUNICATION_POLICY.md`.
+     */
+    const alerts = await as("doctor", request(app).get("/api/v1/notifications/me")).expect(200);
+    const told = (alerts.body.data as { subject?: string; body: string }[]).find((m) =>
+      m.subject?.includes("Complete Blood Count"),
+    );
+    expect(told, "the ordering doctor was never told the result was released").toBeTruthy();
+    expect(told!.body).toContain("Dr Rao");
     // Rendered, not a template. A doctor must never receive `{{patientName}}`.
-    expect(mail[0]?.body).not.toContain("{{");
+    expect(told!.body).not.toContain("{{");
+
+    // And it did NOT need a mail server: nothing was handed to SMTP for this.
+    expect(await mailbox()).toHaveLength(0);
 
     // ── AND THE PATIENT STOPS WAITING ────────────────────────────────────────
     // Nothing is outstanding, so the encounter comes back out of `awaiting_results`
@@ -529,14 +546,24 @@ describe("a critical result is alerted immediately, not eventually", () => {
      * the heart, and it does not wait for a pathologist to come back from lunch or for
      * a queue to catch up.
      */
-    const mail = await waitForMail(1);
-    expect(mail[0]?.to).toContain(`doctor@${SLUG}.test`);
-    expect(mail[0]?.subject).toContain("CRITICAL");
+    /**
+     * In the doctor's inbox, and — the part that used to be untrue — WITHOUT a mail server having
+     * been involved at all. This assertion previously read Mailhog, which meant the most urgent
+     * message in the product was only ever proven to work on a machine that happened to have SMTP
+     * configured. On a default deployment it was recorded `suppressed`.
+     */
+    const alerts = await as("doctor", request(app).get("/api/v1/notifications/me")).expect(200);
+    const alert = (alerts.body.data as { subject?: string; body: string }[]).find((m) =>
+      m.subject?.includes("CRITICAL"),
+    );
+    expect(alert, "the ordering doctor was never alerted to a critical value").toBeTruthy();
     // It carries the VALUE — unlike every other message in the product. The whole
     // purpose is to make a human act in the next few minutes, and "log in to see it"
     // wastes exactly those minutes.
-    expect(mail[0]?.body).toContain("7.2");
-    expect(mail[0]?.body).toContain("Critical Kaur");
+    expect(alert!.body).toContain("7.2");
+    expect(alert!.body).toContain("Critical Kaur");
+
+    expect(await mailbox(), "the critical alert depended on SMTP").toHaveLength(0);
 
     // The result is still UNVERIFIED. The alert did not bypass the second pair of
     // eyes; it simply refused to wait for it.
@@ -548,8 +575,13 @@ describe("a critical result is alerted immediately, not eventually", () => {
     // The ledger is keyed on the order, not on a delivery. A doctor who is told twice
     // about one critical value starts ignoring the channel — which is the failure mode
     // the alert exists to prevent.
-    const before = await inbox();
-    const critical = before.filter((m) => m.subject.includes("CRITICAL"));
+    const alerts = await as(
+      "doctor",
+      request(app).get("/api/v1/notifications/me?limit=100"),
+    ).expect(200);
+    const critical = (alerts.body.data as { subject?: string }[]).filter((m) =>
+      m.subject?.includes("CRITICAL"),
+    );
     expect(critical).toHaveLength(1);
   });
 });
