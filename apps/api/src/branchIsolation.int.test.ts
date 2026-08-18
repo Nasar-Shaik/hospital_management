@@ -3307,3 +3307,110 @@ describe("a person's inbox follows the person, not the branch picker", () => {
     }
   });
 });
+
+/**
+ * ── THE IMAGING WORKLIST STOPS AT THE SITE, TOO ──────────────────────────────
+ *
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * A radiographer at one site seeing another site's studies — which is not an error message, it is
+ * a perfectly ordinary-looking worklist belonging to somebody else's hospital, and the way it gets
+ * noticed is a patient being called for a scan they are not at the building for.
+ *
+ * The lab worklist above proves the same property, and this is NOT a copy for symmetry: D7 added a
+ * ROLE with permissions no other role has (`order:verify` + `order:release` + `radiology:sign` on
+ * an operational login). Row scope is applied per-caller from their binding, so a new role is a new
+ * caller shape, and "the lab technician is confined" is not evidence that this one is.
+ */
+describe("the imaging worklist shows only the site being worked in", () => {
+  let radA = "";
+  let radB = "";
+  let scanAId = "";
+  let scanBId = "";
+
+  beforeAll(async () => {
+    await createUserWithRole("rada@branchiso.test", "RADIOLOGY_TECHNICIAN", [branchA]);
+    await createUserWithRole("radb@branchiso.test", "RADIOLOGY_TECHNICIAN", [branchB]);
+    radA = await login("rada@branchiso.test");
+    radB = await login("radb@branchiso.test");
+
+    // Its own patients, for the reason the lab block states: `POST /encounters` RESUMES an open
+    // visit, so borrowing another block's patient makes this one depend on file order.
+    const pa = await post("/api/v1/patients", tokenMgrA, branchA)
+      .send({
+        name: "Hyderabad Imaging Subject",
+        gender: "female",
+        contact: { phone: "9000800041" },
+      })
+      .expect(201);
+    const pb = await post("/api/v1/patients", tokenAdmin, branchB)
+      .send({ name: "Chennai Imaging Subject", gender: "male", contact: { phone: "9000800042" } })
+      .expect(201);
+
+    scanAId = await scanAt(branchA, tokenMgrA, pa.body.data.patient.id as string);
+    scanBId = await scanAt(branchB, tokenAdmin, pb.body.data.patient.id as string);
+  }, 60_000);
+
+  async function scanAt(branch: string, token: string, patientId: string): Promise<string> {
+    const enc = await post("/api/v1/encounters", token, branch)
+      .send({ patientId, departmentId: DOCTOR })
+      .expect(201);
+    const order = await post("/api/v1/orders", token, branch)
+      .send({
+        encounterId: enc.body.data.encounter.id,
+        category: "radiology",
+        code: "XRAY_CHEST_PA",
+        name: "X-ray Chest PA View",
+      })
+      .expect(201);
+    return order.body.data.order.id as string;
+  }
+
+  const worklist = (token: string, branch?: string) =>
+    get("/api/v1/orders?category=radiology&outstanding=true", token, branch);
+
+  /** The premise: without this, every assertion below passes against an empty list. */
+  it("shows a radiographer the studies at their own site", async () => {
+    const res = await worklist(radA, branchA).expect(200);
+    expect((res.body.data as { id: string }[]).map((o) => o.id)).toContain(scanAId);
+  });
+
+  it("does NOT show them the other site's studies", async () => {
+    const res = await worklist(radA, branchA).expect(200);
+    expect(
+      (res.body.data as { id: string }[]).map((o) => o.id),
+      "a Chennai study reached a Hyderabad radiographer's worklist",
+    ).not.toContain(scanBId);
+  });
+
+  it("holds in the other direction too", async () => {
+    const res = await worklist(radB, branchB).expect(200);
+    const ids = (res.body.data as { id: string }[]).map((o) => o.id);
+    expect(ids).toContain(scanBId);
+    expect(ids, "a Hyderabad study reached a Chennai radiographer's worklist").not.toContain(
+      scanAId,
+    );
+  });
+
+  /** ADR-0015: a forged header is IGNORED, not refused — the caller falls back to their own scope. */
+  it("ignores a header naming a site the radiographer may not work in", () => {
+    return worklist(radA, branchB)
+      .expect(200)
+      .then((res) => {
+        const ids = (res.body.data as { id: string }[]).map((o) => o.id);
+        expect(ids, "naming another branch widened the imaging worklist").not.toContain(scanBId);
+        expect(ids, "the fallback dropped the radiographer's own work").toContain(scanAId);
+      });
+  });
+
+  /**
+   * And the SIGN-OFF is confined too, which is the half a read-only test would miss. This role can
+   * verify and release — so a branch leak here is not somebody reading the wrong list, it is
+   * somebody releasing another site's study to another site's doctor.
+   */
+  it("cannot act on a study at a site it may not work in", async () => {
+    await post(`/api/v1/orders/${scanBId}/accept`, radA, branchA).expect(404);
+    await post(`/api/v1/orders/${scanBId}/verify`, radA, branchA).expect(404);
+    await post(`/api/v1/orders/${scanBId}/release`, radA, branchA).expect(404);
+  });
+});

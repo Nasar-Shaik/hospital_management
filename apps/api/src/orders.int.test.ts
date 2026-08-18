@@ -59,6 +59,9 @@ const { seedNotificationTemplates } = await import("./seed/notificationTemplates
 const { seedTariff } = await import("./seed/tariff.js");
 const { seedLabTests, STARTER_LAB_TEST_COUNT, STARTER_LAB_TEST_CODES } =
   await import("./seed/labTests.js");
+const { setFeatureOverride, clearFeatureOverride } =
+  await import("./modules/entitlements/index.js");
+const { FEATURE_FLAGS } = await import("@medicore/permissions");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
 const { canTransition, isOutstanding } = await import("./modules/orders/index.js");
 const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
@@ -203,6 +206,9 @@ beforeAll(async () => {
     ["tech", "LAB_TECHNICIAN", "Tech Kumar"],
     ["pathologist", "PATHOLOGIST", "Dr Iyer"],
     ["radiologist", "RADIOLOGIST", "Dr Sharma"],
+    // The role D7 v1 turns on: imaging staff who can carry a study all the way to the doctor
+    // WITHOUT a consultant radiologist, because most hospitals do not employ one.
+    ["radiographer", "RADIOLOGY_TECHNICIAN", "Priya Imaging"],
     // Observations are the nurse's, and no other role in this suite holds `vitals:record`. The
     // schema-safety block needs them to EXERCISE the proportionality claim rather than assert it.
     ["nurse", "NURSE", "Nurse Pillai"],
@@ -1483,5 +1489,477 @@ describe("payment is visible to the lab, and gates nothing", () => {
   it("does not become a way to read the money", async () => {
     const res = await as("tech", request(app).get("/api/v1/billing/pending"));
     expect(res.status, "a lab technician read the billing queue").toBe(403);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 12. RADIOLOGY v1 — a study reaches the doctor with no radiologist involved
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * The one that made radiology unusable while looking complete. Every piece was already here — the
+ * category, the order pad, the worklist, the tariff, the narrative result, the film upload, the
+ * release notification — and `radiology:sign` was required to get past `completed` while only
+ * RADIOLOGIST held it. A hospital with no consultant radiologist could take the film, type the
+ * report, and never deliver either. Nothing errored; the study simply stopped.
+ *
+ * So the assertion that carries this milestone is the ROLE list: the whole journey below is walked
+ * by `radiographer` and the word `radiologist` does not appear in it. If somebody later decides
+ * imaging needs a specialist signature after all, this file goes red and the argument happens
+ * before the release rather than after a hospital cannot use the module.
+ */
+describe("radiology runs end to end without a radiologist", () => {
+  it("doctor orders, imaging performs and reports, the doctor reads it", async () => {
+    const encounterId = await encounterWithDoctor("Imaging Devi", "9000000200");
+
+    // ── the doctor asks ──────────────────────────────────────────────────────
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({
+        encounterId,
+        category: "radiology",
+        code: "XRAY_CHEST_PA",
+        name: "X-ray Chest PA View",
+        priority: "routine",
+      })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    // ── it appears on the imaging worklist, named ────────────────────────────
+    const worklist = await as(
+      "radiographer",
+      request(app).get("/api/v1/orders?category=radiology&outstanding=true&limit=100"),
+    ).expect(200);
+    const row = (worklist.body.data as { id: string; patientName: string; uhid: string }[]).find(
+      (o) => o.id === orderId,
+    );
+    expect(row, "the study never reached the imaging worklist").toBeTruthy();
+    // A row that cannot say whose film it is, is the D-1 defect class at the imaging console.
+    expect(row!.patientName).toBe("Imaging Devi");
+    expect(row!.uhid).toBeTruthy();
+
+    // ── imaging performs it ──────────────────────────────────────────────────
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    /**
+     * A NARRATIVE report, which is the whole of radiology reporting in v1. `summary` already
+     * carries 5,000 characters and the result contract already accepts it — there is no structured
+     * imaging template here and deliberately none coming.
+     */
+    const completed = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${orderId}/complete`),
+    )
+      .send({
+        summary:
+          "PA chest, adequate inspiration. Lung fields clear, no focal consolidation. " +
+          "Cardiothoracic ratio normal. Impression: no acute cardiopulmonary abnormality.",
+      })
+      .expect(200);
+    expect(completed.body.data.status).toBe("completed");
+    expect(completed.body.data.performedBy).toBeTruthy();
+
+    // ── and carries it to the doctor, alone ──────────────────────────────────
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+    const released = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${orderId}/release`),
+    ).expect(200);
+    expect(released.body.data.status).toBe("released");
+
+    // ── the doctor can read it ───────────────────────────────────────────────
+    const seen = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+    expect(seen.body.data.status).toBe("released");
+    expect(seen.body.data.result.summary).toContain("no acute cardiopulmonary abnormality");
+  });
+
+  /** The film. Same infrastructure the lab attaches a scanned report with — no imaging archive. */
+  it("attaches the film through the existing reports infrastructure", async () => {
+    const encounterId = await encounterWithDoctor("Film Kumar", "9000000201");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "USG_ABDOMEN", name: "Ultrasound Abdomen" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    const uploaded = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${orderId}/reports`),
+    )
+      .send({
+        filename: "usg-abdomen.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 imaging").toString("base64"),
+      })
+      .expect(201);
+    expect(uploaded.body.data.id).toBeTruthy();
+
+    // Readable back as METADATA on their own order — the same narrow route the lab technician got.
+    const mine = await as(
+      "radiographer",
+      request(app).get(`/api/v1/reports?orderIds=${orderId}`),
+    ).expect(200);
+    expect((mine.body.data as { id: string }[]).length).toBe(1);
+  });
+
+  /**
+   * ── THE BOUNDARY THAT MUST NOT MOVE TO MAKE THIS WORK ───────────────────────
+   * The whole point of building the role narrowly. `emr:read` would have made every one of these
+   * pass, and would have handed a radiographer the admissions register, the drug chart, the
+   * consent records and the death register along with it.
+   */
+  it("does not give imaging staff the patient's chart", async () => {
+    const encounterId = await encounterWithDoctor("Chart Guard", "9000000202");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Scan Head (Plain)" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+    const report = await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/reports`))
+      .send({
+        filename: "ct.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 ct").toString("base64"),
+      })
+      .expect(201);
+    const reportId = report.body.data.id as string;
+
+    const patientId = (
+      await as("doctor", request(app).get(`/api/v1/encounters/${encounterId}`)).expect(200)
+    ).body.data.patientId as string;
+
+    // The chart-wide report history, and the BYTES of the film they just attached. Knowing a
+    // report exists is not reading it — the lab technician meets the identical wall.
+    await as("radiographer", request(app).get(`/api/v1/patients/${patientId}/reports`)).expect(403);
+    await as("radiographer", request(app).get(`/api/v1/reports/${reportId}/file`)).expect(403);
+    /**
+     * And the clinical record itself. The consultation note is `emr:read` — the doctor's written
+     * assessment of this very visit, which is exactly the thing a person who takes X-rays has no
+     * business reading and exactly what a blanket `emr:read` grant would have handed over.
+     */
+    await as(
+      "radiographer",
+      request(app).get(`/api/v1/encounters/${encounterId}/consultation`),
+    ).expect(403);
+  });
+
+  /**
+   * ── THE CATEGORY WALL IS STILL A WALL ───────────────────────────────────────
+   * `radiology:sign` was granted to an operational role, so the obvious worry is that the
+   * competence check has been hollowed out. It has not: the technician's authority is confined to
+   * imaging, exactly as the pathologist's is to blood.
+   */
+  it("cannot sign off a blood result, and the lab cannot sign off a scan", async () => {
+    const encounterId = await encounterWithDoctor("Cross Sign", "9000000203");
+
+    const blood = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    const bloodId = blood.body.data.order.id as string;
+    await as("tech", request(app).post(`/api/v1/orders/${bloodId}/accept`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${bloodId}/start`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${bloodId}/complete`))
+      .send({ summary: "Hb 12.6 g/dL." })
+      .expect(200);
+
+    const refused = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${bloodId}/verify`),
+    ).expect(403);
+    expect(refused.body.error.code).toBe("HMS-AUTH-005");
+    expect(refused.body.error.details.required).toBe("lab:approve");
+
+    const scan = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_LIMB", name: "X-ray Limb" })
+      .expect(201);
+    const scanId = scan.body.data.order.id as string;
+    await as("radiographer", request(app).post(`/api/v1/orders/${scanId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${scanId}/start`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${scanId}/complete`))
+      .send({ summary: "No fracture." })
+      .expect(200);
+
+    // The lab technician holds neither `order:verify` nor `radiology:sign` — refused on the first.
+    await as("tech", request(app).post(`/api/v1/orders/${scanId}/verify`)).expect(403);
+  });
+
+  /** A radiologist, where a hospital employs one, still does everything they did before. */
+  it("leaves the radiologist's own authority untouched", async () => {
+    const encounterId = await encounterWithDoctor("Consultant Read", "9000000204");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Scan Head (Plain)" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    // Performed by the technician, signed by the consultant: the two-person model a hospital gets
+    // by simply not granting the technician `order:verify`. No code path of its own.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "No intracranial haemorrhage." })
+      .expect(200);
+
+    await as("radiologist", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+    await as("radiologist", request(app).post(`/api/v1/orders/${orderId}/release`)).expect(200);
+  });
+
+  it("refuses a role with no part in imaging", async () => {
+    const encounterId = await encounterWithDoctor("No Part", "9000000205");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_ABDOMEN", name: "X-ray Abdomen" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    /**
+     * The front desk raises the patient and takes the money; it does not run the scanner.
+     *
+     * NOT the nurse, who was the obvious second example and is the wrong one: NURSE genuinely
+     * holds `order:perform`, because a nurse performs `procedure` orders — a dressing, a
+     * nebulisation. Asserting a refusal there would have been asserting a bug.
+     */
+    await as("reception", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(403);
+    await as("reception", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(403);
+    await as("reception", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "not mine to write" })
+      .expect(403);
+  });
+
+  it("refuses a forged order id, and one belonging to another hospital", async () => {
+    // Well-formed and absent.
+    await as(
+      "radiographer",
+      request(app).post("/api/v1/orders/64b7f00000000000000000ff/accept"),
+    ).expect(404);
+    // Not an id at all.
+    await as("radiographer", request(app).post("/api/v1/orders/not-an-id/accept")).expect(400);
+
+    // A real id, from the other hospital. The tenant database is the wall; it reads as absent.
+    const otherEnc = await otherEncounter("Other Imaging", "9000000206");
+    const theirs = await asOther("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId: otherEnc, category: "radiology", code: "XRAY_LIMB", name: "X-ray Limb" })
+      .expect(201);
+    await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${theirs.body.data.order.id as string}/accept`),
+    ).expect(404);
+  });
+
+  /**
+   * The state machine is the shared one and this proves radiology gets no dispensation from it —
+   * the same edges, the same refusals, including the deliberately absent `in_progress → cancelled`
+   * that stops a study vanishing after the patient has taken the dose.
+   */
+  it("obeys the same state machine as everything else", async () => {
+    const encounterId = await encounterWithDoctor("State Imaging", "9000000207");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_CHEST_PA", name: "X-ray Chest" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    // Cannot skip the bench.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Reported." })
+      .expect(422);
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    // Accepting twice is not a second acceptance — `accepted → accepted` is not an edge.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(422);
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    /**
+     * The dose has been delivered; there is no way back. Asserted as the DOCTOR, who holds
+     * `order:cancel` — the radiographer does not, so asking them would have proved a permission
+     * boundary while claiming to prove a state-machine one, and would have gone green even if
+     * `in_progress → cancelled` were quietly added.
+     */
+    await as("doctor", request(app).post(`/api/v1/orders/${orderId}/cancel`))
+      .send({ reason: "changed my mind" })
+      .expect(422);
+    // And imaging staff cannot call a doctor's study off in any case — same as the lab bench.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/cancel`))
+      .send({ reason: "not mine to cancel" })
+      .expect(403);
+
+    // A report with nothing in it is not a report.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({})
+      .expect(400);
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Normal study." })
+      .expect(200);
+    // Re-submitting the report is not an amendment path — `completed → completed` is not an edge,
+    // so a second submission is refused rather than silently overwriting a signed-off result.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Actually abnormal." })
+      .expect(422);
+
+    // And release still cannot jump verification.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/release`)).expect(422);
+  });
+
+  it("keeps the existing idempotency contract — one requestId, one study", async () => {
+    const encounterId = await encounterWithDoctor("Double Scan", "9000000208");
+    const requestId = "req-radiology-once-0001";
+    const body = {
+      encounterId,
+      category: "radiology" as const,
+      code: "CT_HEAD",
+      name: "CT Scan Head (Plain)",
+      requestId,
+    };
+
+    const first = await as("doctor", request(app).post("/api/v1/orders")).send(body).expect(201);
+    const second = await as("doctor", request(app).post("/api/v1/orders")).send(body).expect(200);
+
+    // A second CT is a second dose of radiation. The replay must return the SAME study.
+    expect(second.body.data.order.id).toBe(first.body.data.order.id);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 13. THE RADIOLOGY ENTITLEMENT — a module that is sold must be a module that gates
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * `module.clinical.ris` appeared in four editions and gated no line of code, so imaging was
+ * delivered to hospitals that never bought it and withheld from nobody. That is not a leak in the
+ * usual sense — nothing escapes — but it is the same defect class as a permission granted to
+ * nobody, one layer up: a capability whose declaration and whose wiring have drifted apart, and
+ * which nothing could notice because the only symptom is on an invoice.
+ *
+ * The tests below also pin the two DELIBERATE holes in that gate, which matter more than the gate
+ * itself. Both are cases where refusing would harm a patient to enforce a contract.
+ */
+describe("radiology is gated on the module the hospital bought", () => {
+  /** Runs `fn` with this hospital's RIS entitlement switched off, and puts it back afterwards. */
+  async function withoutRis(fn: () => Promise<void>): Promise<void> {
+    await setFeatureOverride({
+      tenantId,
+      flag: FEATURE_FLAGS.CLINICAL_RIS,
+      enabled: false,
+      reason: "orders.int.test — entitlement block",
+    });
+    try {
+      await fn();
+    } finally {
+      await clearFeatureOverride(tenantId, FEATURE_FLAGS.CLINICAL_RIS);
+    }
+  }
+
+  it("an entitled hospital may order imaging", async () => {
+    const encounterId = await encounterWithDoctor("Entitled Imaging", "9000000210");
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_CHEST_PA", name: "X-ray Chest" })
+      .expect(201);
+  });
+
+  it("a hospital without the module is refused — HMS-PLAN-002, not HMS-AUTH-005", async () => {
+    const encounterId = await encounterWithDoctor("Unentitled Imaging", "9000000211");
+
+    await withoutRis(async () => {
+      const refused = await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Head" })
+        .expect(403);
+
+      /**
+       * The CODE is the assertion, not the status. HMS-AUTH-005 would send an administrator
+       * hunting through the role editor for a permission that can never help them; HMS-PLAN-002
+       * sends them to sales. Layer 1 before layer 2 (ADR-0010), and this is what proves it.
+       */
+      expect(refused.body.error.code).toBe("HMS-PLAN-002");
+      expect(refused.body.error.details.feature).toBe("module.clinical.ris");
+    });
+  });
+
+  /**
+   * ── THE OTHER MODULES ARE UNTOUCHED ─────────────────────────────────────────
+   * The Order is polymorphic: one set of routes carries seven categories. A gate written as a
+   * `{ feature }` on `POST /orders` would have taken all seven away at once, which is why this
+   * one is a per-category lookup and why the assertion is here rather than assumed.
+   */
+  it("does not take the laboratory, the pharmacy or a procedure away with it", async () => {
+    const encounterId = await encounterWithDoctor("Other Categories", "9000000212");
+
+    await withoutRis(async () => {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(201);
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "procedure", code: "DRESS", name: "Wound Dressing" })
+        .expect(201);
+    });
+  });
+
+  /**
+   * ── LAB IS DELIBERATELY NOT GATED THE SAME WAY ──────────────────────────────
+   * The symmetric-looking change would be to gate `lab` on `module.clinical.lis`, and it would be
+   * a regression: LIS is not in CLINIC_FLAGS, so PLAN_CLINIC and PLAN_CLINIC_PLUS do not hold it,
+   * and those hospitals legitimately order bloods today and send the sample to an outside
+   * laboratory. This test states that as an intention rather than leaving it to be "fixed".
+   */
+  it("still lets a hospital order a test it sends out to an external laboratory", async () => {
+    const encounterId = await encounterWithDoctor("Send Out", "9000000213");
+
+    await setFeatureOverride({
+      tenantId,
+      flag: FEATURE_FLAGS.CLINICAL_LIS,
+      enabled: false,
+      reason: "orders.int.test — send-out case",
+    });
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "LFT", name: "Liver Function" })
+        .expect(201);
+    } finally {
+      await clearFeatureOverride(tenantId, FEATURE_FLAGS.CLINICAL_LIS);
+    }
+  });
+
+  /**
+   * ── A LAPSED SUBSCRIPTION MUST NOT STRAND A PATIENT ─────────────────────────
+   * The most important test in this block. If a hospital's RIS entitlement lapses on the day a
+   * patient is halfway through a CT, blocking `complete` strands a scan that has already been
+   * performed: the dose is delivered, the image exists, and refusing the transition achieves
+   * nothing except that the doctor never sees it.
+   *
+   * So the gate stops NEW work starting and nothing else — the same reasoning, and the same
+   * shape, as the schema-readiness guard directly above it in `order.service.ts`.
+   */
+  it("lets imaging already in flight finish after the entitlement lapses", async () => {
+    const encounterId = await encounterWithDoctor("Mid Study", "9000000214");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Head" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    await withoutRis(async () => {
+      // The patient has had the scan. Every one of these must still work.
+      await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+        .send({ summary: "No acute intracranial abnormality." })
+        .expect(200);
+      await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+      await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/release`)).expect(200);
+
+      // And the record stays readable. A hospital that stops paying does not lose last year's
+      // chest X-ray; hiding it would be destroying a medical record over an invoice.
+      const seen = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+      expect(seen.body.data.result.summary).toContain("No acute intracranial");
+      await as(
+        "radiographer",
+        request(app).get("/api/v1/orders?category=radiology&limit=10"),
+      ).expect(200);
+    });
   });
 });
