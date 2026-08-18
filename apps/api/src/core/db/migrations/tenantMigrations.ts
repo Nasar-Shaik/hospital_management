@@ -2267,4 +2267,51 @@ export const tenantMigrations: Migration[] = [
         );
     },
   },
+  {
+    id: "0052-medicine-batches",
+    description: "Stock by batch — so expiry can be refused and the oldest can go first",
+    /**
+     * ── THE INDEX IS THE FEFO QUERY ─────────────────────────────────────────────
+     * Every allocation asks the same question: "the earliest-expiring lot of THIS drug that is
+     * not expired and still has something in it". `{tenantId, medicineCode, expiry}` answers it
+     * as a range scan in expiry order, which is both the filter and the sort — so the pharmacy
+     * counter never sorts in memory while a patient waits.
+     *
+     * ── AND ONE ROW PER LOT ─────────────────────────────────────────────────────
+     * `{tenantId, medicineCode, batchNo, expiry}` unique. Receiving the same batch twice must
+     * TOP UP the lot, not create a second row: two rows for one physical box would let FEFO hand
+     * out the same tablets twice and would make a recall miss half the stock. The upsert in
+     * `receiveBatch` relies on this index to arbitrate, not on a read-then-write.
+     *
+     * The expiry is in the key deliberately. The same batch number from two manufacturers, or a
+     * mistyped date corrected on the next delivery, must not silently merge into one lot with
+     * the wrong date on it — the row that would be created is the evidence something is wrong.
+     *
+     * ── SAFE ON EXISTING DATA ───────────────────────────────────────────────────
+     * The collection is new, so both indexes are built over nothing. Stock already on hand stays
+     * exactly where it is — on the master's running total, unbatched — and is neither migrated
+     * nor invented into a batch. A hospital's existing balance has no batch number and no expiry
+     * date, and manufacturing them would put a fictional expiry on real tablets.
+     */
+    up: async (db) => {
+      await db.createCollection("medicineBatches").catch(() => undefined);
+
+      await db
+        .collection("medicineBatches")
+        .createIndex(
+          { tenantId: 1, medicineCode: 1, batchNo: 1, expiry: 1 },
+          { unique: true, background: true, name: "one_row_per_batch" },
+        );
+
+      await db
+        .collection("medicineBatches")
+        .createIndex({ tenantId: 1, medicineCode: 1, expiry: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("medicineBatches")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

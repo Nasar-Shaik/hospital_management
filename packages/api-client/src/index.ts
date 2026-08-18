@@ -512,6 +512,30 @@ export interface InboxMessage {
   createdAt: string;
 }
 
+/** One lot on the shelf. `state` is computed by the server, never stored — it cannot go stale. */
+export interface MedicineBatch {
+  id: string;
+  batchNo: string;
+  expiry: string;
+  remaining: number;
+  state: "expired" | "near_expiry" | "ok";
+}
+
+/**
+ * What the pharmacy could hand over today.
+ *
+ * INFORMATION, not permission: nothing consumes this to refuse a prescription, and nothing
+ * should. A doctor prescribes what the patient needs; if the hospital is out, the patient buys
+ * it outside and the prescription is what they take to the shop.
+ */
+export interface MedicineAvailability {
+  code: string;
+  units: number;
+  nearestExpiry?: string;
+  /** False when the figure is the master's running total rather than counted lots. */
+  batched: boolean;
+}
+
 export interface NotificationTemplate {
   id: string;
   key: string;
@@ -6241,6 +6265,26 @@ export class ApiClient {
    */
   markNotificationRead(id: string): Promise<InboxMessage> {
     return this.request<InboxMessage>("POST", `/api/v1/notifications/${id}/read`);
+  }
+
+  /**
+   * Availability for the drugs on a prescribing pad. `prescription:create`, not a pharmacy
+   * permission — a doctor asking whether their patient can get a drug here is not doing
+   * inventory.
+   */
+  medicineAvailability(codes: string[]): Promise<MedicineAvailability[]> {
+    return this.request<MedicineAvailability[]>(
+      "GET",
+      `/api/v1/medicines/availability?codes=${encodeURIComponent(codes.join(","))}`,
+    );
+  }
+
+  /** Every lot of one drug, expired ones included — the pharmacist's shelf. */
+  medicineBatches(code: string): Promise<MedicineBatch[]> {
+    return this.request<MedicineBatch[]>(
+      "GET",
+      `/api/v1/medicines/${encodeURIComponent(code)}/batches`,
+    );
   }
 
   listNotificationTemplates(): Promise<NotificationTemplate[]> {

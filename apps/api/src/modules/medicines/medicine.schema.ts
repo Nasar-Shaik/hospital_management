@@ -73,3 +73,14 @@ export type UpdateMedicineBody = z.infer<typeof updateMedicineSchema>;
 export type ReceiveStockBody = z.infer<typeof receiveStockSchema>;
 export type AdjustStockBody = z.infer<typeof adjustStockSchema>;
 export type ListQuery = z.infer<typeof listQuerySchema>;
+
+/**
+ * `?codes=PARA500,AMOX500` — the prescribing screen asks about the drugs on the pad, never the
+ * whole formulary. Comma-separated, matching `/billing/order-payments` and `/reports`, which the
+ * same screens already call the same way.
+ */
+export const availabilityQuerySchema = z.object({ codes: z.string().min(1).max(2_000) }).strict();
+
+export const codeParamSchema = z.object({ code: z.string().min(1).max(64) }).strict();
+
+export type AvailabilityQuery = z.infer<typeof availabilityQuerySchema>;

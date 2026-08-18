@@ -771,6 +771,16 @@ const PROBES: Record<string, Probe> = {
    */
   "GET /api/v1/medicines": { method: "get", url: "/api/v1/medicines" },
   "GET /api/v1/medicines/stock-report": { method: "get", url: "/api/v1/medicines/stock-report" },
+  // Availability is the PRESCRIBER's read (`prescription:create`), not the pharmacy's — see
+  // medicine.routes.ts. The matrix is what proves that distinction is real rather than commented.
+  "GET /api/v1/medicines/availability": {
+    method: "get",
+    url: "/api/v1/medicines/availability?codes=PARA500",
+  },
+  "GET /api/v1/medicines/:code/batches": {
+    method: "get",
+    url: "/api/v1/medicines/PARA500/batches",
+  },
   "GET /api/v1/medicines/:id": {
     method: "get",
     url: "/api/v1/medicines/64b7f0000000000000000001",
@@ -1991,11 +2001,19 @@ describe("entitlement (layer 1): a hospital cannot use what it did not buy", () 
       // the session/leave roster that D2 added beside it (both gate on OPS_APPOINTMENTS). The
       // plain doctor directory and a single doctor's card are core (no plan gate), like
       // `GET /doctors`.
+      /**
+       * Matched on the DOCTOR roster specifically, not on the bare words. `/availability` on its
+       * own caught `GET /medicines/availability` — the prescribing screen's stock lookup, which
+       * has nothing to do with scheduling and is deliberately ungated so the smallest customers
+       * still see whether a drug is in the pharmacy. A substring filter that quietly widens onto
+       * every future route sharing a noun is a test that fails for reasons unrelated to its claim.
+       */
       const isSchedulingFeature =
         id.includes("/appointments") ||
-        id.includes("/schedule") ||
-        id.includes("/availability") ||
-        id.includes("/leave");
+        id.includes("/doctors/schedule") ||
+        id.includes("/doctors/availability") ||
+        id.includes("/doctors/leave") ||
+        /\/doctors\/[^/]+\/(schedule|availability|leave)/.test(id);
       if (!isSchedulingFeature) continue;
 
       const res = await request(app)

@@ -3701,6 +3701,46 @@
           "updatedAt"
         ]
       },
+      "MedicineAvailability": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "units": {
+            "type": "number"
+          },
+          "nearestExpiry": {
+            "type": "string"
+          },
+          "batched": {
+            "type": "boolean"
+          }
+        },
+        "required": ["code", "units", "batched"]
+      },
+      "MedicineBatch": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "batchNo": {
+            "type": "string"
+          },
+          "expiry": {
+            "type": "string"
+          },
+          "remaining": {
+            "type": "number"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["expired", "near_expiry", "ok"]
+          }
+        },
+        "required": ["id", "batchNo", "expiry", "remaining", "state"]
+      },
       "MergeResult": {
         "type": "object",
         "properties": {
@@ -17182,6 +17222,76 @@
         "x-feature": "module.pharmacy.dispensing"
       }
     },
+    "/api/v1/medicines/availability": {
+      "get": {
+        "operationId": "get_v1_medicines_availability",
+        "tags": ["medicines"],
+        "summary": "GET /api/v1/medicines/availability",
+        "parameters": [
+          {
+            "name": "codes",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MedicineAvailability"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "prescription:create"
+      }
+    },
     "/api/v1/medicines": {
       "get": {
         "operationId": "get_v1_medicines",
@@ -17354,6 +17464,77 @@
                     },
                     "data": {
                       "$ref": "#/components/schemas/Medicine"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "pharmacy:stock",
+        "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/medicines/{code}/batches": {
+      "get": {
+        "operationId": "get_v1_medicines_code_batches",
+        "tags": ["medicines"],
+        "summary": "GET /api/v1/medicines/{code}/batches",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MedicineBatch"
+                      }
                     }
                   },
                   "required": ["success", "data"]
