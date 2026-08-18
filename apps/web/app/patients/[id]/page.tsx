@@ -47,6 +47,12 @@ import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ConfirmDialog } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
 import { rupees, toPaise } from "../../../lib/money";
+import {
+  awaitingRelease,
+  CRITICAL_PENDING_LABEL,
+  isCriticalPending,
+  isResultReadable,
+} from "../../../lib/results";
 import { idempotencyMessage, newIdempotencyKey } from "../../../lib/idempotency";
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
@@ -739,20 +745,43 @@ function Tests({
               </div>
             </Td>
             <Td>
-              {o.result?.summary ? (
-                <span className={o.result.critical ? "font-medium text-[var(--color-danger)]" : ""}>
-                  {o.result.summary}
-                </span>
-              ) : report ? (
-                <button
-                  type="button"
-                  onClick={() => void download(report)}
-                  className="text-[var(--color-brand-600)] hover:underline"
+              {/*
+               * The release gate, from `lib/results` — the same rule the consultation screen and
+               * mobile ask. This column used to render `result.summary` at ANY status, so a doctor
+               * reading the chart saw a number that no second pair of eyes had signed off, while
+               * the same doctor reading the same order on the consultation screen did not.
+               *
+               * A scanned report is deliberately NOT gated: `report.model.ts` states that an
+               * uploaded document has no separate approval step and reaches the ordering doctor as
+               * soon as it lands. Only the structured RESULT passes through verify → release.
+               */}
+              {isResultReadable(o) ? (
+                <span
+                  className={o.result?.critical ? "font-medium text-[var(--color-danger)]" : ""}
                 >
-                  Download report
-                </button>
+                  {o.result?.summary ?? "Released"}
+                </span>
               ) : (
-                <span className="text-[var(--color-fg-subtle)]">—</span>
+                <div className="space-y-1">
+                  {isCriticalPending(o) && (
+                    <p className="text-xs font-medium text-[var(--color-danger)]">
+                      {CRITICAL_PENDING_LABEL}
+                    </p>
+                  )}
+                  {report ? (
+                    <button
+                      type="button"
+                      onClick={() => void download(report)}
+                      className="text-[var(--color-brand-600)] hover:underline"
+                    >
+                      Download report
+                    </button>
+                  ) : (
+                    <span className="text-[var(--color-fg-subtle)]">
+                      {awaitingRelease(o) ?? "—"}
+                    </span>
+                  )}
+                </div>
               )}
             </Td>
           </tr>

@@ -49,6 +49,7 @@ import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ConfirmDialog, PermissionGate } from "../../components/ui";
 import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
 import { groupReportsByOrder } from "../../lib/reports";
+import { CRITICAL_PENDING_LABEL, isCriticalPending, isResultReadable } from "../../lib/results";
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -278,15 +279,27 @@ function OrdersForVisit({ orders }: { orders: Order[] }) {
             <Badge tone={o.status === "released" ? "success" : "neutral"}>
               {o.status.replace("_", " ")}
             </Badge>
-            {o.result?.critical && <Badge tone="danger">CRITICAL</Badge>}
+            {/*
+             * A critical flag before release is shown WITH the words, never as a bare red pill.
+             * The hospital has already emailed this doctor the value (`order.critical`, sent
+             * synchronously at completion), so saying nothing here would be incoherent — but an
+             * unqualified CRITICAL badge invites action on a number nobody has confirmed, and
+             * makes it impossible to tell which reds are signed off. See `lib/results`.
+             */}
+            {isCriticalPending(o) ? (
+              <Badge tone="danger">{CRITICAL_PENDING_LABEL}</Badge>
+            ) : (
+              o.result?.critical && <Badge tone="danger">CRITICAL</Badge>
+            )}
           </div>
 
           {/*
            * The result appears here ONLY once released — never at `completed` or
            * `verified`. A number that has been run but not signed off must not reach
-           * the person who will act on it (STATE_MACHINE_CATALOG §15).
+           * the person who will act on it (STATE_MACHINE_CATALOG §15). The gate itself now
+           * lives in `lib/results` so the patient chart cannot answer it differently.
            */}
-          {o.status === "released" && o.result && (
+          {isResultReadable(o) && o.result && (
             <div className="mt-2 rounded-md bg-[var(--color-bg-elevated)] p-2 text-xs">
               {o.result.summary && <p className="text-[var(--color-fg)]">{o.result.summary}</p>}
               {o.result.values && o.result.values.length > 0 && (
