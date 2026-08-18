@@ -19,6 +19,13 @@ export const uploadReportSchema = z
   .strict();
 
 export const orderIdParamSchema = z.object({ id: objectId }).strict();
+
+/**
+ * `?orderIds=a,b,c` — the lab worklist's lookup. A comma-separated STRING rather than a repeated
+ * key, matching `/billing/order-payments`, which the same screen already calls with the same ids.
+ * Validated only for shape here; the service caps how many are honoured.
+ */
+export const orderIdsQuerySchema = z.object({ orderIds: z.string().min(1).max(2_600) }).strict();
 export const patientIdParamSchema = z.object({ patientId: objectId }).strict();
 export const reportIdParamSchema = z.object({ id: objectId }).strict();
 

@@ -1296,3 +1296,89 @@ describe("the laboratory catalogue a hospital starts with", () => {
       .expect(403);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE TECHNICIAN CAN SEE THE FILE THEY JUST UPLOADED
+ *
+ * They could attach a report and were never shown that it landed: the worklist's "is anything
+ * already attached?" read was the PATIENT-wide list, gated on `emr:read`, which a lab technician
+ * deliberately does not hold. It 403'd, the page soft-failed, and the confirmation ("1 report
+ * attached — the doctor can see it now") never appeared for the one role that uploads them. Worse,
+ * a re-scan looked like the first scan, because the list that would have said otherwise was empty.
+ *
+ * The fix is a narrower read, not a wider grant. `emr:read` opens twenty-one routes across
+ * admissions, wards, prescriptions, theatres, the MAR and medico-legal records — a lab technician
+ * has no business in any of them, and these tests pin that they still do not.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a lab technician can see the reports on the orders in front of them", () => {
+  let orderId = "";
+  let reportId = "";
+
+  beforeAll(async () => {
+    const encounterId = await encounterWithDoctor("Report Reader", "9000000310");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    orderId = placed.body.data.order.id as string;
+
+    const uploaded = await as("tech", request(app).post(`/api/v1/orders/${orderId}/reports`))
+      .send({
+        filename: "cbc-scan.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 CBC RESULT").toString("base64"),
+      })
+      .expect(201);
+    reportId = uploaded.body.data.id as string;
+  });
+
+  it("reads back the report it attached, keyed on the order", async () => {
+    const res = await as("tech", request(app).get(`/api/v1/reports?orderIds=${orderId}`)).expect(
+      200,
+    );
+    const rows = res.body.data as { id: string; filename: string; orderId: string }[];
+    expect(rows.map((r) => r.id)).toContain(reportId);
+    expect(rows[0]?.filename).toBe("cbc-scan.pdf");
+  });
+
+  /**
+   * The boundary that makes the narrow read worth having. If this ever returns 200, somebody has
+   * widened `emr:read` to the laboratory and the technician now reads the whole clinical record.
+   */
+  it("is still refused the patient's chart-wide report history", async () => {
+    const patient = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+    const patientId = patient.body.data.patientId as string;
+
+    const res = await as("tech", request(app).get(`/api/v1/patients/${patientId}/reports`));
+    expect(res.status, "a lab technician was handed the whole chart's report history").toBe(403);
+    expect(res.body.error.details.required).toBe("emr:read");
+  });
+
+  /**
+   * And metadata is where it stops. Knowing a file exists is the worklist's question; reading the
+   * result printed on it is a clinical act, and that stays behind the chart's permission.
+   */
+  it("cannot open the bytes — knowing a report exists is not reading it", async () => {
+    const res = await as("tech", request(app).get(`/api/v1/reports/${reportId}/file`));
+    expect(res.status).toBe(403);
+  });
+
+  it("returns nothing rather than everything when asked about no orders", async () => {
+    const res = await as("tech", request(app).get("/api/v1/reports?orderIds=,,"));
+    // The schema requires a non-empty string; an all-separator value parses to zero ids.
+    expect([200, 400]).toContain(res.status);
+    if (res.status === 200) expect(res.body.data).toEqual([]);
+  });
+
+  /** The doctor the result comes back to keeps the chart-wide view they always had. */
+  it("leaves the doctor's cross-visit report list exactly as it was", async () => {
+    const order = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+    const patientId = order.body.data.patientId as string;
+
+    const res = await as(
+      "doctor",
+      request(app).get(`/api/v1/patients/${patientId}/reports`),
+    ).expect(200);
+    expect((res.body.data as { id: string }[]).map((r) => r.id)).toContain(reportId);
+  });
+});

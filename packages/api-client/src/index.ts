@@ -4345,6 +4345,19 @@ export class ApiClient {
   }
 
   /**
+   * The reports attached to these ORDERS — the lab worklist's read.
+   *
+   * Needs `order:read`, which a lab technician holds, rather than the `emr:read` the patient-wide
+   * list above requires and they deliberately do not. Metadata only: enough to say a file has
+   * landed, not enough to open it.
+   */
+  reportsForOrders(orderIds: string[]): Promise<ReportMeta[]> {
+    if (orderIds.length === 0) return Promise.resolve([]);
+    const qs = new URLSearchParams({ orderIds: orderIds.join(",") }).toString();
+    return this.request<ReportMeta[]>("GET", `/api/v1/reports?${qs}`);
+  }
+
+  /**
    * Fetches a report file's bytes, authenticated, as a Blob. The caller turns it into an
    * object URL and opens it — a plain `<a href>` cannot carry the bearer token the download
    * route requires, so the file must be fetched, not linked.

@@ -104,6 +104,39 @@ export async function listForPatient(patientId: string): Promise<ReportMeta[]> {
 }
 
 /**
+ * The reports attached to a set of ORDERS — the lab worklist's read.
+ *
+ * ── WHY THIS EXISTS BESIDE `listForPatient` ─────────────────────────────────
+ * The patient-wide list is the doctor's cross-visit view and is gated on `emr:read`, which is the
+ * right gate for "this person's whole report history" — it IS the clinical record. A LAB
+ * TECHNICIAN does not hold it, and should not: `emr:read` opens twenty-one routes across
+ * admissions, wards, prescriptions, theatres, the MAR and medico-legal records, none of which a
+ * technician has any business in.
+ *
+ * But they were left unable to see whether a file they just uploaded had landed, or whether one
+ * was already there — so the worklist soft-failed on a 403 and simply never showed the list.
+ *
+ * This is the same shape of answer as `orderPaymentStatus`: a narrow read, keyed on the orders the
+ * caller can already see, reachable with the permission they already hold. Metadata only — the
+ * bytes stay behind `emr:read` in `getBytes`, because reading a report is a clinical act and
+ * knowing one exists is not.
+ *
+ * Carries the identical `scopeFilter("uploadedBy")` as every other read here, so branch isolation
+ * is exactly what it is everywhere else in this module.
+ */
+export async function listForOrders(orderIds: string[]): Promise<ReportMeta[]> {
+  const ids = orderIds
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (ids.length === 0) return [];
+  const docs = await getReportFileModel(getTenantDb())
+    .find({ ...scopeFilter("uploadedBy"), orderId: { $in: ids } }, { data: 0 })
+    .sort({ uploadedAt: -1 })
+    .lean<Omit<ReportFileDoc, "data">[]>();
+  return docs.map(toMeta);
+}
+
+/**
  * The bytes for one report — the only read that touches `data`.
  *
  * ── THE FILTER IS THE SAME ONE `listForPatient` USES, DELIBERATELY ──────────

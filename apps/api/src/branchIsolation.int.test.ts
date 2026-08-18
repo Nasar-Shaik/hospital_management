@@ -2140,6 +2140,8 @@ describe("a diagnostic report file stops at the branch that produced it", () => 
   let tokenMgrB = "";
   let hydPatient = "";
   let hydReportId = "";
+  /** Kept, because the order-keyed report read below is asked about it by id. */
+  let hydOrderId = "";
 
   beforeAll(async () => {
     await createUserWithRole("mgrb@branchiso.test", "TENANT_ADMIN", [branchB]);
@@ -2159,6 +2161,7 @@ describe("a diagnostic report file stops at the branch that produced it", () => 
       .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
       .expect(201);
     const orderId = order.body.data.order.id as string;
+    hydOrderId = orderId;
 
     // A real upload through the real route — the bytes are what the exploit reads back.
     const uploaded = await post(`/api/v1/orders/${orderId}/reports`, tokenMgrA, branchA)
@@ -2191,6 +2194,29 @@ describe("a diagnostic report file stops at the branch that produced it", () => 
       (res.body.data as { id: string }[]).some((r) => r.id === hydReportId),
       "a Hyderabad report was listed to a Chennai caller",
     ).toBe(false);
+  });
+
+  /**
+   * And the ORDER-KEYED read added for the lab worklist carries the same boundary.
+   *
+   * WHAT DEFECT WOULD THIS CATCH?
+   * A second door into the same collection with weaker scoping. `GET /reports?orderIds=` is
+   * reachable with `order:read` rather than `emr:read` — a wider audience by one role — so if it
+   * had been written without `scopeFilter`, it would be the cheapest cross-branch read of PHI
+   * metadata in the system: the caller supplies the ids, and ids are ObjectIds.
+   */
+  it("does not leak through the order-keyed read the lab worklist uses either", async () => {
+    const res = await get(`/api/v1/reports?orderIds=${hydOrderId}`, tokenMgrB, branchB).expect(200);
+    expect(
+      res.body.data,
+      "a Hyderabad report reached a Chennai caller through the worklist lookup",
+    ).toEqual([]);
+  });
+
+  /** The positive control — without it the assertion above passes on a route that returns nothing. */
+  it("IS returned by that read to the site that produced it", async () => {
+    const res = await get(`/api/v1/reports?orderIds=${hydOrderId}`, tokenMgrA, branchA).expect(200);
+    expect((res.body.data as { id: string }[]).map((r) => r.id)).toContain(hydReportId);
   });
 
   /**

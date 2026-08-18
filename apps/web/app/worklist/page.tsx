@@ -489,27 +489,39 @@ function Worklist() {
    * times the cost, and it went stale the moment an order left `in_progress`.
    */
   useEffect(() => {
-    if (!openPatientId) {
+    const orderIds = openPatientId
+      ? (groups.find((g) => g.patientId === openPatientId)?.orders ?? []).map((o) => o.id)
+      : [];
+    if (orderIds.length === 0) {
       setAttached(new Map());
       return;
     }
     let live = true;
+    /**
+     * Keyed on the ORDERS, not the patient.
+     *
+     * `listReports(patientId)` needs `emr:read` — the doctor's cross-visit chart read — and a lab
+     * technician deliberately does not hold it. So this soft-failed on a 403 for the one role that
+     * uploads the files: they could attach a report and were never shown that it had landed, nor
+     * that one was already there. `reportsForOrders` asks the same question about the orders in
+     * front of them, under the `order:read` they already hold.
+     */
     void api
-      .listReports(openPatientId)
+      .reportsForOrders(orderIds)
       .then((reports) => {
         if (!live) return;
         const byOrder = new Map<string, ReportMeta[]>();
         for (const r of reports) byOrder.set(r.orderId, [...(byOrder.get(r.orderId) ?? []), r]);
         setAttached(byOrder);
       })
-      // Advisory, like payment: a technician who cannot read reports can still Enter result.
+      // Still advisory: a lookup that fails must not stop somebody entering a result.
       .catch(() => {
         if (live) setAttached(new Map());
       });
     return () => {
       live = false;
     };
-  }, [api, openPatientId]);
+  }, [api, openPatientId, groups]);
 
   /**
    * The edges that need no extra information. `complete` and `cancel` are NOT here — both collect

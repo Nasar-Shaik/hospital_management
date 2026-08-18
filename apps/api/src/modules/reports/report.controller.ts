@@ -22,6 +22,19 @@ export const uploadReport: RequestHandler = async (req, res) => {
   );
 };
 
+/**
+ * The reports attached to a set of orders — `?orderIds=a,b,c`, the lab worklist's read. Same
+ * comma-separated shape as `/billing/order-payments`, which the same screen already calls.
+ */
+export const reportsForOrders: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.orderIds === "string" ? req.query.orderIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  ok(res, await reports.reportsForOrders(ids));
+};
+
 export const listPatientReports: RequestHandler = async (req, res) => {
   const { patientId } = req.params as { patientId: string };
   ok(res, await reports.listPatientReports(patientId));
