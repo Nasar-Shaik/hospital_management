@@ -26,6 +26,13 @@ import {
   type RememberedAccount,
 } from "../../lib/devSession";
 
+/**
+ * One sentence, used in two places — on load once branding has resolved the host to nothing, and
+ * again if a submit comes back `HMS-TEN-001`. Written once so the two can never drift into saying
+ * different things about the same problem.
+ */
+const UNKNOWN_HOST = "This address does not belong to any hospital. Check the web address.";
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -81,6 +88,28 @@ function LoginForm() {
   const destination = params.get("next") ?? "/dashboard";
 
   /**
+   * WEB-02 — the address is wrong, and we knew before they typed.
+   *
+   * `BrandingProvider` calls the public `GET /site` on load, so by the time this form is on screen
+   * the app already has a definitive answer about whether this hostname is a hospital at all. It
+   * used to throw that answer away and wait for a submit, which meant the only way to learn you
+   * were at the wrong address was to type your real password into it first. The hostname IS the
+   * tenant (ADR-0005), so a wrong address is not a typo in a form — it is a different machine.
+   *
+   * Shown as soon as branding has resolved, and never while it is still resolving: a flash of
+   * "this is not a hospital" on a hospital that simply had not answered yet would be its own
+   * defect. `hostIsUnknown` is `HMS-TEN-001` only — see `BrandingProvider`.
+   *
+   * The submit-time mapping in `describe()` stays. It is the same sentence, and it still has work
+   * to do: branding may not have answered yet when somebody types fast.
+   */
+  const addressIsNotAHospital = branding.loaded && branding.hostIsUnknown;
+
+  // A submit-time error outranks the load-time one: it is the more specific answer to what the
+  // person just did, and stacking two red boxes says less than either alone.
+  const alert = error ?? (addressIsNotAHospital ? UNKNOWN_HOST : null);
+
+  /**
    * A NON-ApiClientError means the request never got an answer: DNS, the wrong
    * host, a dead API. "Check your connection" is useless advice for the most
    * common cause by far, which is that the address itself is wrong — and the
@@ -104,7 +133,7 @@ function LoginForm() {
         // One message for every credential failure — see the note above.
         return "Incorrect email or password.";
       case "HMS-TEN-001":
-        return "This address does not belong to any hospital. Check the web address.";
+        return UNKNOWN_HOST;
       case "HMS-TEN-002":
         return "This hospital's account is suspended. Please contact support.";
       case "HMS-AUTH-002":
@@ -188,9 +217,9 @@ function LoginForm() {
         </div>
 
         <Card className="p-6 shadow-sm">
-          {error ? (
+          {alert ? (
             <div className="mb-4">
-              <Alert tone="danger">{error}</Alert>
+              <Alert tone="danger">{alert}</Alert>
             </div>
           ) : (
             !mfaToken &&

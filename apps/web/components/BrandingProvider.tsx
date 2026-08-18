@@ -10,6 +10,7 @@
  * reaches the API in local dev, then exposed as an object URL for an `<img>`.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { ApiClientError } from "@medicore/api-client";
 import { useTheme } from "@medicore/ui";
 import { useAuth } from "./AuthProvider";
 
@@ -18,6 +19,22 @@ interface Branding {
   accentColor: string;
   logoUrl: string | null;
   loaded: boolean;
+  /**
+   * The address this browser is on resolves to NO hospital — the API answered `HMS-TEN-001`.
+   *
+   * ── WHY THIS IS PUBLISHED RATHER THAN SWALLOWED ─────────────────────────
+   * This provider calls the public `GET /site` on every page load, so the app already knows,
+   * before anyone types anything, whether the hostname belongs to a hospital. It used to discard
+   * that answer, and the only way to be told was to submit a password and read the login
+   * response — which means typing a real credential at a host that is not your hospital's.
+   *
+   * Kept deliberately narrow: TRUE only for `HMS-TEN-001`, which the API returns when and only
+   * when the host matches no tenant in the registry. A suspended hospital (`HMS-TEN-002`), a
+   * lapsed licence (`HMS-TEN-005`), an unreachable registry (`HMS-TEN-004`) and a dead network
+   * are all different answers, and telling a real hospital it does not exist because the API was
+   * briefly down would be far worse than saying nothing.
+   */
+  hostIsUnknown: boolean;
   /** Re-reads branding — call after the admin saves a new logo/name/colour. */
   refresh: () => void;
 }
@@ -27,6 +44,7 @@ const BrandingContext = createContext<Branding>({
   accentColor: "",
   logoUrl: null,
   loaded: false,
+  hostIsUnknown: false,
   refresh: () => {},
 });
 
@@ -95,6 +113,7 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
     accentColor: "",
     logoUrl: null,
     loaded: false,
+    hostIsUnknown: false,
   });
 
   const load = useCallback(() => {
@@ -112,9 +131,15 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
           accentColor: site.accentColor,
           logoUrl: objectUrl,
           loaded: true,
+          hostIsUnknown: false,
         });
       })
-      .catch(() => setState((prev) => ({ ...prev, loaded: true })));
+      .catch((err: unknown) => {
+        // Only HMS-TEN-001 means "no hospital at this address". Everything else — suspended,
+        // licence lapsed, registry down, no network — leaves the flag alone. See the interface.
+        const hostIsUnknown = err instanceof ApiClientError && err.code === "HMS-TEN-001";
+        setState((prev) => ({ ...prev, loaded: true, hostIsUnknown }));
+      });
   }, [api]);
 
   useEffect(() => {
