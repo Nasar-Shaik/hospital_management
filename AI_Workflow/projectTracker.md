@@ -26,7 +26,7 @@ the code won and the difference is recorded in §10.
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Branch**             | `feature/0.1` — **28 commits unpushed**, HEAD `0356f89`, tree clean                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **API**                | 43 modules · 228 OpenAPI paths · 277 contract operations · 51 tenant migrations · **13 default roles**                                                                                                                                                                                                                                                                                                                                                                                                  |
+| **API**                | 43 modules · 228 OpenAPI paths · 277 contract operations · 52 tenant migrations · **13 default roles**                                                                                                                                                                                                                                                                                                                                                                                                  |
 | **Web**                | 47 screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | **Tests passing**      | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -149,6 +149,20 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 
 ### E–F · Front office & financial
 
+- [x] **F4/F5 Pharmacy — v1 complete (2026-08-19).** Doctor prescribes (seeing availability, and
+      restricted by none of it) → signs → the counter's queue → partial or full handover → stock
+      falls **by batch, earliest expiry first** → billing is told what actually crossed the counter
+      → the doctor sees `12/20 given`. Prescription, dispensing and billing are three different
+      questions and the code keeps them apart.
+      `medicineBatches` (migration 0052) makes expiry mean something: it was captured on receipt
+      and read by nothing. Expired lots are excluded by the QUERY, never by an `if`; a lot cannot be
+      over-drawn; a shortfall is recorded as `reconcile` rather than refused, because a bookkeeping
+      problem must not hold a patient's medicine.
+      Written up in [`docs/PHARMACY.md`](docs/PHARMACY.md).
+      **NOT built, deliberately:** procurement, vendors, GRN, warehouses, POS, substitution,
+      barcode hardware, expiry/low-stock notifications (both evaluated — see the doc).
+      **Open:** per-branch stock is a product decision, not an oversight.
+
 - [x] **E1 Appointments, queue, token** (22) — clinic hours now resolve in the **branch** timezone
 - [x] **F1 Billing** (28) — estimates, invoices, receipts, refunds; packages visible, payee named
 
@@ -202,9 +216,9 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 
 ### 5.3 P4 — financial
 
-- [ ] **F5** Inventory depth — **expiry is recorded and never read**; no batch chosen at dispense;
-      no expiry or low-stock alert; no goods-receipt or vendor. Master + ledger exist. _See §6._
-- [ ] **F4** Pharmacy — dispensing is 2 routes and unaware of batch or expiry
+- [ ] **F5** Inventory depth — goods-receipt, vendors, procurement. _Batch/expiry landed
+      2026-08-19 (see D-group). No purchasing, deliberately._
+- [ ] **F4** Pharmacy depth — OTC/walk-in sale (`pharmacy:sell`), purchasing (`pharmacy:purchase`), substitution. _Dispensing and stock completed 2026-08-19._
 - [ ] **F2** Insurance / TPA / claims — beyond MVP (7 routes)
 - [ ] **F3** Corporate & packages — enrolment exists, corporate billing does not
 - [ ] **F6** Finance & accounting — general ledger · **F7** HR & payroll
@@ -228,14 +242,14 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 **Five of the six gaps this file opened on 2026-08-12 are closed.** They are kept here with their
 resolution so the next audit does not re-investigate them.
 
-| #   | Gap                                                  | State                                                                                                                                                                                                                                                                                                                         |
-| --- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | **IPD terminal states** — LAMA/absconded/deceased    | ✅ **Closed.** `DISCHARGE_DISPOSITIONS`, `endStayWithOutcome`, and an `outcome_note` in the ward record. The tracker's claim that they record as an ordinary discharge was already false when written.                                                                                                                        |
-| 2   | **Pharmacy stock, batches, expiry** (F5)             | 🟨 **Narrower than stated.** A medicine master and an append-only `stockMovements` ledger exist; batch and expiry are captured **on receipt**. What is missing: nothing ever **reads** expiry, no batch is chosen at dispense, and there is no alert. Dispensing not blocking on stock is a deliberate decision, not the gap. |
-| 3   | **Bed inventory** — two patients in one bed          | ✅ **Closed.** `one_open_stay_per_bed_per_branch` partial-unique index arbitrates occupancy; proven by the branch-isolation suite.                                                                                                                                                                                            |
-| 4   | **`Branch.timezone` unvalidated**                    | ✅ **Closed** (`c262612`) — shape + `Intl` rule, and both clients now reckon clinical dates in it.                                                                                                                                                                                                                            |
-| 5   | **`resolveActiveBranch` accepts an INACTIVE branch** | ✅ **Closed** (`dadbf66`).                                                                                                                                                                                                                                                                                                    |
-| 6   | **RBAC matrix test isolation**                       | ✅ **Not a code defect** (`b2253bd`) — Docker OOM on the dev host, ~7.75 GB across ~30 containers. Check for `Exited (137)` before blaming the suite.                                                                                                                                                                         |
+| #   | Gap                                                  | State                                                                                                                                                                                                                                                                                                     |
+| --- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **IPD terminal states** — LAMA/absconded/deceased    | ✅ **Closed.** `DISCHARGE_DISPOSITIONS`, `endStayWithOutcome`, and an `outcome_note` in the ward record. The tracker's claim that they record as an ordinary discharge was already false when written.                                                                                                    |
+| 2   | **Pharmacy stock, batches, expiry** (F5)             | ✅ **Closed 2026-08-19.** `medicineBatches` gives each lot its own balance and expiry; dispensing takes FEFO and can never take an expired lot. Receipt demands a batch number and an expiry together, or neither. What is still absent is PURCHASING (vendors, GRN) — a different feature, not this gap. |
+| 3   | **Bed inventory** — two patients in one bed          | ✅ **Closed.** `one_open_stay_per_bed_per_branch` partial-unique index arbitrates occupancy; proven by the branch-isolation suite.                                                                                                                                                                        |
+| 4   | **`Branch.timezone` unvalidated**                    | ✅ **Closed** (`c262612`) — shape + `Intl` rule, and both clients now reckon clinical dates in it.                                                                                                                                                                                                        |
+| 5   | **`resolveActiveBranch` accepts an INACTIVE branch** | ✅ **Closed** (`dadbf66`).                                                                                                                                                                                                                                                                                |
+| 6   | **RBAC matrix test isolation**                       | ✅ **Not a code defect** (`b2253bd`) — Docker OOM on the dev host, ~7.75 GB across ~30 containers. Check for `Exited (137)` before blaming the suite.                                                                                                                                                     |
 
 ### Open risks, current
 
