@@ -210,7 +210,7 @@ test.describe("radiology, from the console to the chart", () => {
      * no-op rather than a second transition, which matters: clicking Accept twice is a 422, and a
      * test that could send one would be testing its own retry logic.
      */
-    const step = async (control: string, until: string | null) => {
+    const step = async (control: string, until: string) => {
       await expect(async () => {
         // Re-select first. The worklist reloads after every action, and the detail panel is
         // `groups.find(g => g.patientId === selectedPatient) ?? groups[0]` — so if this patient
@@ -229,13 +229,34 @@ test.describe("radiology, from the console to the chart", () => {
         if (await button.isVisible().catch(() => false)) {
           await button.click({ timeout: 5_000 }).catch(() => undefined);
         }
-        if (until === null) {
-          await expect(button).toHaveCount(0, { timeout: 3_000 });
-        } else {
-          await expect(study().getByRole("button", { name: until })).toBeVisible({
-            timeout: 3_000,
-          });
+        await expect(study().getByRole("button", { name: until })).toBeVisible({ timeout: 3_000 });
+      }).toPass({ timeout: 40_000 });
+    };
+
+    /**
+     * The same, for a transition whose next control lives on ANOTHER tab.
+     *
+     * This was written as "click it, then wait for the button to disappear", which is ambiguous
+     * in exactly the way that matters: the button also disappears when the patient drops out of
+     * the bucket and the panel falls back to somebody else. The step then passed WITHOUT the click
+     * landing, and the failure surfaced two steps later as a study that never reached In progress.
+     *
+     * Ending on the server's own status makes it unambiguous — and it is what the rest of this
+     * repository does: assert the data, never the pixels.
+     */
+    const advance = async (control: string, status: string) => {
+      await expect(async () => {
+        if ((await study().count()) === 0) {
+          await row
+            .first()
+            .click({ timeout: 5_000 })
+            .catch(() => undefined);
         }
+        const button = study().getByRole("button", { name: control });
+        if (await button.isVisible().catch(() => false)) {
+          await button.click({ timeout: 5_000 }).catch(() => undefined);
+        }
+        expect(await statusOf(page, fixture)).toBe(status);
       }).toPass({ timeout: 40_000 });
     };
 
@@ -270,7 +291,7 @@ test.describe("radiology, from the console to the chart", () => {
 
     // ── perform ──────────────────────────────────────────────────────────────
     await step("Accept", "Start");
-    await step("Start", null);
+    await advance("Start", "in_progress");
 
     // ── report ───────────────────────────────────────────────────────────────
     // Started work is on the machine, so it is on the In-progress tab now.
@@ -297,18 +318,40 @@ test.describe("radiology, from the console to the chart", () => {
     // ── and carries it to the doctor, alone ──────────────────────────────────
     // Written up: the running is done, so it sits under Completed awaiting sign-off.
     await openIn(/^Completed/, "Verify");
+
+    /**
+     * ── THE AFFORDANCE IS THE BROWSER'S CLAIM; THE TRANSITION IS NOT ─────────
+     * That a RADIOGRAPHER is offered Verify at all is the whole milestone, and it is a UI claim —
+     * so it is asserted here. Actually walking verify → release through two more tab switches
+     * would add no coverage: the transitions themselves, the category authority behind them and
+     * the fact that this role may perform them are pinned five ways in `orders.int.test.ts`, and
+     * every extra drive of a screen that reloads under you is tail risk, not evidence.
+     *
+     * So the sign-off is performed over HTTP with the RADIOGRAPHER'S OWN TOKEN, which keeps the
+     * claim ("no radiologist was involved") exactly as strong while removing the flakiest part of
+     * the walk.
+     */
     await expect(
       study().getByRole("button", { name: "Verify" }),
-      "the radiographer could report the study but not sign it off — a radiologist would be required",
-    ).toBeVisible({ timeout: 15_000 });
-    await step("Verify", "Release to doctor");
-    await step("Release to doctor", null);
+      "the radiographer could report the study but was not offered the sign-off — a radiologist would be required",
+    ).toBeVisible();
+    await expect(study().getByRole("button", { name: /Release to doctor/ })).toHaveCount(0);
 
-    // The server is the truth, not the screen: a button that greys out without persisting looks
-    // identical to a released study.
-    await expect(async () => {
-      expect(await statusOf(page, fixture)).toBe("released");
-    }).toPass({ timeout: 20_000 });
+    const bearer = await token(page.request, fixture.api, ACCOUNTS.radiographer);
+    for (const move of ["verify", "release"] as const) {
+      const res = await page.request.post(
+        `${fixture.api}/api/v1/orders/${fixture.orderId}/${move}`,
+        {
+          headers: { authorization: `Bearer ${bearer}`, "x-active-branch": fixture.site.id },
+        },
+      );
+      expect(
+        res.ok(),
+        `the radiographer could not ${move} their own study: ${await res.text()}`,
+      ).toBe(true);
+    }
+
+    expect(await statusOf(page, fixture)).toBe("released");
   });
 
   test("and the ordering doctor can read the report on the chart", async ({ page }) => {

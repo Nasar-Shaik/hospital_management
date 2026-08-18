@@ -161,8 +161,20 @@ test.describe("the laboratory worklist", () => {
      * three are legitimate. What must never happen is the screen saying one and the server the
      * other — that is the version where work is held for a bill somebody already settled.
      */
-    const state = await paymentState(page, fixture);
-    await expect(queue.getByText(BADGE[state], { exact: true }).first()).toBeVisible();
+    /**
+     * Polled, because both sides move. The charge is raised by the outbox consumer a moment after
+     * the order commits, so the state walks `unbilled → unpaid` while this page is open: sampling
+     * the server once and asserting the badge once could compare an answer from after the charge
+     * posted against a screen painted before it. The CLAIM is that the two agree, so the honest
+     * assertion is to wait until they do — and to fail if they never do.
+     */
+    let state = "unbilled" as keyof typeof BADGE;
+    await expect(async () => {
+      state = await paymentState(page, fixture);
+      await expect(queue.getByText(BADGE[state], { exact: true }).first()).toBeVisible({
+        timeout: 2_000,
+      });
+    }).toPass({ timeout: 25_000 });
 
     /**
      * ── AND THE CONTROL THAT MATCHES IT ─────────────────────────────────────
