@@ -218,3 +218,53 @@ describe("the three reads the audit fixed stay scoped", () => {
     });
   }
 });
+
+/**
+ * ── THE ONE READ THAT MUST NOT ACQUIRE A BRANCH ──────────────────────────────
+ *
+ * Everything above is a guard against a read that FORGOT to narrow to the caller's branch. This
+ * is the opposite guard, for the one read where narrowing would be the defect.
+ *
+ * A notification is addressed to a PERSON. A consultant who switches the branch picker to look at
+ * another site must not thereby lose the critical potassium raised twenty minutes ago at the
+ * first one — the alert would still exist, the badge would read zero, and nothing anywhere would
+ * look wrong. That is precisely the shape of failure this whole file exists to catch, pointing
+ * the other way.
+ *
+ * ── WHY IT NEEDS A SOURCE TEST AND NOT JUST THE BEHAVIOURAL ONES ─────────────
+ * `branchIsolation.int.test.ts` asserts the behaviour end to end, and today those assertions
+ * cannot go red from a one-line change: `ctx.activeBranchId` is populated inside `authorize()`,
+ * the inbox route deliberately has none, so the repository has no active branch to filter on even
+ * if somebody wrote the filter. The regression needs TWO changes to become visible — a permission
+ * added to the route, and a branch filter added to the read — and by then it is shipped.
+ *
+ * This fails on the FIRST of the two, which is the only moment it is cheap to fix. The reasoning
+ * lives in `AI_Workflow/docs/COMMUNICATION_POLICY.md`.
+ */
+describe("the notification inbox is addressed to a person, not to a site", () => {
+  const SOURCE = readFileSync(join(MODULES, "notifications/notification.repository.ts"), "utf8");
+  const code = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("does not narrow the inbox to the active branch", () => {
+    expect(
+      code,
+      "the inbox read has acquired an active-branch filter — a doctor would stop seeing alerts " +
+        "from the site they are not currently looking at, including critical results. If this is " +
+        "genuinely wanted, change COMMUNICATION_POLICY.md first.",
+    ).not.toMatch(/activeBranchId/);
+  });
+
+  it("does not apply scopeFilter to it either", () => {
+    expect(
+      code,
+      "`scopeFilter()` narrows to the caller's branch. It is inert on this module today only " +
+        "because the inbox route carries no `authorize()`; importing it here is a trap primed to " +
+        "fire the day somebody adds one.",
+    ).not.toMatch(/scopeFilter/);
+  });
+
+  /** The branch is still RECORDED and returned — not filtering is not the same as not knowing. */
+  it("still tells the reader which site the message came from", () => {
+    expect(code).toMatch(/branchId/);
+  });
+});

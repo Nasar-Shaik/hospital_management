@@ -26,6 +26,7 @@ import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redis
 import {
   assertMailhogReachable,
   clearMailbox,
+  inbox as mailbox,
   waitForMail,
   TEST_SMTP_HOST,
   TEST_SMTP_PORT,
@@ -52,8 +53,9 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
 const { dispatchEventInline, dispatchTaskInline } = await import("./core/events/eventConsumer.js");
-const { listNotifications, updateTemplate, notify } =
+const { listNotifications, listTemplates, updateTemplate, notify } =
   await import("./modules/notifications/index.js");
+const { tenantMigrations } = await import("./core/db/migrations/tenantMigrations.js");
 const { cancelAppointment } = await import("./modules/appointments/index.js");
 
 const SLUG = "test-notify-apollo";
@@ -755,6 +757,139 @@ describe("a person can read the messages addressed to them", () => {
     // anybody went back to returning the full record and trusted `responds()` to trim it.
     for (const leaked of ["to", "dedupeKey", "attempts", "error", "status", "recipientId"]) {
       expect(message, `the inbox exposed \`${leaked}\``).not.toHaveProperty(leaked);
+    }
+  });
+});
+
+/**
+ * ── THE CHANNEL A STAFF ALERT ACTUALLY TRAVELS ON ────────────────────────────
+ *
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * The one this milestone exists to close, and its mirror image.
+ *
+ * The defect: `order.critical` shipped on `email`, and `email.isEnabled()` is
+ * `NOTIFY_EMAIL_ENABLED && SMTP_HOST`. On a deployment with no mail server — the default — the
+ * most urgent message in the product was recorded `suppressed` and reached nobody, while every
+ * mechanism around it worked perfectly. These tests fail if either staff alert goes back to a
+ * channel that can be switched off.
+ *
+ * The mirror image, which a blanket flip would cause: moving the PATIENT messages to `inapp` as
+ * well. A patient has no login and no inbox, so an in-app appointment reminder is a message
+ * addressed to somebody who can never open it — the same failure, pointing the other way, and
+ * silent because the ledger would cheerfully record every one of them as `sent`.
+ *
+ * `password.reset` is the one staff message that must stay on email: a person who cannot sign in
+ * cannot read an in-app inbox.
+ */
+describe("a staff alert does not depend on a mail server", () => {
+  it("routes the two order alerts in-app, and everything else out by mail", async () => {
+    const templates = await asTenant(() => listTemplates());
+    const channelOf = (key: string) => templates.find((t) => t.key === key)?.channel;
+
+    expect(channelOf("order.critical")).toBe("inapp");
+    expect(channelOf("order.result.released")).toBe("inapp");
+
+    // A patient cannot open an in-app inbox. Nor can a member of staff who has lost their password.
+    expect(channelOf("patient.welcome")).toBe("email");
+    expect(channelOf("appointment.confirmation")).toBe("email");
+    expect(channelOf("appointment.reminder")).toBe("email");
+    expect(channelOf("appointment.cancellation")).toBe("email");
+    expect(channelOf("password.reset")).toBe("email");
+  });
+
+  /**
+   * The real proof, and it is about what did NOT happen: the alert is delivered, it is in the
+   * doctor's inbox, and the mail server — which is running and reachable in this suite — was never
+   * asked for anything. A hospital with no SMTP at all gets the identical outcome, because the
+   * in-app channel has no transport to be missing.
+   */
+  it("delivers a critical result with the mail server untouched", async () => {
+    await clearMailbox();
+    const dedupe = `channel:crit:${Date.now()}`;
+
+    const outcome = await asTenant(() =>
+      notify({
+        templateKey: "order.critical",
+        recipient: { address: "doc@notify.test", name: "Dr Rao", type: "user", id: doctorId },
+        data: {
+          doctorName: "Dr Rao",
+          patientName: "Meera Nair",
+          uhid: "UH-1",
+          testName: "Serum Potassium",
+          result: "K 7.2 mmol/L",
+          hospital: "Apollo Notify",
+        },
+        dedupeKey: dedupe,
+      }),
+    );
+    expect(outcome).toBe("sent");
+
+    const { items } = await asTenant(() =>
+      listNotifications({ recipientId: doctorId, limit: 50, skip: 0 }),
+    );
+    const row = items.find((n) => n.dedupeKey === dedupe);
+    expect(row?.channel).toBe("inapp");
+    expect(row?.status).toBe("sent");
+
+    // Nothing left by SMTP. This is the assertion that would have caught the original defect from
+    // the other side: on the old template this row's delivery depended entirely on a mail server.
+    expect(await mailbox()).toHaveLength(0);
+
+    // And it is readable by the person it names, carrying the value that makes it worth reading.
+    const mine = await asDoctor(request(app).get("/api/v1/notifications/me?limit=5")).expect(200);
+    const message = (mine.body.data as { id: string; body: string }[]).find(
+      (m) => m.id === row!.id,
+    );
+    expect(message?.body).toContain("K 7.2 mmol/L");
+  });
+
+  /**
+   * ── THE HOSPITAL THAT WAS PROVISIONED BEFORE THIS RELEASE ───────────────────
+   * `seedNotificationTemplates` writes `$setOnInsert`, so changing a shipped default reaches NEW
+   * tenants only. Without migration 0051 every existing hospital would have kept `order.critical`
+   * on the switched-off channel, and the fix would have looked applied while changing nothing for
+   * every current customer — the same trap the lab catalogue fell into a milestone ago.
+   *
+   * This puts a template back the way an older hospital's database holds it and runs the
+   * migration over it.
+   */
+  it("re-points a hospital whose templates predate the change", async () => {
+    const templates = connection.collection("notificationTemplates");
+    const before = await templates.findOne({ key: "order.critical" });
+    expect(before, "the template must exist for this to mean anything").toBeTruthy();
+
+    try {
+      // An older hospital, which had also rewritten the wording — that must survive.
+      await templates.updateOne(
+        { key: "order.critical" },
+        { $set: { channel: "email", isDefault: false, subject: "Our own words" } },
+      );
+
+      const migration = tenantMigrations.find((m) => m.id === "0051-staff-alerts-in-app");
+      expect(migration, "migration 0051 is missing").toBeTruthy();
+      await migration!.up(connection);
+
+      const after = await templates.findOne({ key: "order.critical" });
+      expect(after?.channel).toBe("inapp");
+      // One field moved. The hospital's words, and the fact that they are theirs, are untouched.
+      expect(after?.subject).toBe("Our own words");
+      expect(after?.isDefault).toBe(false);
+
+      // Idempotent — a second run has nothing left to match.
+      await migration!.up(connection);
+      expect((await templates.findOne({ key: "order.critical" }))?.channel).toBe("inapp");
+    } finally {
+      await templates.updateOne(
+        { key: "order.critical" },
+        {
+          $set: {
+            channel: before!.channel,
+            isDefault: before!.isDefault,
+            subject: before!.subject,
+          },
+        },
+      );
     }
   });
 });

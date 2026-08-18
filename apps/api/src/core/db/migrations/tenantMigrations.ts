@@ -2226,4 +2226,45 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0051-staff-alerts-in-app",
+    description: "Move the two staff alerts off email, which most deployments have not configured",
+    /**
+     * ── WHY A MIGRATION AND NOT JUST A SEED EDIT ────────────────────────────────
+     * `seedNotificationTemplates` writes with `$setOnInsert` — deliberately, so a hospital that
+     * rewrote its wording keeps it forever. The cost is that changing a shipped default reaches
+     * NEW tenants only: every hospital already provisioned would have kept `order.critical` on a
+     * channel that is switched off, and the fix would have looked applied while changing nothing
+     * for every existing customer. The lab catalogue hit exactly this a milestone ago.
+     *
+     * ── WHAT IT IS SAFE TO OVERWRITE ────────────────────────────────────────────
+     * Only rows still sitting on `email`. `updateTemplate` accepts subject, body and enabled — it
+     * cannot change a channel — so `channel: "email"` on these two keys is provably the shipped
+     * default and not somebody's decision. A hospital that rewrote the WORDING keeps its words:
+     * this touches one field and leaves `isDefault`, `subject`, `body` and `enabled` alone.
+     *
+     * Idempotent by the same filter: a second run matches nothing.
+     */
+    up: async (db) => {
+      await db
+        .collection("notificationTemplates")
+        .updateMany(
+          { key: { $in: ["order.critical", "order.result.released"] }, channel: "email" },
+          { $set: { channel: "inapp" } },
+        );
+    },
+    /**
+     * Back to email — the state these shipped in. `down` is the inverse of `up`, not a judgement
+     * about which channel is better: a rollback that left the templates somewhere neither release
+     * put them would be worse than either.
+     */
+    down: async (db) => {
+      await db
+        .collection("notificationTemplates")
+        .updateMany(
+          { key: { $in: ["order.critical", "order.result.released"] }, channel: "inapp" },
+          { $set: { channel: "email" } },
+        );
+    },
+  },
 ];

@@ -57,6 +57,7 @@ const { seedMainBranch } = await import("./seed/mainBranch.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
 const { markRetryOrFail } = await import("./core/events/outbox.js");
 const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
+const { notify } = await import("./modules/notifications/index.js");
 const { seedLabTests } = await import("./seed/labTests.js");
 const { getEncounterModel } = await import("./modules/encounters/encounter.model.js");
 const { getAppointmentModel, getDoctorScheduleModel } =
@@ -3183,5 +3184,126 @@ describe("the staff directory follows the branch you are working in", () => {
   it("keeps an unassigned account visible, because nobody could find it otherwise", async () => {
     expect(await directory(branchA)).toContain(unassigned);
     expect(await directory(branchB)).toContain(unassigned);
+  });
+});
+
+/**
+ * ── THE INBOX IS ADDRESSED TO A PERSON, NOT TO A SITE ────────────────────────
+ *
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * The one this whole suite otherwise argues FOR. Every clinical read in the product narrows to the
+ * active branch, and `scopeFilter` is applied so consistently that adding it here would look like
+ * a fix rather than a regression. It would be a regression, and a dangerous one: a consultant who
+ * switches the branch picker to look at another site would lose the critical potassium raised
+ * twenty minutes ago at the first one. The alert would still exist, the badge would read zero, and
+ * nothing anywhere would look wrong.
+ *
+ * So the property is asserted in the suite that would otherwise be cited as the reason to break
+ * it, with the reasoning attached: `branchId` is recorded on the message and shown next to it —
+ * it is not a filter. There is no leak, because the only way a row names you is that the domain
+ * addressed it to you.
+ *
+ * ── WHAT THESE TESTS DO AND DO NOT PROVE ────────────────────────────────────
+ * They walk the real behaviour with two sites and a real `X-Active-Branch`, and they are the
+ * readable statement of the intent. They CANNOT, however, go red from a one-line change today:
+ * `ctx.activeBranchId` is populated inside `authorize()`, and the inbox route deliberately has
+ * none, so a branch filter written into the repository would have nothing to filter on. Making
+ * this regression visible takes two changes — a permission on the route and a filter on the read
+ * — and these tests only catch the pair.
+ *
+ * The first of the two is caught on its own by the source guard in `scopedReads.test.ts`
+ * ("the notification inbox is addressed to a person, not to a site"), which is where the
+ * falsifiable half of this property lives. Both are kept: one says what the system does, the
+ * other fails at the moment the decision is being reversed.
+ */
+describe("a person's inbox follows the person, not the branch picker", () => {
+  let inboxUserId = "";
+  let inboxToken = "";
+
+  beforeAll(async () => {
+    inboxUserId = await createUserWithRole("inbox.doctor@branchiso.test", "DOCTOR", [
+      branchA,
+      branchB,
+    ]);
+    inboxToken = await login("inbox.doctor@branchiso.test");
+
+    // One message per site, raised the way the domain raises them.
+    for (const [branchId, testName] of [
+      [branchA, "Serum Potassium (Hyderabad)"],
+      [branchB, "Serum Potassium (Chennai)"],
+    ] as const) {
+      await inTenant(() =>
+        notify({
+          templateKey: "order.critical",
+          recipient: { name: "Inbox Doctor", type: "user", id: inboxUserId },
+          data: {
+            doctorName: "Inbox Doctor",
+            patientName: "A Patient",
+            uhid: "UH-X",
+            testName,
+            result: "K 7.2 mmol/L",
+            hospital: "Apollo",
+          },
+          dedupeKey: `branchiso:${branchId}:${Date.now().toString()}`,
+          branchId,
+        }),
+      );
+    }
+  }, 60_000);
+
+  it("shows both sites' alerts whichever site is selected", async () => {
+    for (const selected of [branchA, branchB]) {
+      const res = await get("/api/v1/notifications/me?limit=50", inboxToken, selected).expect(200);
+      const bodies = (res.body.data as { body: string }[]).map((m) => m.body).join("\n");
+
+      expect(bodies, `Hyderabad's alert vanished with ${selected} selected`).toContain("Hyderabad");
+      expect(bodies, `Chennai's alert vanished with ${selected} selected`).toContain("Chennai");
+    }
+  });
+
+  it("shows both in All mode too", async () => {
+    const res = await get("/api/v1/notifications/me?limit=50", inboxToken).expect(200);
+    const bodies = (res.body.data as { body: string }[]).map((m) => m.body).join("\n");
+    expect(bodies).toContain("Hyderabad");
+    expect(bodies).toContain("Chennai");
+  });
+
+  /** The site is still RECORDED — a message that cannot say where it came from is a worse record. */
+  it("still says which site each alert was raised at", async () => {
+    const res = await get("/api/v1/notifications/me?limit=50", inboxToken).expect(200);
+    const messages = res.body.data as { body: string; branchId?: string }[];
+
+    const hyd = messages.find((m) => m.body.includes("Hyderabad"));
+    const chn = messages.find((m) => m.body.includes("Chennai"));
+    expect(hyd?.branchId).toBe(branchA);
+    expect(chn?.branchId).toBe(branchB);
+  });
+
+  /**
+   * Opening one is not branch work either. A doctor reading yesterday's alert from another site
+   * must not have to go and find the right branch in a dropdown first — and the message is
+   * already theirs, so there is nothing the active branch could usefully arbitrate.
+   */
+  it("opens an alert raised at the other site", async () => {
+    const listed = await get("/api/v1/notifications/me?limit=50", inboxToken, branchB).expect(200);
+    const hyd = (listed.body.data as { id: string; body: string }[]).find((m) =>
+      m.body.includes("Hyderabad"),
+    );
+    expect(hyd, "the Hyderabad alert was not listed at all").toBeTruthy();
+
+    const opened = await post(`/api/v1/notifications/${hyd!.id}/read`, inboxToken, branchB).expect(
+      200,
+    );
+    expect(opened.body.data.readAt).toBeTruthy();
+  });
+
+  /** A message addressed to somebody else stays that way, at every branch and in All mode. */
+  it("does not leak another user's alert through the branch picker", async () => {
+    for (const selected of [branchA, branchB, undefined]) {
+      const res = await get("/api/v1/notifications/me?limit=50", tokenAdmin, selected).expect(200);
+      const bodies = (res.body.data as { body: string }[]).map((m) => m.body).join("\n");
+      expect(bodies).not.toContain("Serum Potassium");
+    }
   });
 });
