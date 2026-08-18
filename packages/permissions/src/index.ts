@@ -584,14 +584,32 @@ const CLINICAL = {
       "the radiology report arrives with the module; today results ride on the order worklist under order:perform",
     ),
   ),
+  /**
+   * ── THIS IS COMPETENCE IN A CATEGORY, NOT SENIORITY ───────────────────────
+   * Read `order.authority.ts`: the extra permission required to verify an order is "the one that
+   * says they are competent in THIS category". That is what this code means, and it is why a
+   * RADIOLOGY_TECHNICIAN holds it in a hospital with no radiologist on staff — a radiographer is
+   * competent in imaging and is not competent in haematology, which is precisely the distinction
+   * the check exists to make.
+   *
+   * It was described as "sign a radiology report" while only RADIOLOGIST held it, and that reading
+   * had a consequence nobody intended: a hospital without a consultant radiologist could not get a
+   * chest X-ray past `completed`, so the film was taken, the report was typed, and the ordering
+   * doctor never saw either. Requiring a specialist the hospital does not employ is not a safety
+   * control; it is an outage.
+   *
+   * A hospital that DOES employ radiologists gets the two-person model by granting this and
+   * `order:verify` to the radiologist and withholding them from the technician. That is a role
+   * edit, not a code change — see `AI_Workflow/docs/RADIOLOGY.md`.
+   */
   RADIOLOGY_SIGN: p(
     "radiology:sign",
-    "Sign a radiology report",
+    "Authority over imaging results — verify and release a radiology study",
     "branch",
     enforcedIn(
       "D7 Radiology",
       "orders/order.authority.ts",
-      "verifying a radiology order needs order:verify AND this, so a radiologist cannot certify a blood culture",
+      "verifying a radiology order needs order:verify AND this, so whoever signs off a scan is competent in imaging rather than merely holding the generic verb",
     ),
   ),
 
@@ -1480,10 +1498,49 @@ export const DEFAULT_ROLES = [
       CLINICAL.VITALS_READ,
     ),
   },
+  /**
+   * ── THE ROLE THAT MAKES RADIOLOGY WORK WITHOUT A RADIOLOGIST ──────────────
+   * Modelled on LAB_TECHNICIAN, with ONE deliberate difference: it also holds `order:verify`,
+   * `order:release` and `radiology:sign`, so it can carry a study all the way to the doctor.
+   *
+   * That difference is not an oversight and it is not a weakening of the lab's rule. The lab's
+   * two-person split is a real safety property: the person who ran the assay must not be the one
+   * who certifies the number, because the check is on the MEASUREMENT. Imaging is not that. In a
+   * hospital with no radiologist — which is most hospitals this product is sold to — the person
+   * who takes the film writes "AP chest, no focal consolidation, film attached" and the treating
+   * doctor reads the image. There is no second reader to be had, and inventing a requirement for
+   * one means the report never reaches anybody.
+   *
+   * What it deliberately does NOT hold is `emr:read`. It can see its own worklist (`order:read`),
+   * attach a film (`file:upload` + `order:perform`) and read the metadata of reports on orders it
+   * is working (`GET /reports?orderIds=`, `order:read`) — but the report BYTES and the patient's
+   * chart stay behind `emr:read`, exactly as they do for the lab technician. Granting the chart to
+   * make a worklist work is the mistake this product has made before.
+   */
+  {
+    code: "RADIOLOGY_TECHNICIAN",
+    name: "Radiology Technician",
+    description: "Performs imaging studies and reports them. No radiologist required.",
+    permissions: codes(
+      PATIENT.PATIENT_READ,
+      // Works the imaging worklist: accepts the study, performs it, records the report.
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_PERFORM,
+      /**
+       * And carries it to the doctor. `radiology:sign` confines that authority to IMAGING — this
+       * role still cannot certify a blood result, which is the property `order.authority.ts`
+       * exists to hold and which a plain `order:verify` grant would have thrown away.
+       */
+      CLINICAL.ORDER_VERIFY,
+      CLINICAL.ORDER_RELEASE,
+      CLINICAL.RADIOLOGY_SIGN,
+      PLATFORM.FILE_UPLOAD,
+    ),
+  },
   {
     code: "RADIOLOGIST",
     name: "Radiologist",
-    description: "Reports and signs imaging studies.",
+    description: "Reports and signs imaging studies. Optional — see RADIOLOGY_TECHNICIAN.",
     permissions: codes(
       PATIENT.PATIENT_READ,
       CLINICAL.RADIOLOGY_REPORT,

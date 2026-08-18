@@ -132,7 +132,20 @@ const FLAG_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = 
   critical_high: "danger",
 };
 
+/**
+ * ── AN IMAGING REPORT IS PROSE, A LAB RESULT IS NUMBERS ─────────────────────
+ * One form serves both, because it is the same order and the same `complete` call — but what it
+ * ASKS FOR differs, and showing a radiographer a grid of "Haemoglobin / 11.9 / g/dL / 12–15" is
+ * asking them to file an X-ray as a blood count. `summary` (5,000 characters, already on the
+ * result) is the whole radiology reporting model for v1: findings and impression, typed by the
+ * person who took the film, with the image attached through the upload beside it.
+ *
+ * The values grid is not REMOVED for imaging, it is collapsed: a chest X-ray genuinely has no
+ * numbers, and an obstetric ultrasound genuinely does (BPD, FL, EFW). One is the common case and
+ * one is real, so the common case is the default and the other is one click away.
+ */
 function ResultForm({ order, onDone }: { order: OrderRow; onDone: () => void }) {
+  const imaging = order.category === "radiology";
   const { api } = useAuth();
   const [summary, setSummary] = useState("");
   const [critical, setCritical] = useState(false);
@@ -144,10 +157,20 @@ function ResultForm({ order, onDone }: { order: OrderRow; onDone: () => void }) 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Look the order's test up in the catalogue (D6). When it is defined, pre-fill the analyte grid
-  // and reference ranges so the technician enters values, not paperwork — and the ranges are the
-  // ones the lab agreed, not typed from memory.
+  /**
+   * Look the order's test up in the LAB catalogue (D6) and pre-fill the analyte grid, so the
+   * technician enters values rather than paperwork and the ranges are the ones the lab agreed
+   * rather than typed from memory.
+   *
+   * `category === "lab"` guards it, and not merely as an optimisation. An imaging study has no
+   * analytes, so there is nothing to find; and `GET /lab-tests/:code` is gated on
+   * `module.clinical.lis`, so at a hospital that bought imaging and not the laboratory this fired
+   * a request that could only ever answer HMS-PLAN-002. A doomed request whose failure is
+   * swallowed looks fine for a year and then confuses whoever is reading the access log during an
+   * incident.
+   */
   useEffect(() => {
+    if (order.category !== "lab") return;
     let live = true;
     api
       .getLabTest(order.code)
@@ -201,19 +224,26 @@ function ResultForm({ order, onDone }: { order: OrderRow; onDone: () => void }) 
 
       <label className="block">
         <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
-          Result / report
+          {imaging ? "Report — findings and impression" : "Result / report"}
         </span>
         <textarea
           value={summary}
           onChange={(e) => setSummary(e.target.value)}
-          rows={2}
-          placeholder="Haemoglobin 11.9 g/dL. Within range."
+          rows={imaging ? 6 : 2}
+          placeholder={
+            imaging
+              ? "PA chest, adequate inspiration. Lung fields clear, no focal consolidation. Heart size normal. Impression: no acute abnormality."
+              : "Haemoglobin 11.9 g/dL. Within range."
+          }
           className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] outline-none"
         />
       </label>
 
-      <div>
-        <span className="mb-1 block text-xs font-medium text-[var(--color-fg-muted)]">
+      <details open={!imaging}>
+        <summary className="cursor-pointer text-xs font-medium text-[var(--color-fg-muted)]">
+          {imaging ? "Measurements — most studies have none" : "Values"}
+        </summary>
+        <span className="mb-1 mt-1 block text-xs font-medium text-[var(--color-fg-muted)]">
           Values {analytes.length > 0 ? "(from catalogue)" : "(optional)"}
           {specimen && (
             <span className="ml-2 font-normal text-[var(--color-fg-subtle)]">
@@ -274,7 +304,7 @@ function ResultForm({ order, onDone }: { order: OrderRow; onDone: () => void }) 
         >
           Add another value
         </button>
-      </div>
+      </details>
 
       <label className="flex items-start gap-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger-bg)] p-2.5">
         <input
@@ -284,8 +314,11 @@ function ResultForm({ order, onDone }: { order: OrderRow; onDone: () => void }) 
           className="mt-0.5"
         />
         <span className="text-xs text-[var(--color-danger)]">
-          <strong>Critical value</strong> — alerts the ordering doctor immediately, before
-          verification. Use this when the number could harm the patient today.
+          <strong>{imaging ? "Critical finding" : "Critical value"}</strong> — alerts the ordering
+          doctor immediately, before verification. Use this when{" "}
+          {imaging
+            ? "what you have seen needs acting on today: a tension pneumothorax does not wait for the report to be read."
+            : "the number could harm the patient today."}
         </span>
       </label>
 

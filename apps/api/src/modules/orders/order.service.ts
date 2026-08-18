@@ -34,10 +34,12 @@ import {
 } from "../encounters/index.js";
 import { getPatient, namesByIds } from "../patients/index.js";
 import { notify } from "../notifications/index.js";
+import { isFeatureEnabled } from "../entitlements/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getById as getTenant } from "../tenants/index.js";
 import * as repo from "./order.repository.js";
 import { verifyAuthorityFor } from "./order.authority.js";
+import { featureForCategory } from "./order.entitlement.js";
 import {
   canTransition,
   type OrderCategory,
@@ -168,6 +170,42 @@ async function assertOrderingIsSafe(): Promise<void> {
 }
 
 /**
+ * Did this hospital buy this KIND of work?
+ *
+ * ── PLACING ONLY, FOR THE SAME REASON THE READINESS GUARD IS ────────────────
+ * Guarded here and nowhere in the state machine, exactly like `assertOrderingIsSafe` above and for
+ * the same clinical reason, stated there: a transition updates a row that already exists. If a
+ * hospital's RIS entitlement lapses on the day a patient is halfway through a CT, blocking
+ * `complete` strands a scan that has already been performed — the dose is delivered, the image
+ * exists, and the only thing refusing achieves is that the doctor never sees it. An expired
+ * subscription is a commercial problem and must never be allowed to become a clinical one.
+ *
+ * Reads are not guarded either, and it is the same argument once more: a record already created
+ * must stay readable. A hospital that stops paying for imaging does not thereby lose the right to
+ * see last year's chest X-ray, and a product that hid it would be destroying a medical record
+ * over an invoice.
+ *
+ * So the entitlement stops NEW work starting — the one point at which refusing costs nobody
+ * anything.
+ */
+async function assertCategoryIsSold(category: OrderCategory): Promise<void> {
+  const feature = featureForCategory(category);
+  if (!feature) return;
+
+  const ctx = getContext();
+  if (await isFeatureEnabled(ctx.tenantId, feature)) return;
+
+  // HMS-PLAN-002 — the same code and shape `authorize({ feature })` raises, so a client that
+  // already knows how to say "not in your edition" needs no second case. Mobile reads exactly this
+  // code to hide a module rather than report a fault (`queue.tsx`).
+  throw new AppError("HMS-PLAN-002", 403, "Feature not in your edition", {
+    feature,
+    category,
+    hint: `ordering ${category} needs the ${feature} module`,
+  });
+}
+
+/**
  * A doctor asks for something.
  *
  * ── AN ORDER REQUIRES AN OPEN ENCOUNTER ─────────────────────────────────────
@@ -186,6 +224,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
    * mid-analysis for a rule that has no bearing on them.
    */
   await assertOrderingIsSafe();
+  await assertCategoryIsSold(input.category);
 
   const encounter = await getEncounter(input.encounterId);
   if (!encounter) {

@@ -136,10 +136,16 @@ const STAFF: StaffSeed[] = [
     does: "verify and release BLOOD results",
   },
   {
+    key: "radiographer",
+    name: "Priya (Imaging)",
+    role: "RADIOLOGY_TECHNICIAN",
+    does: "the x-ray worklist: perform, report and release IMAGING — no radiologist needed",
+  },
+  {
     key: "radiologist",
     name: "Dr Sharma (Radiology)",
     role: "RADIOLOGIST",
-    does: "the x-ray worklist; verify and release IMAGING",
+    does: "OPTIONAL consultant sign-off on imaging; the demo works without this login",
   },
   {
     key: "pharmacy",
