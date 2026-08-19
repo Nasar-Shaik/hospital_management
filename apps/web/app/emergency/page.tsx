@@ -226,6 +226,7 @@ export default function EmergencyBoardPage() {
   const { api, can } = useAuth();
   const canTriage = can("triage:perform");
   const canClose = can("encounter:close");
+  const canMove = can("encounter:update");
 
   const [rows, setRows] = useState<EdBoardRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -246,6 +247,25 @@ export default function EmergencyBoardPage() {
         .finally(() => setLoading(false));
     },
     [api],
+  );
+
+  /**
+   * ── HAND THE PATIENT TO A DOCTOR ──────────────────────────────────────────
+   * `POST /encounters/:id/queue` — the SAME route the front desk uses, not an emergency one. It is
+   * here because without it the board is a dead end: a patient can be triaged `critical` and then
+   * sit at `Arrived` forever, because the only screen that could put them in the doctor's queue is
+   * the reception register, which is not where the ED nurse is standing. The clinical judgement and
+   * the act of sending them in stay SEPARATE (triage does not queue, deliberately) — this is the
+   * second act, given its own button.
+   */
+  const sendIn = useCallback(
+    (row: EdBoardRow) => {
+      api
+        .queueEncounter(row.encounterId)
+        .then(() => load())
+        .catch((e: unknown) => setError(e));
+    },
+    [api, load],
   );
 
   useEffect(() => {
@@ -312,6 +332,11 @@ export default function EmergencyBoardPage() {
           {canTriage && (
             <Button size="sm" variant="secondary" onClick={() => setTriaging(r)}>
               {r.priority ? "Re-assess" : "Triage"}
+            </Button>
+          )}
+          {canMove && r.status === "arrived" && (
+            <Button size="sm" variant="secondary" onClick={() => sendIn(r)}>
+              Send to doctor
             </Button>
           )}
           {canClose && (

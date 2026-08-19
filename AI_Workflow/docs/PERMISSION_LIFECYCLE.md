@@ -53,6 +53,31 @@ There is no allow-list to append to.
 
 Of the 75: **62 future**, **11 superseded**, **2 service**.
 
+### Since then (2026-08-19)
+
+**160 permissions · 87 active · 73 declared — 60 future, 11 superseded, 2 service.**
+
+Two codes went live in the Theatre and Emergency milestones, and both had been sitting in the
+catalogue held by somebody who could not use them:
+
+| Code             | Was                                              | Now                                           |
+| ---------------- | ------------------------------------------------ | --------------------------------------------- |
+| `ot:record`      | `future` — "the operation record is not built"   | Gates `POST /ot-bookings/:id/operative-note`. |
+| `triage:perform` | `future` — "the ED triage workflow is not built" | Gates `POST /emergency/triage`.               |
+
+Two more things were corrected that the gate cannot see, and they are the interesting half:
+
+- **`ot:schedule` was granted to no clinical role.** It was active and correctly routed, so nothing
+  here flagged it — the ledger checks that a permission gates something, not that anybody holds it.
+  The result was a whole shipped module (theatres, bookings, the collision rule, the screen) that
+  only the hospital administrator could reach. **A permission nobody holds is a feature nobody
+  has**, and this is the fourth time. The DOCTOR and NURSE roles now carry it.
+- **`ed:board:manage` kept a reason that had become false.** It still gates nothing and is still
+  correctly `future`, but its reason said "the emergency board is not built" _after the board
+  shipped_. The gate can see a `future` permission that acquires a route; it cannot see a
+  declaration that has quietly stopped being true. Rewritten to name what is actually unbuilt: bay
+  assignment and manual re-ordering.
+
 ### The two that a route census would have wrongly called orphans
 
 Both are live authorization that `authorize()` cannot express, and both would have been "fixed"
