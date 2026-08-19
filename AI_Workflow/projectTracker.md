@@ -22,21 +22,21 @@ the code won and the difference is recorded in §10.
 
 ## 1. Snapshot
 
-|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Branch**             | `feature/0.1` — **28 commits unpushed**, HEAD `0356f89`, tree clean                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| **API**                | 43 modules · 228 OpenAPI paths · 277 contract operations · 52 tenant migrations · **13 default roles**                                                                                                                                                                                                                                                                                                                                                                                                  |
-| **Web**                | 47 screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **Tests passing**      | **3,661** — 1,690 API integration · 1,613 mobile · 207 web · 133 API unit · 18 packages                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Gates**              | `format` · `lint` 18/18 · `typecheck` 18/18 · `unit` · `openapi` · `contract` · `client` · `build` 11/11 · `boundaries` — green. **`integration` is green on re-run and in isolation, not on every full run** — 6 runs on 2026-08-17: one passed 1838/1838, five failed 1–4 disjoint tests each. Every failure a timeout, 404 or 401; **none an assertion about behaviour**. Cause NOT established (a contention theory was claimed and retracted the same day). Raised as **T3**; see `TESTING.md` §9. |
-| **Test environment**   | ✅ **Ready** — `pnpm seed:validation` builds a 45-bed, 42-patient ward across two sites and two timezones; `--verify` checks the **schema** (3) then the **data** (19), and refuses a database that cannot enforce the clinical invariants. See `SEED.md`.                                                                                                                                                                                                                                              |
-| **API pre-validation** | ✅ 2026-08-14 — **43 server-side safety checks**, two real nurses racing one dose. Duplicate prevention, 409-as-answer, idempotent replay and lost-response reconciliation all hold.                                                                                                                                                                                                                                                                                                                    |
-| **Manual validation**  | 🔴 **0 executed.** Procedure now written: [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md). Mobile M2 0/61 · M3 0/45 · Web 0/24 · **Journey 0/25 (§13A, new 2026-08-17)** · safety, permission and negative suites 0. **Nothing has been seen on a screen by a person.**                                                                                                                                                                                                        |
-| **Open defects**       | **4 fixed 2026-08-16** (D1 · D2 · D3 · D6) · **3 fixed 2026-08-17** (D9 cross-branch appointment write · D10 cross-branch report file · D13 mobile discarded the paper instruction) · **2 closed 2026-08-17** (D11, D12). **2 reclassified** as deliberate design (D4, D5). **1 open** — D7, a product decision. **P0 = 0, P1 = 0.** T2 partially controlled. See `docs/RISK_REGISTER.md` §0 and its 2026-08-17 P2 review.                                                                              |
-| **CI**                 | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Next action**        | **HUMAN MANUAL VALIDATION.** Execute [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md) in its §5 order — §5.0's security regression set (BR-10, BR-11, BR-07, DRIFT-01…12, BR-12) first, then the environment gate, permissions by API, **Web**, the new **§13A journey** (JR-01…22 + DUP-01/02 + TEN-01), then mobile. **No engineering work is pending before this.**                                                                                                          |
+|                        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Branch**             | `feature/0.1` — **12 commits unpushed**, HEAD `f64f34f`, tree clean (2026-08-19)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| **Phases complete**    | 2 of 10 (P0, P1) · P2 ~55% · P3 ~30% · P5 ~35%                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **API**                | 44 modules · 234 OpenAPI paths · 283 contract operations · 53 tenant migrations · **13 default roles** · 160 permissions (87 active, 73 declared)                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **Web**                | 48 screens                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Mobile**             | 27 screens · **M0–M3 delivered** (foundation, doctor, nurse)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Tests passing**      | **4,338** — 2,057 API integration · 1,668 mobile · 356 web · 239 API unit · 18 packages · **45 Playwright** on top                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Gates**              | **`pnpm gate:full` green end to end, 2026-08-19** — format · lint 18/18 · typecheck 18/18 · unit · openapi (234 paths) · contract (283 ops, additive only) · client · integration **2,057/2,057** · build · boundaries (0 violations, 1,151 modules) · **e2e 45**. T3 (the wandering integration flake) was root-caused and **closed 2026-08-17**; its guard is still armed. **The one unexplained 2026-08-19 failure was reproduced, named and fixed** — it was a real 500 under a concurrent triage, plus a second harness race in `dropDatabases`. See `TESTING.md` §9. |
+| **Test environment**   | ✅ **Ready** — `pnpm seed:validation` builds a 45-bed, 42-patient ward across two sites and two timezones; `--verify` checks the **schema** (3) then the **data** (19), and refuses a database that cannot enforce the clinical invariants. See `SEED.md`.                                                                                                                                                                                                                                                                                                                 |
+| **API pre-validation** | ✅ 2026-08-14 — **43 server-side safety checks**, two real nurses racing one dose. Duplicate prevention, 409-as-answer, idempotent replay and lost-response reconciliation all hold.                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Manual validation**  | 🔴 **0 executed.** Procedure now written: [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md). Mobile M2 0/61 · M3 0/45 · Web 0/24 · **Journey 0/25 (§13A, new 2026-08-17)** · safety, permission and negative suites 0. **Nothing has been seen on a screen by a person.**                                                                                                                                                                                                                                                                           |
+| **Open defects**       | **4 fixed 2026-08-16** (D1 · D2 · D3 · D6) · **3 fixed 2026-08-17** (D9 cross-branch appointment write · D10 cross-branch report file · D13 mobile discarded the paper instruction) · **2 closed 2026-08-17** (D11, D12). **2 reclassified** as deliberate design (D4, D5). **1 open** — D7, a product decision. **P0 = 0, P1 = 0.** T2 partially controlled. See `docs/RISK_REGISTER.md` §0 and its 2026-08-17 P2 review.                                                                                                                                                 |
+| **CI**                 | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Next action**        | **HUMAN MANUAL VALIDATION — unchanged, and now four milestones overdue.** Execute [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md) in its §5 order — §5.0's security regression set (BR-10, BR-11, BR-07, DRIFT-01…12, BR-12) first, then the environment gate, permissions by API, **Web**, the new **§13A journey** (JR-01…22 + DUP-01/02 + TEN-01), then mobile. **No engineering work is pending before this.**                                                                                                                                |
 
 ---
 
@@ -147,6 +147,42 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
       **NOT built, deliberately:** PACS, DICOM, modality integration, RIS scheduling, mandatory
       sign-off, second reader, structured imaging templates. `radiology:report` stays `future()`.
 
+- [x] **B5/D8 Operation theatre — Theatre v1 complete (2026-08-19).** Surgeon books a theatre
+      window → the OT list shows it → the room is started → the **operation record** is written →
+      it reaches the patient's chart. The registry, the bookings, the overlap rule, the four-state
+      machine and the screen already existed and were **not** rebuilt.
+      What was missing was the record — `ot:record` was declared `future()` — and **a surgeon who
+      could book**: `ot:schedule` was granted to no clinical role, so the only person in the
+      building who could put a patient on a surgical list was the hospital administrator. Fourth
+      instance of "a permission nobody holds is a feature nobody has".
+      The record is **write-once**, enforced by a conditional update rather than a read-then-write,
+      and may only be written on a procedure that has started — a note on a scheduled or cancelled
+      booking would record an operation that did not happen. The overlap rule is tested at its
+      BOUNDARIES (a back-to-back list is legal) and under concurrency.
+      Written up in [`docs/THEATRE.md`](docs/THEATRE.md).
+      **NOT built, deliberately:** pre-op checklists, anaesthesia, team roster, instrument/implant
+      tracking, CSSD, OT inventory, PACU, blood, consumables, utilisation analytics, and amending a
+      record. **Billing is a documented dependency, not a second system** — a `procedure` ORDER is
+      what bills; a booking is scheduling.
+
+- [x] **D10 Emergency & triage — Emergency v1 complete (2026-08-19).** Patient arrives → registered
+      as an emergency → triaged → ranked on the board → sent to a doctor → worked up on the
+      **ordinary** clinical screens → discharged, admitted, or sent to another hospital.
+      **The ED is not a second hospital, it is a way in.** `origin: "emergency"` and `class: "ER"`
+      already existed, and the encounter's own state machine already _is_ arrived → triaged → with
+      a doctor → treatment → disposition. So this module owns exactly two things: the triage
+      judgement (a person, a priority, a time) and the board. An integration test drives an ED lab
+      order and asserts it lands on the ordinary bench, so a second clinical pipeline cannot be
+      added quietly.
+      `module.clinical.emergency` **gated nothing** and now gates the department; `triage:perform`
+      went live and is held by NURSE and DOCTOR, not by the registration desk. **An unassessed
+      patient sorts above every assessed one** — unknown severity is not low severity.
+      Written up in [`docs/EMERGENCY.md`](docs/EMERGENCY.md).
+      **NOT built, deliberately:** five-level triage scales, bay assignment, manual board
+      re-ordering, MLC registration, ambulance/referral integration, ED analytics. Notifications
+      were **evaluated and declined** — "a critical patient arrived" is addressed to a room, not a
+      person, and the board is the alert.
+
 ### E–F · Front office & financial
 
 - [x] **F4/F5 Pharmacy — v1 complete (2026-08-19).** Doctor prescribes (seeing availability, and
@@ -209,10 +245,14 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 - [ ] **D6** LIS depth — specimen collection/accession state, panels, delta checks
 - [ ] **D7** RIS depth — PACS/DICOM, modality worklists, structured templates, and radiologist
       sign-off as a hospital-configurable policy rather than a role edit
-- [ ] **D9** Blood bank · **D10** Emergency & triage _(D7 Radiology v1 landed 2026-08-18)_
+- [ ] **D9** Blood bank _(D7 Radiology v1 2026-08-18 · **D10 Emergency v1 2026-08-19** — see §4)_
+- [ ] **D10** Emergency depth — five-level triage, bay assignment, MLC registration, ED analytics.
+      _v1 landed 2026-08-19; `ed:board:manage` stays `future()` and now names what it is reserved
+      for._
 - [ ] **D11** Critical care · **D12** Dialysis · **D13** Physiotherapy · **D14** Dietetics
 - [ ] **D4** Teleconsultation
-- [ ] **D8** Theatre depth — anaesthetist/team, pre-op checklist, utilisation
+- [ ] **D8** Theatre depth — anaesthetist/team, pre-op checklist, utilisation, instrument/implant
+      tracking, and **amending an operation record**. _v1 landed 2026-08-19; see §4._
 
 ### 5.3 P4 — financial
 
@@ -424,12 +464,22 @@ M4 first: push is what makes the app worth opening unprompted, and the outbox th
 already built and proven. M5 follows Stage B, because a dispensing screen with no batch is the
 same defect on a smaller screen.
 
-### Stage E · Widen the clinical floor — P3 breadth · L
+### Stage E · Widen the clinical floor — P3 breadth · L · 🟨 **two of three delivered**
 
 **D7 radiology** and **D10 emergency & triage** before D9/D11–D14: radiology is the second-largest
 order source after the lab and reuses the order pipeline wholesale, and triage is the front door of
 every hospital that buys the Hospital edition. Then **C2** problem list and **D1** ICD master —
 both are the same missing thing, a coded clinical vocabulary.
+
+- [x] **D7 Radiology v1** — 2026-08-18.
+- [x] **D10 Emergency v1** — 2026-08-19. (**B5/D8 Theatre v1** landed the same day; it was not on
+      this list, because the tracker had recorded theatres as complete since B5 shipped the
+      registry. It was complete as a _bookable resource_ and had no operation record — see §10.)
+- [ ] **C2 problem list + D1 ICD master** — the remaining Stage E item, and the one this ordering
+      was actually pointing at. The ICD **master exists** (108 seeded codes, `mrd:code`, the `/mrd`
+      screen); what does not is a **problem list that persists across visits**. Diagnoses today
+      live on one consultation note, so a patient's diabetes is re-typed every visit and no report
+      can count it.
 
 ### Stage F · Financial depth — P4 · L
 
@@ -495,4 +545,5 @@ copies another tracker inherits its drift. **Read the code.**
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2026-08-12 | Created. Baseline reconciled against the source tree, the gates and `PROJECT-STATUS.md`.                                                                                                                                                                                                                                                                                                                                  |
 | 2026-08-14 | Reconciled against 24 commits (mobile M2 + M3, web W1–W4 + closure, API nurse-safety work). Tests 1,722 → 3,661. Five of six §6 gaps closed, three of them found false. Added §8 web slices and §9 stage-wise strategy.                                                                                                                                                                                                   |
+| 2026-08-19 | **Theatre v1 and Emergency v1 closed** (§4), Stage E marked two-of-three (§9), pending D8/D10 rewritten as depth items (§5.2), snapshot refreshed to 44 modules / 234 paths / 4,338 tests. The 2026-08-19 gate anomaly was **reproduced, named and fixed** — a 500 on a concurrent ED triage and a race in `dropDatabases`; see `TESTING.md` §9 and the T3 postscript in `RISK_REGISTER.md`.                              |
 | 2026-08-14 | Post-Phase-1 sync. Confirmed defects moved to `RISK_REGISTER.md` §0 (D1–D7); **T2 recorded as materialised**. Stage A marked in progress with the environment and API pre-validation done. Corrected two claims this file made: the nurse **can** write a nursing note (mobile gained the route at M3-S2 — the gap is web-only), and "M2 forces a development build" is contradicted by SDK 54's own bundled-module list. |

@@ -779,6 +779,53 @@ container exited 137**. Not the OOM-kill scenario that had been the leading expl
 accumulated state either — 14 databases, 5 of them test. Not a code regression: the session that
 observed it changed **only** files under `AI_Workflow/`.
 
+#### 2026-08-19 — one more, and it was not the harness this time
+
+A single-test failure during a `pnpm gate:full` run, identity not captured. Nine full integration
+runs afterwards were green at 2,057/2,057, so it looked exactly like T3 returning. **It was not.**
+Following this file's own instruction — keep the output — three deliberate reproduction runs were
+logged to a file, and **all three failed**, two on the same test and one on a suite. The isolation
+runs were green because the isolation runs are not loaded enough to race.
+
+**Two distinct causes, one a product defect and one a harness defect.**
+
+**1 · A concurrent triage answered 500.** `emergency.int.test.ts > survives two nurses triaging the
+same patient at the same instant`. An upsert is find-then-insert inside the server: both callers
+found nothing, both attempted the insert, and `one_triage_per_encounter` refused the loser with
+E11000. Nothing caught it, so the error handler answered `HMS-GEN-500` — for a write whose row was
+sitting right there, and with the one status a client is entitled to read as "the server is broken,
+stop". Fixed by retrying the upsert once (`upsertRetryingOnDuplicate`); on the retry the document
+exists and the upsert is an ordinary update. Falsified: removing the retry fails 2 runs in 6 **in
+isolation**, where the race is rarest.
+
+**The test is the other half of the story.** It asserted `[a.status, b.status].every(s => s === 201
+|| s === 409)` — a shape chosen before anyone knew what the race actually produced, and lenient
+enough to accept a 500 for an entire milestone had the third status never appeared. It now demands
+both succeed. **A test that accepts several answers cannot tell you which one it got.**
+
+**2 · `dropDatabases` returned before the drop had finished.** The third run failed at
+`beforeAll` with `Cannot create collection hms_test-emergency-rival.wardNotes - database is in the
+process of being dropped`, thrown from a migration inside `provisionTenant`. Under full-run load
+Mongo keeps a just-dropped namespace in a dropping state after `dropDatabase()` resolves, and every
+suite's next act is to provision into it. The whole file reports as a failed suite and every test in
+it is **skipped** — which is worse than a failure, because a skip reads as "not a problem".
+`dropDatabases` now waits until the namespace can be written again, probing with a **write**
+(a read succeeds against a database that is still being dropped, so `listCollections` would answer
+"fine" and prove nothing).
+
+This one is shared by all 23 suites, and its shape — a `beforeAll` dying on a database operation, in
+a different suite each time — matches the hook timeouts recorded above during the T3 investigation.
+It is **not** claimed to be the same cause: T3's was proven to be foreign processes answering on
+colliding ports, and that fix is still armed.
+
+**Four full integration runs after both fixes: 2,057/2,057, four for four**, where the same
+build had failed three for three.
+
+**What this says about the previous entries on this page.** Both causes were inside the boundary of
+this system, and both were found by keeping the output of a failing run rather than by re-running
+until it passed. The standing instruction on this page — capture the name before filtering — is the
+only reason there is anything to write here.
+
 #### A clean run that looked like an answer, and was not
 
 Docker Desktop crashed a few hours after the runs above. When it came back **only HMS's four

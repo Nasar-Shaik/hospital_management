@@ -546,6 +546,16 @@ step and no workflow change can fix that. It does mean the honest statement of t
 _"green on a re-run, cause unknown"_, and the proportionate mitigation remains the one already
 recorded: run `pnpm gate` once on a second machine before the pilot.
 
+**Postscript, 2026-08-19 — a recurrence that was NOT T3, and did not reopen it.** One single-test
+failure during a full gate, then nine green runs — the exact signature of this entry returning.
+Three logged reproduction runs failed three for three and named two different causes, both inside
+this system: a **500 on a concurrent ED triage** (an upsert losing to its own unique index with
+nothing catching E11000 — a real product defect, now fixed and falsified) and a **harness race in
+`dropDatabases`**, which returned before Mongo had finished dropping and killed a whole suite in
+`beforeAll`. Neither is a port collision; T3's fix was verified still armed before the search
+started. The lesson this entry already records held: the failure was found by keeping the output,
+not by re-running until it passed. Written up in [`TESTING.md`](../../TESTING.md) §9.
+
 **Left deliberately unfixed:** a preflight that fails the gate when foreign containers are up.
 That was the shape of the retracted theory, and it would now be a control for a cause nobody has
 established — enforcing a precondition that has not been shown to matter, on a host this repository
