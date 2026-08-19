@@ -100,8 +100,8 @@ const EXEMPT: Record<string, { lines: number; why: string }> = {
     why: "NOT A TENANT COLLECTION: operator-console data in the master database.",
   },
   "theatres/theatre.repository.ts": {
-    lines: 2,
-    why: "SERVER-DERIVED ID: both resolve `clash.theatreId` / `doc.theatreId` to name a theatre in a booking-clash message. The id comes from a booking already resolved through a scoped read, never from the request.",
+    lines: 3,
+    why: "SERVER-DERIVED ID: all three resolve a `theatreId` read off a booking, to name the room on a row or in a clash message — `findOverlap`, `setStatus` and `recordOperativeNote`. In every case the booking itself came back from a scoped read (or a scoped conditional update), so the id is the server's own, never the request's; re-scoping it would be scoping a value the scope already produced.",
   },
   "ambulance/ambulance.repository.ts": {
     lines: 2,

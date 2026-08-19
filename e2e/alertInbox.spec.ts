@@ -177,18 +177,28 @@ test.describe("the alert inbox", () => {
       await expect(message.first()).toBeVisible({ timeout: 5_000 });
     }).toPass({ timeout: 45_000 });
 
-    const before = await unreadCount(page);
-    expect(before, "the badge did not count the message it was showing").toBeGreaterThan(0);
+    // The bell says there is something unread. The NUMBER is deliberately not the assertion — see
+    // below.
+    await expect(bell).toHaveAttribute("aria-label", /unread/);
 
     /**
-     * Opening it must reach the SERVER, not just the screen. So the badge is re-read after a full
-     * reload — an optimistic update that never persisted would survive a re-render and would not
-     * survive this.
+     * ── WHY THIS NO LONGER COUNTS ───────────────────────────────────────────
+     * This used to read the badge, then assert it fell by exactly one. The badge is CAPPED at
+     * "99+" (`lib/alerts.ts` — a two-character dot cannot show "247"), and a demo hospital
+     * eventually crosses a hundred unread alerts. At that point the parser read "99+ unread" as
+     * no match, returned 0, and the test failed on a completely healthy system — arithmetic on a
+     * number the product deliberately stops reporting.
+     *
+     * The claim was never about the count. It is that opening a message marks it read ON THE
+     * SERVER, so the assertion is that THIS message leaves the bell's unread list and does not
+     * come back across a full reload. An optimistic update that never persisted would survive a
+     * re-render; it does not survive this.
      */
     await message.first().click();
     await page.reload();
     await expect(async () => {
-      expect(await unreadCount(page)).toBe(before - 1);
+      await bell.click();
+      await expect(message).toHaveCount(0, { timeout: 5_000 });
     }).toPass({ timeout: 15_000 });
   });
 
@@ -226,16 +236,6 @@ test.describe("the alert inbox", () => {
     }).toPass({ timeout: 15_000 });
   });
 });
-
-/** The number on the bell, or 0 when it carries none. */
-async function unreadCount(page: import("@playwright/test").Page): Promise<number> {
-  const label = await page
-    .getByRole("button", { name: /^Alerts/ })
-    .first()
-    .getAttribute("aria-label");
-  const match = /(\d+)\s+unread/.exec(label ?? "");
-  return match ? Number(match[1]) : 0;
-}
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

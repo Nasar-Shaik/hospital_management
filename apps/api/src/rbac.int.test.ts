@@ -667,7 +667,8 @@ const PROBES: Record<string, Probe> = {
   },
 
   /* ── Operation theatres (B5) — feature `module.clinical.ot`. READS `emr:read` (the board);
-   * the REGISTRY is `facility:manage`; SCHEDULING is `ot:schedule`. */
+   * the REGISTRY is `facility:manage`; SCHEDULING is `ot:schedule`; the OPERATION RECORD is
+   * `ot:record`, which the surgeon holds and the OT coordinator deliberately does not. */
   "GET /api/v1/theatres": { method: "get", url: "/api/v1/theatres" },
   "POST /api/v1/theatres": {
     method: "post",
@@ -696,6 +697,15 @@ const PROBES: Record<string, Probe> = {
     method: "post",
     url: "/api/v1/ot-bookings/64b7f0000000000000000001/transition",
     body: { to: "cancelled" },
+  },
+  "POST /api/v1/ot-bookings/:id/operative-note": {
+    method: "post",
+    url: "/api/v1/ot-bookings/64b7f0000000000000000001/operative-note",
+    body: {
+      procedurePerformed: "Matrix procedure",
+      surgeonId: "64b7f0000000000000000003",
+      performedAt: "2999-01-01T09:30:00.000Z",
+    },
   },
 
   /* ── Diagnostic reports ─────────────────────────────────────────────────────
