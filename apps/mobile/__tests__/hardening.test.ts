@@ -113,7 +113,15 @@ describe("1. a full round at branch A, then a switch to B", () => {
      */
     const afterSelect = h.api.calls
       .filter((call) => call.path.startsWith("/api/v1/") && !call.path.startsWith("/api/v1/auth"))
-      .filter((call) => call.path !== "/api/v1/me/branches");
+      .filter((call) => call.path !== "/api/v1/me/branches")
+      /**
+       * Registering a handset for push is a SESSION fact, not a site one (M4). A phone is not
+       * registered at Hyderabad — it belongs to a person, exactly like the inbox it delivers, and
+       * the server's `devices` collection carries no `branchId` to stamp. It sits beside
+       * `/me/branches` above for the same reason: both are asked before a site is chosen and
+       * neither is about one.
+       */
+      .filter((call) => !call.path.startsWith("/api/v1/me/devices"));
     const sites = new Set(afterSelect.map((call) => call.headers["x-active-branch"]));
 
     expect(sites).toEqual(new Set([BRANCH_HYD.id]));

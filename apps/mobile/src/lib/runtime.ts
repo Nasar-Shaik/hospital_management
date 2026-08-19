@@ -36,6 +36,7 @@ import {
   type SecureStorage,
 } from "./storage";
 import { readLockPreference } from "./lock";
+import type { PushRegistrar } from "./push";
 import { createLogger, type Logger } from "./log";
 import { shouldRetryRead, shouldRetryMutation, backoffMs } from "./net/retry";
 
@@ -49,6 +50,13 @@ export interface RuntimeDeps {
    * behaviour as a phone with no sensor, and the reason tests need no device.
    */
   biometrics?: BiometricAuthenticator;
+  /**
+   * The device's notification service (M4). Optional for the same reason and with the same shape:
+   * a runtime built without one never registers, which is exactly what a simulator, Expo Go and a
+   * declined permission all look like. The inbox is unaffected — push is a knock on the door, not
+   * the message.
+   */
+  push?: PushRegistrar;
   fetchImpl?: typeof fetch;
   logger?: Logger;
   now?: () => number;
@@ -79,6 +87,11 @@ export interface MobileRuntime {
   biometrics?: BiometricAuthenticator;
   /** Non-secret settings. Exposed so the lock's preference can be written from Settings (M2 K). */
   preferences: Preferences;
+  /**
+   * The notification service, or `undefined` when this build has none (M4). Exposed so the shell
+   * can subscribe to taps — the same shape as `biometrics`, checked rather than assumed.
+   */
+  push?: PushRegistrar;
   /** Owned here so that no sign-out or branch switch can forget to clear it. */
   queryClient: QueryClient;
   logger: Logger;
@@ -216,6 +229,45 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
   });
 
   /**
+   * The handset's registration, remembered only for as long as the session (M4).
+   *
+   * In memory rather than on disk, and that is a deliberate trade: a cold start re-registers
+   * (which is an upsert, so it costs one request and creates nothing new) and a sign-out after a
+   * crash has no id to release. The server closes that gap from the other side — the next sign-in
+   * on this phone moves the token to whoever it is — so persisting an id would buy nothing except
+   * a stale one to reason about.
+   */
+  let deviceId: string | undefined;
+
+  async function registerThisPhone(): Promise<void> {
+    if (!deps.push) return;
+    try {
+      const credential = await deps.push.getCredential();
+      // No token is the ORDINARY answer: a simulator, Expo Go, a declined permission, a build
+      // with no EAS project. None of them is a problem to report to a doctor.
+      if (!credential) return;
+      const device = await api.registerDevice(credential);
+      deviceId = device.id;
+      logger.info("device registered for alerts", { tenantSlug: deps.profile.slug });
+    } catch {
+      // A phone that could not register is a phone that does not buzz. The inbox is unchanged,
+      // so there is nothing to tell the user and nothing to retry aggressively.
+      logger.warn("could not register this device for alerts", { tenantSlug: deps.profile.slug });
+    }
+  }
+
+  async function releaseThisPhone(): Promise<void> {
+    const id = deviceId;
+    deviceId = undefined;
+    if (!id) return;
+    try {
+      await api.releaseDevice(id);
+    } catch {
+      logger.warn("could not release this device", { tenantSlug: deps.profile.slug });
+    }
+  }
+
+  /**
    * Declared after `api` and referenced by its `onUnauthorized` closure — the late binding that
    * breaks the circularity described in the header. The closure cannot run before this statement,
    * because no request can be issued until `createRuntime` returns.
@@ -229,6 +281,16 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
 
     /** Everything that must be true again after a session ends, in one place. */
     onSessionEnded: (reason) => {
+      /**
+       * Stop this handset ringing for the person who just left (M4).
+       *
+       * Deliberately NOT awaited, and deliberately before the stores are cleared: `signOut` has
+       * already discarded the tokens by the time this runs on some paths, so the request is made
+       * on a best-effort basis and its failure changes nothing here. The server has the other
+       * half of the guarantee — the next person to sign in on this phone REASSIGNS the token, so
+       * a release that never arrived cannot leave two people reachable on one device.
+       */
+      void releaseThisPhone();
       branch.getState().reset();
       /**
        * The gate comes DOWN on sign-out, always. The next screen is the login form: a lock in
@@ -257,7 +319,13 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
       const me = await api.me();
       session.getState().setUser(me);
       session.getState().setPermissions(me.permissions ?? []);
+      /**
+       * The hospital's edition, read from the same response (M4). Dropped until now, which is why
+       * the tab bar offered modules the plan does not include — see `state/session.ts`.
+       */
+      session.getState().setFeatures(me.features ?? []);
       await branches.restore(me.id);
+      await registerThisPhone();
     },
   });
 
@@ -272,6 +340,7 @@ export function createRuntime(deps: RuntimeDeps): MobileRuntime {
     auth,
     branches,
     ...(deps.biometrics ? { biometrics: deps.biometrics } : {}),
+    ...(deps.push ? { push: deps.push } : {}),
     preferences: deps.preferences,
     queryClient,
     logger,

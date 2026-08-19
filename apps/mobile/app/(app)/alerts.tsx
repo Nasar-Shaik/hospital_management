@@ -20,6 +20,7 @@
  * is not a filter the user has to discover.
  */
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Screen } from "../../src/components/Screen";
@@ -30,11 +31,13 @@ import { useClinical, useZoneFor } from "../../src/hooks/useClinical";
 import { useRuntime } from "../../src/providers/RuntimeProvider";
 import { useTheme } from "../../src/hooks/useTheme";
 import { isUnread, sortAlerts, toneFor } from "../../src/clinical/alerts";
+import { destinationFor } from "../../src/lib/push";
 import { formatDateTime } from "../../src/lib/time";
 import { radius, space, typography } from "../../src/theme/tokens";
 
 export default function Alerts(): React.JSX.Element {
   const theme = useTheme();
+  const router = useRouter();
   const runtime = useRuntime();
   const client = useQueryClient();
   const { queries } = useClinical();
@@ -102,8 +105,21 @@ export default function Alerts(): React.JSX.Element {
             const critical = toneFor(item.templateKey) === "critical";
             return (
               <Pressable
+                /**
+                 * ── OPENING AN ALERT MEANS OPENING WHAT IT IS ABOUT (M4) ──────
+                 * A tap used to do one thing: mark the row read. For the message this list exists
+                 * for — a critical potassium — that left the doctor holding a sentence and a
+                 * search: back out, find the Results tab, find the patient, find the test. The
+                 * destination travels ON the message (`resourceType`/`resourceId`), so it is the
+                 * same landing a push notification makes, and neither can drift from the other.
+                 *
+                 * `destinationFor` returns `/alerts` for anything this build cannot open, so a
+                 * message from a newer server is a row that stays put rather than a dead end.
+                 */
                 onPress={() => {
                   if (isUnread(item)) open.mutate(item.id);
+                  const to = destinationFor(item);
+                  if (to !== "/alerts") router.push(to as never);
                 }}
                 accessibilityRole="button"
                 accessibilityLabel={`${critical ? "Critical alert. " : ""}${item.subject ?? item.templateKey}`}

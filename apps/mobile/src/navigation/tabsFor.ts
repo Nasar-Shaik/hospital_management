@@ -17,6 +17,15 @@
  * reaching.
  */
 
+/**
+ * ── AND IT ANSWERS TO THE HOSPITAL'S EDITION TOO (M4) ───────────────────────
+ * Permission is only half the question. A permission says "may this USER"; a feature flag says
+ * "did this HOSPITAL buy it", and until M4 the phone read only the first — so a nurse holding
+ * `nursing:manage` at a clinic with no IPD was offered a Ward tab whose every request could only
+ * answer `HMS-PLAN-002`. The web shell has gated on both since D20; this is the same rule
+ * reaching the other client, and it is why `tabsFor` now takes two sets.
+ */
+
 /** A tab is a route name plus the permissions required to see it. */
 export interface TabDefinition {
   /** The Expo Router segment under `app/(app)/`. */
@@ -26,6 +35,15 @@ export interface TabDefinition {
   icon: string;
   /** ALL of these are required. An empty list means "everyone signed in". */
   needs: readonly string[];
+  /**
+   * The module the hospital must have BOUGHT, when the tab belongs to one.
+   *
+   * Absent for the tabs every edition includes — the queue, the patient list, results, alerts and
+   * billing all rest on `module.ops.opd`, which no edition is without. Naming a flag here that
+   * every edition holds would be a switch nobody can turn off, which is the same mistake in the
+   * other direction.
+   */
+  feature?: string;
 }
 
 /**
@@ -44,8 +62,25 @@ export const TABS: readonly TabDefinition[] = [
    * hold `emr:read` and neither rounds from this screen. The screen itself still needs `emr:read`
    * and says so; the server refuses regardless.
    */
-  { name: "ward", title: "Ward", icon: "bed-outline", needs: ["nursing:manage"] },
-  { name: "pharmacy", title: "Pharmacy", icon: "medkit-outline", needs: ["pharmacy:dispense"] },
+  {
+    name: "ward",
+    title: "Ward",
+    icon: "bed-outline",
+    needs: ["nursing:manage"],
+    /**
+     * `module.clinical.nursing`, NOT `module.ops.ipd`, and the distinction is the server's:
+     * `GET /ward-worklist` is gated on the nursing flag because it returns dose slots — the same
+     * thing the medication schedule returns, gated the same way. Beds are a different purchase.
+     */
+    feature: "module.clinical.nursing",
+  },
+  {
+    name: "pharmacy",
+    title: "Pharmacy",
+    icon: "medkit-outline",
+    needs: ["pharmacy:dispense"],
+    feature: "module.pharmacy.dispensing",
+  },
   { name: "billing", title: "Billing", icon: "cash-outline", needs: ["billing:read"] },
   { name: "alerts", title: "Alerts", icon: "notifications-outline", needs: [] },
 ] as const;
@@ -56,16 +91,29 @@ export const TABS: readonly TabDefinition[] = [
  */
 export const MAX_VISIBLE_TABS = 5;
 
-export function tabsFor(held: ReadonlySet<string>): TabDefinition[] {
-  return TABS.filter((tab) => tab.needs.every((permission) => held.has(permission)));
+/**
+ * `bought` is optional so a caller that has not read `/auth/me` yet — or a test about
+ * permissions alone — behaves exactly as it did before M4. An UNKNOWN edition shows every tab the
+ * permissions allow, which is the right way round: the server refuses what it must, and a tab bar
+ * that hid itself while the edition was still loading would flicker on every cold start.
+ */
+export function tabsFor(held: ReadonlySet<string>, bought?: ReadonlySet<string>): TabDefinition[] {
+  return TABS.filter(
+    (tab) =>
+      tab.needs.every((permission) => held.has(permission)) &&
+      (!tab.feature || !bought || bought.has(tab.feature)),
+  );
 }
 
 /** What fits in the bar, and what is pushed into "More". */
-export function splitTabs(held: ReadonlySet<string>): {
+export function splitTabs(
+  held: ReadonlySet<string>,
+  bought?: ReadonlySet<string>,
+): {
   visible: TabDefinition[];
   overflow: TabDefinition[];
 } {
-  const all = tabsFor(held);
+  const all = tabsFor(held, bought);
   if (all.length <= MAX_VISIBLE_TABS) return { visible: all, overflow: [] };
   // `alerts` always keeps its place — a notification the user cannot find is a notification that
   // did not arrive — so the overflow is taken from the middle, not the end.
@@ -101,8 +149,12 @@ const PREFERRED_HOME: Record<string, string> = {
   TENANT_ADMIN: "billing",
 };
 
-export function homeFor(roles: readonly string[], held: ReadonlySet<string>): string | undefined {
-  const { visible } = splitTabs(held);
+export function homeFor(
+  roles: readonly string[],
+  held: ReadonlySet<string>,
+  bought?: ReadonlySet<string>,
+): string | undefined {
+  const { visible } = splitTabs(held, bought);
   for (const role of roles) {
     const preferred = PREFERRED_HOME[role];
     if (preferred && visible.some((tab) => tab.name === preferred)) return preferred;

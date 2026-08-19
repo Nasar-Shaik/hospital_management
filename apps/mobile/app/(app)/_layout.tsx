@@ -10,7 +10,7 @@
 import { useEffect, useMemo } from "react";
 import { Pressable, StyleSheet, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Link, Redirect, Tabs } from "expo-router";
+import { Link, Redirect, Tabs, useRouter } from "expo-router";
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
 import { requireRuntime, useRuntime } from "../../src/providers/RuntimeProvider";
 import { useCapabilities, useSession } from "../../src/hooks/useStores";
@@ -18,6 +18,7 @@ import { useTheme } from "../../src/hooks/useTheme";
 import { useLicenceNotice } from "../../src/hooks/useLicenceNotice";
 import { LicenceNotice } from "../../src/components/LicenceNotice";
 import { TABS, splitTabs } from "../../src/navigation/tabsFor";
+import { destinationFor } from "../../src/lib/push";
 
 /**
  * `requireRuntime` covers every screen in the group, because a layout renders before its children.
@@ -25,9 +26,12 @@ import { TABS, splitTabs } from "../../src/navigation/tabsFor";
  */
 function AppLayout(): React.JSX.Element {
   const theme = useTheme();
+  const router = useRouter();
   const runtime = useRuntime();
   const status = useSession((s) => s.status);
   const permissions = useSession((s) => s.permissions);
+  /** The hospital's edition (M4) — a tab for a module it never bought is a dead end. */
+  const features = useSession((s) => s.features);
   const { ready } = useCapabilities();
 
   /**
@@ -43,6 +47,26 @@ function AppLayout(): React.JSX.Element {
   const belowNotice = useMemo(() => (notice ? { ...insets, top: 0 } : insets), [insets, notice]);
 
   /**
+   * ── A TAPPED NOTIFICATION OPENS WHAT IT IS ABOUT (M4) ──────────────────────
+   * Wired HERE rather than at the root layout, and the difference matters: this layout only
+   * mounts once a session exists, so a tap can never navigate a signed-out phone into a chart it
+   * will immediately be refused. A notification tapped while signed out lands on the login screen
+   * and is still waiting in the inbox afterwards, which is the honest outcome.
+   *
+   * `onOpened` covers both arrivals — a tap while the app is running, and a tap that LAUNCHED it
+   * from a cold start. Wiring only the first is the half-implementation that works in every test
+   * and fails for exactly the case a push exists for: a phone in a pocket, screen off.
+   */
+  useEffect(() => {
+    if (status !== "signedIn" || !runtime.push) return;
+    return runtime.push.onOpened((payload) => {
+      const to = destinationFor(payload);
+      if (to !== "/alerts") router.push(to as never);
+      else router.push("/alerts");
+    });
+  }, [status, runtime, router]);
+
+  /**
    * A branch-shaped refusal anywhere in the app means the list this phone is holding is out of
    * date (M0 §7). Re-reading it here, once, keeps that recovery out of every individual screen.
    */
@@ -55,7 +79,7 @@ function AppLayout(): React.JSX.Element {
 
   if (status === "signedOut") return <Redirect href="/login" />;
 
-  const { visible } = splitTabs(permissions);
+  const { visible } = splitTabs(permissions, features);
   const shown = new Set(visible.map((tab) => tab.name));
 
   return (

@@ -55,6 +55,12 @@ export default [
                 "Use src/platform/biometrics.ts — one module owns the prompt, so the lock policy " +
                 "stays testable without a device (M2 K).",
             },
+            {
+              name: "expo-notifications",
+              message:
+                "Use src/platform/pushNotifications.ts — one module owns the notification service, " +
+                "so registration, payload parsing and deep links stay testable without a device (M4).",
+            },
           ],
         },
       ],
@@ -66,6 +72,7 @@ export default [
       "src/platform/secureStore.ts",
       "src/platform/preferences.ts",
       "src/platform/biometrics.ts",
+      "src/platform/pushNotifications.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },

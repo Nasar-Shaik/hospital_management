@@ -26,6 +26,8 @@ export default function Home(): React.JSX.Element {
    */
   const roles = useSession((s) => s.user?.roles);
   const permissions = useSession((s) => s.permissions);
+  /** The hospital's edition (M4) — a tab for a module it never bought is a dead end. */
+  const features = useSession((s) => s.features);
 
   if (status === "signedOut") return <Redirect href="/login" />;
 
@@ -39,7 +41,7 @@ export default function Home(): React.JSX.Element {
     );
   }
 
-  const home = homeFor(roles ?? [], permissions);
+  const home = homeFor(roles ?? [], permissions, features);
   return <Redirect href={`/${home ?? "alerts"}`} />;
 }
 

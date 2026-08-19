@@ -8,6 +8,7 @@ import { createProfile } from "../../src/lib/tenant";
 import type { SessionEndReason } from "../../src/lib/session";
 import type { BiometricAuthenticator } from "../../src/lib/storage";
 import { createFakeApi, ok, type FakeApi } from "./fakeApi";
+import type { PushCredential, PushPayload, PushRegistrar } from "../../src/lib/push";
 
 export const SLUG = "apollo";
 export const PASSWORD = "V4lid!Password#2026";
@@ -23,6 +24,9 @@ export const USER = {
 };
 
 export const PERMISSIONS = ["patient:read", "encounter:read", "order:read"];
+
+/** A hospital edition that includes the modules the default permissions reach. */
+export const FEATURES = ["module.ops.opd", "module.ops.appointments", "module.clinical.emr"];
 
 export const BRANCH_HYD = {
   id: "branch-hyd",
@@ -87,10 +91,53 @@ export function createFakeBiometrics(): FakeBiometrics {
   return fake;
 }
 
+/**
+ * A notification service that does exactly what a test tells it to (M4).
+ *
+ * The whole reason `PushRegistrar` is a port. No simulator will decline a permission on request,
+ * rotate a token mid-session, or deliver a payload from a build two versions newer — and those
+ * are the three situations the registration lifecycle has to survive.
+ */
+export interface FakePush extends PushRegistrar {
+  /** What `getCredential()` answers. `undefined` is the ordinary "no push here" case. */
+  credential: PushCredential | undefined;
+  /** Make the OS call throw, the way a revoked permission can. */
+  failNext: boolean;
+  /** Deliver a tap to whatever the app subscribed with. */
+  open(payload: PushPayload): void;
+  /** Every subscription that is still live — so a test can prove the shell unsubscribes. */
+  subscribers: number;
+}
+
+export function createFakePush(): FakePush {
+  const handlers = new Set<(payload: PushPayload) => void>();
+  const fake: FakePush = {
+    credential: { token: "ExponentPushToken[test]", platform: "ios" },
+    failNext: false,
+    get subscribers() {
+      return handlers.size;
+    },
+    getCredential: () => {
+      if (fake.failNext) {
+        fake.failNext = false;
+        return Promise.reject(new Error("permission revoked"));
+      }
+      return Promise.resolve(fake.credential);
+    },
+    onOpened: (handler) => {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
+    open: (payload) => handlers.forEach((handler) => handler(payload)),
+  };
+  return fake;
+}
+
 export interface Harness {
   runtime: MobileRuntime;
   api: FakeApi;
   biometrics: FakeBiometrics;
+  push: FakePush;
   secureStore: ReturnType<typeof createMemoryStorage>;
   preferences: ReturnType<typeof createMemoryStorage>;
   /** Every reason a session ended during the test, in order. */
@@ -100,6 +147,8 @@ export interface Harness {
     branches?: unknown[];
     canAggregate?: boolean;
     permissions?: string[];
+    /** The hospital's edition, as `/auth/me` reports it (M4). */
+    features?: string[];
   }): void;
 }
 
@@ -108,6 +157,7 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
   const secureStore = createMemoryStorage();
   const preferences = createMemoryStorage();
   const biometrics = createFakeBiometrics();
+  const push = createFakePush();
   const sessionEndings: SessionEndReason[] = [];
 
   const runtime = createRuntime({
@@ -119,6 +169,7 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
     preferences,
     fetchImpl: api.fetchImpl,
     biometrics,
+    push,
     ...(options.now ? { now: options.now } : {}),
     onSessionEnded: (reason) => sessionEndings.push(reason),
   });
@@ -127,6 +178,7 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
     runtime,
     api,
     biometrics,
+    push,
     secureStore,
     preferences,
     sessionEndings,
@@ -135,8 +187,23 @@ export function createHarness(options: { now?: () => number } = {}): Harness {
       api.on("POST", "/api/v1/auth/refresh", () => ok(tokenPair({ refreshToken: "refresh-2" })));
       api.on("POST", "/api/v1/auth/logout", () => ok({ loggedOut: true }));
       api.on("GET", "/api/v1/auth/me", () =>
-        ok({ ...USER, permissions: config.permissions ?? PERMISSIONS }),
+        ok({
+          ...USER,
+          permissions: config.permissions ?? PERMISSIONS,
+          features: config.features ?? FEATURES,
+        }),
       );
+      api.on("POST", "/api/v1/me/devices", () =>
+        ok({
+          id: "device-1",
+          userId: USER.id,
+          platform: "ios",
+          active: true,
+          lastSeenAt: "2026-08-20T09:00:00.000Z",
+          createdAt: "2026-08-20T09:00:00.000Z",
+        }),
+      );
+      api.on("DELETE", "/api/v1/me/devices/device-1", () => ok({ released: true }));
       api.on("GET", "/api/v1/me/branches", () =>
         ok({
           branches: config.branches ?? [BRANCH_HYD],

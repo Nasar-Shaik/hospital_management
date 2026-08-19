@@ -614,7 +614,14 @@ describe("22 · 23 · 24. writes are branch-scoped, and a switch leaves nothing 
     const writeCalls = h.api.calls.filter(
       (c) => c.method !== "GET" && c.path.startsWith("/api/v1/"),
     );
-    const clinical = writeCalls.filter((c) => !c.path.startsWith("/api/v1/auth/"));
+    const clinical = writeCalls.filter(
+      (c) =>
+        !c.path.startsWith("/api/v1/auth/") &&
+        // Registering or releasing a handset (M4) is a session act, like login beside it: a phone
+        // belongs to a person, not to a site, and `devices` carries no branch for the header to
+        // mean anything against.
+        !c.path.startsWith("/api/v1/me/devices"),
+    );
     expect(clinical.length).toBeGreaterThan(2);
     expect(clinical.every((c) => c.headers["x-active-branch"] === BRANCH_HYD.id)).toBe(true);
   });

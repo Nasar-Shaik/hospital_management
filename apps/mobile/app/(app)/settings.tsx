@@ -35,6 +35,8 @@ export default function SettingsScreen(): React.JSX.Element {
 
   const user = useSession((s) => s.user);
   const permissions = useSession((s) => s.permissions);
+  /** The hospital's edition (M4) — a tab for a module it never bought is a dead end. */
+  const features = useSession((s) => s.features);
   const permissionCount = permissions.size;
 
   /**
@@ -42,7 +44,7 @@ export default function SettingsScreen(): React.JSX.Element {
    * always returned it; until now nothing rendered it, which meant an administrator holding every
    * grant simply could not open Billing from the app. This is the "More" the tab bar promises.
    */
-  const { overflow } = splitTabs(permissions);
+  const { overflow } = splitTabs(permissions, features);
   const branchLabel = useActiveBranchLabel();
   const online = useConnectivity((s) => s.online);
   const preference = useStore(themeStore, (s) => s.preference);

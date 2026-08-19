@@ -29,6 +29,7 @@ import type { HospitalProfile } from "../lib/tenant";
 import type { SessionEndReason } from "../lib/session";
 import { secureStore } from "../platform/secureStore";
 import { preferences } from "../platform/preferences";
+import { pushNotifications } from "../platform/pushNotifications";
 import { appConfig } from "../platform/config";
 import { createLogger } from "../lib/log";
 
@@ -52,6 +53,12 @@ export function RuntimeProvider({
       profile,
       secureStore,
       preferences,
+      /**
+       * The notification service (M4). A phone that cannot mint a token — a simulator, Expo Go, a
+       * declined permission, a build with no EAS project — registers nothing and behaves exactly
+       * as it did before, because the inbox is the message.
+       */
+      push: pushNotifications,
       logger: createLogger({ verbose: appConfig.environment !== "production" }),
       onSessionEnded,
     });
