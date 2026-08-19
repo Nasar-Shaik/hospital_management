@@ -390,6 +390,19 @@ describe("the board ranks the department", () => {
     expect(rows[0]?.priority).toBe("critical");
   });
 
+  /**
+   * ── THE RACE THAT WAS FOUND BY BEING TOO LENIENT ──────────────────────────
+   * This assertion used to accept "201 or 409 for both" — a shape chosen before anyone knew what
+   * the race actually produced. It failed once in roughly ten full runs with a status that was
+   * neither, and the answer was a **500**: an upsert is find-then-insert inside the server, both
+   * callers found nothing, and `one_triage_per_encounter` refused the loser's insert with E11000
+   * (see `upsertRetryingOnDuplicate`). Nothing had gone wrong — the row the loser wanted existed —
+   * and a 500 is the one status a client may read as "the server is broken, stop".
+   *
+   * So the assertion is now exact: BOTH succeed. One inserts, one updates, and the tolerant
+   * version that hid this for a milestone is gone. A test that accepts several answers cannot tell
+   * you which one it got.
+   */
   it("survives two nurses triaging the same patient at the same instant", async () => {
     const { encounterId } = await arrive("Raced Triage");
     const [a, b] = await Promise.all([
@@ -399,13 +412,17 @@ describe("the board ranks the department", () => {
       }),
       req("post", "/api/v1/emergency/triage", doctorToken, main.host, siteA).send({
         encounterId,
-        priority: "urgent",
+        priority: "critical",
       }),
     ]);
-    expect([a.status, b.status].every((s) => s === 201 || s === 409)).toBe(true);
+    expect([a.status, b.status], `${a.status}/${a.text} — ${b.status}/${b.text}`).toEqual([
+      201, 201,
+    ]);
 
     const rows = (await boardAt()).filter((r) => r.encounterId === encounterId);
     expect(rows, "a concurrent double-triage left two rows for one patient").toHaveLength(1);
+    // One of the two judgements won, and it is a REAL one — not a default the loser fell back to.
+    expect(["urgent", "critical"]).toContain(rows[0]?.priority);
   });
 
   /**

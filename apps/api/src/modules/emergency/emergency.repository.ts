@@ -9,6 +9,7 @@ import { Types } from "mongoose";
 import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { writeBranchId } from "../../core/context/activeBranch.js";
 import { scopeFilter } from "../../middleware/authorize.js";
+import { upsertRetryingOnDuplicate } from "../../core/db/mongoErrors.js";
 import { getEdTriageModel, type EdTriageDoc, type TriagePriority } from "./emergency.model.js";
 
 export interface Triage {
@@ -57,22 +58,24 @@ export interface RecordTriageInput {
 export async function recordTriage(input: RecordTriageInput): Promise<Triage> {
   const ctx = getContext();
   const branchId = await writeBranchId();
-  const doc = await getEdTriageModel(getTenantDb())
-    .findOneAndUpdate(
-      { tenantId: ctx.tenantId, encounterId: new Types.ObjectId(input.encounterId) },
-      {
-        $set: {
-          patientId: new Types.ObjectId(input.patientId),
-          priority: input.priority,
-          triagedAt: new Date(),
-          ...(input.chiefComplaint ? { chiefComplaint: input.chiefComplaint } : {}),
-          ...(input.triagedBy ? { triagedBy: input.triagedBy } : {}),
-          ...(branchId ? { branchId } : {}),
+  const doc = await upsertRetryingOnDuplicate(() =>
+    getEdTriageModel(getTenantDb())
+      .findOneAndUpdate(
+        { tenantId: ctx.tenantId, encounterId: new Types.ObjectId(input.encounterId) },
+        {
+          $set: {
+            patientId: new Types.ObjectId(input.patientId),
+            priority: input.priority,
+            triagedAt: new Date(),
+            ...(input.chiefComplaint ? { chiefComplaint: input.chiefComplaint } : {}),
+            ...(input.triagedBy ? { triagedBy: input.triagedBy } : {}),
+            ...(branchId ? { branchId } : {}),
+          },
         },
-      },
-      { new: true, upsert: true, setDefaultsOnInsert: true },
-    )
-    .lean<EdTriageDoc>();
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      )
+      .lean<EdTriageDoc>(),
+  );
   return toTriage(doc);
 }
 
@@ -119,21 +122,23 @@ export interface TransferInput {
 export async function recordTransfer(input: TransferInput): Promise<Triage> {
   const ctx = getContext();
   const branchId = await writeBranchId();
-  const doc = await getEdTriageModel(getTenantDb())
-    .findOneAndUpdate(
-      { tenantId: ctx.tenantId, encounterId: new Types.ObjectId(input.encounterId) },
-      {
-        $set: {
-          patientId: new Types.ObjectId(input.patientId),
-          transferredTo: input.destination,
-          transferredAt: new Date(),
-          ...(input.note ? { transferNote: input.note } : {}),
-          ...(input.by ? { transferredBy: input.by } : {}),
-          ...(branchId ? { branchId } : {}),
+  const doc = await upsertRetryingOnDuplicate(() =>
+    getEdTriageModel(getTenantDb())
+      .findOneAndUpdate(
+        { tenantId: ctx.tenantId, encounterId: new Types.ObjectId(input.encounterId) },
+        {
+          $set: {
+            patientId: new Types.ObjectId(input.patientId),
+            transferredTo: input.destination,
+            transferredAt: new Date(),
+            ...(input.note ? { transferNote: input.note } : {}),
+            ...(input.by ? { transferredBy: input.by } : {}),
+            ...(branchId ? { branchId } : {}),
+          },
         },
-      },
-      { new: true, upsert: true, setDefaultsOnInsert: true },
-    )
-    .lean<EdTriageDoc>();
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      )
+      .lean<EdTriageDoc>(),
+  );
   return toTriage(doc);
 }
