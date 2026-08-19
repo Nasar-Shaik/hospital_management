@@ -164,9 +164,34 @@ describe("reading it back", () => {
   });
 
   it("renders every part of the record the chart shows", () => {
-    render(<OperativeNoteDetail note={RECORD} />);
+    render(
+      <OperativeNoteDetail note={RECORD} surgeonName={SURGEONS.find((d) => d.id === "d1")?.name} />,
+    );
     expect(screen.getByText("Laparoscopic appendectomy")).toBeTruthy();
     expect(screen.getByText("Inflamed appendix, no perforation.")).toBeTruthy();
     expect(screen.getByText("Nil by mouth 6 hours.")).toBeTruthy();
+  });
+
+  /**
+   * ── THE FIELD THE FORM DEMANDS AND NOBODY USED TO SEE ─────────────────────
+   * Found by Stage A manual validation (2026-08-19). "Operating surgeon" is REQUIRED to save the
+   * record — the Save button is disabled without it — the API stores it and the contract returns
+   * it, and `OperativeNoteDetail` rendered every other field and dropped this one. On a permanent
+   * surgical record, who held the knife is not an optional detail.
+   */
+  it("names the operating surgeon on the record it reads back", () => {
+    render(<OperativeNoteDetail note={RECORD} surgeonName="Dr Khan (Surgery)" />);
+    expect(screen.getByText("Operating surgeon")).toBeTruthy();
+    expect(screen.getByText("Dr Khan (Surgery)")).toBeTruthy();
+  });
+
+  /**
+   * A surgeon who has left the hospital is not in today's doctor list, and that is the case where
+   * silently omitting the row would be worst — an old record would read as if nobody operated.
+   */
+  it("says so rather than going quiet when the surgeon cannot be named", () => {
+    render(<OperativeNoteDetail note={RECORD} />);
+    expect(screen.getByText("Operating surgeon")).toBeTruthy();
+    expect(screen.getByText(/not in the current doctor list/i)).toBeTruthy();
   });
 });

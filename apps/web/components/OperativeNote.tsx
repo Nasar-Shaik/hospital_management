@@ -34,13 +34,36 @@ function localNow(): string {
   return now.toISOString().slice(0, 16);
 }
 
-/** The record as it reads back — used inside the modal and inline on the chart. */
-export function OperativeNoteDetail({ note }: { note: OperativeNote }): JSX.Element {
+/**
+ * The record as it reads back — used inside the modal and inline on the chart.
+ *
+ * ── WHY THE SURGEON IS RESOLVED BY THE CALLER ───────────────────────────────
+ * The record stores `surgeonId`; an id is not an answer to "who operated". Both callers already
+ * hold the doctor list they populated the form from, so the NAME is passed in rather than looked
+ * up again here. When it cannot be resolved the field still appears and says so: a surgeon who has
+ * since left the hospital is exactly the case where omitting the row silently would be worst.
+ *
+ * Found by Stage A manual validation (2026-08-19): the form REQUIRED an operating surgeon, the API
+ * stored it and the contract carried it — and no reader ever showed it.
+ */
+export function OperativeNoteDetail({
+  note,
+  surgeonName,
+}: {
+  note: OperativeNote;
+  surgeonName?: string;
+}): JSX.Element {
   return (
     <dl className="space-y-3 text-sm">
       <div>
         <dt className="text-xs font-medium text-[var(--color-fg-muted)]">Procedure performed</dt>
         <dd className="text-[var(--color-fg)]">{note.procedurePerformed}</dd>
+      </div>
+      <div>
+        <dt className="text-xs font-medium text-[var(--color-fg-muted)]">Operating surgeon</dt>
+        <dd className="text-[var(--color-fg)]">
+          {surgeonName ?? "Not in the current doctor list"}
+        </dd>
       </div>
       <div>
         <dt className="text-xs font-medium text-[var(--color-fg-muted)]">Performed at</dt>
@@ -116,7 +139,10 @@ export function OperativeNoteModal({
           <p className="text-xs text-[var(--color-fg-muted)]">
             {booking.patientName} · {booking.uhid} · {booking.theatreName}
           </p>
-          <OperativeNoteDetail note={existing} />
+          <OperativeNoteDetail
+            note={existing}
+            surgeonName={surgeons.find((d) => d.id === existing.surgeonId)?.name}
+          />
         </div>
       </Modal>
     );

@@ -1918,7 +1918,7 @@ function MyPatients() {
                */}
               {procedures.length > 0 && (
                 <CollapsibleCard title="Procedures" count={procedures.length} defaultOpen={false}>
-                  <ProceduresForPatient bookings={procedures} />
+                  <ProceduresForPatient bookings={procedures} doctors={doctors} />
                 </CollapsibleCard>
               )}
 
@@ -1950,7 +1950,13 @@ function MyPatients() {
  * with "only the surgery somebody wrote up", and an operation nobody documented is exactly the one
  * a doctor needs to know happened.
  */
-function ProceduresForPatient({ bookings }: { bookings: OtBooking[] }) {
+function ProceduresForPatient({
+  bookings,
+  doctors,
+}: {
+  bookings: OtBooking[];
+  doctors: DoctorRef[];
+}) {
   const newestFirst = [...bookings].sort((a, b) =>
     b.scheduledStart.localeCompare(a.scheduledStart),
   );
@@ -1974,7 +1980,10 @@ function ProceduresForPatient({ bookings }: { bookings: OtBooking[] }) {
           <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">{b.theatreName}</p>
           {b.operativeNote ? (
             <div className="mt-3 rounded-lg border border-[var(--color-border)] p-3">
-              <OperativeNoteDetail note={b.operativeNote} />
+              <OperativeNoteDetail
+                note={b.operativeNote}
+                surgeonName={doctors.find((d) => d.id === b.operativeNote?.surgeonId)?.name}
+              />
             </div>
           ) : (
             <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
