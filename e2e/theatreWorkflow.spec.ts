@@ -23,10 +23,18 @@ import { apiGet, apiOrigin, apiPost, sites, token } from "./support/api";
  *   would grow the registry forever; a run that picked "whatever theatre is there" would collide
  *   with a coordinator's real list the moment this ran against a demo hospital somebody uses.
  *
- *   THE WINDOW is derived from the clock, so no two runs book the same slot, and every locator is
- *   anchored on THIS RUN'S procedure name. `.first()` on a board that accumulates a row per run
- *   would eventually assert against a previous run's booking — which is exactly the failure mode
- *   that makes a green suite worthless.
+ *   THE ROOM IS CLEARED FIRST. A booking holds its window while it is `scheduled` or
+ *   `in_progress` and releases it on any terminal state, so a run that finishes leaves nothing
+ *   behind — but a run that DIES halfway leaves a booking occupying the slot, and the next run is
+ *   then refused its own first booking. That happened: a clock-derived slot repeated, landed on an
+ *   abandoned booking, and the failure read as "the overlap rule is broken" when the rule was the
+ *   only thing working. So the spec cancels anything still holding a window in its own dedicated
+ *   room before it starts, and books a FIXED slot — deterministic by construction rather than by
+ *   hoping two runs never coincide.
+ *
+ *   EVERY LOCATOR is anchored on THIS RUN'S procedure name. `.first()` on a board that accumulates
+ *   a row per run would eventually assert against a previous run's booking — which is exactly the
+ *   failure mode that makes a green suite worthless.
  */
 
 interface Stay {
@@ -45,6 +53,12 @@ interface Theatre {
 interface Doctor {
   id: string;
   name: string;
+}
+
+interface Booking {
+  id: string;
+  status: string;
+  procedureName: string;
 }
 
 interface Fixture {
@@ -129,14 +143,40 @@ async function arrange(request: APIRequestContext, baseURL: string): Promise<Fix
   const surgeon = doctors.find((d) => /Rao/.test(d.name));
   expect(surgeon, "the doctor this suite signs in as is not in the doctor list").toBeTruthy();
 
-  /**
-   * A slot nobody else in this run — or any previous one — is using. Minutes-of-day derived from
-   * the clock, kept clear of both ends of the day so the half-hour window and its deliberate
-   * overlap both land on the SAME date the board is showing.
-   */
   const now = new Date();
   const day = `${String(now.getFullYear())}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const base = 60 + (Math.floor(Date.now() / 1000) % 1200);
+
+  /**
+   * ── CLEAR THE ROOM ────────────────────────────────────────────────────────
+   * Only bookings still HOLDING a window matter: `completed` and `cancelled` release theirs, so a
+   * run that finished leaves nothing to clean and previous runs' history stays on the board where
+   * a demo hospital wants it. This cancels only what a crashed run abandoned, and only in this
+   * spec's own room.
+   */
+  const wide = `from=${day}T00:00:00.000Z&to=${day}T23:59:59.000Z`;
+  const existing = await apiGet<Booking[]>(
+    request,
+    `${api}/api/v1/ot-bookings?theatreId=${theatre.id}&${wide}`,
+    adminToken,
+    site.id,
+  );
+  for (const b of existing.filter((x) => x.status === "scheduled" || x.status === "in_progress")) {
+    await apiPost(
+      request,
+      `${api}/api/v1/ot-bookings/${b.id}/transition`,
+      adminToken,
+      { to: "cancelled", reason: "abandoned by an interrupted e2e run" },
+      site.id,
+    );
+  }
+
+  /**
+   * A FIXED slot, safe because the room was just cleared. A clock-derived one repeated every
+   * twenty minutes of wall time and its half-hour windows overlapped between consecutive runs —
+   * the very thing the spec then blamed on the product. Early morning so neither the window nor
+   * its deliberate overlap can cross midnight into a day the board is not showing.
+   */
+  const base = 8 * 60;
   const run = String(Date.now()).slice(-6);
 
   return {
