@@ -199,6 +199,12 @@ export const Icons = {
       <path d="m3.3 7 8.7 5 8.7-5M12 22V12" />
     </Svg>
   ),
+  /** Shelving. Deliberately not the `assets` cube — the two sit side by side in Administration. */
+  store: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M3 7h18M3 12h18M3 17h18M5 7v10M19 7v10" />
+    </Svg>
+  ),
   feedback: (p: IconProps) => (
     <Svg {...p}>
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />

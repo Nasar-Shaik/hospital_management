@@ -141,6 +141,18 @@ const NAVIGATION: NavSection[] = [
         permission: "asset:manage",
         feature: FEATURE_FLAGS.SUPPORT_ASSETS,
       },
+      /**
+       * The general store (G1) — consumables, linen and spares. `inventory:manage` is the store's
+       * baseline permission (see `inventory.routes.ts`): the three acts on top of it each have
+       * their own, but a person who cannot read the shelf has no use for this screen.
+       */
+      {
+        label: "General store",
+        href: "/inventory",
+        icon: "store",
+        permission: "inventory:manage",
+        feature: FEATURE_FLAGS.SUPPORT_INVENTORY,
+      },
       // The feedback & complaint register (B10) — the quality desk. `feedback:manage` logs + reads.
       { label: "Feedback", href: "/feedback", icon: "feedback", permission: "feedback:manage" },
       {

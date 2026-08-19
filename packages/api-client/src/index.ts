@@ -3048,6 +3048,136 @@ export interface StockMoveResult {
   movement: StockMovement;
 }
 
+/* ── General store (G1/G3) — non-drug consumables ─────────────────────────────
+ * A different room from the pharmacy, on purpose: a glove has no form, no strength and no
+ * batch, and must never reach a prescribing pad. The shape mirrors the medicine master because
+ * that pattern is proven, not because the two share a table.
+ */
+
+export const ITEM_CATEGORIES = [
+  "consumable",
+  "linen",
+  "stationery",
+  "housekeeping",
+  "spare",
+  "other",
+] as const;
+export type ItemCategory = (typeof ITEM_CATEGORIES)[number];
+
+export const ITEM_UNITS = [
+  "piece",
+  "box",
+  "pack",
+  "pair",
+  "roll",
+  "metre",
+  "litre",
+  "kilogram",
+] as const;
+export type ItemUnit = (typeof ITEM_UNITS)[number];
+
+/** An item as the store master holds it. The BALANCE is not here — see `StoreRow`. */
+export interface InventoryItem {
+  id: string;
+  code: string;
+  name: string;
+  category: ItemCategory;
+  unit: ItemUnit;
+  /** At or below this the list calls it low. Zero means no flag. */
+  reorderLevel: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StockPosition = "ok" | "low" | "out";
+
+/**
+ * An item WITH what is on the shelf the caller is looking at.
+ *
+ * `onHand` is per SITE, unlike the pharmacy's hospital-wide `stockUnits`: a store is a room, and
+ * with a branch selected this is that room's count. In the aggregate view it is the sum across
+ * the sites the user may see.
+ */
+export interface StoreRow extends InventoryItem {
+  onHand: number;
+  position: StockPosition;
+}
+
+export interface Supplier {
+  id: string;
+  code: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  /** GSTIN / VAT / TIN, as printed on the invoice. Free text. */
+  taxId?: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type MovementKind = "receipt" | "issue" | "adjustment";
+
+/** One line of the store ledger. Supplier and department names are captured at the time. */
+export interface InventoryMovement {
+  id: string;
+  itemId: string;
+  itemCode: string;
+  kind: MovementKind;
+  /** Signed: + in, − out. */
+  delta: number;
+  balanceAfter: number;
+  supplierId?: string;
+  supplierName?: string;
+  invoiceRef?: string;
+  unitCost?: number;
+  departmentId?: string;
+  departmentName?: string;
+  reason?: string;
+  branchId?: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CreateItemInput {
+  code: string;
+  name: string;
+  category: ItemCategory;
+  unit: ItemUnit;
+  reorderLevel?: number;
+}
+
+export type UpdateItemInput = Partial<Omit<CreateItemInput, "code">> & { active?: boolean };
+
+export interface CreateSupplierInput {
+  code: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  taxId?: string;
+}
+
+export type UpdateSupplierInput = Partial<Omit<CreateSupplierInput, "code">> & {
+  active?: boolean;
+};
+
+/**
+ * Where an issue may go. Served by the STORE, not by `/departments` — a store keeper must not
+ * hold `patient:read` merely to fill in a picker.
+ */
+export interface IssueDestination {
+  id: string;
+  name: string;
+}
+
+/** What a receive / issue / adjust answers with: the item, the new shelf, and the ledger row. */
+export interface InventoryStockChange {
+  item: InventoryItem;
+  onHand: number;
+  movement: InventoryMovement;
+}
+
 /* ── Admissions (ADR-0013 §4) ─────────────────────────────────────────────── */
 
 export interface Bed {
@@ -5425,6 +5555,101 @@ export class ApiClient {
     return this.request<StockMoveResult>("POST", `/api/v1/medicines/${id}/adjust`, input, {
       ...(key ? { idempotencyKey: key } : {}),
     });
+  }
+
+  /* ── General store (needs module.support.inventory) ────────────────────────
+   * Reads are gated on `inventory:manage`; the three writes each carry their own permission, so a
+   * hospital can put the delivery, the issue and the stock-take in three different pairs of hands.
+   */
+
+  /** The store list — every item with this site's on-hand and its position, worst first. */
+  listStoreItems(
+    params: { search?: string; lowStockOnly?: boolean; includeInactive?: boolean } = {},
+  ): Promise<StoreRow[]> {
+    return this.request<StoreRow[]>("GET", `/api/v1/inventory-items${medicineQuery(params)}`);
+  }
+
+  createStoreItem(input: CreateItemInput): Promise<InventoryItem> {
+    return this.request<InventoryItem>("POST", "/api/v1/inventory-items", input);
+  }
+
+  updateStoreItem(id: string, patch: UpdateItemInput): Promise<InventoryItem> {
+    return this.request<InventoryItem>("PATCH", `/api/v1/inventory-items/${id}`, patch);
+  }
+
+  /** Where stock may be issued to — active departments, as an id and a label. */
+  listStoreDestinations(): Promise<IssueDestination[]> {
+    return this.request<IssueDestination[]>("GET", "/api/v1/inventory-destinations");
+  }
+
+  listStoreMovements(id: string): Promise<InventoryMovement[]> {
+    return this.request<InventoryMovement[]>("GET", `/api/v1/inventory-items/${id}/movements`);
+  }
+
+  /**
+   * Book a delivery in, against a supplier.
+   *
+   * `key` is stable across the retries of ONE submission and new for a genuinely new delivery.
+   * Without it the `idempotent()` middleware this route carries can never fire — and a
+   * double-booked delivery is a number that stays wrong until somebody counts the shelf by hand.
+   */
+  receiveStoreStock(
+    id: string,
+    input: { quantity: number; supplierId?: string; invoiceRef?: string; unitCost?: number },
+    key?: string,
+  ): Promise<InventoryStockChange> {
+    return this.request<InventoryStockChange>(
+      "POST",
+      `/api/v1/inventory-items/${id}/receive`,
+      input,
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
+  }
+
+  /** Hand stock out to a department. Refused (HMS-INV-002) when the shelf cannot cover it. */
+  issueStoreStock(
+    id: string,
+    input: { quantity: number; departmentId: string },
+    key?: string,
+  ): Promise<InventoryStockChange> {
+    return this.request<InventoryStockChange>(
+      "POST",
+      `/api/v1/inventory-items/${id}/issue`,
+      input,
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
+  }
+
+  /** Correct the count after a stock-take. `delta` is signed; it may not go below zero. */
+  adjustStoreStock(
+    id: string,
+    input: { delta: number; reason: string },
+    key?: string,
+  ): Promise<InventoryStockChange> {
+    return this.request<InventoryStockChange>(
+      "POST",
+      `/api/v1/inventory-items/${id}/adjust`,
+      input,
+      { ...(key ? { idempotencyKey: key } : {}) },
+    );
+  }
+
+  listSuppliers(params: { search?: string; includeInactive?: boolean } = {}): Promise<Supplier[]> {
+    const parts: string[] = [];
+    if (params.search) parts.push(`search=${encodeURIComponent(params.search)}`);
+    if (params.includeInactive) parts.push("includeInactive=true");
+    return this.request<Supplier[]>(
+      "GET",
+      `/api/v1/suppliers${parts.length ? `?${parts.join("&")}` : ""}`,
+    );
+  }
+
+  createSupplier(input: CreateSupplierInput): Promise<Supplier> {
+    return this.request<Supplier>("POST", "/api/v1/suppliers", input);
+  }
+
+  updateSupplier(id: string, patch: UpdateSupplierInput): Promise<Supplier> {
+    return this.request<Supplier>("PATCH", `/api/v1/suppliers/${id}`, patch);
   }
 
   /* ── Admissions ───────────────────────────────────────────────────────────
