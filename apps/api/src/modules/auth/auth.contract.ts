@@ -32,6 +32,12 @@ export const authenticatedUser = contract(
     mustChangePassword: z.boolean(),
     /** `/auth/me` only, and for hiding menu items — never an authorization decision. */
     permissions: z.array(z.string()).optional(),
+    /**
+     * The hospital's edition flags — `/auth/me` only, and for the same purpose: so the navigation
+     * stops advertising modules this hospital never bought (D20). `authorize()` re-checks the
+     * entitlement on every request; this is a hint, not a grant.
+     */
+    features: z.array(z.string()).optional(),
   }),
 );
 export type AuthenticatedUserProof = Proves<Matches<typeof authenticatedUser, AuthenticatedUser>>;

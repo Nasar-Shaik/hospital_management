@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@medicore/api-client": "workspace:*",
+    "@medicore/permissions": "workspace:*",
     "@medicore/types": "workspace:*",
     "@medicore/ui": "workspace:*",
     "next": "^15.3.0",

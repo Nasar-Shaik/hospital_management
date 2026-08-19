@@ -279,6 +279,9 @@ importers:
       '@medicore/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@medicore/permissions':
+        specifier: workspace:*
+        version: link:../../packages/permissions
       '@medicore/types':
         specifier: workspace:*
         version: link:../../packages/types

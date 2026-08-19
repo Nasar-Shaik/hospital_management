@@ -49,6 +49,14 @@ import {
 interface AuthState {
   user: AuthenticatedUser | null;
   permissions: string[];
+  /**
+   * The MODULES THIS HOSPITAL BOUGHT (ADR-0010 layer 1), from `/auth/me`.
+   *
+   * Separate from `permissions` because they are separate questions with separate remedies. The
+   * navigation needs both: a permission decides whether THIS user should see a door, an
+   * entitlement decides whether the hospital has the room behind it (D20).
+   */
+  features: string[];
   /** True until the first refresh attempt settles — render nothing sensitive before then. */
   loading: boolean;
 }
@@ -68,6 +76,16 @@ interface AuthContextValue extends AuthState {
   endSession: (redirectTo?: string) => void;
   /** Does the user hold this permission? UI gating only — never a security boundary. */
   can: (permission: string) => boolean;
+  /**
+   * Is this module part of the hospital's edition? UI gating only — the server answers
+   * `HMS-PLAN-002` independently on every route (D20).
+   *
+   * Answers TRUE while the session is still loading and for any user whose `/auth/me` predates
+   * this field. Failing open is deliberate: a false negative hides a module a hospital is paying
+   * for, and that is a silent, un-reportable failure — nobody files a bug about a menu entry they
+   * have never seen. A false positive costs one honest refusal on the page.
+   */
+  hasFeature: (flag: string) => boolean;
   refreshUser: () => Promise<void>;
   /** The authenticated client. It reads the in-memory token on every call. */
   api: ApiClient;
@@ -77,7 +95,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [state, setState] = useState<AuthState>({ user: null, permissions: [], loading: true });
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    permissions: [],
+    features: [],
+    loading: true,
+  });
 
   // In a ref, not state: the API client reads it on every request, and we must
   // never re-render just because a token rotated.
@@ -134,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // The family is gone (logout elsewhere, reuse detected, expiry).
             accessToken.current = undefined;
             setDevRefreshToken(undefined);
-            setState({ user: null, permissions: [], loading: false });
+            setState({ user: null, permissions: [], features: [], loading: false });
             router.replace("/login?reason=expired");
           }
         })();
@@ -163,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         accessToken.current = undefined;
         setDevRefreshToken(undefined);
-        setState({ user: null, permissions: [], loading: false });
+        setState({ user: null, permissions: [], features: [], loading: false });
         router.replace("/login?reason=expired");
         return false;
       }
@@ -192,7 +215,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Only `/auth/me` carries the permission list the UI needs for menu gating —
       // it is deliberately absent from the login response and from the token.
       const me = await api.me().catch(() => pair.user);
-      setState({ user: me, permissions: me.permissions ?? [], loading: false });
+      setState({
+        user: me,
+        permissions: me.permissions ?? [],
+        features: me.features ?? [],
+        loading: false,
+      });
       // Dev-only: offer this account as a one-click sign-in next time (no-op in production).
       rememberAccount({ email: me.email, name: me.name, role: me.roles[0] });
     },
@@ -219,7 +247,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
          * runs exactly as before.
          */
         if (DEV_MULTI_ACCOUNT && !stored) {
-          if (!cancelled) setState({ user: null, permissions: [], loading: false });
+          if (!cancelled) setState({ user: null, permissions: [], features: [], loading: false });
           return;
         }
         // Reuse an in-flight bootstrap so a StrictMode remount does not fire a second refresh.
@@ -228,7 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled) await adopt(pair);
       } catch {
         bootstrap.current = null;
-        if (!cancelled) setState({ user: null, permissions: [], loading: false });
+        if (!cancelled) setState({ user: null, permissions: [], features: [], loading: false });
       }
     })();
 
@@ -271,7 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accessToken.current = undefined;
       // Dev-only: drop THIS tab's stored session so a reload does not revive it.
       setDevRefreshToken(undefined);
-      setState({ user: null, permissions: [], loading: false });
+      setState({ user: null, permissions: [], features: [], loading: false });
       router.replace(redirectTo);
     },
     [router],
@@ -294,7 +322,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     const me = await api.me();
-    setState((s) => ({ ...s, user: me, permissions: me.permissions ?? [] }));
+    setState((s) => ({
+      ...s,
+      user: me,
+      permissions: me.permissions ?? [],
+      features: me.features ?? [],
+    }));
   }, [api]);
 
   const can = useCallback(
@@ -302,9 +335,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [state.permissions],
   );
 
+  /**
+   * Fails OPEN while the edition is unknown — see the note on `hasFeature` above. An empty list
+   * means "not answered yet" (or an older `/auth/me`), not "you bought nothing".
+   */
+  const hasFeature = useCallback(
+    (flag: string) => state.features.length === 0 || state.features.includes(flag),
+    [state.features],
+  );
+
   const value = useMemo<AuthContextValue>(
-    () => ({ ...state, login, completeMfa, logout, endSession, can, refreshUser, api }),
-    [state, login, completeMfa, logout, endSession, can, refreshUser, api],
+    () => ({ ...state, login, completeMfa, logout, endSession, can, hasFeature, refreshUser, api }),
+    [state, login, completeMfa, logout, endSession, can, hasFeature, refreshUser, api],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

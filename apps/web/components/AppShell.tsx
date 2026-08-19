@@ -21,6 +21,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { ThemeToggle } from "@medicore/ui";
+import { FEATURE_FLAGS, type FeatureFlag } from "@medicore/permissions";
 import { AlertBell } from "./AlertBell";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { LicenseBanner } from "./LicenseBanner";
@@ -36,6 +37,29 @@ interface NavItem {
   icon: IconName;
   /** Permission required to see it. Omit for items everyone may use. */
   permission?: string;
+  /**
+   * Edition flag the MODULE behind this entry needs (ADR-0010 layer 1). Omit for entries in every
+   * edition.
+   *
+   * ── WHY THIS IS A SECOND GATE AND NOT A BIGGER FIRST ONE (D20) ────────────
+   * The nav gated on permission alone, and a permission answers a different question. A
+   * `PLAN_CLINIC` administrator holds every code in the catalogue, so the sidebar offered
+   * Theatres, Emergency, Ward, Bed board, Medication round, Ambulance, Mortuary and Pharmacy — and
+   * each opened onto `HMS-PLAN-002 Feature not in your edition` printed above an empty module
+   * state ("Nobody in the emergency department", "No theatres yet"). Editing a role could never
+   * fix any of it, which is exactly the confusion the two error codes exist to prevent.
+   *
+   * Typed as `FeatureFlag`, so a flag that does not exist does not compile — the same rule
+   * `authorize()` follows by taking `PERMISSIONS.X` rather than a string (Guidelines Never-rule 7).
+   *
+   * The value must be the flag the ROUTE behind the page is gated on. That correspondence cannot
+   * be a shared constant — the web app may not import the API (ADR-0012) — so it is checked from
+   * both ends against each side's own shipped artefact: `navigationEntitlement.test.tsx` proves
+   * each entry appears exactly when its flag is present, and the module suites
+   * (`theatres.int.test.ts`, `emergency.int.test.ts`, `rbac.int.test.ts` §entitlement) prove the
+   * route refuses without it.
+   */
+  feature?: FeatureFlag;
   /**
    * Hide this entry from anyone who ALSO holds this permission.
    *
@@ -81,7 +105,13 @@ const NAVIGATION: NavSection[] = [
       },
       { label: "Service tariff", href: "/tariff", icon: "tariff", permission: "tariff:manage" },
       { label: "Care packages", href: "/packages", icon: "tariff", permission: "tariff:manage" },
-      { label: "Medical records", href: "/mrd", icon: "reports", permission: "mrd:register:view" },
+      {
+        label: "Medical records",
+        href: "/mrd",
+        icon: "reports",
+        permission: "mrd:register:view",
+        feature: FEATURE_FLAGS.SUPPORT_MRD,
+      },
       {
         label: "Public website",
         href: "/settings/site",
@@ -104,7 +134,13 @@ const NAVIGATION: NavSection[] = [
         permission: "department:manage",
       },
       // The estate register — equipment + its service history (B7). Facilities/biomedical work.
-      { label: "Assets", href: "/assets", icon: "assets", permission: "asset:manage" },
+      {
+        label: "Assets",
+        href: "/assets",
+        icon: "assets",
+        permission: "asset:manage",
+        feature: FEATURE_FLAGS.SUPPORT_ASSETS,
+      },
       // The feedback & complaint register (B10) — the quality desk. `feedback:manage` logs + reads.
       { label: "Feedback", href: "/feedback", icon: "feedback", permission: "feedback:manage" },
       {
@@ -132,10 +168,22 @@ const NAVIGATION: NavSection[] = [
       },
       { label: "Worklist", href: "/worklist", icon: "worklist", permission: "order:read" },
       // The lab's test master — analytes + reference ranges (D6). The pathologist owns it.
-      { label: "Lab catalogue", href: "/lab-catalogue", icon: "lab", permission: "lab:approve" },
+      {
+        label: "Lab catalogue",
+        href: "/lab-catalogue",
+        icon: "lab",
+        permission: "lab:approve",
+        feature: FEATURE_FLAGS.CLINICAL_LIS,
+      },
       // `pharmacy:dispense`, not `order:read` — this screen is for the person who HANDS THE DRUGS
       // OVER; the read permission would show a dispensing counter to every nurse and pathologist.
-      { label: "Pharmacy", href: "/pharmacy", icon: "pharmacy", permission: "pharmacy:dispense" },
+      {
+        label: "Pharmacy",
+        href: "/pharmacy",
+        icon: "pharmacy",
+        permission: "pharmacy:dispense",
+        feature: FEATURE_FLAGS.PHARMACY_DISPENSING,
+      },
       // `pharmacy:stock`: the MASTER is inventory — the person who keeps the shelf, not the one
       // handing a drug over.
       {
@@ -143,9 +191,16 @@ const NAVIGATION: NavSection[] = [
         href: "/medicines",
         icon: "medicines",
         permission: "pharmacy:stock",
+        feature: FEATURE_FLAGS.PHARMACY_FULL,
       },
       // `emr:read`: the ward round is a doctor's list of PATIENTS, not a bed-allocation tool.
-      { label: "Ward", href: "/ward", icon: "ward", permission: "emr:read" },
+      {
+        label: "Ward",
+        href: "/ward",
+        icon: "ward",
+        permission: "emr:read",
+        feature: FEATURE_FLAGS.OPS_IPD,
+      },
       /**
        * The NURSE's round — who needs a drug next, across the whole ward (W4).
        *
@@ -160,6 +215,7 @@ const NAVIGATION: NavSection[] = [
         href: "/medication-round",
         icon: "medicines",
         permission: "emr:read",
+        feature: FEATURE_FLAGS.CLINICAL_NURSING,
       },
       { label: "Patients", href: "/patients", icon: "patients", permission: "patient:read" },
       {
@@ -167,6 +223,7 @@ const NAVIGATION: NavSection[] = [
         href: "/appointments",
         icon: "appointments",
         permission: "appointment:read",
+        feature: FEATURE_FLAGS.OPS_APPOINTMENTS,
       },
       // The doctor ROSTER — weekly sessions + leave (D2). `doctor:manage`: roster administration,
       // not front-desk work; the same permission that guards setting a doctor's hours.
@@ -187,8 +244,20 @@ const NAVIGATION: NavSection[] = [
       },
       // The BED BOARD (which beds are free) and the inventory behind it (B4). `/ward` shows who is
       // admitted; this shows where there is space.
-      { label: "Bed board", href: "/beds", icon: "beds", permission: "bed:allocate" },
-      { label: "Theatres", href: "/theatres", icon: "theatres", permission: "ot:schedule" },
+      {
+        label: "Bed board",
+        href: "/beds",
+        icon: "beds",
+        permission: "bed:allocate",
+        feature: FEATURE_FLAGS.OPS_IPD,
+      },
+      {
+        label: "Theatres",
+        href: "/theatres",
+        icon: "theatres",
+        permission: "ot:schedule",
+        feature: FEATURE_FLAGS.CLINICAL_OT,
+      },
       /**
        * The ED board. Gated on `triage:perform` — the emergency department's OWN permission, held
        * by the nurse and the doctor who stand in front of the board, and not by every receptionist
@@ -196,16 +265,29 @@ const NAVIGATION: NavSection[] = [
        * (it is the queue, ranked), so the desk can still reach it when they need to answer "where
        * is my father"; this decides whose sidebar carries a link.
        */
-      { label: "Emergency", href: "/emergency", icon: "emergency", permission: "triage:perform" },
+      {
+        label: "Emergency",
+        href: "/emergency",
+        icon: "emergency",
+        permission: "triage:perform",
+        feature: FEATURE_FLAGS.CLINICAL_EMERGENCY,
+      },
       {
         label: "Ambulance",
         href: "/ambulance",
         icon: "ambulance",
         permission: "ambulance:dispatch",
+        feature: FEATURE_FLAGS.SUPPORT_AMBULANCE,
       },
       // The body custody register (support.mortuary) — receive and release. `mortuary:manage` is the
       // ward/mortuary staff who run it; release refuses a medico-legal body without clearance.
-      { label: "Mortuary", href: "/mortuary", icon: "ward", permission: "mortuary:manage" },
+      {
+        label: "Mortuary",
+        href: "/mortuary",
+        icon: "ward",
+        permission: "mortuary:manage",
+        feature: FEATURE_FLAGS.SUPPORT_MORTUARY,
+      },
     ],
   },
   {
@@ -389,7 +471,7 @@ function BranchFooter({ collapsed }: { collapsed: boolean }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { user, can, logout } = useAuth();
+  const { user, can, hasFeature, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // The shell is mounted once by the root layout (see components/AppFrame.tsx) and never remounts on
@@ -424,10 +506,23 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
   };
 
+  /**
+   * Both gates, in the order ADR-0010 asks them (D20).
+   *
+   *   entitlement — did this HOSPITAL buy the module?   `hasFeature`
+   *   permission  — does this USER hold the code?       `can`
+   *
+   * An entry needs both. Failing either hides the link; hiding a link grants nothing and refuses
+   * nothing, because the server independently answers `HMS-PLAN-002` or `HMS-AUTH-005` on the
+   * route (Constitution §3.6) — which is what a person typing the URL still gets.
+   */
   const sections = NAVIGATION.map((section) => ({
     ...section,
     items: section.items.filter(
-      (item) => (!item.permission || can(item.permission)) && !(item.unless && can(item.unless)),
+      (item) =>
+        (!item.feature || hasFeature(item.feature)) &&
+        (!item.permission || can(item.permission)) &&
+        !(item.unless && can(item.unless)),
     ),
   })).filter((section) => section.items.length > 0);
 
