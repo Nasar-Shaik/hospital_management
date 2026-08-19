@@ -144,6 +144,18 @@ export interface AuthenticatedUser {
    * (Constitution §3.6).
    */
   permissions?: string[];
+  /**
+   * The MODULE FLAGS this hospital's edition includes — `/auth/me` only (ADR-0010 layer 1).
+   *
+   * A permission answers "may this user"; a feature answers "did this hospital buy it". A client
+   * that can see only the first advertises modules that will always refuse: a clinic administrator
+   * holds every permission and was shown Theatres, Emergency, Ward and Ambulance, each of which
+   * opened onto `HMS-PLAN-002` (D20). Values are the `module.*` flags from `@medicore/permissions`.
+   *
+   * A hint for drawing a menu, never a grant. `HMS-PLAN-002` from a route remains the
+   * authoritative answer, and is what a client should react to when it has one.
+   */
+  features?: string[];
 }
 
 export interface TokenPair {
@@ -2261,18 +2273,27 @@ export interface Encounter {
 }
 
 /**
- * A stay on the ward list (`GET /inpatients`), carrying the patient it belongs to.
+ * A visit on a LIST, carrying the patient it belongs to.
  *
- * The identity is resolved by the API — the same `namesByIds` call the bed board and the
- * medication round already make, with the same hospital-wide semantics. A client must never
- * reconstruct it from a patient list; `listInpatients` explains what that cost.
+ * Returned by `GET /encounters` (the queue, the register, the doctor's day) and `GET /inpatients`
+ * (the ward). The identity is resolved by the API — the same `namesByIds` call the bed board and
+ * the medication round already make, with the same hospital-wide semantics.
+ *
+ * ── A CLIENT MUST NEVER RECONSTRUCT THIS FROM A PATIENT LIST ────────────────
+ * It reads as an obvious client-side join and it is wrong in a way nothing reports: the visits on
+ * a queue and the first page of `/patients` are different populations, so a patient registered
+ * before the page reaches back reduces to a dash. That is what `listInpatients` cost on the ward
+ * and what `listEncounters` cost on the doctor's queue — 15 of 99 rows, silently.
  */
-export interface InpatientRow extends Encounter {
+export interface EncounterRow extends Encounter {
   /** `Unknown patient` when the record cannot be read — never silently blank. */
   patientName: string;
   /** Empty only when the patient record itself carries none. */
   uhid: string;
 }
+
+/** The ward-list row. The same shape; the API names it separately and so do we. */
+export type InpatientRow = EncounterRow;
 
 /** How an inpatient stay ended (see the admissions module). */
 export type DischargeDisposition = "discharged" | "lama" | "absconded" | "deceased";
@@ -4841,6 +4862,8 @@ export class ApiClient {
    *
    * `date` is `YYYY-MM-DD` and is resolved in the HOSPITAL's timezone by the server.
    * `queued` returns everyone waiting or being seen, in token order.
+   *
+   * Each row names its patient (`EncounterRow`). Do not join against `listPatients` to get one.
    */
   listEncounters(
     params: {
@@ -4853,13 +4876,13 @@ export class ApiClient {
       page?: number;
       limit?: number;
     } = {},
-  ): Promise<Paged<Encounter>> {
+  ): Promise<Paged<EncounterRow>> {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== "") query.set(key, String(value));
     }
     const qs = query.toString();
-    return this.paged<Encounter>(`/api/v1/encounters${qs ? `?${qs}` : ""}`);
+    return this.paged<EncounterRow>(`/api/v1/encounters${qs ? `?${qs}` : ""}`);
   }
 
   getEncounter(id: string): Promise<Encounter> {

@@ -10,7 +10,12 @@ import {
   ENCOUNTER_STATUSES,
 } from "./encounter.model.js";
 import type { Encounter } from "./encounter.repository.js";
-import type { AdmitResult, InpatientRow, StartEncounterResult } from "./encounter.service.js";
+import type {
+  AdmitResult,
+  EncounterRow,
+  InpatientRow,
+  StartEncounterResult,
+} from "./encounter.service.js";
 
 const encounterStatus = z.enum(ENCOUNTER_STATUSES);
 
@@ -76,30 +81,39 @@ export const encounter = contract(
 export type EncounterProof = Proves<Matches<typeof encounter, Encounter>>;
 
 /**
- * A stay on the ward list, WITH the patient it belongs to.
+ * Who the visit belongs to — carried by every LIST a person reads.
  *
- * ── WHY THE WARD LIST IDENTIFIES ITS PATIENTS AND A BARE ENCOUNTER DOES NOT ──
- * An encounter is a visit; naming the patient on every one of them would cost a lookup on paths
- * that never display a name. But `/inpatients` is read by a human walking a ward, and every
- * consumer of it needs exactly this: who is in the bed. Leaving them to reconstruct it produced a
- * real defect — the web ward page resolved names from the hundred most recently REGISTERED
- * patients, so anyone admitted longer ago than that reached the medication confirmation with no
- * name and no UHID, which is the identity check that catches the right drug given to the wrong
- * person.
+ * ── THE SAME DEFECT, TWICE, BECAUSE ONLY ONE LIST WAS FIXED ─────────────────
+ * An encounter is a visit; naming the patient on every single one of them would cost a lookup on
+ * paths that never display a name — `GET /encounters/:id` still does not carry it. But a LIST of
+ * visits is a screen somebody reads, and every consumer of one needs exactly this: who.
+ *
+ * Leaving them to reconstruct it produced the defect on `/inpatients` first: the web ward page
+ * resolved names from the hundred most recently REGISTERED patients, so anyone admitted longer ago
+ * than that reached the medication confirmation with no name and no UHID — the identity check that
+ * catches the right drug given to the wrong person. That was fixed here, for that one route, and
+ * the doctor's queue went on doing the identical join against the identical hundred: 15 of 99 rows
+ * showed a dash where a person should be (D18). Both lists now carry identity, so there is no
+ * longer a "which list did we fix" to get wrong.
  *
  * Resolved server-side by `namesByIds`, exactly as `/bed-board` and `/medication-round` already
  * do — the same call, the same hospital-wide semantics, no new domain rule. Additive: every field
  * an existing client reads is still here and still means what it meant.
  */
-export const inpatientRow = contract(
-  "InpatientRow",
-  encounter.extend({
-    /** `Unknown patient` when the record cannot be read — never silently blank. */
-    patientName: z.string(),
-    /** Empty only when the patient record itself carries none. */
-    uhid: z.string(),
-  }),
-);
+const patientIdentity = {
+  /** `Unknown patient` when the record cannot be read — never silently blank. */
+  patientName: z.string(),
+  /** Empty only when the patient record itself carries none. */
+  uhid: z.string(),
+};
+
+/** A queue/register row: the encounter plus who it is about. */
+export const encounterRow = contract("EncounterRow", encounter.extend(patientIdentity));
+export type EncounterRowProof = Proves<Matches<typeof encounterRow, EncounterRow>>;
+
+/** A stay on the ward list. Structurally the same row; named separately because `/inpatients`
+ *  has documented `InpatientRow` since it was built, and a schema name is public surface. */
+export const inpatientRow = contract("InpatientRow", encounter.extend(patientIdentity));
 export type InpatientRowProof = Proves<Matches<typeof inpatientRow, InpatientRow>>;
 
 /** 201 for a new visit, 200 when the patient was already in the building — `resumed` says which. */

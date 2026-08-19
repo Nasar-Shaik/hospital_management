@@ -1,18 +1,21 @@
 /**
  * Who the patient is — the line every clinical screen opens with.
  *
- * ── THE NAME IS FETCHED PER PATIENT, AND THAT IS DELIBERATE ─────────────────
- * `GET /encounters` returns `patientId` and no identity at all: the contract carries no name and no
- * UHID (encounter.contract.ts). The web app works around it by pulling the first 100 patients and
- * matching locally, which silently renders "—" for patient 101 and holds a hospital's register in
- * memory to label twenty rows.
+ * ── THE LISTS NO LONGER COME HERE, AND THAT WAS THE POINT ───────────────────
+ * This file used to carry a note saying `GET /encounters` returned `patientId` and no identity at
+ * all, that the web app worked around it by pulling the first 100 patients and matching locally
+ * (silently rendering "—" for patient 101), and that the honest version on a phone was a
+ * per-patient read — N reads for N rows — with the observation that "an API change would pay for
+ * itself: a patient summary embedded in the encounter list".
  *
- * On a phone the honest version is a per-patient read: `getPatient(id)` behind its own query key,
- * so twenty rows cost twenty small cached lookups, the SAME cache entry is reused when the patient
- * screen opens, and a row that fails to resolve degrades to its UHID-less placeholder instead of
- * lying. It is still N reads for N rows, and that is the one place an API change would pay for
- * itself — a patient summary embedded in the encounter list, or an `ids=` filter on `/patients`.
- * Reported rather than worked around with a client-side join that pretends to be complete.
+ * It did. `GET /encounters` and `GET /inpatients` now return `EncounterRow`, which names its
+ * patient, so a list of twenty costs ONE request; the web app's silent dash was the defect that
+ * finally paid for it (D18). `EncounterRow.tsx` and `inpatients.tsx` read the row.
+ *
+ * What is left here is what a list cannot answer: a SINGLE patient behind an id, on a screen that
+ * was reached with an id and nothing else — the order detail, the prescribing screen. There the
+ * per-patient read is not a workaround, it is the only question being asked, and the cache entry
+ * it fills is the same one the patient screen opens with.
  */
 import { StyleSheet, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";

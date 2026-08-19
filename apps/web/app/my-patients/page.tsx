@@ -32,10 +32,10 @@ import {
   type DrugFrequency,
   type DrugRoute,
   type Encounter,
+  type EncounterRow,
   type Order,
   type OrderPriority,
   type CatalogueItem,
-  type Patient,
   type Prescription,
   type PrescriptionLineInput,
   type ReportMeta,
@@ -1378,8 +1378,18 @@ function AdmitOrTransfer({
 function MyPatients() {
   const { api, user, can } = useAuth();
 
-  const [waiting, setWaiting] = useState<Encounter[]>([]);
-  const [patients, setPatients] = useState<Patient[]>([]);
+  /**
+   * The queue, and it NAMES its patients (D18).
+   *
+   * This page used to hold a second list — `listPatients({ limit: 100 })` — and match `patientId`
+   * against it. The two lists are different populations: this one is everybody queued for this
+   * doctor, that one was the hundred most recent REGISTRATIONS. 15 of 99 rows on the demo hospital
+   * fell outside it and rendered "—", with no error and no empty state. `EncounterRow` carries the
+   * identity the server already had, so there is nothing left to reconcile.
+   */
+  const [waiting, setWaiting] = useState<EncounterRow[]>([]);
+  /** How many queued patients did not fit on the page this screen asked for — see `load`. */
+  const [beyondPage, setBeyondPage] = useState(0);
   const [services, setServices] = useState<CatalogueItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -1396,20 +1406,6 @@ function MyPatients() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    /**
-     * 100 is the server's cap. Asking for more is a 400, not a bigger page.
-     *
-     * The failure is SURFACED rather than swallowed: an earlier `.catch(() => undefined)`
-     * here turned that 400 into an empty dropdown with no error, which reads as "this
-     * hospital has no patients" — a lie that took a browser session to disbelieve.
-     */
-    void api
-      .listPatients({ limit: 100 })
-      .then((page) => setPatients(page.items))
-      .catch((err: unknown) =>
-        setError(err instanceof ApiClientError ? err.message : "Could not load patients."),
-      );
-
     /**
      * The CATALOGUE, not the tariff. Same collection on the server, price stripped —
      * a doctor sees what can be ordered and never what it costs, so a patient's means
@@ -1445,6 +1441,19 @@ function MyPatients() {
       if (!user?.id) return;
       const page = await api.listEncounters({ queued: true, doctorId: user.id, limit: 100 });
       setWaiting(page.items);
+      /**
+       * ── A CAP THAT TRUNCATES MUST SAY SO (D18) ──────────────────────────
+       * 100 is the server's ceiling on every list, and this asks for one page. A queue longer
+       * than that is unusual — but "unusual" was also the reasoning that let a capped join
+       * silently dash 15 of 99 rows, and this truncation is the same shape: the tail of the
+       * waiting room simply is not on screen, and nothing said so. Found by an E2E patient who
+       * was genuinely in the queue at position 104 and could not be found on the page.
+       *
+       * Deliberately NOT a bigger limit: the rows are in TOKEN order, so the hundred shown are
+       * the hundred who arrived first, which is the right hundred to work through. What was
+       * missing was the sentence admitting there are more.
+       */
+      setBeyondPage(Math.max(0, (page.meta.total ?? page.items.length) - page.items.length));
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load your list.");
@@ -1592,9 +1601,6 @@ function MyPatients() {
     }
   }
 
-  const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
-  const uhidOf = (id: string): string => patients.find((p) => p.id === id)?.uhid ?? "";
-
   return (
     <div className="space-y-6">
       <div>
@@ -1610,9 +1616,15 @@ function MyPatients() {
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         {/* ── the waiting list ── */}
         <Card className="p-4">
-          <h2 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
+          <h2 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">
             Waiting ({waiting.length})
           </h2>
+          {beyondPage > 0 && (
+            <p className="mb-3 text-xs text-[var(--color-warning)]">
+              {beyondPage} more {beyondPage === 1 ? "patient is" : "patients are"} queued beyond
+              this page. These are the first 100 by token — the earliest arrivals.
+            </p>
+          )}
 
           {loading ? (
             <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
@@ -1640,7 +1652,7 @@ function MyPatients() {
                         </span>
                       )}
                       <span className="truncate text-sm text-[var(--color-fg)]">
-                        {nameOf(e.patientId)}
+                        {e.patientName}
                       </span>
                       {e.express && (
                         <span className="ml-auto shrink-0 rounded-full bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">
@@ -1685,10 +1697,10 @@ function MyPatients() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-[var(--color-fg)]">
-                      {nameOf(selected.patientId)}
+                      {selected.patientName}
                     </h2>
                     <p className="mt-0.5 font-mono text-xs text-[var(--color-fg-muted)]">
-                      {uhidOf(selected.patientId)}
+                      {selected.uhid}
                     </p>
                     {selected.reason && (
                       <p className="mt-2 text-sm text-[var(--color-fg-muted)]">

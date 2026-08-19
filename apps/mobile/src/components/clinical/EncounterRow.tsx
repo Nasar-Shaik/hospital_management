@@ -4,9 +4,12 @@
  * Reading order matches how the row is used: the TOKEN (what the waiting room is called by), the
  * NAME, then the status and when they arrived. Tapping anywhere on the row opens the chart, so the
  * target is the full width rather than the name.
+ *
+ * The name comes off the ROW. `GET /encounters` carries it (D18), so a list of twenty patients
+ * costs one request and not twenty-one — see `Identity.tsx`, which asked for exactly this.
  */
 import { StyleSheet, Text, View } from "react-native";
-import type { Encounter } from "@medicore/api-client";
+import type { EncounterRow as ListedEncounter } from "@medicore/api-client";
 import { useTheme } from "../../hooks/useTheme";
 import { radius, space, typography } from "../../theme/tokens";
 import { formatTime, parseInstant } from "../../lib/time";
@@ -17,14 +20,13 @@ import {
 } from "../../clinical/encounters";
 import { Card } from "../Card";
 import { Pill } from "../Pill";
-import { PatientName } from "./Identity";
 
 export function EncounterRow({
   encounter,
   zone,
   onPress,
 }: {
-  encounter: Encounter;
+  encounter: ListedEncounter;
   /** Resolved by the caller from the record's own branch — never the device's. */
   zone: string;
   onPress: () => void;
@@ -46,7 +48,12 @@ export function EncounterRow({
           </View>
         ) : null}
         <View style={styles.name}>
-          <PatientName patientId={encounter.patientId} />
+          {/* The row's OWN name, sent by the server (D18). This used to be a `<PatientName>` that
+              fetched the patient behind every row — twenty rows, twenty requests, and a ward round
+              that opened on "Loading patient…" twenty times. */}
+          <Text style={[typography.heading, { color: theme.colors.fg }]} numberOfLines={1}>
+            {encounter.patientName}
+          </Text>
         </View>
         {encounter.express ? <Pill label="Express" tone="warning" /> : null}
       </View>

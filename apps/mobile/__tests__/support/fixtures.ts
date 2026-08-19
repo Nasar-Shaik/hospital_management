@@ -11,6 +11,7 @@ import type {
   BedBoard,
   ConsultationNote,
   Encounter,
+  EncounterRow,
   MedicationAdministration,
   Order,
   Paged,
@@ -39,10 +40,22 @@ export function patient(overrides: Partial<Patient> = {}): Patient {
   };
 }
 
-export function encounter(overrides: Partial<Encounter> = {}): Encounter {
+/**
+ * A visit AS A LIST ROW — `EncounterRow`, which is what `GET /encounters` returns.
+ *
+ * The identity fields are not decoration: the server resolves them (D18) and the phone renders
+ * them instead of fetching each patient separately. They deliberately match `patient()` above, so
+ * a test that reads a name off a row and a test that reads it off the chart cannot disagree.
+ *
+ * `EncounterRow` is assignable to `Encounter`, so this is still the right fixture for the
+ * single-encounter reads that carry no identity.
+ */
+export function encounter(overrides: Partial<EncounterRow> = {}): EncounterRow {
   return {
     id: ENCOUNTER_ID,
     patientId: PATIENT_ID,
+    patientName: "Meera Nair",
+    uhid: "APL000123",
     episodeId: EPISODE_ID,
     origin: "walk_in",
     class: "OP",
@@ -201,7 +214,7 @@ export const IP_ENCOUNTER_ID = "encounter-ip-1";
  * `admitPatient` writes, because the IP encounter IS the admission (ADR-0013 §1) and there is no
  * second object to fake.
  */
-export function inpatient(overrides: Partial<Encounter> = {}): Encounter {
+export function inpatient(overrides: Partial<EncounterRow> = {}): EncounterRow {
   return encounter({
     id: IP_ENCOUNTER_ID,
     class: "IP",

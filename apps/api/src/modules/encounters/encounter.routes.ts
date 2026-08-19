@@ -32,6 +32,7 @@ import * as controller from "./encounter.controller.js";
 import {
   admitResult,
   encounter,
+  encounterRow,
   inpatientRow,
   startEncounterResult,
 } from "./encounter.contract.js";
@@ -80,7 +81,9 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(listEncountersQuerySchema, "query"),
-    responds(encounter.array(), { meta: true }),
+    // `encounterRow`, not `encounter`: a list of visits is a screen somebody reads, and every one
+    // of its consumers had to turn `patientId` into a name somehow (D18, see the contract).
+    responds(encounterRow.array(), { meta: true }),
     asyncHandler(controller.listEncounters),
   );
 

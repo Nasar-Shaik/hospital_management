@@ -46,53 +46,66 @@ const logger = createLogger({ service: "encounters" });
 export type { Encounter } from "./encounter.repository.js";
 
 /**
- * A stay on the ward list, carrying the patient it belongs to.
+ * An encounter WITH the patient it belongs to — the row shape of every list a human reads.
  *
- * The ward list is read by a human walking a ward: every consumer needs to know WHO is in the bed,
- * and leaving them to reconstruct it from a separate patient list is what produced the defect this
- * exists to close — a medication confirmation reaching a nurse with no name and no UHID because
- * the patient had been admitted longer ago than the client's patient page reached back.
+ * The ward list is read by somebody walking a ward and the queue by a doctor calling the next
+ * patient in: both need to know WHO, and leaving them to reconstruct it from a separate patient
+ * list is what produced the same defect twice. First on the ward (a medication confirmation
+ * reaching a nurse with no name and no UHID because the patient had been admitted longer ago than
+ * the client's patient page reached back), then — after that was fixed here and not there — on the
+ * doctor's queue, where 15 of 99 rows rendered a dash where a person should be (D18).
  */
-export interface InpatientRow extends repo.Encounter {
+export interface EncounterRow extends repo.Encounter {
   /** `Unknown patient` when the record cannot be read — never silently blank. */
   patientName: string;
+  /** Empty only when the patient record itself carries none. */
   uhid: string;
 }
 
+/** The ward list is the same row. The name is kept because `/inpatients` documents it. */
+export type InpatientRow = EncounterRow;
+
 /**
- * One page of the ward, with each stay's patient resolved.
+ * Attaches each encounter's patient identity — ONE query for the page, not one per row.
  *
- * ── ONE EXTRA QUERY FOR THE PAGE, NOT ONE PER BED ───────────────────────────
  * `namesByIds` takes the whole page's patient ids at once — the same call `/bed-board` and
  * `/medication-round` already make, with the same hospital-wide semantics. It deliberately does
  * NOT apply `scopeFilter()`: naming a patient whose encounter this caller can already see reveals
  * nothing new, and branch-scoping the lookup would blank the identity of anyone registered at
  * another site, which is the failure mode rather than the protection.
+ *
+ * ── WHY A LOOKUP BY ID AND NOT A JOIN AGAINST A PAGE OF PATIENTS ────────────
+ * Because the two are only the same when the page happens to be big enough. A client asking for
+ * `/patients?limit=100` and matching locally resolves whoever is in that page of RECENT
+ * REGISTRATIONS and silently dashes everyone else — and the queue it is labelling is a different
+ * population, ordered by arrival. `$in` on the ids actually present cannot miss.
  */
+async function withIdentity<T extends repo.Encounter>(items: T[]): Promise<(T & EncounterRow)[]> {
+  if (items.length === 0) return [];
+
+  const names = await namesByIds([...new Set(items.map((e) => e.patientId))]);
+  const byId = new Map(names.map((n) => [n.id, n]));
+
+  return items.map((encounter) => {
+    const who = byId.get(encounter.patientId);
+    return {
+      ...encounter,
+      // The bed board says "Unknown patient" in the same situation and for the same reason: a
+      // row that silently drops its identity is worse than one that says the lookup failed.
+      patientName: who?.name ?? "Unknown patient",
+      uhid: who?.uhid ?? "",
+    };
+  });
+}
+
+/** One page of the ward, with each stay's patient resolved. */
 export async function listInpatientsWithIdentity(filter: {
   limit: number;
   skip: number;
   ward?: string;
 }): Promise<{ items: InpatientRow[]; total: number }> {
   const { items, total } = await repo.listInpatients(filter);
-  if (items.length === 0) return { items: [], total };
-
-  const names = await namesByIds([...new Set(items.map((e) => e.patientId))]);
-  const byId = new Map(names.map((n) => [n.id, n]));
-
-  return {
-    items: items.map((encounter) => {
-      const who = byId.get(encounter.patientId);
-      return {
-        ...encounter,
-        // The bed board says "Unknown patient" in the same situation and for the same reason: a
-        // row that silently drops its identity is worse than one that says the lookup failed.
-        patientName: who?.name ?? "Unknown patient",
-        uhid: who?.uhid ?? "",
-      };
-    }),
-    total,
-  };
+  return { items: await withIdentity(items), total };
 }
 
 export interface StartEncounterInput {
@@ -1131,6 +1144,27 @@ export async function listEncounters(
   const zone = await branchZone(getContext().activeBranchId);
   const { from, before } = dayRangeInZone(date, zone);
   return repo.list({ ...rest, arrivedFrom: from, arrivedBefore: before });
+}
+
+/**
+ * The same page, with each visit's patient named — what `GET /encounters` returns (D18).
+ *
+ * ── WHY THE HTTP LIST NAMES ITS PATIENTS AND `listEncounters` DOES NOT ───────
+ * Every consumer of the HTTP list is a screen a person reads: the doctor's queue, the reception
+ * register, the phone's round. All three showed a `patientId`, and all three had to turn it into a
+ * name somehow — the two web screens by matching against `/patients?limit=100`, the phone by
+ * fetching each patient separately. The first is wrong past a hundred registrations and the second
+ * is N round trips for N rows.
+ *
+ * `listEncounters` stays bare for the module that reads it as DATA rather than as a screen: the ED
+ * board (`emergency.service.ts`) resolves its own names alongside the triage rows it joins, and
+ * paying for the identity twice would be the cost of a tidier call graph.
+ */
+export async function listEncountersWithIdentity(
+  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & { date?: string },
+): Promise<{ items: EncounterRow[]; total: number }> {
+  const { items, total } = await listEncounters(filter);
+  return { items: await withIdentity(items), total };
 }
 
 export const getOpenEncounterFor = repo.findOpenForPatient;

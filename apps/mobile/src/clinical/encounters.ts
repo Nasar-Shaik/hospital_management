@@ -91,7 +91,7 @@ export function isLiveEncounter(encounter: Pick<Encounter, "status">): boolean {
  * start another — and a patient with no token (never issued, by hospital policy) sorts after those
  * with one rather than to the top, which is where `undefined` would otherwise land.
  */
-export function sortForRound(encounters: readonly Encounter[]): Encounter[] {
+export function sortForRound<T extends Encounter>(encounters: readonly T[]): T[] {
   const rank = (e: Encounter): number => (e.status === "in_progress" ? 0 : e.express ? 1 : 2);
   return [...encounters].sort((a, b) => {
     const byRank = rank(a) - rank(b);

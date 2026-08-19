@@ -17,6 +17,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { Types } from "mongoose";
 import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -714,5 +715,200 @@ describe("starting a visit refuses when the database cannot enforce one open enc
       );
       forgetSchemaReadiness();
     }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 8. THE LIST NAMES ITS PATIENTS (risk register D18)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * ── THE DEFECT ──────────────────────────────────────────────────────────────
+ * `GET /encounters` returned `patientId` and nothing else, so every screen built on it had to turn
+ * that id into a name. Two web screens did it by fetching `/patients?limit=100` and matching
+ * locally, and the phone did it with one request per row. The first is the defect: a queue and a
+ * page of RECENT REGISTRATIONS are different populations, so any queued patient outside that page
+ * rendered "—". Measured on the demo hospital: 15 of 99 rows on a doctor's own worklist.
+ *
+ * ── WHAT THESE TESTS PIN, AND WHY IN THIS SHAPE ─────────────────────────────
+ * Not "a name came back" — that passes on a five-patient database and passed on the demo hospital
+ * for the 84 rows that happened to fall inside the page. The load-bearing case is a patient the
+ * client's join CANNOT have reached: registered first, then buried under a hundred and twenty
+ * later registrations. Every assertion below is written so that resolving identity from a page of
+ * recent patients gives the wrong answer.
+ */
+describe("a page of visits carries the identity of the people on it", () => {
+  /** Registered FIRST, then buried. Any join against a page of recent patients misses them. */
+  const BURIED = "Buried Under Later Registrations";
+  const LATER = 120;
+
+  let buriedPatientId = "";
+  let buriedUhid = "";
+  let buriedEncounterId = "";
+  /** The six later registrations that also have a visit — `patientId → the name it must render`. */
+  const alsoVisiting = new Map<string, string>();
+  let phone = 9500600000;
+
+  async function register(name: string): Promise<{ id: string; uhid: string }> {
+    phone += 1;
+    const res = await auth(request(app).post("/api/v1/patients"), pvt)
+      .send({ name, gender: "female", contact: { phone: String(phone) } })
+      .expect(201);
+    return {
+      id: res.body.data.patient.id as string,
+      uhid: res.body.data.patient.uhid as string,
+    };
+  }
+
+  beforeAll(async () => {
+    const who = await register(BURIED);
+    buriedPatientId = who.id;
+    buriedUhid = who.uhid;
+
+    const visit = await auth(request(app).post("/api/v1/encounters"), pvt)
+      .send({ patientId: buriedPatientId, doctorId: pvt.doctorId })
+      .expect(201);
+    buriedEncounterId = visit.body.data.encounter.id as string;
+    await auth(request(app).post(`/api/v1/encounters/${buriedEncounterId}/queue`), pvt).expect(200);
+
+    // The hundred and twenty registrations that push the queued patient out of any client page.
+    // Mostly registered only — they are NOT in the queue, which is the whole point: the queue is
+    // small and the register is large, and a client that reads the second to label the first is
+    // wrong. The first six DO get a visit, so the queue spans more than one page and the
+    // pagination assertion below has a second page to be wrong about. They are early in this
+    // run, so they are outside the reachable page too.
+    for (let i = 0; i < LATER; i += 1) {
+      const name = `Later Registration ${String(i)}`;
+      const who = await register(name);
+      if (i < 6) {
+        await auth(request(app).post("/api/v1/encounters"), pvt)
+          .send({ patientId: who.id, doctorId: pvt.doctorId })
+          .expect(201);
+        alsoVisiting.set(who.id, name);
+      }
+    }
+  }, 180_000);
+
+  /** The control: the fixture really does bury them. If this fails, the tests below prove nothing. */
+  it("is a fixture where the queued patient is outside the client's reachable page", async () => {
+    const page = await auth(request(app).get("/api/v1/patients?limit=100"), pvt).expect(200);
+
+    const reachable = (page.body.data as { id: string }[]).map((p) => p.id);
+    expect(reachable).toHaveLength(100);
+    expect(reachable).not.toContain(buriedPatientId);
+  });
+
+  it("names the patient on the doctor's queue, and gives their UHID", async () => {
+    const res = await auth(
+      request(app).get(`/api/v1/encounters?queued=true&doctorId=${pvt.doctorId}&limit=100`),
+      pvt,
+    ).expect(200);
+
+    const row = (res.body.data as { id: string; patientName: string; uhid: string }[]).find(
+      (e) => e.id === buriedEncounterId,
+    );
+
+    expect(row?.patientName).toBe(BURIED);
+    expect(row?.uhid).toBe(buriedUhid);
+    // Not a dash, not a blank, not the id: the three things the old screens showed instead.
+    expect(row?.patientName).not.toBe("—");
+  });
+
+  it("names them on the day's register too — the same row, the other screen", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const res = await auth(request(app).get(`/api/v1/encounters?date=${today}&limit=100`), pvt);
+
+    const row = (res.body.data as { id: string; patientName: string }[]).find(
+      (e) => e.id === buriedEncounterId,
+    );
+    expect(row?.patientName).toBe(BURIED);
+  });
+
+  /**
+   * Identity travels with the PAGE, not with the first one. A resolver that ran once at load and
+   * cached "the patients we know about" would pass page 1 and dash page 2 — which is the same
+   * defect wearing a different hat.
+   */
+  it("names every row on every page, not just the first", async () => {
+    const all: { id: string; patientId: string; patientName: string }[] = [];
+    for (let page = 1; page <= 2; page += 1) {
+      const res = await auth(
+        request(app).get(`/api/v1/encounters?page=${String(page)}&limit=5`),
+        pvt,
+      ).expect(200);
+      all.push(...(res.body.data as { id: string; patientId: string; patientName: string }[]));
+    }
+
+    expect(all.length).toBeGreaterThan(5); // there really was a second page
+
+    /**
+     * Asserted against the names these patients were REGISTERED with, not merely against "not
+     * blank". A resolver that fell back to "Unknown patient" for everyone it could not reach would
+     * satisfy a not-blank check on every row while having failed on all of them — and that is
+     * exactly what the defect's shape was.
+     */
+    const seen = all.filter((row) => alsoVisiting.has(row.patientId));
+    expect(
+      seen.length,
+      "none of the fixture's later visits appeared in these pages",
+    ).toBeGreaterThan(0);
+    for (const row of seen) {
+      expect(row.patientName, `row ${row.id} was not named correctly`).toBe(
+        alsoVisiting.get(row.patientId),
+      );
+    }
+  });
+
+  /**
+   * ── THE MISSING JOIN ────────────────────────────────────────────────────────
+   * A visit whose patient record cannot be read is a real state (a purge, a bad id from an
+   * import). It must say so. "Unknown patient" is the same word the bed board and the ward list
+   * already use, and the point of using a word at all is that a blank is indistinguishable from a
+   * loading state — which is exactly how D18 stayed invisible.
+   */
+  it("says `Unknown patient` when the patient record cannot be read — never a blank", async () => {
+    const orphan = await register("Soon To Be Unreadable");
+    const visit = await auth(request(app).post("/api/v1/encounters"), pvt)
+      .send({ patientId: orphan.id, doctorId: pvt.doctorId })
+      .expect(201);
+    const encounterId = visit.body.data.encounter.id as string;
+
+    await pvt.connection.collection("patients").deleteOne({ _id: new Types.ObjectId(orphan.id) });
+
+    const res = await auth(
+      request(app).get(`/api/v1/encounters?patientId=${orphan.id}&limit=10`),
+      pvt,
+    ).expect(200);
+
+    const row = (res.body.data as { id: string; patientName: string; uhid: string }[]).find(
+      (e) => e.id === encounterId,
+    );
+    expect(row?.patientName).toBe("Unknown patient");
+    expect(row?.uhid).toBe("");
+  });
+
+  /**
+   * A small hospital is where a capped join LOOKS correct, and it is why nobody noticed. The
+   * assertion here is that the fix did not trade the large case for the small one.
+   */
+  it("works on a hospital small enough that the old join would also have worked", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters?limit=10"), gov).expect(200);
+
+    const rows = res.body.data as { patientName: string }[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.patientName).not.toBe("Unknown patient");
+  });
+
+  /**
+   * ── THE IDENTITY IS NOT A NEW READ CHANNEL ──────────────────────────────────
+   * Naming a patient on a row the caller can already see reveals nothing new — but that argument
+   * only holds if the ROW is still scoped. This asserts the boundary that actually matters is
+   * untouched: another hospital's queue is empty, so there is nothing to name.
+   */
+  it("does not name anybody across a tenant boundary", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters?limit=100"), gov).expect(200);
+
+    const names = (res.body.data as { patientName: string }[]).map((r) => r.patientName);
+    expect(names).not.toContain(BURIED);
   });
 });

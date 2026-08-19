@@ -39,7 +39,7 @@ export const listEncounters: RequestHandler = async (req, res) => {
    * branch is an async domain lookup rather than HTTP work, so the service owns it (Doc 09 §11).
    * This used to call `dayRangeInZone(date, env.DEFAULT_TIMEZONE)` here — see risk register D2.
    */
-  const { items, total } = await encounters.listEncounters({
+  const { items, total } = await encounters.listEncountersWithIdentity({
     limit: query.limit,
     skip: (query.page - 1) * query.limit,
     ...(query.status ? { status: query.status } : {}),

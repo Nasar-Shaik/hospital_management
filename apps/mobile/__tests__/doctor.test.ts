@@ -112,6 +112,42 @@ describe("2. My patients loads the doctor's own list", () => {
     expect(query.get("page")).toBe("1");
   });
 
+  /**
+   * ── D18: THE ROW NAMES ITS OWN PATIENT ────────────────────────────────────
+   * `GET /encounters` used to return `patientId` and no identity, so every row on this screen
+   * fetched its patient separately — twenty rows, twenty requests, and a list that opened on
+   * "Loading patient…" twenty times. The web app solved the same problem by matching against a
+   * page of recent patients, which silently rendered "—" for anyone outside it (D18).
+   *
+   * The server resolves identity now. What this can prove without a renderer is the half that
+   * matters most: the descriptor fans out to nothing, and the name is already on the row. That the
+   * COMPONENT reads it rather than re-fetching is held by the type — `EncounterRow` takes the
+   * api-client's row type, and the `<PatientName>` it used to render is gone.
+   */
+  it("carries each patient's name on the row, and fetches no patient to label a list", async () => {
+    const h = await signedIn();
+    const rows = Array.from({ length: 20 }, (_, i) =>
+      encounter({
+        id: `e${String(i)}`,
+        patientId: `p${String(i)}`,
+        patientName: `Patient ${String(i)}`,
+        uhid: `UH-${String(i).padStart(5, "0")}`,
+        token: i + 1,
+      }),
+    );
+    h.api.on("GET", ENCOUNTERS, () => okPaged(page(rows)));
+
+    const result = await firstPage(
+      h.runtime,
+      queriesOf(h.runtime).myPatients({ doctorId: USER.id }),
+    );
+
+    expect(result.items.map((e) => e.patientName)).toEqual(rows.map((r) => r.patientName));
+    expect(result.items.every((e) => e.uhid.length > 0)).toBe(true);
+    // The N+1 this replaced, asserted as an absence.
+    expect(h.api.calls.filter((c) => c.path.startsWith("/api/v1/patients"))).toHaveLength(0);
+  });
+
   it("passes the status and queued filters through to the server too", async () => {
     const h = await signedIn();
     h.api.on("GET", ENCOUNTERS, () => okPaged(page([])));

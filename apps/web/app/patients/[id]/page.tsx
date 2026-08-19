@@ -18,6 +18,7 @@ import {
   ApiClientError,
   type Allergy,
   type Encounter,
+  type EncounterRow,
   type Invoice,
   type Order,
   type OrderRow,
@@ -175,7 +176,7 @@ function Profile() {
         api.getPatient(id),
         soft(api.listAllergies(id), [] as Allergy[]),
         soft(api.listEncounters({ patientId: id, limit: 100 }), {
-          items: [] as Encounter[],
+          items: [] as EncounterRow[],
           meta: { page: 1, limit: 0 },
         }),
         // 100 is the API's ceiling on every list. This asked for 200, was refused with

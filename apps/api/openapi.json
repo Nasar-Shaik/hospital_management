@@ -904,6 +904,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -2759,6 +2765,150 @@
           }
         },
         "required": ["from", "to", "at"]
+      },
+      "EncounterRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "episodeId": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "appointment",
+              "walk_in",
+              "emergency",
+              "referral",
+              "camp",
+              "telemedicine",
+              "corporate",
+              "transfer"
+            ]
+          },
+          "class": {
+            "type": "string",
+            "enum": ["OP", "IP", "ER", "TELE", "HOME"]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "arrived",
+              "in_queue",
+              "in_progress",
+              "awaiting_results",
+              "closed",
+              "cancelled",
+              "left_without_being_seen",
+              "admitted"
+            ]
+          },
+          "appointmentId": {
+            "type": "string"
+          },
+          "doctorId": {
+            "type": "string"
+          },
+          "departmentId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "number"
+          },
+          "express": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "diagnosis": {
+            "type": "string"
+          },
+          "advice": {
+            "type": "string"
+          },
+          "branchId": {
+            "type": "string"
+          },
+          "arrivedAt": {
+            "type": "string"
+          },
+          "seenAt": {
+            "type": "string"
+          },
+          "closedAt": {
+            "type": "string"
+          },
+          "bed": {
+            "type": "object",
+            "properties": {
+              "ward": {
+                "type": "string"
+              },
+              "bedCode": {
+                "type": "string"
+              },
+              "tariffCode": {
+                "type": "string"
+              },
+              "bedId": {
+                "type": "string"
+              }
+            },
+            "required": ["ward", "bedCode", "tariffCode"]
+          },
+          "admittedAt": {
+            "type": "string"
+          },
+          "dischargedAt": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": ["discharged", "lama", "absconded", "deceased"]
+          },
+          "admittedFrom": {
+            "type": "string"
+          },
+          "activeOrderCount": {
+            "type": "number"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EncounterHistoryEntry"
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "patientName": {
+            "type": "string"
+          },
+          "uhid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "patientId",
+          "episodeId",
+          "origin",
+          "class",
+          "status",
+          "arrivedAt",
+          "activeOrderCount",
+          "history",
+          "createdAt",
+          "patientName",
+          "uhid"
+        ]
       },
       "FeedbackStatusChange": {
         "type": "object",
@@ -11841,7 +11991,7 @@
                     "data": {
                       "type": "array",
                       "items": {
-                        "$ref": "#/components/schemas/Encounter"
+                        "$ref": "#/components/schemas/EncounterRow"
                       }
                     },
                     "meta": {

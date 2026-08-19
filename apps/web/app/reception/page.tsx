@@ -27,6 +27,7 @@ import {
   type EncounterBilling,
   type Invoice,
   type Encounter,
+  type EncounterRow,
   type EncounterStatus,
   type DoctorRef,
   type Patient,
@@ -371,7 +372,16 @@ function Reception() {
   const { timezone } = useBranch();
 
   const [day, setDay] = useState(() => todayInZone(timezone));
-  const [register, setRegister] = useState<Encounter[]>([]);
+  /**
+   * The day's register, and it NAMES its patients (D18).
+   *
+   * The `patients` list below is the REGISTRATION PICKER — a page of people you might be about to
+   * register. It used to double as the register's name lookup, and the two are different
+   * populations: the picker is the hundred most recent registrations, the register is today's
+   * visits. A patient registered before the picker reaches back is here and not there, and the
+   * register showed "—" for them. `EncounterRow` carries the identity the server already had.
+   */
+  const [register, setRegister] = useState<EncounterRow[]>([]);
   // OP-fee status per encounter, for the pay-before-queue gate. Empty until the register loads.
   const [consultPaid, setConsultPaid] = useState<Record<string, ConsultPayState>>({});
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -527,8 +537,6 @@ function Reception() {
     }
   }
 
-  const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
-  const uhidOf = (id: string): string => patients.find((p) => p.id === id)?.uhid ?? "";
   const doctorOf = (id?: string): string =>
     id ? (doctors.find((d) => d.id === id)?.name ?? "—") : "—";
 
@@ -763,9 +771,9 @@ function Reception() {
                         {time(e.arrivedAt)}
                       </td>
                       <td className="py-2.5 pr-4">
-                        <span className="text-[var(--color-fg)]">{nameOf(e.patientId)}</span>{" "}
+                        <span className="text-[var(--color-fg)]">{e.patientName}</span>{" "}
                         <span className="font-mono text-xs text-[var(--color-fg-muted)]">
-                          {uhidOf(e.patientId)}
+                          {e.uhid}
                         </span>
                         {e.express && (
                           <span className="ml-2 rounded-full bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">

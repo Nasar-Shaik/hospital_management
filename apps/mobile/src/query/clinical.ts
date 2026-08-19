@@ -28,6 +28,7 @@ import type {
   ConsultationNote,
   DoseSlot,
   Encounter,
+  EncounterRow,
   EncounterStatus,
   InboxMessage,
   MedicationAdministration,
@@ -126,7 +127,7 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
      * patient was theirs. Filtering server-side means the wrong rows never leave the database —
      * and a client-side filter would in any case be a UI convenience, never an access control.
      */
-    myPatients(filter: MyPatientsFilter): InfiniteRead<Encounter> {
+    myPatients(filter: MyPatientsFilter): InfiniteRead<EncounterRow> {
       const filters = filterKey({ ...filter, limit: PAGE_SIZE });
       return {
         queryKey: queryKeys.encounters(scope, filters),
@@ -145,7 +146,7 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
     },
 
     /** One page of the doctor's day, for a home-screen count. Deliberately not infinite. */
-    roundToday(filter: MyPatientsFilter): Read<Paged<Encounter>> {
+    roundToday(filter: MyPatientsFilter): Read<Paged<EncounterRow>> {
       const filters = filterKey({ ...filter, limit: PAGE_SIZE, view: "round" });
       return {
         queryKey: queryKeys.encounters(scope, filters),
@@ -161,7 +162,7 @@ export function clinicalQueries(api: ApiClient, scope: QueryScope) {
     },
 
     /** A patient's visits across every episode — the spine of their history. */
-    patientEncounters(patientId: string): Read<Paged<Encounter>> {
+    patientEncounters(patientId: string): Read<Paged<EncounterRow>> {
       const filters = filterKey({ patientId, limit: PAGE_SIZE });
       return {
         queryKey: queryKeys.encounters(scope, filters),

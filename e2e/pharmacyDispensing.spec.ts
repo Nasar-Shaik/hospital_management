@@ -38,6 +38,8 @@ interface Fixture {
   /** Deliberately never received. The doctor must still be able to prescribe it. */
   outOfStock: { code: string; name: string };
   prescriptionId: string;
+  /** The visit this spec opened. Held so the teardown can close it — see `afterAll`. */
+  encounterId: string;
   patientName: string;
   uhid: string;
 }
@@ -192,6 +194,7 @@ async function arrange(request: APIRequestContext, baseURL: string): Promise<Fix
     stocked,
     outOfStock,
     prescriptionId: draft.id,
+    encounterId: stay.id,
     patientName: stay.patientName,
     uhid: stay.uhid,
   };
@@ -204,16 +207,34 @@ test.describe("the pharmacy counter", () => {
     fixture = await arrange(request, baseURL ?? "http://sunrise.localhost:3000");
   });
 
-  /** A part-dispensed prescription would sit on the counter's queue forever. Call it off. */
+  /**
+   * Leave the hospital as it was found — the counter AND the waiting room.
+   *
+   * ── WHY THE SECOND HALF OF THIS WAS ADDED LATE, AND WHAT IT COST ──────────
+   * The prescription was always cancelled; the VISIT was not, because it has to stay open while
+   * the spec runs (a closed encounter drops out of the doctor's queue, and the pharmacy half needs
+   * the prescription dispensable). Leaving it open at the END was an oversight with a slow fuse:
+   * every run of this suite added one more patient to Dr Rao's queue, permanently.
+   *
+   * By the time it was noticed there were **57 of them**, the queue held 107, and `/my-patients`
+   * asks for one page of 100 — so `emergencyWorkflow`'s patient had been pushed onto page two and
+   * that spec failed looking for somebody who was really there. A test that quietly grows the
+   * database it asserts against eventually asserts about a different hospital.
+   */
   test.afterAll(async ({ request }) => {
+    const headers = {
+      authorization: `Bearer ${fixture.adminToken}`,
+      "x-active-branch": fixture.site.id,
+    };
     await request
       .post(`${fixture.api}/api/v1/prescriptions/${fixture.prescriptionId}/cancel`, {
-        headers: {
-          authorization: `Bearer ${fixture.adminToken}`,
-          "x-active-branch": fixture.site.id,
-        },
+        headers,
         data: { reason: "end of browser test — leaving the counter as it was found" },
       })
+      .catch(() => undefined);
+    // The visit itself, so the queue this spec borrows is the same size when it leaves.
+    await request
+      .post(`${fixture.api}/api/v1/encounters/${fixture.encounterId}/close`, { headers, data: {} })
       .catch(() => undefined);
   });
 

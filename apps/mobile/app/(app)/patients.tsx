@@ -17,7 +17,7 @@ import { useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { Redirect, useRouter } from "expo-router";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import type { Encounter, EncounterStatus } from "@medicore/api-client";
+import type { EncounterStatus } from "@medicore/api-client";
 import { Screen } from "../../src/components/Screen";
 import { Button } from "../../src/components/Button";
 import { QueryGate } from "../../src/components/QueryGate";
@@ -70,9 +70,8 @@ export default function MyPatients(): React.JSX.Element {
 
   if (permissionsReady && !canRead) return <Redirect href="/" />;
 
-  const encounters: Encounter[] = sortForRound(
-    list.data?.pages.flatMap((page) => page.items) ?? [],
-  );
+  // Type inferred from the query: `EncounterRow`, which names its patient (D18).
+  const encounters = sortForRound(list.data?.pages.flatMap((page) => page.items) ?? []);
 
   return (
     <Screen padded={false}>
