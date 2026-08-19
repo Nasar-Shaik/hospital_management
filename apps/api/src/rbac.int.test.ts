@@ -839,6 +839,61 @@ const PROBES: Record<string, Probe> = {
     body: { delta: -6, reason: "breakage" },
   },
 
+  /* ── General store (G1/G3) — feature `module.support.inventory` ─────────────
+   * FIVE different permissions across eight routes, which is the whole point of the module's
+   * authorization design and therefore the thing most worth pinning here. Reads are
+   * `inventory:manage`; the three movements are `inventory:purchase` / `:issue` / `:audit`; the
+   * supplier master is `vendor:manage`. STORE_KEEPER holds all five and nothing clinical — the
+   * matrix is what proves that role can actually work and cannot read a patient.
+   */
+  "GET /api/v1/inventory-items": { method: "get", url: "/api/v1/inventory-items" },
+  "GET /api/v1/inventory-destinations": { method: "get", url: "/api/v1/inventory-destinations" },
+  "GET /api/v1/inventory-items/:id/movements": {
+    method: "get",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/movements",
+  },
+  "POST /api/v1/inventory-items": {
+    method: "post",
+    url: "/api/v1/inventory-items",
+    body: {
+      code: "GLOVE_M",
+      name: "Examination gloves, medium",
+      category: "consumable",
+      unit: "box",
+    },
+  },
+  "PATCH /api/v1/inventory-items/:id": {
+    method: "patch",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001",
+    body: { reorderLevel: 20 },
+  },
+  "POST /api/v1/inventory-items/:id/receive": {
+    method: "post",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/receive",
+    body: { quantity: 100 },
+  },
+  "POST /api/v1/inventory-items/:id/issue": {
+    method: "post",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/issue",
+    body: { quantity: 10, departmentId: "64b7f0000000000000000002" },
+  },
+  "POST /api/v1/inventory-items/:id/adjust": {
+    method: "post",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/adjust",
+    body: { delta: -6, reason: "matrix probe" },
+  },
+  "GET /api/v1/suppliers": { method: "get", url: "/api/v1/suppliers" },
+  "POST /api/v1/suppliers": {
+    method: "post",
+    url: "/api/v1/suppliers",
+    body: { code: "ACME", name: "Acme Surgical Supplies" },
+  },
+  "PATCH /api/v1/suppliers/:id": {
+    method: "patch",
+    url: "/api/v1/suppliers/64b7f0000000000000000001",
+    body: { name: "Acme Surgical Supplies Ltd" },
+  },
+
   /* ── Reporting (the audit/register suite) ────────────────────────────────────
    * `report:view` — a hospital-wide read. Each takes a from/to range.
    */

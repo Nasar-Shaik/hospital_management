@@ -100,6 +100,12 @@
       "name": "insurance-policies"
     },
     {
+      "name": "inventory-destinations"
+    },
+    {
+      "name": "inventory-items"
+    },
+    {
       "name": "invoices"
     },
     {
@@ -170,6 +176,9 @@
     },
     {
       "name": "subscription"
+    },
+    {
+      "name": "suppliers"
     },
     {
       "name": "tariff"
@@ -3504,6 +3513,130 @@
         },
         "required": ["id", "patientId", "insurer", "policyNumber", "policyType", "status"]
       },
+      "InventoryItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["consumable", "linen", "stationery", "housekeeping", "spare", "other"]
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["piece", "box", "pack", "pair", "roll", "metre", "litre", "kilogram"]
+          },
+          "reorderLevel": {
+            "type": "number"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "category",
+          "unit",
+          "reorderLevel",
+          "active",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "InventoryMovement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "itemCode": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["receipt", "issue", "adjustment"]
+          },
+          "delta": {
+            "type": "number"
+          },
+          "balanceAfter": {
+            "type": "number"
+          },
+          "supplierId": {
+            "type": "string"
+          },
+          "supplierName": {
+            "type": "string"
+          },
+          "invoiceRef": {
+            "type": "string"
+          },
+          "unitCost": {
+            "type": "number"
+          },
+          "departmentId": {
+            "type": "string"
+          },
+          "departmentName": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "branchId": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "itemId",
+          "itemCode",
+          "kind",
+          "delta",
+          "balanceAfter",
+          "createdBy",
+          "createdAt"
+        ]
+      },
+      "InventoryStockChange": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/InventoryItem"
+          },
+          "onHand": {
+            "type": "number"
+          },
+          "movement": {
+            "$ref": "#/components/schemas/InventoryMovement"
+          }
+        },
+        "required": ["item", "onHand", "movement"]
+      },
       "Invoice": {
         "type": "object",
         "properties": {
@@ -3652,6 +3785,18 @@
           }
         },
         "required": ["userId", "name"]
+      },
+      "IssueDestination": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "name"]
       },
       "LabTest": {
         "type": "object",
@@ -6394,6 +6539,60 @@
           "status"
         ]
       },
+      "StoreRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": ["consumable", "linen", "stationery", "housekeeping", "spare", "other"]
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["piece", "box", "pack", "pair", "roll", "metre", "litre", "kilogram"]
+          },
+          "reorderLevel": {
+            "type": "number"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "onHand": {
+            "type": "number"
+          },
+          "position": {
+            "type": "string",
+            "enum": ["ok", "low", "out"]
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "category",
+          "unit",
+          "reorderLevel",
+          "active",
+          "createdAt",
+          "updatedAt",
+          "onHand",
+          "position"
+        ]
+      },
       "SubscriptionView": {
         "type": "object",
         "properties": {
@@ -6434,6 +6633,39 @@
           }
         },
         "required": ["planCode", "planName", "features", "limits", "usage"]
+      },
+      "Supplier": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "taxId": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "code", "name", "active", "createdAt", "updatedAt"]
       },
       "TemporaryPassword": {
         "type": "object",
@@ -18417,6 +18649,1022 @@
         ],
         "x-permission": "pharmacy:stock",
         "x-feature": "module.pharmacy.full"
+      }
+    },
+    "/api/v1/suppliers": {
+      "get": {
+        "operationId": "get_v1_suppliers",
+        "tags": ["suppliers"],
+        "summary": "GET /api/v1/suppliers",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Supplier"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "vendor:manage",
+        "x-feature": "module.support.inventory"
+      },
+      "post": {
+        "operationId": "post_v1_suppliers",
+        "tags": ["suppliers"],
+        "summary": "POST /api/v1/suppliers",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "phone": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "maxLength": 200
+                  },
+                  "taxId": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                },
+                "required": ["code", "name"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Supplier"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "vendor:manage",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/suppliers/{id}": {
+      "patch": {
+        "operationId": "patch_v1_suppliers_id",
+        "tags": ["suppliers"],
+        "summary": "PATCH /api/v1/suppliers/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "phone": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "maxLength": 200
+                  },
+                  "taxId": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Supplier"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "vendor:manage",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-items": {
+      "get": {
+        "operationId": "get_v1_inventory_items",
+        "tags": ["inventory-items"],
+        "summary": "GET /api/v1/inventory-items",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "lowStockOnly",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          },
+          {
+            "name": "includeInactive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/StoreRow"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:manage",
+        "x-feature": "module.support.inventory"
+      },
+      "post": {
+        "operationId": "post_v1_inventory_items",
+        "tags": ["inventory-items"],
+        "summary": "POST /api/v1/inventory-items",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": ["consumable", "linen", "stationery", "housekeeping", "spare", "other"]
+                  },
+                  "unit": {
+                    "type": "string",
+                    "enum": ["piece", "box", "pack", "pair", "roll", "metre", "litre", "kilogram"]
+                  },
+                  "reorderLevel": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000
+                  }
+                },
+                "required": ["code", "name", "category", "unit"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryItem"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:manage",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-destinations": {
+      "get": {
+        "operationId": "get_v1_inventory_destinations",
+        "tags": ["inventory-destinations"],
+        "summary": "GET /api/v1/inventory-destinations",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IssueDestination"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:manage",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-items/{id}/movements": {
+      "get": {
+        "operationId": "get_v1_inventory_items_id_movements",
+        "tags": ["inventory-items"],
+        "summary": "GET /api/v1/inventory-items/{id}/movements",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/InventoryMovement"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:manage",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-items/{id}": {
+      "patch": {
+        "operationId": "patch_v1_inventory_items_id",
+        "tags": ["inventory-items"],
+        "summary": "PATCH /api/v1/inventory-items/{id}",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "category": {
+                    "type": "string",
+                    "enum": ["consumable", "linen", "stationery", "housekeeping", "spare", "other"]
+                  },
+                  "unit": {
+                    "type": "string",
+                    "enum": ["piece", "box", "pack", "pair", "roll", "metre", "litre", "kilogram"]
+                  },
+                  "reorderLevel": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000
+                  },
+                  "active": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryItem"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:manage",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-items/{id}/receive": {
+      "post": {
+        "operationId": "post_v1_inventory_items_id_receive",
+        "tags": ["inventory-items"],
+        "summary": "POST /api/v1/inventory-items/{id}/receive",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the delivery this key already booked in. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "quantity": {
+                    "type": "integer",
+                    "exclusiveMinimum": true,
+                    "minimum": 0,
+                    "maximum": 1000000
+                  },
+                  "supplierId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  },
+                  "invoiceRef": {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  "unitCost": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 10000000
+                  }
+                },
+                "required": ["quantity"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryStockChange"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:purchase",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-items/{id}/issue": {
+      "post": {
+        "operationId": "post_v1_inventory_items_id_issue",
+        "tags": ["inventory-items"],
+        "summary": "POST /api/v1/inventory-items/{id}/issue",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the issue this key already made. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "quantity": {
+                    "type": "integer",
+                    "exclusiveMinimum": true,
+                    "minimum": 0,
+                    "maximum": 1000000
+                  },
+                  "departmentId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  }
+                },
+                "required": ["quantity", "departmentId"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryStockChange"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:issue",
+        "x-feature": "module.support.inventory"
+      }
+    },
+    "/api/v1/inventory-items/{id}/adjust": {
+      "post": {
+        "operationId": "post_v1_inventory_items_id_adjust",
+        "tags": ["inventory-items"],
+        "summary": "POST /api/v1/inventory-items/{id}/adjust",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:@+-]+$"
+            },
+            "description": "Replays the correction this key already made. Send the same key to retry safely: the first request executes and its response is stored for 24 hours, and every later request with that key returns that response verbatim with `Idempotency-Replayed: true`. The same key with a different request body is refused (`HMS-REQ-002`), never silently replayed. Keys are scoped to one hospital and one user; a UUID per user intent is the intended shape."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "delta": {
+                    "type": "integer"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
+                },
+                "required": ["delta", "reason"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/InventoryStockChange"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`HMS-REQ-002` — this `Idempotency-Key` was used for a DIFFERENT request; `details.original` carries what it did the first time. Or `HMS-REQ-004` — the same request is still in flight; retry shortly to receive its result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "inventory:audit",
+        "x-feature": "module.support.inventory"
       }
     },
     "/api/v1/bed-board": {

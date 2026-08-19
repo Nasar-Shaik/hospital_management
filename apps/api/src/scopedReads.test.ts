@@ -71,6 +71,14 @@ const EXEMPT: Record<string, { lines: number; why: string }> = {
     lines: 1,
     why: "TENANT-WIDE: the drug catalogue is one hospital-wide price/stock list, like `serviceItems`. Scoping it hides the formulary from anyone with a branch selected.",
   },
+  "inventory/inventory.repository.ts": {
+    lines: 1,
+    why: "TENANT-WIDE: `findItemById` reads the store's ITEM MASTER — what the hospital stocks is one list, like `medicines` and the tariff. The SHELF is a different collection (`inventoryStock`) and IS branch-scoped: `stockByItem` and `listMovements` both pass `scopeFilter()`, and the branch-isolation suite pins that a site sees only its own on-hand and its own movements. Scoping the catalogue too would hide an item from the site that has run out of it.",
+  },
+  "inventory/supplier.repository.ts": {
+    lines: 1,
+    why: "TENANT-WIDE: a supplier is a company the hospital buys from, not a record that happened at a site. `findById` resolves the name to stamp on a receipt; narrowing it would stop a store keeper at one site attributing a delivery to a supplier added at another.",
+  },
   "billing/billing.repository.ts": {
     lines: 1,
     why: "TENANT-WIDE: `findServiceById` reads the tariff — hospital-wide config, not a patient record. Section 19 of the branch-isolation suite is the falsification for exactly this.",

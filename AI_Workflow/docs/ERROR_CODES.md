@@ -69,6 +69,7 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 | HMS-PHM-003 | 402  | Dispense exceeds the patient's advance (`details.shortfall`)                           | Doctor authorises on credit (`pharmacy:credit-override`) | no            |
 | HMS-PHM-004 | 503  | Dispensing unavailable: this database cannot enforce the one-handover-per-request rule | Hand over on paper and escalate; respect `Retry-After`   | yes (backoff) |
 | HMS-INV-001 | 422  | GRN quantity exceeds PO                                                                | Verify receipt; amend PO per policy                      | no            |
+| HMS-INV-002 | 422  | Not enough on the store shelf (`details.onHand`)                                       | Issue what is there, or receive a delivery first         | no            |
 | HMS-FIN-001 | 422  | Accounting period closed                                                               | Post to open period / reopen with permission             | no            |
 
 ## Files & Integrations

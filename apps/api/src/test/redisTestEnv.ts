@@ -107,6 +107,13 @@ const SUITE_DB = {
    * interleave its own writes into the trail these assertions count.
    */
   auditPlugin: 24,
+  /**
+   * The general store (G1/G3). Its own database for the same reason as theatres and emergency: it
+   * provisions a clinic on an edition WITHOUT `module.support.inventory`, and the entitlement
+   * verdict is CACHED — a "no store module" answer resolved from another suite's key would pass
+   * for a reason that has nothing to do with the store.
+   */
+  inventory: 25,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

@@ -237,6 +237,37 @@ export const NON_CLINICAL_UNIQUE_INDEXES: readonly ExemptUniqueIndex[] = [
       "same number, and neither the expiry refusal nor the over-draw guard depends on it",
   },
   {
+    collection: "inventoryItems",
+    index: "one_item_per_code",
+    reason: "store catalogue; a duplicate item is visible in the store list and editable",
+  },
+  {
+    collection: "suppliers",
+    index: "one_supplier_per_code",
+    reason: "partner master; a duplicate supplier is visible in the picker and editable",
+  },
+  {
+    collection: "inventoryStock",
+    index: "one_shelf_row_per_item_per_branch",
+    /**
+     * ── THE ONE OF THE THREE THAT IS LOAD-BEARING, AND STILL NOT CLINICAL ───────
+     * Weighed rather than assumed. This index is not decoration: the receive path UPSERTS on
+     * exactly this key, so without it two deliveries booked at the same instant would each insert
+     * their own row and split one shelf into two plausible-looking numbers. It is the same
+     * arbitration `one_row_per_batch` performs next door.
+     *
+     * It is still not a CLINICAL-SAFETY invariant in the sense the other list means. Nothing here
+     * reaches a patient: the store holds gloves, linen and floor cleaner, and the rule that stops
+     * a shelf going negative is the CONDITIONAL TAKE in `inventory.repository.ts`, which holds
+     * whether or not a row is duplicated. A split shelf is a bookkeeping error, visible on the
+     * store list as a count that does not match the room, and correctable with an adjustment —
+     * which is exactly the "visible and editable" test the entries above apply.
+     */
+    reason:
+      "stock bookkeeping; the receive upsert arbitrates on it, but a split shelf is a visible " +
+      "count error correctable by adjustment, and the negative-shelf guard is the conditional take",
+  },
+  {
     collection: "edTriage",
     index: "one_triage_per_encounter",
     /**

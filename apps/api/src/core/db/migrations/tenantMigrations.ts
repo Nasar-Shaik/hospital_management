@@ -2357,4 +2357,72 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0054-general-store",
+    description: "The general store — item master, per-site shelf, supplier list and the ledger",
+    /**
+     * ── FOUR COLLECTIONS, AND THE ONE INDEX THAT IS A RULE ───────────────────────
+     * `inventoryStock` gets `{tenantId, itemId, branchId}` UNIQUE, and it is not merely a lookup
+     * hint. One shelf row per item per site is the invariant the whole module rests on: the
+     * receive path upserts on exactly this key, and two deliveries booked at the same instant
+     * would otherwise each insert their own row, splitting the balance into two numbers that both
+     * look plausible and neither of which is the shelf. With the index, the second upsert is
+     * arbitrated by the database and simply increments the first — the same reason
+     * `one_row_per_batch` exists next door.
+     *
+     * A missing `branchId` participates in the key as null, which is exactly what is wanted: a
+     * pre-branch tenant has one unnamed shelf per item rather than an unbounded set of them.
+     *
+     * ── THE OTHER THREE ─────────────────────────────────────────────────────────
+     * `inventoryItems` and `suppliers` get `{tenantId, code}` unique — masters keyed by the code a
+     * person types, like `medicines` (0019) and the tariff. `inventoryMovements` gets
+     * `{tenantId, itemId, createdAt}`, which is the history query verbatim: one item, newest
+     * first, so the ledger reads as a range scan instead of a sort over everything the store has
+     * ever done.
+     *
+     * ── SAFE ON EXISTING DATA ───────────────────────────────────────────────────
+     * All four collections are new, so every index is built over nothing. No existing row is read,
+     * rewritten or reinterpreted, and a hospital that never opens the store screen is unaffected
+     * beyond four empty collections.
+     */
+    up: async (db) => {
+      await db.createCollection("inventoryItems").catch(() => undefined);
+      await db.createCollection("inventoryStock").catch(() => undefined);
+      await db.createCollection("inventoryMovements").catch(() => undefined);
+      await db.createCollection("suppliers").catch(() => undefined);
+
+      await db
+        .collection("inventoryItems")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, background: true, name: "one_item_per_code" },
+        );
+
+      await db
+        .collection("suppliers")
+        .createIndex(
+          { tenantId: 1, code: 1 },
+          { unique: true, background: true, name: "one_supplier_per_code" },
+        );
+
+      await db
+        .collection("inventoryStock")
+        .createIndex(
+          { tenantId: 1, itemId: 1, branchId: 1 },
+          { unique: true, background: true, name: "one_shelf_row_per_item_per_branch" },
+        );
+
+      await db
+        .collection("inventoryMovements")
+        .createIndex({ tenantId: 1, itemId: 1, createdAt: -1 }, { background: true });
+    },
+    down: async (db) => {
+      for (const name of ["inventoryItems", "inventoryStock", "inventoryMovements", "suppliers"]) {
+        await db
+          .collection(name)
+          .drop()
+          .catch(() => undefined);
+      }
+    },
+  },
 ];
