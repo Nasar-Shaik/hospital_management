@@ -22,6 +22,7 @@ import {
   type Invoice,
   type Order,
   type OrderRow,
+  type OtBooking,
   type DocumentMeta,
   type DocumentCategory,
   type Patient,
@@ -44,9 +45,11 @@ import {
   type IcdCode,
   type CodedDiagnosis,
 } from "@medicore/api-client";
+import { FEATURE_FLAGS } from "@medicore/permissions";
 import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ConfirmDialog } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
+import { OperativeNoteDetail } from "../../../components/OperativeNote";
 import { rupees, toPaise } from "../../../lib/money";
 import {
   awaitingRelease,
@@ -128,10 +131,11 @@ type TabKey =
   | "insurance"
   | "consent"
   | "coding"
-  | "documents";
+  | "documents"
+  | "procedures";
 
 function Profile() {
-  const { can, api, user } = useAuth();
+  const { can, hasFeature, api, user } = useAuth();
   const canWallet = can("wallet:manage");
   const canInsurance = can("insurance:link");
   const canFileClaim = can("insurance:claim");
@@ -145,6 +149,8 @@ function Profile() {
   const canReadDocs = can("file:read");
   const canUploadDocs = can("file:upload");
   const canDeleteDocs = can("file:delete");
+  // Layer 1 (ADR-0010): does this hospital HAVE operating theatres? See the `procedures` strand.
+  const hasTheatres = hasFeature(FEATURE_FLAGS.CLINICAL_OT);
   const params = useParams<{ id: string }>();
   const id = params.id;
 
@@ -159,6 +165,20 @@ function Profile() {
   const [doctors, setDoctors] = useState<Map<string, string>>(new Map());
   const [vitals, setVitals] = useState<VitalsReading[]>([]);
   const [documents, setDocuments] = useState<DocumentMeta[]>([]);
+  /**
+   * The patient's surgical history (C2, Theatre v1).
+   *
+   * ── WHY THIS TAB EXISTS ─────────────────────────────────────────────────────
+   * The operative note — what was done inside this patient — was written, stored and reachable
+   * only from `/my-patients`, the CONSULTING screen. That lists the doctor's live queue, so the
+   * moment the visit closed the record became unreachable in the product: `GET /ot-bookings?
+   * patientId=` had returned the whole surgical history all along and nothing asked it here.
+   *
+   * The same shape as D15 (required, stored, never displayed) one screen further on, and the
+   * reason the Theatre workflow's last step — "→ patient chart" — was never exercised in a
+   * browser: there was nothing to exercise.
+   */
+  const [procedures, setProcedures] = useState<OtBooking[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -172,7 +192,7 @@ function Profile() {
       // permission on one strand (e.g. billing) must not blank the whole page, so each
       // optional strand tolerates a failure and simply shows empty.
       const soft = <T,>(p: Promise<T>, fallback: T): Promise<T> => p.catch(() => fallback);
-      const [pat, alg, enc, ord, rx, rep, inv, docs, vit, files] = await Promise.all([
+      const [pat, alg, enc, ord, rx, rep, inv, docs, vit, files, ops] = await Promise.all([
         api.getPatient(id),
         soft(api.listAllergies(id), [] as Allergy[]),
         soft(api.listEncounters({ patientId: id, limit: 100 }), {
@@ -204,6 +224,13 @@ function Profile() {
         canReadVitals ? soft(api.listPatientVitals(id, 50), [] as VitalsReading[]) : [],
         // Documents (A7) are behind `file:read` — a role without it simply sees no tab.
         canReadDocs ? soft(api.listDocuments(id), [] as DocumentMeta[]) : [],
+        /**
+         * Not asked for at all unless the hospital HAS theatres (D20's rule, reused).
+         * `soft()` would turn an entitlement refusal into an empty list, and an empty list under a
+         * "Procedures" heading reads as "this patient has never been operated on" — a refusal
+         * rendered as emptiness, which is exactly the class D20 closed.
+         */
+        hasTheatres ? soft(api.listOtBookings({ patientId: id }), [] as OtBooking[]) : [],
       ]);
       setPatient(pat);
       setAllergies(alg.filter((a) => a.status === "active"));
@@ -215,6 +242,7 @@ function Profile() {
       setDoctors(new Map(docs.map((d) => [d.id, d.name])));
       setVitals(vit);
       setDocuments(files);
+      setProcedures(ops);
 
       // The wallet is only fetched for staff who may see it (cashier / front office); a
       // clinician's profile view simply has no advance panel, rather than a 403 in the console.
@@ -230,7 +258,7 @@ function Profile() {
     } finally {
       setLoading(false);
     }
-  }, [api, id, canWallet, canReadVitals]);
+  }, [api, id, canWallet, canReadVitals, canReadDocs, hasTheatres]);
 
   useEffect(() => {
     void load();
@@ -278,6 +306,9 @@ function Profile() {
     ...(canInsurance ? [{ key: "insurance" as const, label: "Insurance" }] : []),
     ...(canReadVitals || canManageConsent ? [{ key: "consent" as const, label: "Consent" }] : []),
     ...(canCode ? [{ key: "coding" as const, label: "Coding" }] : []),
+    ...(hasTheatres && canReadVitals
+      ? [{ key: "procedures" as const, label: "Procedures", count: procedures.length }]
+      : []),
     ...(canReadDocs
       ? [{ key: "documents" as const, label: "Documents", count: documents.length }]
       : []),
@@ -454,12 +485,87 @@ function Profile() {
             reload={load}
           />
         )}
+        {tab === "procedures" && hasTheatres && <Procedures bookings={procedures} who={who} />}
       </div>
     </Shell>
   );
 }
 
 /* ── tab panels ──────────────────────────────────────────────────────────────── */
+
+/**
+ * The patient's surgical history — every procedure, newest first, with the operation record.
+ *
+ * ── WHAT THIS IS AND IS NOT ─────────────────────────────────────────────────
+ * A READ. There is no booking control here and there should not be: a procedure is scheduled on
+ * the OT board, where the day's theatre occupancy is visible and the collision rule can be
+ * explained. This is the chart — what happened, and what the surgeon found.
+ *
+ * A booking with no operative note is shown as such rather than hidden. "Scheduled" and "operated
+ * on but never written up" are different facts about a patient, and the second one is the one
+ * somebody needs to chase.
+ */
+function Procedures({ bookings, who }: { bookings: OtBooking[]; who: (id?: string) => string }) {
+  const sorted = useMemo(
+    () => [...bookings].sort((a, b) => b.scheduledStart.localeCompare(a.scheduledStart)),
+    [bookings],
+  );
+
+  if (sorted.length === 0) {
+    return (
+      <Card className="p-8">
+        <p className="text-center text-sm text-[var(--color-fg-subtle)]">
+          No procedures booked or performed for this patient.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {sorted.map((b) => (
+        <Card key={b.id} className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-medium text-[var(--color-fg)]">{b.procedureName}</p>
+              <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">
+                {new Date(b.scheduledStart).toLocaleString()} · {b.theatreName} · Dr{" "}
+                {who(b.surgeonId)}
+              </p>
+            </div>
+            <Badge
+              tone={
+                b.status === "completed"
+                  ? "success"
+                  : b.status === "cancelled"
+                    ? "neutral"
+                    : "brand"
+              }
+            >
+              {b.status.replace("_", " ")}
+            </Badge>
+          </div>
+
+          <div className="mt-4 border-t border-[var(--color-border)] pt-4">
+            {b.operativeNote ? (
+              <OperativeNoteDetail
+                note={b.operativeNote}
+                surgeonName={who(b.operativeNote.surgeonId)}
+              />
+            ) : (
+              /* Not a blank. A completed procedure with no record is the one worth chasing. */
+              <p className="text-sm text-[var(--color-fg-muted)]">
+                {b.status === "completed"
+                  ? "No operation record has been written for this procedure."
+                  : "The operation record is written during or after the procedure."}
+              </p>
+            )}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
 
 interface TimelineEvent {
   at: string;

@@ -39,6 +39,8 @@ import { apiGet, apiOrigin, apiPost, sites, token } from "./support/api";
 
 interface Stay {
   id: string;
+  /** The PATIENT, not the visit — the chart is addressed by patient (`/patients/<id>`). */
+  patientId: string;
   patientName: string;
   uhid: string;
 }
@@ -65,6 +67,8 @@ interface Fixture {
   /** The site the theatre lives at — a booking is a WRITE, and a write needs one site chosen. */
   siteName: string;
   theatreName: string;
+  /** Addressed by PATIENT, because that is how the chart is addressed. */
+  patientId: string;
   patientName: string;
   uhid: string;
   /**
@@ -182,6 +186,7 @@ async function arrange(request: APIRequestContext, baseURL: string): Promise<Fix
   return {
     siteName: site.name,
     theatreName: THEATRE_NAME,
+    patientId: stay.patientId,
     patientName: stay.patientName,
     uhid: stay.uhid,
     surgeonId: surgeon!.id,
@@ -310,6 +315,47 @@ test.describe.serial("the operating theatre, from the list to the chart", () => 
     await expect(modal.getByText("Inflamed appendix, no perforation.")).toBeVisible();
     await modal.getByRole("button", { name: "Close" }).click();
     await expect(modal).toHaveCount(0);
+  });
+
+  /**
+   * ── THE LAST STEP OF THE WORKFLOW: → PATIENT CHART ────────────────────────
+   *
+   * WHAT DEFECT WOULD THIS CATCH?
+   * The one it was written for. The operative note was reachable from exactly one screen —
+   * `/my-patients`, which lists the doctor's LIVE QUEUE — so the moment the visit closed, the
+   * record of what was done inside the patient left the product's reach. The API had returned the
+   * whole surgical history all along; no screen asked it. Nothing failed, nothing 404'd, and the
+   * note simply had nowhere to be read.
+   *
+   * This runs after the happy path in the same serial file, so the note it looks for is the one
+   * the previous test wrote — a chart that showed SOMETHING would pass a weaker assertion, so the
+   * findings string is matched exactly.
+   */
+  test("and the operation is readable from the patient's chart afterwards", async ({ page }) => {
+    const f = fixture;
+    await signIn(page, ACCOUNTS.doctor);
+    await switchToBranch(page, f.siteName);
+
+    await page.goto(`/patients/${f.patientId}`);
+    await expect(page.getByRole("heading", { name: f.patientName })).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await page.getByRole("button", { name: /Procedures/ }).click();
+
+    /**
+     * The operation record for THIS run, addressed by the `<dl>` the note renders as.
+     *
+     * Anchored on the procedure name, which carries this run's stamp: the rotating fixture means a
+     * long-stay patient accumulates several E2E procedures, and `.first()` would eventually assert
+     * against another run's record. A `<dl>` is exactly one element per note, so the match is
+     * unambiguous without depending on how the card around it is nested.
+     */
+    const record = page.locator("dl").filter({ hasText: `Laparoscopic ${f.procedure}` });
+    await expect(record).toHaveCount(1);
+    await expect(record).toContainText("Inflamed appendix, no perforation.");
+    // The surgeon reads as a NAME here too (D15) — the chart must not print a user id.
+    await expect(record).toContainText("Rao");
   });
 
   test("a reader without ot:record sees the record but cannot author one", async ({ page }) => {
