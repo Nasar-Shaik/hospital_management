@@ -32,6 +32,19 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 | D11 | An un-stamped report is absent from the branch-scoped list              | P3  | ✅ **CLOSED** 2026-08-17 (`0eeb882`) — same control as D12            |
 | D12 | A branchless dose is absent from the chart once a branch is selected    | P3  | ✅ **CLOSED** 2026-08-17 (`0eeb882`) — window shut at branch creation |
 | D13 | Mobile discarded the clinical refusal instruction ("chart on paper")    | P2  | ✅ **FIXED** 2026-08-17 (`bd09795`)                                   |
+| D14 | ED triage/transfer accepted on a visit that had already ended           | P1  | ✅ **FIXED** 2026-08-19 (`9d4715b`)                                   |
+| D15 | The operating surgeon is required, stored — and never displayed         | P3  | ✅ **FIXED** 2026-08-19 (`ffd481c`)                                   |
+| D16 | Stock lookup 400s past a 2,000-character formulary, silently            | P2  | ✅ **FIXED** 2026-08-19 (`ac4bae9`)                                   |
+| D17 | A document created by an UPSERT is never audited                        | P2  | 🟡 **OPEN** — platform, see below                                     |
+| D18 | The doctor's queue renders "—" instead of a patient's name              | P2  | 🟡 **OPEN** — see below                                               |
+| D19 | A write is offered under "All branches" and refused only on submit      | P3  | 🟡 **OPEN** — see below                                               |
+| D20 | The nav advertises modules the hospital's edition does not include      | P3  | 🟡 **OPEN** — see below                                               |
+
+> **D14–D20 were all found on 2026-08-19, in a browser, in one sitting** — the first execution of
+> the Stage A validation the tracker has been asking for since 2026-08-14. Seven defects in a
+> product whose automated gate was green: 2,060 integration tests, 45 Playwright specs, 0 boundary
+> violations. That ratio is the finding. `TESTING.md` §12 records how it was run and what it could
+> not cover.
 
 ### D9 — the appointment state machine used the unscoped twin
 
@@ -321,6 +334,94 @@ product/security question that the fix does not retroactively answer.
 > appointment — so it crosses the exact line this paragraph draws and is rated P1 on the register's
 > own terms. The paragraph is kept rather than rewritten because the reasoning it records is still
 > the right test; D9 is the first entry to fail it.
+
+### D14 — an emergency visit that had ended still accepted both writes
+
+The most serious thing this validation found, and P1 rather than P2 for the same reason D9 is: it
+**alters clinical data**.
+
+`requireEdEncounter` refused a visit of the wrong class and stopped there. Nothing required the
+visit to still be OPEN. Measured live against the running stack:
+
+- A patient already **transferred out to another hospital** accepted a fresh triage — HTTP **201**
+  — and their `triagedAt` was rewritten. An assessment filed, with a timestamp, on somebody who
+  was not in the building.
+- Worse: `transferOut` writes the transfer record **before** `closeEncounter` validates the state
+  change. A second transfer on the same visit was refused with a 422 from the state machine — but
+  only after the write had landed. A real destination, `"Apollo Hospitals, Jubilee Hills — Cath
+Lab"`, became the second caller's text. **A call that reported failure destroyed a clinical
+  fact.**
+
+Fixed with one guard: an ED write requires an open visit. That closes the second defect properly
+rather than by reordering, because a closed visit is refused before anything is written at all.
+
+The regression test asserts the stored destination **before** the status, deliberately: the broken
+version refused the second transfer too, so a test that checks the status first fails on the status
+and never reaches the damage.
+
+### D17 — a document created by an upsert has no audit trail
+
+Platform-level, in `core/db/plugins/auditPlugin.ts`. The post-`findOneAndUpdate` hook reads:
+
+```ts
+if (!before) return; // upsert of a brand-new doc, or nothing matched
+```
+
+So **any document whose first write is an upsert is never audited.** Emergency surfaced it because
+it is the first module whose primary write is an upsert: the first triage of a patient produced no
+audit row at all, and only the _re-triage_ appeared, as `edTriage.updated`. `EMERGENCY.md` states
+that the audit log **is** the re-triage history — with this gap the original assessment is not in
+it, and in the common case (triaged once, never revised) there is no trail of the clinical decision
+at all.
+
+Not fixed here, on purpose. The hook is shared by every audited model — encounters, patients,
+billing, wallet, consultations, MRD codings, appointments, medicine batches — so changing when it
+writes is a platform change with its own blast radius and its own test surface. It should be the
+next fix, scoped on its own, not slipped in behind a validation pass.
+
+### D18 — the doctor's queue shows a dash where a name belongs
+
+`/my-patients` loads the queue with `listEncounters({ queued: true, limit: 100 })` and, separately,
+`listPatients({ limit: 100 })`, then joins them in the browser:
+
+```ts
+const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
+```
+
+Two independently capped lists and one join between them. Any queued patient outside that page of
+100 has no name. Observed on the demo hospital: **15 of 99 rows** in the doctor's own worklist
+rendered as "—", with no error and no empty state — just a dash where a person should be.
+
+The fix is a decision rather than a patch: resolve the names the queue actually needs, by id,
+instead of hoping they fall inside an unrelated page. Left open so that decision is taken
+deliberately.
+
+### D19 — the branch a write needs is chosen after the work, not before
+
+Met twice in one session, on two actions and two roles. With the header on **"All branches"** the
+emergency board loads, rows render, and every action is enabled. The nurse picks a priority, types
+a chief complaint, presses Save — and only then gets `HMS-BRANCH-001 No active branch selected`.
+Switching the branch to fix it **closes the modal and discards what she typed.**
+
+Not specific to Emergency: the same refusal stopped a theatre booking during the Theatre milestone,
+where it was worked around in the Playwright fixture with `switchToBranch()` rather than fixed in
+the product. A test can be taught to set the branch first. A person cannot be, because nothing on
+the screen tells them.
+
+### D20 — the sidebar sells what the edition does not include
+
+A `PLAN_CLINIC` tenant's navigation offers Theatres, Emergency, Ward, Bed board, Medication round,
+Ambulance, Mortuary, Pharmacy and more. The nav gates on **permission** and never on
+**entitlement**, so an administrator holds the codes and sees every door.
+
+The API is correct — `HMS-PLAN-002 Feature not in your edition`, naming the exact flag. The page
+then puts the refusal and a contradiction side by side: `/emergency` shows "Feature not in your
+edition" and, directly below it, **"Nobody in the emergency department."**; `/theatres` offers
+"Book a procedure" and "Add theatre" and reports "No theatres yet."
+
+Same "a refusal shown as emptiness" class `TESTING.md` §11 recorded from the page sweep, on pages
+written after that sweep — which suggests the lesson needs to live in a shared component rather
+than in the memory of whoever fixed it last time.
 
 ## Technical
 

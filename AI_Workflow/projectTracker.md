@@ -36,7 +36,7 @@ the code won and the difference is recorded in §10.
 | **Manual validation**  | 🔴 **0 executed.** Procedure now written: [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md). Mobile M2 0/61 · M3 0/45 · Web 0/24 · **Journey 0/25 (§13A, new 2026-08-17)** · safety, permission and negative suites 0. **Nothing has been seen on a screen by a person.**                                                                                                                                                                                                                                                                           |
 | **Open defects**       | **4 fixed 2026-08-16** (D1 · D2 · D3 · D6) · **3 fixed 2026-08-17** (D9 cross-branch appointment write · D10 cross-branch report file · D13 mobile discarded the paper instruction) · **2 closed 2026-08-17** (D11, D12). **2 reclassified** as deliberate design (D4, D5). **1 open** — D7, a product decision. **P0 = 0, P1 = 0.** T2 partially controlled. See `docs/RISK_REGISTER.md` §0 and its 2026-08-17 P2 review.                                                                                                                                                 |
 | **CI**                 | 🔴 Billing-locked off-repo. No workflow has ever executed. `pnpm gate` on one machine is the only gate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| **Next action**        | **HUMAN MANUAL VALIDATION — unchanged, and now four milestones overdue.** Execute [`docs/MANUAL_VALIDATION_RUNBOOK.md`](docs/MANUAL_VALIDATION_RUNBOOK.md) in its §5 order — §5.0's security regression set (BR-10, BR-11, BR-07, DRIFT-01…12, BR-12) first, then the environment gate, permissions by API, **Web**, the new **§13A journey** (JR-01…22 + DUP-01/02 + TEN-01), then mobile. **No engineering work is pending before this.**                                                                                                                                |
+| **Next action**        | **AWAITING REVIEW of the Stage A results.** The web half of Stage A was **executed on 2026-08-19** and produced **seven defects** (`RISK_REGISTER.md` §0 D14–D20; `TESTING.md` §11b); three are fixed, **D17–D20 are open**. `BR-07` ran and passed. The recommended next engineering task is **D17 — a document created by an upsert is never audited**, a platform fix with its own blast radius. Mobile (`M2` 0/61, `M3` 0/45) still needs hardware and eyes. **C2 is approved in direction, not for implementation.**                                                  |
 
 ---
 
@@ -359,7 +359,7 @@ the safety envelope complete. The next web work is validation, not code.
 
 Ordered by what makes the next stage cheaper or safer, not by what is most interesting.
 
-### Stage A · Prove what exists — **no new features** · S · 🟨 IN PROGRESS
+### Stage A · Prove what exists — **no new features** · S · 🟩 WEB EXECUTED · 🟥 MOBILE BLOCKED
 
 Everything built since M1 is proven by tests only. A defect found now costs one fix; the same defect
 found after M4 and M5 are built on top costs a redesign.
@@ -385,7 +385,36 @@ found after M4 and M5 are built on top costs a redesign.
 > noting for its own sake: _a plan that lives only in a conversation is not a deliverable_, and it
 > was marked `[x]` for two days.
 
-**Left — the runbook is prepared but NOT executed. No manual result exists yet.**
+> ## EXECUTED 2026-08-19 — the web half, and it was worth the wait
+>
+> **Seven defects, found in one sitting, in a product whose automated gate was green** (2,060
+> integration tests, 45 Playwright specs, 0 boundary violations). Three fixed the same day, four
+> open. Evidence and reproduction: `docs/RISK_REGISTER.md` §0 **D14–D20**; how it was run and what
+> it could not cover: `TESTING.md` **§11b**.
+>
+> | Defect                                                                                                          | Sev | Status             |
+> | --------------------------------------------------------------------------------------------------------------- | --- | ------------------ |
+> | D14 ED triage/transfer accepted on a visit that had ENDED — and a refused transfer overwrote a real destination | P1  | ✅ fixed `9d4715b` |
+> | D15 the operating surgeon is required, stored, and never shown                                                  | P3  | ✅ fixed `ffd481c` |
+> | D16 stock lookup 400s past a 2,000-char formulary, silently                                                     | P2  | ✅ fixed `ac4bae9` |
+> | D17 a document created by an UPSERT is never audited                                                            | P2  | 🟡 open — platform |
+> | D18 the doctor's queue renders "—" instead of a patient's name                                                  | P2  | 🟡 open            |
+> | D19 a write is offered under "All branches", refused on submit                                                  | P3  | 🟡 open            |
+> | D20 the nav advertises modules the edition does not include                                                     | P3  | 🟡 open            |
+>
+> **Item 1 (web) is done** — Theatre and Emergency end to end, plus reception, consultation,
+> ordering, admission, and the money path from bill to payment. **Item 5 is done: `BR-07` ran and
+> passed** — a branch-confined user sees only their branch whether they send the other branch's id
+> in `x-active-branch` or no header at all. The header filters within what you may see; it does not
+> grant. That is the row this campaign was most about, and it is now a measurement rather than an
+> inference from the code path.
+>
+> **Two things this pass does NOT settle.** It was executed by an agent driving a real browser, not
+> by a person: nobody has judged legibility, density or whether a screen works under time pressure.
+> And **items 2 and 3 are untouched** — the mobile checklists need hardware and eyes, and remain
+> 0/61 and 0/45.
+
+**Left — items 2 and 3 need a device. Item 6 needs a credential.**
 
 > **Updated 2026-08-17 after a security audit and a pre-validation preparation pass.** Three items
 > below moved. **Item 4 (licence states) is DONE** — `pnpm seed:licence` prepares LIC-01…05 and was
@@ -397,9 +426,9 @@ found after M4 and M5 are built on top costs a redesign.
 > Backup/restore (DR §0) and VPS readiness are now documented and are pilot-deployment blockers,
 > separate from manual validation.
 
-1. **Web first, not mobile** — it needs no build, no device, no pairing, and D-1/D-2 have _never_
-   been opened in a browser, whereas the mobile MAR has 1,613 tests around it. Highest defect
-   probability per minute. → runbook §13, `WEB-01`…`WEB-24`.
+1. ~~**Web first, not mobile**~~ — **DONE 2026-08-19.** The reasoning held exactly: highest defect
+   probability per minute, and it produced D14–D20 in a single session. `TESTING.md` §11b lists
+   what passed.
 2. Run `MOBILE_M2_DEVICE_CHECKLIST.md` on hardware → 61/61. Gate is §1 + §2 + §7[1–3], 17 rows.
 3. Run `MOBILE_M3_DEVICE_CHECKLIST.md` on hardware → 45/45.
 4. ~~Prepare the licence grace/expired states~~ — **DONE 2026-08-17.** `pnpm seed:licence -- --slug
@@ -407,11 +436,12 @@ licence-lab --state <active|expiring|grace|expired>`, verified against a real te
    the commands. The old instruction (`extendDays: -1`) could not have worked — the schema declares
    `min(1)`, so it was a 400 and had never been run. **LIC-06 alone remains blocked**, and needs an
    edition without the nursing module rather than a licence change.
-5. **🔴 Create a branch-confined nurse so `BR-07` can run — now the highest-value account in the
-   campaign.** D1 is fixed, but the 2026-08-17 audit found three MORE branch-scope defects behind
-   the same blind spot, so this is no longer about one risk-register entry. It was the only way to prove
-   empirically that risk-register D1 reaches a bound user, which was inferred from the
-   code path. Roles UI, no code change.
+5. ~~Create a branch-confined user so `BR-07` can run~~ — **DONE 2026-08-19, and it PASSED.** The
+   demo hospital already had one (`person1@sunrise.com`, FRONT_OFFICE, bound to GC01), which is why
+   this sat open for two days behind an account nobody had looked for. Measured: 4 GC01 patients
+   under `x-active-branch: GC01`, the same 4 under `x-active-branch: MAIN`, the same 4 with no
+   header; an unbound admin sees 192 in MAIN and 4 in GC01. The blind spot that produced D1, D9 and
+   D10 does not reach a bound user.
 6. Resolve the push blocker (SSH unlock or `workflow` scope) and push the outstanding commits.
 7. ~~Unblock CI billing, or record the decision~~ — **DECISION RECORDED 2026-08-17: `pnpm gate` on
    one machine is the accepted V1 gate.** Reviewed rather than assumed:
@@ -433,6 +463,13 @@ licence-lab --state <active|expiring|grace|expired>`, verified against a real te
 any database that predates M3, and it invalidates results without saying so.
 
 **Exit:** every checklist green, history pushed. **Do not start Stage B until this is done.**
+
+> **Where that exit actually stands, 2026-08-19.** The web half is executed and its defects are
+> filed; the mobile half cannot be executed without hardware. Stages B–E were built past this gate
+> anyway, five milestones deep — so the honest reading is not "the gate held" but "the gate was
+> bypassed, and the first time anyone opened it, seven defects fell out". Whether the remaining
+> mobile rows block the pilot is a product decision, not an engineering one. Nothing has been
+> pushed.
 
 ### Stage B · Make the shelf honest — F5 + F4 · M
 

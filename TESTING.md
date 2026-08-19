@@ -1143,6 +1143,84 @@ green suite is not mistaken for coverage of them:
 `NOT AUTOMATABLE — DOCUMENTED LIMITATION`. **"Manual PASS" is never used**, because no human has
 executed any row.
 
+> **Still true on 2026-08-19, and worth stating precisely.** Stage A was executed that day — see
+> §11b — but by an agent driving a real browser, not by a person. The vocabulary above is unchanged:
+> nothing below is marked "manual PASS", because nobody has looked at this product with their eyes.
+
+---
+
+## 11b. Stage A executed — 2026-08-19, in a browser, as each role
+
+The gate the tracker had been asking for since 2026-08-14, finally run. **Seven defects, in a
+product whose automated gate was green** — 2,060 integration tests, 45 Playwright specs, 234 paths,
+0 boundary violations. Three were fixed the same day; four are open on the risk register as
+D17–D20. The full list, with evidence, is `AI_Workflow/docs/RISK_REGISTER.md` §0, D14–D20.
+
+### How it was run, and what that is worth
+
+A real Chromium instance against the running dev stack, signing in and out as
+`admin` · `reception` · `drrao` · `nurse` · `cashier`, plus API-level probes as `drkhan`,
+`pharmacy`, `labtech`, `radiographer` and a branch-confined front-desk user. Every clinical write
+below went through the actual screen a member of staff would use.
+
+**This is not the same as a human, and the difference matters in both directions.**
+
+_What it did better than a person:_ it read the database after every write, so a screen that
+_looked_ right was still checked against what was actually stored. That is how D14 was found —
+the browser showed a plausible refusal; the collection showed a destroyed destination.
+
+_What it cannot do at all:_ judge legibility, layout, colour, density, or whether a screen is
+usable under time pressure. It cannot use a phone. **The mobile device checklists (`M2`, 61 rows;
+`M3`, 45 rows) remain 0/106 and are not addressable this way** — they need hardware and eyes. §11's
+"Not automatable" list is unchanged by this pass.
+
+### What passed
+
+**Theatre** — registry create as admin (read-only for a doctor, correctly); booking; overlap
+refused in the browser with `HMS-VAL-001` and the form preserved; back-to-back slots at a shared
+boundary accepted (half-open intervals); start; operative note; write-once enforced at the API
+(409 on a second note, 409 on a note against a `scheduled` booking); role matrix across five roles;
+branch isolation (a booking made in MAIN returns `[]` under GC01).
+
+**Emergency** — arrival from Reception with the emergency checkbox; the board inside a minute;
+untriaged sorting **above** critical, with the banner saying so; triage; re-triage as a revision
+with the modal pre-filled; "send to doctor"; the doctor's queue, order pad and "send for tests";
+**an ED imaging order landing on the ordinary radiology bench** — the claim the whole module rests
+on; admission closing the ER encounter and opening an IP stay, with the patient leaving the board;
+transfer out recording destination, reason, time and actor, and walking `arrived → in_progress →
+closed`; the full role matrix; `HMS-TEN-003` on both cross-tenant directions.
+
+**Entitlement** — a `PLAN_CLINIC` tenant provisioned with the documented command answers
+`HMS-PLAN-002` naming `module.clinical.ot` / `module.clinical.emergency`, not a permission error.
+
+**BR-07, executed for the first time** — the row the tracker called "the highest-value account in
+the campaign". A front-desk user bound to GC01 sees **4 GC01 patients** whether they send
+`x-active-branch: GC01`, `x-active-branch: MAIN`, or no header at all; an unbound admin sees 192 in
+MAIN and 4 in GC01. The header filters within what you may see. It does not grant.
+
+**Platform** — public site, login/logout, patient registration (UHID for life), reception register,
+consultation, multi-select order pad, admission with the bed picker, and the money path end to end:
+bill raised (`INV-2026-00134`), payment taken, invoice `paid`.
+
+### One thing that looked like a defect and was not
+
+Twice, mid-session, the browser stopped delivering trusted input to the page: clicks reported
+success, nothing happened, and `page.evaluate` still worked. Instrumenting document-level capture
+listeners showed **zero DOM events arriving** — so the input never reached the page at all, and a
+reload restored it. A harness artefact, recorded here because the obvious reading ("the modal will
+not open") would have been filed as a product bug.
+
+### The environment notes
+
+- `pnpm verify` defaulted to a hospital called `demo` that no documented command creates, so the
+  "is it working?" check failed on a working stack. Fixed (`2ef81a2`); it now defaults to
+  `sunrise`, which is what `seed:demo` actually makes.
+- **`seed:demo` creates no operating theatre.** Theatre reads as unbuilt on a fresh seed until an
+  admin adds one. Not fixed — adding demo data is a product call, not a validation fix.
+- The demo hospital now carries 192 patients and 165 encounters, most of them E2E residue
+  (`E2E Pharmacy Patient …`, `ED Walkin …`), and today's OT schedule is ~29 `E2E appendectomy`
+  rows. Deliberate, per §11 — but it is what a first-time validator opens the product to.
+
 ---
 
 ## 12. What you cannot test yet (updated 2026-07-16)
