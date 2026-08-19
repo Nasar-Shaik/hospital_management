@@ -36,9 +36,9 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 | D15 | The operating surgeon is required, stored — and never displayed         | P3  | ✅ **FIXED** 2026-08-19 (`ffd481c`)                                   |
 | D16 | Stock lookup 400s past a 2,000-character formulary, silently            | P2  | ✅ **FIXED** 2026-08-19 (`ac4bae9`)                                   |
 | D17 | A document created by an UPSERT is never audited                        | P2  | ✅ **FIXED** 2026-08-19 — see below                                   |
-| D18 | The doctor's queue renders "—" instead of a patient's name              | P2  | 🟡 **OPEN** — see below                                               |
-| D19 | A write is offered under "All branches" and refused only on submit      | P3  | 🟡 **OPEN** — see below                                               |
-| D20 | The nav advertises modules the hospital's edition does not include      | P3  | 🟡 **OPEN** — see below                                               |
+| D18 | The doctor's queue renders "—" instead of a patient's name              | P2  | ✅ **FIXED** 2026-08-19 — see below                                   |
+| D19 | A write is offered under "All branches" and refused only on submit      | P3  | ✅ **FIXED** 2026-08-19 — see below                                   |
+| D20 | The nav advertises modules the hospital's edition does not include      | P3  | ✅ **FIXED** 2026-08-19 — see below                                   |
 | D21 | An audit entry with an empty diff side could never recompute its hash   | P2  | ✅ **FIXED** 2026-08-19 — found while fixing D17                      |
 
 > **D14–D20 were all found on 2026-08-19, in a browser, in one sitting** — the first execution of
@@ -439,8 +439,60 @@ Two independently capped lists and one join between them. Any queued patient out
 rendered as "—", with no error and no empty state — just a dash where a person should be.
 
 The fix is a decision rather than a patch: resolve the names the queue actually needs, by id,
-instead of hoping they fall inside an unrelated page. Left open so that decision is taken
-deliberately.
+instead of hoping they fall inside an unrelated page.
+
+**Fixed 2026-08-19 — server-side, once, for every list.** `GET /encounters` now returns
+`EncounterRow` (the encounter plus `patientName` and `uhid`), resolved by the same `namesByIds`
+call `/inpatients`, `/bed-board` and `/medication-round` already make: one `$in` per page, not one
+query per row. Three clients stopped guessing — `/my-patients` and `/reception` deleted their
+`patients.find(...) ?? "—"` joins, and the phone deleted a per-row `getPatient` fetch that
+`Identity.tsx` had already documented as "the one place an API change would pay for itself".
+`/my-patients` now issues one request fewer than before the fix.
+
+**Why the same defect happened twice.** The identical join was found and fixed on the WARD in July,
+and the reasoning written into `encounter.contract.ts` at the time — "an encounter is a visit;
+naming the patient on every one of them would cost a lookup on paths that never display a name" —
+was true and drew the line in the wrong place. The line is not `/inpatients` versus the rest, it is
+a LIST (a screen somebody reads) versus a single encounter. `GET /encounters/:id` still carries no
+identity, and that is still correct.
+
+**The other half of the same cap, found while repeating the browser suite.** The list itself asks
+for one page of 100 and truncated in silence — the tail of the waiting room simply absent. It
+surfaced as a browser failure: an E2E patient standing at position 104 in a queue of 107 could not
+be found on the page while being genuinely in the queue. The page now says how many are beyond it.
+Deliberately not a bigger limit: the rows are in TOKEN order, so the hundred shown are the hundred
+who arrived first, which is the right hundred — what was missing was the sentence admitting there
+are more (D-2 below explains why the queue was 107 at all).
+
+Proved by `encounters.int.test.ts` §8, whose fixture buries the queued patient under 120 later
+registrations so that any implementation resolving identity from a page of recent patients gives
+the wrong answer, and by `queueIdentity.test.tsx`, which mounts both real web pages against a
+server whose `/patients` returns a hundred other people. Falsified both ways: removing the
+server-side join turns 8 integration tests red, and restoring the capped join — on the client or,
+compiling cleanly, on the server — turns the load-bearing ones red while the small-hospital case
+still passes, which is exactly why nobody noticed for a milestone.
+
+### D-2 — a browser spec grew the hospital it asserts against, one patient per run
+
+Not a product defect: a TEST defect, recorded here because it was mistaken for one and because its
+failure mode is worth knowing. `pharmacyDispensing.spec.ts` opens a visit for its own patient and
+must leave it OPEN while it runs — a closed encounter drops out of the doctor's queue, and the
+pharmacy half needs the prescription dispensable. Its teardown cancelled the prescription and never
+closed the visit.
+
+So every run of the browser suite added one patient to Dr Rao's queue, permanently. By the time it
+was noticed there were **57 of them** and the queue held 107 — past the page `/my-patients` asks
+for — and `emergencyWorkflow` began failing while looking for a patient who was really there, two
+rows past the end of the page.
+
+Two fixes, and they are different in kind. The spec now closes its visit (`afterAll`), so the
+suite leaves the waiting room the size it found it: measured at 52 queued before three consecutive
+runs and 52 after. And the PRODUCT now says when a queue is longer than the page — because "the
+tail is missing and nothing says so" is the same defect as D18 wearing a different hat, and the
+only reason it was found is that a test happened to stand in the truncated part.
+
+The 57 leaked visits were closed in the local dev hospital to make the suite deterministic again;
+two refused (they are `awaiting_results`, which `close` does not accept) and were left alone.
 
 ### D19 — the branch a write needs is chosen after the work, not before
 
@@ -453,6 +505,28 @@ Not specific to Emergency: the same refusal stopped a theatre booking during the
 where it was worked around in the Playwright fixture with `switchToBranch()` rather than fixed in
 the product. A test can be taught to set the branch first. A person cannot be, because nothing on
 the screen tells them.
+
+**Fixed 2026-08-19 — the question is asked before the work, not after it.**
+`mustChooseBranchToWrite()` in `lib/branchScope.ts` restates the server's rule rather than
+inventing a second one: refuse only when the caller can reach SEVERAL active sites and has chosen
+none, which is exactly `writeBranchId()`'s condition over exactly the list `GET /me/branches`
+returns. `BranchProvider` publishes it; the four write actions that stamp a branch (ED triage, ED
+transfer-out, theatre booking, new theatre) are disabled while it holds, and
+`<ChooseBranchNotice>` explains why and lists the sites inline — because sending somebody to a
+control in the top-right corner is how the switcher got missed in the first place.
+
+Two things deliberately NOT done. The guard is on the way IN, not inside the form: choosing a
+branch re-keys the routed subtree and discards the screen, which is correct and is precisely what
+must not happen over a half-typed modal. And "Send to doctor" is left enabled — it is a transition
+on a visit that already has a branch, it succeeds in aggregate mode, and disabling it would strand
+a triaged patient on the board.
+
+The server rule is unchanged and is now pinned independently (`emergency.int.test.ts`,
+`theatres.int.test.ts`): a hospital-wide caller with no site gets `HMS-BRANCH-001` on all four
+writes, a forged branch header is ignored rather than obeyed, and a single-site nurse is never
+asked to choose. Falsified in both directions — deleting the UI predicate turns 5 jsdom tests and
+2 Playwright tests red; making the server guess the first candidate instead of refusing turns 5
+integration tests red across two modules.
 
 ### D20 — the sidebar sells what the edition does not include
 
@@ -468,6 +542,37 @@ edition" and, directly below it, **"Nobody in the emergency department."**; `/th
 Same "a refusal shown as emptiness" class `TESTING.md` §11 recorded from the page sweep, on pages
 written after that sweep — which suggests the lesson needs to live in a shared component rather
 than in the memory of whoever fixed it last time.
+
+**Fixed 2026-08-19 — both halves, and neither is a plan check.** The nav could not gate on
+entitlement because no client could ask: `GET /subscription` needs `subscription:manage`, which no
+clinician holds, and the mobile app had been reduced to learning the hospital's edition by asking
+for a module and reading `HMS-PLAN-002` back. `/auth/me` now carries `features` beside
+`permissions` — ADR-0010's first two layers in the one call every client already makes — and
+`NAVIGATION` items carry a `FeatureFlag` (typed, so a flag that does not exist does not compile).
+Thirteen entries are tagged. `hasFeature` fails OPEN while the edition is unknown, on purpose: a
+false negative hides a module a hospital pays for and nobody reports a menu entry they have never
+seen, while a false positive costs one honest refusal.
+
+The second half is the contradiction on the page. `isFeatureUnavailable()` — the same predicate,
+under the same name, that `apps/mobile/src/lib/net/errors.ts` has had since M0 — now lets
+`/emergency` and `/theatres` render `<ModuleNotInEdition>` INSTEAD of their board, their empty
+state and their write buttons, and say in as many words that no permission change will open it.
+
+Server enforcement is untouched and is what a typed URL still meets. `navigationEntitlement.test.tsx`
+drives the real `AppShell` against the real `EDITIONS` data and checks each entry against its OWN
+flag — withdrawing one flag from a full edition must hide exactly the entries that depend on it,
+which is what catches an entry tagged with a wrong-but-valid flag. Falsified: removing the
+entitlement gate from the nav turns 13 tests red, removing layer 1 from `authorize()` turns the
+direct-route tests red, and making `isFeatureUnavailable` always false brings the refusal-beside-
+emptiness back on both pages.
+
+**Not covered by Playwright, and deliberately.** There is no `PLAN_CLINIC` tenant in the seeded
+hospital, and the only way to make one in a browser run is an operator-token feature override — a
+test that, if it died halfway, would leave the shared seeded hospital missing a module and poison
+every other spec. The nav is proved in jsdom against real edition data and the refusals are proved
+over real HTTP; the browser investment went to D19 instead, where the starting state (an
+administrator landing in "All branches") is a property of the running application that jsdom
+cannot stage.
 
 ## Technical
 

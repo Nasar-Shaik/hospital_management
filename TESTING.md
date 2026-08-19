@@ -1231,6 +1231,52 @@ create/update pair on the real ED triage flow, that a no-op and a failed write r
 the trail stays inside one hospital and stamps the right branch, that each entry names its own
 actor — and that every entry recomputes to its stored hash.
 
+### D18–D20: the three that were UX findings, and what could actually test them
+
+Closed 2026-08-19, after D17. All three were found in a browser and none of them could have been
+found by reading the code, but they needed three different kinds of test — which is the useful part
+of the record.
+
+**D18 needed a fixture that is bigger than the bug.** The doctor's queue joined `patientId` against
+`listPatients({ limit: 100 })`, so the name was right for everyone inside that page and a dash for
+everyone outside it: 15 of 99 rows on the demo hospital. Any test with five patients passes against
+the defect, which is how a green suite of 2,060 tests missed it. So `encounters.int.test.ts` §8
+buries the queued patient under **120 later registrations** and `queueIdentity.test.tsx` answers
+`/patients` with a hundred OTHER people. The fix is server-side (`EncounterRow` carries
+`patientName` and `uhid`), so the same test protects `/my-patients`, `/reception` and the phone.
+
+**D19 needed a browser for the starting state, not for the widget.** The guard itself — several
+sites reachable, none chosen, so a branch-stamping write cannot succeed — is a pure function and is
+tested as one. What jsdom cannot stage is how a real session ARRIVES in that state: `/me/branches`
+plus `reconcileBranch` plus an empty `sessionStorage` is why an administrator signing in lands in
+"All branches" at all, and that is the whole premise of the defect. `branchSwitch.spec.ts` signs in,
+asserts the switcher says "All branches" without having been told to, and finds "Book a procedure"
+disabled — then asserts in the same test that the server still answers `HMS-BRANCH-001`, because a
+fix that disabled the button and relaxed the server would be worse than the defect.
+
+**And repeating the browser suite found a third thing neither of them would have.** Running the
+affected specs three times over turned `emergencyWorkflow` red — looking for a patient who was
+genuinely in the doctor's queue, two rows past the end of the page it asks for.
+`pharmacyDispensing.spec.ts` opens a visit and must keep it open while it runs; its teardown
+cancelled the prescription and never closed the visit, so **every run of the suite added one
+patient to Dr Rao's queue, permanently**. 57 had accumulated, the queue held 107, and
+`/my-patients` asks for one page of 100.
+
+Both halves were fixed, and only one of them is a test fix. The spec now closes its visit (52
+queued before three consecutive runs, 52 after). The PRODUCT now says how many patients are queued
+beyond the page — not by raising the limit, because the rows are in token order and the hundred
+shown are the earliest arrivals, but because a cap that silently drops the tail is D18 again with a
+different symptom. It took a test standing in the truncated part to notice.
+
+**D20 could not have Playwright, and the reason is worth stating.** Proving the nav for a clinic
+needs a `PLAN_CLINIC` tenant; the seeded hospital is `PLAN_HOSPITAL`, and the only way to make one
+mid-run is an operator feature override. A run that died between the override and its restore would
+leave the shared seeded hospital missing a module and would poison every other spec — a fixture that
+can corrupt the environment is worse than a missing test. So the nav is proved in jsdom against the
+REAL `EDITIONS` data from `@medicore/permissions` (withdraw one flag from a full edition, assert
+exactly the entries depending on it disappear), and the refusals are proved over real HTTP in
+`emergency.int.test.ts`. Recorded as a known gap rather than papered over.
+
 ### The environment notes
 
 - `pnpm verify` defaulted to a hospital called `demo` that no documented command creates, so the
