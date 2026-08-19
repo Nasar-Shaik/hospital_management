@@ -177,6 +177,12 @@ export const Icons = {
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     </Svg>
   ),
+  /** The cross on an emergency department door. */
+  emergency: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M12 3v18M3 12h18" />
+    </Svg>
+  ),
   ambulance: (p: IconProps) => (
     <Svg {...p}>
       <path d="M10 10H6M8 8v4" />

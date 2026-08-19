@@ -189,6 +189,14 @@ const NAVIGATION: NavSection[] = [
       // admitted; this shows where there is space.
       { label: "Bed board", href: "/beds", icon: "beds", permission: "bed:allocate" },
       { label: "Theatres", href: "/theatres", icon: "theatres", permission: "ot:schedule" },
+      /**
+       * The ED board. Gated on `triage:perform` — the emergency department's OWN permission, held
+       * by the nurse and the doctor who stand in front of the board, and not by every receptionist
+       * in every clinic that never bought the module. The route itself needs only `encounter:read`
+       * (it is the queue, ranked), so the desk can still reach it when they need to answer "where
+       * is my father"; this decides whose sidebar carries a link.
+       */
+      { label: "Emergency", href: "/emergency", icon: "emergency", permission: "triage:perform" },
       {
         label: "Ambulance",
         href: "/ambulance",

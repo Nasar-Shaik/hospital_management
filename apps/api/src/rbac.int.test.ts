@@ -708,6 +708,25 @@ const PROBES: Record<string, Probe> = {
     },
   },
 
+  /* ── Emergency department (D10) — feature `module.clinical.emergency`. The BOARD is
+   * `encounter:read` (it is the queue, ranked); TRIAGE is `triage:perform` (a clinical judgement
+   * the registration desk must not make); TRANSFER OUT is `encounter:close` (it ends the visit). */
+  "GET /api/v1/emergency/board": { method: "get", url: "/api/v1/emergency/board" },
+  "POST /api/v1/emergency/triage": {
+    method: "post",
+    url: "/api/v1/emergency/triage",
+    body: {
+      encounterId: "64b7f0000000000000000001",
+      priority: "urgent",
+      chiefComplaint: "Matrix complaint",
+    },
+  },
+  "POST /api/v1/emergency/transfer-out": {
+    method: "post",
+    url: "/api/v1/emergency/transfer-out",
+    body: { encounterId: "64b7f0000000000000000001", destination: "Matrix General" },
+  },
+
   /* ── Diagnostic reports ─────────────────────────────────────────────────────
    * `order:perform` uploads a report (the technician/radiologist who ran the test);
    * `emr:read` lists a PATIENT's reports and opens a file (every clinical reader);

@@ -903,6 +903,40 @@ export interface ListBookingsQuery {
   status?: OtBookingStatus;
 }
 
+/* ── emergency department (D10) ── */
+
+export type TriagePriority = "critical" | "urgent" | "non_urgent";
+
+/** The triage judgement on one ED visit. `priority` is absent until somebody assesses them. */
+export interface EdTriage {
+  encounterId: string;
+  patientId: string;
+  priority?: TriagePriority;
+  chiefComplaint?: string;
+  triagedAt?: string;
+  triagedBy?: string;
+  transferredTo?: string;
+  transferNote?: string;
+  transferredAt?: string;
+}
+
+/** One line on the emergency board. */
+export interface EdBoardRow {
+  encounterId: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  arrivedAt: string;
+  /** Whole minutes since arrival, on the SERVER's clock — never the browser's. */
+  waitingMinutes: number;
+  priority?: TriagePriority;
+  chiefComplaint?: string;
+  triagedAt?: string;
+  status: string;
+  doctorId?: string;
+  token?: number;
+}
+
 /* ── ambulance fleet (B6) ── */
 
 export type AmbulanceKind =
@@ -2162,6 +2196,9 @@ export type EncounterStatus =
   | "left_without_being_seen"
   | "admitted";
 
+/** The care setting. FHIR calls this `class`. */
+export type EncounterClass = "OP" | "IP" | "ER" | "TELE" | "HOME";
+
 export type EncounterOrigin =
   | "appointment"
   | "walk_in"
@@ -2183,7 +2220,7 @@ export interface Encounter {
   patientId: string;
   episodeId: string;
   origin: EncounterOrigin;
-  class: "OP" | "IP" | "ER" | "TELE" | "HOME";
+  class: EncounterClass;
   status: EncounterStatus;
   appointmentId?: string;
   doctorId?: string;
@@ -3937,6 +3974,40 @@ export class ApiClient {
     return this.request<OtBooking>("POST", `/api/v1/ot-bookings/${id}/operative-note`, input);
   }
 
+  /* ── emergency department (D10) ── */
+
+  /**
+   * Everyone currently in the emergency department, worst first — untriaged at the very top.
+   * Needs `encounter:read` + the emergency module.
+   */
+  edBoard(): Promise<EdBoardRow[]> {
+    return this.request<EdBoardRow[]>("GET", "/api/v1/emergency/board");
+  }
+
+  /**
+   * Assess, or re-assess, an ED patient. Needs `triage:perform` + the emergency module.
+   * Re-triage overwrites the judgement on the same visit — it does not add a second one.
+   */
+  triagePatient(input: {
+    encounterId: string;
+    priority: TriagePriority;
+    chiefComplaint?: string;
+  }): Promise<EdTriage> {
+    return this.request<EdTriage>("POST", "/api/v1/emergency/triage", input);
+  }
+
+  /**
+   * The patient left for another hospital: records where they went, then closes the visit.
+   * Needs `encounter:close` + the emergency module.
+   */
+  transferOutOfEd(input: {
+    encounterId: string;
+    destination: string;
+    note?: string;
+  }): Promise<EdTriage> {
+    return this.request<EdTriage>("POST", "/api/v1/emergency/transfer-out", input);
+  }
+
   /* ── hospital profile (B1) ── */
 
   /** The hospital's own official identity. Needs `hospital:manage`. */
@@ -4743,6 +4814,8 @@ export class ApiClient {
     input: {
       patientId: string;
       origin?: EncounterOrigin;
+      /** The care setting. `ER` puts the visit on the emergency board. Defaults to `OP`. */
+      class?: EncounterClass;
       doctorId?: string;
       departmentId?: string;
       reason?: string;

@@ -452,6 +452,17 @@ export interface ListEncountersFilter {
   patientId?: string;
   /** The queue board: everyone currently waiting or being seen. */
   queuedOnly?: boolean;
+  /**
+   * Everyone still HERE — the open states, `arrived` included.
+   *
+   * Distinct from `queuedOnly`, which drops `arrived`: a patient who has been brought in and not
+   * yet put in a queue is not on the OPD's queue board and is emphatically on the emergency
+   * department's, because being unseen is exactly what makes them urgent. Reads the derived
+   * `open` flag rather than restating the state list, so it can never disagree with `isOpen`.
+   */
+  openOnly?: boolean;
+  /** One care setting — `ER` is the emergency department's board. */
+  encounterClass?: EncounterClass;
   /** Arrived on or after. Half-open with `arrivedBefore` — see the service. */
   arrivedFrom?: Date;
   arrivedBefore?: Date;
@@ -473,6 +484,8 @@ export async function list(
     ...(filter.queuedOnly
       ? { status: { $in: ["in_queue", "in_progress", "awaiting_results"] } }
       : {}),
+    ...(filter.openOnly ? { open: true } : {}),
+    ...(filter.encounterClass ? { class: filter.encounterClass } : {}),
     /**
      * HALF-OPEN: `>= start` and `< next midnight`. Never `<= end of day`, because the
      * "end" of a day is 23:59:59.999 and a patient who arrives in that last

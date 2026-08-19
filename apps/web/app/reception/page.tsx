@@ -383,6 +383,13 @@ function Reception() {
   // A paid fast-track visit: the patient is seen ahead of the normal queue and pays an express
   // surcharge on top of the consultation. Off by default — the ordinary visit is the common one.
   const [express, setExpress] = useState(false);
+  /**
+   * Brought in as an emergency. Sets `class: ER` + `origin: emergency`, which is what puts the
+   * patient on the emergency board — and nothing else changes: same registration, same UHID, same
+   * queue, same bill. That is the point (`AI_Workflow/docs/EMERGENCY.md`): the ED is a way in, not
+   * a separate hospital.
+   */
+  const [emergency, setEmergency] = useState(false);
 
   const [openBill, setOpenBill] = useState<string | null>(null);
   const [openVitals, setOpenVitals] = useState<string | null>(null);
@@ -460,6 +467,7 @@ function Reception() {
         ...(doctorId ? { doctorId, departmentId: doctorId } : {}),
         ...(reason ? { reason } : {}),
         ...(express ? { express: true } : {}),
+        ...(emergency ? { origin: "emergency" as const, class: "ER" as const } : {}),
       });
 
       const who = patients.find((p) => p.id === patientId)?.name ?? "Patient";
@@ -477,6 +485,7 @@ function Reception() {
       setReason("");
       setPatientId("");
       setExpress(false);
+      setEmergency(false);
 
       if (result.resumed) {
         setNotice(
@@ -643,6 +652,31 @@ function Reception() {
                 Seen ahead of the queue. An express surcharge is added to the consultation fee.
               </p>
             )}
+          </div>
+
+          {/*
+           * ── EMERGENCY IS NOT A THIRD "VISIT TYPE" ────────────────────────────
+           * Kept apart from Normal/Express deliberately. Those two are a COMMERCIAL choice about
+           * queue position and a surcharge; this is a statement about how the patient arrived, and
+           * a desk under pressure must not have to trade one against the other. An emergency
+           * arrival can also be express, and neither answer implies the other.
+           */}
+          <div className="mt-4">
+            <label className="flex items-start gap-2.5 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={emergency}
+                onChange={(e) => setEmergency(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium text-[var(--color-fg)]">Emergency arrival</span>
+                <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
+                  Puts them on the emergency board for triage. Everything else — the UHID, the
+                  queue, the bill — is unchanged.
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="mt-4 flex items-center gap-3">

@@ -95,6 +95,12 @@ const SUITE_DB = {
    * for the wrong reason or fail for one that has nothing to do with theatres.
    */
   theatres: 22,
+  /**
+   * The emergency department (D10). Its own database because, like theatres, it provisions a
+   * clinic on an edition WITHOUT the ED flag, and the entitlement verdict is cached — a "no
+   * emergency module" answer resolved from another suite's key would pass for the wrong reason.
+   */
+  emergency: 23,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

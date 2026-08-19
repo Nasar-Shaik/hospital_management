@@ -237,6 +237,31 @@ export const NON_CLINICAL_UNIQUE_INDEXES: readonly ExemptUniqueIndex[] = [
       "same number, and neither the expiry refusal nor the over-draw guard depends on it",
   },
   {
+    collection: "edTriage",
+    index: "one_triage_per_encounter",
+    /**
+     * ── SHAPED LIKE A CLINICAL ARBITER, AND STILL NOT ONE ───────────────────────
+     * The frightening reading is real and was written out before this was decided: two rows for
+     * one ED visit means two priorities, the board picks one, and a `critical` patient could be
+     * displayed as `non_urgent` while a nurse walks past them.
+     *
+     * What stops that being the actual failure is WHO races. The index arbitrates an upsert, so a
+     * duplicate needs two concurrent writes on the same encounter, and in practice that is one
+     * nurse's double tap — which sends the SAME priority twice. Both rows agree, and the board is
+     * right whichever it reads. The genuinely divergent case needs two people triaging one patient
+     * in the same instant to different conclusions, and then the board shows one of two defensible
+     * clinical opinions rather than a wrong one.
+     *
+     * Contrast the guarded five: a duplicate charted dose is a second dose in a patient, and no
+     * reading of it is benign. `candidate` because the shape is close enough that it deserves
+     * re-examination the day the ED board is driven by anything other than a person reading it.
+     */
+    candidate: true,
+    reason:
+      "a duplicate triage row needs two concurrent triages of one visit — in practice one nurse's " +
+      "double tap, which sends the same priority twice, so the board is right either way",
+  },
+  {
     collection: "serviceItems",
     index: "tenantId_1_code_1",
     reason: "tariff data; a duplicate service line is visible on the price list",

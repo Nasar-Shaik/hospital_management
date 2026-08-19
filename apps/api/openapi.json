@@ -70,6 +70,9 @@
       "name": "editions"
     },
     {
+      "name": "emergency"
+    },
+    {
       "name": "encounters"
     },
     {
@@ -2343,6 +2346,57 @@
         },
         "required": ["patient", "score", "matchedOn"]
       },
+      "EdBoardRow": {
+        "type": "object",
+        "properties": {
+          "encounterId": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "patientName": {
+            "type": "string"
+          },
+          "uhid": {
+            "type": "string"
+          },
+          "arrivedAt": {
+            "type": "string"
+          },
+          "waitingMinutes": {
+            "type": "number"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "urgent", "non_urgent"]
+          },
+          "chiefComplaint": {
+            "type": "string"
+          },
+          "triagedAt": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "doctorId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "encounterId",
+          "patientId",
+          "patientName",
+          "uhid",
+          "arrivedAt",
+          "waitingMinutes",
+          "status"
+        ]
+      },
       "EditableSite": {
         "type": "object",
         "properties": {
@@ -2429,6 +2483,40 @@
             "type": "number"
           }
         }
+      },
+      "EdTriage": {
+        "type": "object",
+        "properties": {
+          "encounterId": {
+            "type": "string"
+          },
+          "patientId": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["critical", "urgent", "non_urgent"]
+          },
+          "chiefComplaint": {
+            "type": "string"
+          },
+          "triagedAt": {
+            "type": "string"
+          },
+          "triagedBy": {
+            "type": "string"
+          },
+          "transferredTo": {
+            "type": "string"
+          },
+          "transferNote": {
+            "type": "string"
+          },
+          "transferredAt": {
+            "type": "string"
+          }
+        },
+        "required": ["encounterId", "patientId"]
       },
       "Encounter": {
         "type": "object",
@@ -21527,6 +21615,220 @@
         ],
         "x-permission": "ot:record",
         "x-feature": "module.clinical.ot"
+      }
+    },
+    "/api/v1/emergency/board": {
+      "get": {
+        "operationId": "get_v1_emergency_board",
+        "tags": ["emergency"],
+        "summary": "GET /api/v1/emergency/board",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EdBoardRow"
+                      }
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:read",
+        "x-feature": "module.clinical.emergency"
+      }
+    },
+    "/api/v1/emergency/triage": {
+      "post": {
+        "operationId": "post_v1_emergency_triage",
+        "tags": ["emergency"],
+        "summary": "POST /api/v1/emergency/triage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "encounterId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": ["critical", "urgent", "non_urgent"]
+                  },
+                  "chiefComplaint": {
+                    "type": "string",
+                    "maxLength": 500
+                  }
+                },
+                "required": ["encounterId", "priority"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/EdTriage"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "triage:perform",
+        "x-feature": "module.clinical.emergency"
+      }
+    },
+    "/api/v1/emergency/transfer-out": {
+      "post": {
+        "operationId": "post_v1_emergency_transfer_out",
+        "tags": ["emergency"],
+        "summary": "POST /api/v1/emergency/transfer-out",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "encounterId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  },
+                  "destination": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 200
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": ["encounterId", "destination"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/EdTriage"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "encounter:close",
+        "x-feature": "module.clinical.emergency"
       }
     },
     "/api/v1/ambulances": {

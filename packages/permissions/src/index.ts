@@ -635,17 +635,34 @@ const CLINICAL = {
     future("D9 Blood Bank", "blood bank is not built"),
   ),
 
-  TRIAGE_PERFORM: p(
-    "triage:perform",
-    "Triage an emergency patient",
-    "branch",
-    future("D10 Emergency", "the ED triage workflow is not built"),
-  ),
+  /**
+   * Assess how sick an emergency patient is. Live since Emergency v1 — it gates
+   * `POST /emergency/triage`.
+   *
+   * Its own permission rather than `encounter:update` because triage is a clinical judgement, not
+   * queue management: the registration desk moves patients along and must not be able to declare
+   * one `non_urgent`.
+   */
+  TRIAGE_PERFORM: p("triage:perform", "Triage an emergency patient", "branch"),
   ED_BOARD_MANAGE: p(
     "ed:board:manage",
-    "Emergency board",
+    "Manage the emergency board",
     "branch",
-    future("D10 Emergency", "the emergency board is not built"),
+    /**
+     * Still unbuilt, and the reason had to be REWRITTEN when the board shipped — the ledger test
+     * can see that a `future` permission has acquired a route, but it cannot see a reason that has
+     * quietly become untrue.
+     *
+     * READING the board needs no permission of its own: it is the queue, filtered and ranked, and
+     * everyone who reads it already holds `encounter:read` for the same patients. What this code
+     * is reserved for is MANAGING it — assigning a patient to a bay, pinning a row, overriding the
+     * triage order by hand — none of which exists, because v1's board is a ranked list a person
+     * reads rather than a thing a person arranges.
+     */
+    future(
+      "D10 Emergency",
+      "the board is read-only in v1 (`encounter:read`); bay assignment and manual re-ordering are not built",
+    ),
   ),
   MLC_MANAGE: p(
     "mlc:manage",
@@ -1288,6 +1305,9 @@ export const DEFAULT_ROLES = [
       CLINICAL.TELECONSULT_HOST,
       CLINICAL.LAB_ORDER,
       CLINICAL.RADIOLOGY_ORDER,
+      // An ED doctor re-assesses the patient in front of them. A hospital with no triage nurse on
+      // the night shift still has to be able to sort its waiting room.
+      CLINICAL.TRIAGE_PERFORM,
       CLINICAL.OT_RECORD,
       /**
        * ── THE SURGEON BOOKS THE THEATRE ──────────────────────────────────────
@@ -1336,6 +1356,13 @@ export const DEFAULT_ROLES = [
       CLINICAL.ALLERGY_MANAGE,
       CLINICAL.NURSING_MANAGE,
       CLINICAL.MAR_ADMINISTER,
+      /**
+       * ── THE TRIAGE NURSE ────────────────────────────────────────────────────
+       * The person at the emergency door deciding who is seen next. It is a clinical judgement,
+       * which is why it is not `encounter:update` (the desk holds that one and moves patients
+       * along a queue without assessing them).
+       */
+      CLINICAL.TRIAGE_PERFORM,
       CLINICAL.LAB_COLLECT,
       // Nurses work the ward's worklist: they carry out procedures and diet orders.
       CLINICAL.ORDER_READ,

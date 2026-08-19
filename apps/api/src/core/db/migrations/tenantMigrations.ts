@@ -2314,4 +2314,47 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+
+  {
+    id: "0053-ed-triage",
+    description: "One triage judgement per emergency visit — so a patient has one priority",
+    /**
+     * ── WHY THE UNIQUE KEY IS THE WHOLE POINT ───────────────────────────────────
+     * `{tenantId, encounterId}` unique. Triage is REVISED, not repeated: a waiting patient who
+     * deteriorates is moved up, and the record must be the current judgement rather than a pile
+     * of them. Without this key a double-submitted triage — the ordinary consequence of a nurse
+     * tapping twice on a busy shift — leaves two rows with two priorities for one patient, and
+     * the board renders whichever the read happened to reach first. That is a patient displayed
+     * as `non_urgent` while a `critical` row for the same person sits behind them.
+     *
+     * The upsert in `recordTriage` relies on this index to arbitrate rather than on a
+     * read-then-write, so two devices racing the same encounter converge on one row.
+     *
+     * ── AND THE BOARD'S OWN READ ────────────────────────────────────────────────
+     * The board fetches every triage row for a set of encounters in one query, so the same key
+     * serves it — `{tenantId, encounterId}` is exactly the `$in` it filters on.
+     *
+     * ── SAFE ON EXISTING DATA ───────────────────────────────────────────────────
+     * A new collection, built over nothing. Emergency visits already recorded (`origin:
+     * "emergency"`, `class: "ER"`) keep their encounters untouched and simply have no triage
+     * record — which is the truth about them, and which the board shows as untriaged rather than
+     * inventing a priority nobody assigned.
+     */
+    up: async (db) => {
+      await db.createCollection("edTriage").catch(() => undefined);
+
+      await db
+        .collection("edTriage")
+        .createIndex(
+          { tenantId: 1, encounterId: 1 },
+          { unique: true, background: true, name: "one_triage_per_encounter" },
+        );
+    },
+    down: async (db) => {
+      await db
+        .collection("edTriage")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

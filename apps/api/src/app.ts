@@ -37,6 +37,7 @@ import { branchRouter } from "./modules/branches/index.js";
 import { departmentRouter } from "./modules/departments/index.js";
 import { wardRouter } from "./modules/wards/index.js";
 import { theatreRouter } from "./modules/theatres/index.js";
+import { emergencyRouter } from "./modules/emergency/index.js";
 import { ambulanceRouter } from "./modules/ambulance/index.js";
 import { assetRouter } from "./modules/assets/index.js";
 import { feedbackRouter } from "./modules/feedback/index.js";
@@ -189,6 +190,7 @@ export function createApp(logger: Logger): Express {
   v1Router.use(departmentRouter());
   v1Router.use(wardRouter());
   v1Router.use(theatreRouter());
+  v1Router.use(emergencyRouter());
   v1Router.use(ambulanceRouter());
   v1Router.use(assetRouter());
   v1Router.use(feedbackRouter());
