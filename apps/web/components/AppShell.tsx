@@ -104,7 +104,18 @@ const NAVIGATION: NavSection[] = [
         permission: "subscription:manage",
       },
       { label: "Service tariff", href: "/tariff", icon: "tariff", permission: "tariff:manage" },
-      { label: "Care packages", href: "/packages", icon: "tariff", permission: "tariff:manage" },
+      /**
+       * Care packages are a module a hospital BUYS (Day Care, Hospital Plus, Enterprise) — the
+       * only part of billing that is. The API gate landed 2026-08-20; without the flag here the
+       * menu would keep offering a page that answers "not in your edition".
+       */
+      {
+        label: "Care packages",
+        href: "/packages",
+        icon: "tariff",
+        permission: "tariff:manage",
+        feature: FEATURE_FLAGS.FINANCE_PACKAGES,
+      },
       {
         label: "Medical records",
         href: "/mrd",

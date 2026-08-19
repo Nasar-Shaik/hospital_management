@@ -79,7 +79,25 @@ const SCREENS: Screen[] = [
   { path: "/theatres", heading: /Operation theatres/i, offers: "Book a procedure" },
   { path: "/ambulance", heading: /Ambulance/i, offers: "Dispatch" },
   { path: "/assets", heading: /Assets/i, offers: "Add asset" },
-  { path: "/packages", heading: /Care packages/i, offers: "Add package" },
+  {
+    path: "/packages",
+    heading: /Care packages/i,
+    expectedRefusals: [
+      {
+        match: /\/api\/v1\/packages/,
+        /**
+         * `module.finance.packages` is not in PLAN_HOSPITAL — care packages are a Day Care /
+         * Hospital Plus differentiator — so the API answers `HMS-PLAN-002` and the page says so
+         * instead of offering "Add package" over "No packages yet".
+         *
+         * Until 2026-08-20 these routes gated on `module.ops.opd` and this line read
+         * `offers: "Add package"`, which is what the defect looked like from the browser: a
+         * module the seeded hospital had not bought, working perfectly.
+         */
+        because: "the seeded plan does not include care packages (HMS-PLAN-002)",
+      },
+    ],
+  },
   { path: "/tariff", heading: /Service tariff/i, offers: "Add service" },
   { path: "/feedback", heading: /Feedback & complaints/i, offers: "Log new" },
   { path: "/audit", heading: /Activity trail/i, offers: "Export CSV" },

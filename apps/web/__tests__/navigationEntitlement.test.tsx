@@ -142,6 +142,7 @@ describe("3. each entry answers to its own flag", () => {
     ["module.support.mrd", ["Medical records"]],
     ["module.support.assets", ["Assets"]],
     ["module.ops.appointments", ["Appointments"]],
+    ["module.finance.packages", ["Care packages"]],
   ];
 
   for (const [flag, labels] of CASES) {

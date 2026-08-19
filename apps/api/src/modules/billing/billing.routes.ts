@@ -63,6 +63,22 @@ import {
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_OPD } as const;
 
+/**
+ * Care packages are the one part of billing a hospital BUYS SEPARATELY.
+ *
+ * `module.finance.packages` is in three editions — Day Care, Hospital Plus and Enterprise — and
+ * until 2026-08-20 it gated nothing at all, because these six routes carried `FEATURE` like the
+ * rest of the file. Every PLAN_HOSPITAL and PLAN_CLINIC tenant therefore had a Hospital-Plus
+ * differentiator for free, and the flag sat on their subscription page as a module they had not
+ * bought. The fix is one constant, not a new mechanism: the routes now name the flag the price
+ * list already names.
+ *
+ * The rest of billing stays on `module.ops.opd` for the reason given at the top of this file —
+ * there is no edition in which a hospital takes patients and issues no bill. A package is
+ * different in kind: a fixed-price bundle is a commercial product a hospital chooses to sell.
+ */
+const PACKAGES = { feature: FEATURE_FLAGS.FINANCE_PACKAGES } as const;
+
 export function billingRouter(): Router {
   const router = Router();
 
@@ -358,7 +374,7 @@ export function billingRouter(): Router {
   router.get(
     "/packages",
     authenticate(),
-    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    authorize(PERMISSIONS.BILLING_READ, PACKAGES),
     validate(listPackagesQuerySchema, "query"),
     responds(servicePackage.array()),
     asyncHandler(controller.listPackages),
@@ -367,7 +383,7 @@ export function billingRouter(): Router {
   router.post(
     "/packages",
     authenticate(),
-    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    authorize(PERMISSIONS.TARIFF_MANAGE, PACKAGES),
     validate(createPackageSchema),
     responds(servicePackage, { status: 201 }),
     asyncHandler(controller.createPackage),
@@ -376,7 +392,7 @@ export function billingRouter(): Router {
   router.patch(
     "/packages/:id",
     authenticate(),
-    authorize(PERMISSIONS.TARIFF_MANAGE, FEATURE),
+    authorize(PERMISSIONS.TARIFF_MANAGE, PACKAGES),
     validate(idParamSchema, "params"),
     validate(updatePackageSchema),
     responds(servicePackage),
@@ -386,7 +402,7 @@ export function billingRouter(): Router {
   router.get(
     "/encounters/:id/package-enrollments",
     authenticate(),
-    authorize(PERMISSIONS.BILLING_READ, FEATURE),
+    authorize(PERMISSIONS.BILLING_READ, PACKAGES),
     validate(idParamSchema, "params"),
     responds(packageEnrollment.array()),
     asyncHandler(controller.listPackageEnrollments),
@@ -395,7 +411,7 @@ export function billingRouter(): Router {
   router.post(
     "/encounters/:id/package-enrollments",
     authenticate(),
-    authorize(PERMISSIONS.PACKAGE_ENROLL, FEATURE),
+    authorize(PERMISSIONS.PACKAGE_ENROLL, PACKAGES),
     validate(idParamSchema, "params"),
     validate(enrollPackageSchema),
     responds(packageEnrollment, { status: 201 }),
@@ -406,7 +422,7 @@ export function billingRouter(): Router {
   router.post(
     "/package-enrollments/:id/cancel",
     authenticate(),
-    authorize(PERMISSIONS.PACKAGE_ENROLL, FEATURE),
+    authorize(PERMISSIONS.PACKAGE_ENROLL, PACKAGES),
     validate(idParamSchema, "params"),
     responds(packageEnrollment),
     asyncHandler(controller.cancelPackageEnrollment),

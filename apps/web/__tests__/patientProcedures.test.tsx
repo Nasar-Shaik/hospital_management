@@ -94,6 +94,9 @@ const NOT_WRITTEN_UP = {
   operativeNote: undefined,
 };
 
+/** What `GET /packages` answers. §1–2 never look at it; §3 makes it the plan refusal. */
+let packagesAnswer: () => Response = () => ok([]);
+
 function serve(bookings: unknown[]) {
   const urls: string[] = [];
   const fetchImpl = (async (url: string | URL, init?: RequestInit): Promise<Response> => {
@@ -102,6 +105,8 @@ function serve(bookings: unknown[]) {
 
     if (/\/patients\/p-1(\?|$)/.test(href)) return ok(PATIENT);
     if (href.includes("/ot-bookings")) return ok(bookings);
+    // Care packages are a module a hospital buys; §3 drives this branch.
+    if (href.includes("/packages")) return packagesAnswer();
     if (href.includes("/doctors")) return ok([{ id: "doctor-1", name: "Rao" }]);
     if (href.includes("/encounters") || href.includes("/orders") || href.includes("/invoices")) {
       return ok([], { page: 1, limit: 100, total: 0 });
@@ -118,6 +123,7 @@ beforeEach(() => {
   FEATURES.clear();
   for (const p of ["patient:read", "emr:read"]) PERMISSIONS.add(p);
   FEATURES.add("module.clinical.ot");
+  packagesAnswer = () => ok([]);
 });
 afterEach(cleanup);
 
@@ -200,5 +206,58 @@ describe("2. a hospital without theatres", () => {
 
     await screen.findByText("Kamala Devi");
     expect(urls.filter((u) => u.includes("/ot-bookings"))).toHaveLength(0);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 3. THE BILLS TAB, FOR A HOSPITAL THAT NEVER BOUGHT CARE PACKAGES.
+ *
+ * The same class as §2, on the tab next door, and newly reachable: until 2026-08-20 the package
+ * routes gated on `module.ops.opd`, so this refusal could not happen. Now it can, and the panel
+ * swallowed the error — leaving a hospital that does not have the module looking at "No packages
+ * defined. Create one under Care packages first.", an instruction pointing at a page that will
+ * refuse them too.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("3. the bills tab, for a hospital without care packages", () => {
+  const refusePackages = () =>
+    new Response(
+      JSON.stringify({
+        success: false,
+        error: {
+          code: "HMS-PLAN-002",
+          message: "Feature not in your edition",
+          details: { feature: "module.finance.packages" },
+        },
+      }),
+      { status: 403, headers: { "content-type": "application/json" } },
+    );
+
+  async function openBills() {
+    fireEvent.click(await screen.findByRole("button", { name: /Bills/ }));
+  }
+
+  it("shows no care package panel at all, rather than an empty one", async () => {
+    PERMISSIONS.add("billing:read");
+    PERMISSIONS.add("package:enroll");
+    packagesAnswer = refusePackages;
+    serve([]);
+    render(<PatientPage />);
+    await openBills();
+
+    expect(await screen.findByText("No bills.")).toBeTruthy();
+    expect(screen.queryByText("Care packages")).toBeNull();
+    expect(screen.queryByText(/No packages defined/)).toBeNull();
+  });
+
+  /** And the panel is still there for a hospital that DID buy them — the guard must key on the code. */
+  it("still shows it to a hospital that has the module", async () => {
+    PERMISSIONS.add("billing:read");
+    PERMISSIONS.add("package:enroll");
+    serve([]);
+    render(<PatientPage />);
+    await openBills();
+
+    expect(await screen.findByText("Care packages")).toBeTruthy();
   });
 });

@@ -7,11 +7,20 @@
  * codes it covers. Enrolling a visit charges the price once; the covered services then post at ₹0
  * against it, so the bundle is billed once and its contents are not double-charged. Reading is
  * `billing:read` (the counter that enrols); defining a package is the tariff owner's `tariff:manage`.
+ *
+ * ── AND IT IS A MODULE A HOSPITAL BUYS ──────────────────────────────────────
+ * `module.finance.packages` — Day Care, Hospital Plus and Enterprise. Until 2026-08-20 the API
+ * gated these routes on `module.ops.opd` like the rest of billing, so every hospital had them.
+ * Now that the gate is real, this page can be reached by a hospital that never bought it, and
+ * "Add package" over "No packages yet" would read as an empty catalogue rather than as a module
+ * the plan does not include (D20) — so it says which one it is.
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { type CarePackage } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { Badge, Button, Card, Field, ErrorAlert } from "../../components/ui";
+import { ModuleNotInEdition } from "../../components/ModuleNotInEdition";
+import { isFeatureUnavailable } from "../../lib/errors";
 import { rupees, toPaise } from "../../lib/money";
 
 /** Codes typed as a comma/newline list → a clean, upper-cased array; and back for editing. */
@@ -192,6 +201,19 @@ function PackagesPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  /**
+   * The plan refused the catalogue: no table, no empty state and no "Add package" — every one of
+   * them would be refused too, and together they would say "you have this and it is empty".
+   */
+  if (isFeatureUnavailable(error)) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-6 p-6">
+        <h1 className="text-xl font-semibold text-[var(--color-fg)]">Care packages</h1>
+        <ModuleNotInEdition module="Care packages" />
+      </div>
+    );
   }
 
   return (

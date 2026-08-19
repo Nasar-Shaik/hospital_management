@@ -38,6 +38,8 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedTariff } = await import("./seed/tariff.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
+const { setFeatureOverride, clearFeatureOverride } =
+  await import("./modules/entitlements/index.js");
 
 const PVT = "test-bill-pvt";
 const GOV = "test-bill-gov";
@@ -1197,5 +1199,92 @@ describe("an admitted patient's test settles even when the advance is short", ()
       200,
     );
     expect(after.body.data.balance).toBe(before.body.data.balance);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * CARE PACKAGES ARE A MODULE THE HOSPITAL BUYS — layer 1, not layer 2.
+ *
+ * `module.finance.packages` is sold in three editions (Day Care, Hospital Plus, Enterprise) and,
+ * until 2026-08-20, gated nothing: the six package routes carried `module.ops.opd` like the rest
+ * of billing, which every edition holds. So both hospitals in this suite — PLAN_HOSPITAL, which
+ * does NOT include packages — could define a maternity bundle and enrol patients into it, and the
+ * flag sat on their subscription page as a module they had not bought.
+ *
+ * The regression is asserted on the CODE, not the status. `HMS-PLAN-002` and `HMS-AUTH-005` are
+ * both 403s and mean opposite things: one sends the administrator to their account manager, the
+ * other sends them into the role editor after a permission that can never help. A test that
+ * accepted either would pass just as happily if this were re-gated to a permission nobody holds.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("care packages: a hospital that did not buy them cannot use them", () => {
+  const ID = "64b7f0000000000000000001";
+  const ROUTES: [string, () => request.Test][] = [
+    ["GET /packages", () => request(app).get("/api/v1/packages")],
+    ["POST /packages", () => request(app).post("/api/v1/packages")],
+    ["PATCH /packages/:id", () => request(app).patch(`/api/v1/packages/${ID}`)],
+    [
+      "GET /encounters/:id/package-enrollments",
+      () => request(app).get(`/api/v1/encounters/${ID}/package-enrollments`),
+    ],
+    [
+      "POST /encounters/:id/package-enrollments",
+      () => request(app).post(`/api/v1/encounters/${ID}/package-enrollments`),
+    ],
+    [
+      "POST /package-enrollments/:id/cancel",
+      () => request(app).post(`/api/v1/package-enrollments/${ID}/cancel`),
+    ],
+  ];
+
+  /**
+   * Every route, not just the list. A gate on the read but not the write is worse than no gate:
+   * the hospital simply uses the parts that were forgotten, and the catalogue it cannot see fills
+   * up anyway.
+   */
+  it.each(ROUTES)("refuses %s with HMS-PLAN-002", async (_name, call) => {
+    const res = await auth(call(), pvt).send({});
+    expect(res.status).toBe(403);
+    expect(res.body.error?.code).toBe("HMS-PLAN-002");
+    expect(res.body.error?.details?.feature).toBe("module.finance.packages");
+  });
+
+  /**
+   * The other half, and the half that proves this is an ENTITLEMENT and not an accident: the same
+   * hospital, the same administrator, the same request — with the module switched on through the
+   * mechanism that already exists for it (a per-tenant override, `featureFlags` in the master
+   * registry). Nothing about the user changed, so nothing but layer 1 can explain the difference.
+   */
+  it("admits the same hospital once the module is switched on for it", async () => {
+    await setFeatureOverride({
+      tenantId: pvt.id,
+      flag: "module.finance.packages",
+      enabled: true,
+      reason: "billing.int.test — proving the gate is layer 1",
+    });
+    try {
+      const res = await auth(request(app).get("/api/v1/packages"), pvt);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([]);
+    } finally {
+      await clearFeatureOverride(pvt.id, "module.finance.packages");
+    }
+  });
+
+  /** And withdrawing it takes the module away again — the cache must not outlive the entitlement. */
+  it("takes it away again when the override is cleared", async () => {
+    const res = await auth(request(app).get("/api/v1/packages"), pvt);
+    expect(res.status).toBe(403);
+    expect(res.body.error?.code).toBe("HMS-PLAN-002");
+  });
+
+  /**
+   * The rest of billing is NOT a package. `module.ops.opd` still gates the counter, so re-gating
+   * the packages must not have taken the tariff or the bill with it — the failure this would
+   * catch is a one-line mistake with a very large blast radius.
+   */
+  it("leaves the rest of billing untouched for the same hospital", async () => {
+    await auth(request(app).get("/api/v1/services"), pvt).expect(200);
+    await auth(request(app).get("/api/v1/invoices"), pvt).expect(200);
   });
 });

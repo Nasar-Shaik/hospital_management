@@ -15554,7 +15554,7 @@
           }
         ],
         "x-permission": "billing:read",
-        "x-feature": "module.ops.opd"
+        "x-feature": "module.finance.packages"
       },
       "post": {
         "operationId": "post_v1_packages",
@@ -15651,7 +15651,7 @@
           }
         ],
         "x-permission": "tariff:manage",
-        "x-feature": "module.ops.opd"
+        "x-feature": "module.finance.packages"
       }
     },
     "/api/v1/packages/{id}": {
@@ -15757,7 +15757,7 @@
           }
         ],
         "x-permission": "tariff:manage",
-        "x-feature": "module.ops.opd"
+        "x-feature": "module.finance.packages"
       }
     },
     "/api/v1/encounters/{id}/package-enrollments": {
@@ -15827,7 +15827,7 @@
           }
         ],
         "x-permission": "billing:read",
-        "x-feature": "module.ops.opd"
+        "x-feature": "module.finance.packages"
       },
       "post": {
         "operationId": "post_v1_encounters_id_package_enrollments",
@@ -15933,7 +15933,7 @@
           }
         ],
         "x-permission": "package:enroll",
-        "x-feature": "module.ops.opd"
+        "x-feature": "module.finance.packages"
       }
     },
     "/api/v1/package-enrollments/{id}/cancel": {
@@ -16000,7 +16000,7 @@
           }
         ],
         "x-permission": "package:enroll",
-        "x-feature": "module.ops.opd"
+        "x-feature": "module.finance.packages"
       }
     },
     "/api/v1/prescriptions": {

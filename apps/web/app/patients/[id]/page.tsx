@@ -58,6 +58,7 @@ import {
   isResultReadable,
 } from "../../../lib/results";
 import { idempotencyMessage, newIdempotencyKey } from "../../../lib/idempotency";
+import { isFeatureUnavailable } from "../../../lib/errors";
 
 /* ── helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -1067,7 +1068,14 @@ function Bills({
   );
 }
 
-/* ── Package enrollment (F5) ─────────────────────────────────────────────────── */
+/* ── Package enrollment (F5) ───────────────────────────────────────────────────
+ *
+ * Care packages are a module a hospital BUYS (`module.finance.packages` — Day Care, Hospital Plus,
+ * Enterprise). A hospital without it must not be shown this panel at all: the catalogue call comes
+ * back `HMS-PLAN-002`, and rendering the panel anyway would offer a picker over "No packages
+ * defined. Create one under Care packages first." — an instruction that leads to a page which will
+ * refuse them too (D20, a refusal rendered as emptiness). Not sold, not shown.
+ * ──────────────────────────────────────────────────────────────────────────── */
 
 function PackagesPanel({
   encounters,
@@ -1088,6 +1096,7 @@ function PackagesPanel({
   const [packageCode, setPackageCode] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [notInEdition, setNotInEdition] = useState(false);
 
   const loadEnrollments = useCallback(() => {
     if (!encounterId) {
@@ -1107,7 +1116,10 @@ function PackagesPanel({
         setPackages(p);
         setPackageCode((cur) => cur || p[0]?.code || "");
       })
-      .catch(() => setPackages([]));
+      .catch((e: unknown) => {
+        setPackages([]);
+        if (isFeatureUnavailable(e)) setNotInEdition(true);
+      });
   }, [api]);
   useEffect(loadEnrollments, [loadEnrollments]);
 
@@ -1126,6 +1138,8 @@ function PackagesPanel({
 
   const active = enrollments.find((e) => e.status === "active");
 
+  // The hospital never bought packages — see the note above this component.
+  if (notInEdition) return null;
   // Nothing to show and nothing the viewer can do — keep the tab clean.
   if (!canEnroll && enrollments.length === 0) return null;
 

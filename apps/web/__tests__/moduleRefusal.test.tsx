@@ -42,6 +42,7 @@ vi.mock("../components/BranchProvider", () => ({ useBranch: () => BRANCH }));
 
 const { default: EmergencyBoardPage } = await import("../app/emergency/page");
 const { default: TheatresPage } = await import("../app/theatres/page");
+const { default: PackagesPage } = await import("../app/packages/page");
 
 /** The API's real answer for a module the hospital never bought. */
 function refuseEverything() {
@@ -125,6 +126,46 @@ describe("3. an ordinary failure is still an ordinary failure", () => {
     render(<EmergencyBoardPage />);
 
     expect(await screen.findByText("Nobody in the emergency department.")).toBeTruthy();
+    expect(screen.queryByText(/not part of your hospital/)).toBeNull();
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 4. CARE PACKAGES — the same page, newly reachable by a hospital without the module.
+ *
+ * Until 2026-08-20 this page could not be refused: the six package routes gated on
+ * `module.ops.opd`, which every edition holds, so `module.finance.packages` — a Day Care /
+ * Hospital Plus differentiator — withheld nothing. Now that the gate is real, `/packages` joins
+ * the pages a hospital can reach and must not be lied to on, and it would have landed in exactly
+ * the D20 shape: "Add package" over "No packages yet. Add one to start the catalogue."
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("4. the care package catalogue, for a hospital that did not buy it", () => {
+  it("says the module is not in the edition, and does not offer an empty catalogue", async () => {
+    render(<PackagesPage />);
+
+    expect(await screen.findByText(/not part of your hospital/)).toBeTruthy();
+    expect(screen.queryByText("No packages yet. Add one to start the catalogue.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add package" })).toBeNull();
+  });
+
+  /** Same guard, same rule: a 500 is not a licensing answer. */
+  it("still shows an ordinary failure as an ordinary failure", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          success: false,
+          error: { code: "HMS-GEN-500", message: "Something went wrong" },
+        }),
+        { status: 500, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    AUTH.api = new ApiClient({ baseUrl: "http://api.test", fetchImpl });
+
+    render(<PackagesPage />);
+
+    expect(
+      await screen.findByText("No packages yet. Add one to start the catalogue."),
+    ).toBeTruthy();
     expect(screen.queryByText(/not part of your hospital/)).toBeNull();
   });
 });
