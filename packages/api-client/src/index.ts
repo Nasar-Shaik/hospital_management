@@ -6385,12 +6385,46 @@ export class ApiClient {
    * Availability for the drugs on a prescribing pad. `prescription:create`, not a pharmacy
    * permission — a doctor asking whether their patient can get a drug here is not doing
    * inventory.
+   *
+   * ── WHY THIS IS CHUNKED ─────────────────────────────────────────────────────
+   * `codes` is one comma-separated query parameter and the API caps it at 2,000 characters
+   * (`availabilityQuerySchema`). The caller is the prescribing pad, which asks about every drug it
+   * is SHOWING — and an unfiltered pad shows the whole formulary. Past roughly 100–150 codes the
+   * single request became a 400, and because the pad swallows the error on purpose (an inventory
+   * lookup must never put a banner over a prescribing screen), the stock column simply went blank
+   * and stayed blank. Found by Stage A manual validation on 2026-08-19, on a hospital with 120
+   * drugs; a real formulary is larger than that on day one.
+   *
+   * Splitting here rather than raising the cap: the bound is a reasonable thing for a URL to have,
+   * and every caller of this method wants "tell me about these drugs" regardless of how many.
    */
-  medicineAvailability(codes: string[]): Promise<MedicineAvailability[]> {
-    return this.request<MedicineAvailability[]>(
-      "GET",
-      `/api/v1/medicines/availability?codes=${encodeURIComponent(codes.join(","))}`,
+  async medicineAvailability(codes: string[]): Promise<MedicineAvailability[]> {
+    /** Comfortably inside the server's 2,000, with room for the longest code to not straddle it. */
+    const BUDGET = 1_800;
+    const batches: string[][] = [];
+    let batch: string[] = [];
+    let length = 0;
+    for (const code of codes) {
+      const cost = code.length + (batch.length === 0 ? 0 : 1);
+      if (length + cost > BUDGET && batch.length > 0) {
+        batches.push(batch);
+        batch = [];
+        length = 0;
+      }
+      batch.push(code);
+      length += batch.length === 1 ? code.length : cost;
+    }
+    if (batch.length > 0) batches.push(batch);
+
+    const pages = await Promise.all(
+      batches.map((group) =>
+        this.request<MedicineAvailability[]>(
+          "GET",
+          `/api/v1/medicines/availability?codes=${encodeURIComponent(group.join(","))}`,
+        ),
+      ),
     );
+    return pages.flat();
   }
 
   /** Every lot of one drug, expired ones included — the pharmacist's shelf. */
