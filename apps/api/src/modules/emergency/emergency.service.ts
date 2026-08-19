@@ -15,6 +15,7 @@ import { getContext } from "../../core/context/requestContext.js";
 import {
   closeEncounter,
   getEncounter,
+  isOpen,
   listEncounters,
   startConsultation,
   type Encounter,
@@ -25,7 +26,28 @@ import { PRIORITY_RANK, UNTRIAGED_RANK, type TriagePriority } from "./emergency.
 
 export type { Triage } from "./emergency.repository.js";
 
-/** An ED visit, and only an ED visit. Everything here refuses an encounter of another class. */
+/**
+ * An ED visit, still in progress — the only thing either write here may touch.
+ *
+ * ── WHY "STILL OPEN" IS PART OF THE GUARD, NOT A SEPARATE CHECK ─────────────
+ * Found by manual validation (Stage A, 2026-08-19), and it was not theoretical. `class === "ER"`
+ * alone let both writes land on a visit that had already ENDED:
+ *
+ *   - a patient transferred out to another hospital accepted a fresh triage (201) and had their
+ *     `triagedAt` rewritten, putting a new assessment on someone who was not in the building;
+ *   - worse, `transferOut` records the destination BEFORE `closeEncounter` validates the move, so
+ *     a transfer that was then refused (422, because the visit was already closed) had already
+ *     overwritten a REAL destination — "Apollo Hospitals — Cath Lab" became the second caller's
+ *     value. A failed call destroyed a clinical fact.
+ *
+ * Refusing a closed visit up front fixes both, and it fixes the second one properly: there is no
+ * ordering left to get wrong, because nothing is written at all. It also holds for `planned`,
+ * which is open but cannot reach `closed` — an ER visit should never be in that state, and if one
+ * ever is, refusing beats writing a transfer we cannot complete.
+ *
+ * The status is named in the error. "That visit is closed" with no reason is the kind of refusal
+ * that sends a nurse to find someone with a database client.
+ */
 async function requireEdEncounter(encounterId: string): Promise<Encounter> {
   const encounter = await getEncounter(encounterId);
   if (!encounter) throw new AppError("HMS-GEN-404", 404, "Visit not found", { id: encounterId });
@@ -38,6 +60,12 @@ async function requireEdEncounter(encounterId: string): Promise<Encounter> {
     throw new AppError("HMS-VAL-001", 409, "That visit is not an emergency presentation", {
       class: encounter.class,
       hint: "register the patient with class ER to work them up in the emergency department",
+    });
+  }
+  if (!isOpen(encounter.status)) {
+    throw new AppError("HMS-VAL-001", 409, "That emergency visit has already ended", {
+      status: encounter.status,
+      hint: "the patient has been discharged, admitted or sent elsewhere — register a new arrival",
     });
   }
   return encounter;

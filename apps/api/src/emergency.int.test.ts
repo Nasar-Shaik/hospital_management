@@ -24,6 +24,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { Types } from "mongoose";
 import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -620,6 +621,108 @@ describe("a patient leaves the board exactly when they leave the department", ()
     );
 
     expect((await boardAt()).map((r) => r.encounterId)).not.toContain(encounterId);
+  });
+});
+
+/* ══ 3b. a visit that has ended is not a visit ═══════════════════════════════ */
+
+/**
+ * ── FOUND BY A HUMAN, NOT BY THIS SUITE ─────────────────────────────────────
+ * Stage A manual validation, 2026-08-19. Every test above works on a patient who is still in the
+ * department, because that is the story anyone writing them has in their head. Nobody had asked
+ * what happens to a visit that already ENDED — and the answer was: both writes were accepted.
+ *
+ * The first two tests below are ordinary regressions. The THIRD is the one that matters, and it is
+ * the reason this block exists: a refused transfer used to overwrite the destination of a real
+ * one, because the record was written before the close was validated. Deleting the `isOpen` guard
+ * turns that test red with the wrong hospital's name in the assertion — which is exactly what a
+ * patient's notes would have said.
+ */
+describe("a visit that has already ended refuses both writes", () => {
+  /** Arrive, triage, and send the patient to another hospital. The visit is now closed. */
+  async function transferredOut(name: string, destination: string): Promise<string> {
+    const { encounterId } = await arrive(name);
+    await req("post", "/api/v1/emergency/triage", nurseToken, main.host, siteA)
+      .send({ encounterId, priority: "critical", chiefComplaint: "Crushing central chest pain" })
+      .expect(201);
+    await req("post", "/api/v1/emergency/transfer-out", doctorToken, main.host, siteA)
+      .send({ encounterId, destination })
+      .expect(201);
+    return encounterId;
+  }
+
+  it("refuses to triage a patient who has been sent to another hospital", async () => {
+    const encounterId = await transferredOut("Already Gone", "St Jude — cath lab");
+
+    const res = await req("post", "/api/v1/emergency/triage", nurseToken, main.host, siteA).send({
+      encounterId,
+      priority: "non_urgent",
+      chiefComplaint: "assessment of a patient who is not here",
+    });
+    expect(res.status, res.text).toBe(409);
+    expect(res.body.error.message).toMatch(/already ended/i);
+    expect(res.body.error.details.status).toBe("closed");
+  });
+
+  /**
+   * A second terminal state, so the guard is `isOpen` rather than "not closed". Left-without-being
+   * -seen is the one that would bite in a real department: the patient walked out, and the nurse
+   * working down a stale board would otherwise still be able to file an assessment on them.
+   */
+  it("refuses to triage a patient who left without being seen", async () => {
+    const { encounterId } = await arrive("Walked Out Again");
+    await req("post", `/api/v1/encounters/${encounterId}/queue`, deskToken, main.host, siteA);
+    await req("post", `/api/v1/encounters/${encounterId}/left`, deskToken, main.host, siteA).expect(
+      200,
+    );
+
+    const res = await req("post", "/api/v1/emergency/triage", nurseToken, main.host, siteA).send({
+      encounterId,
+      priority: "critical",
+    });
+    expect(res.status, res.text).toBe(409);
+    expect(res.body.error.details.status).toBe("left_without_being_seen");
+  });
+
+  /**
+   * ── THE FALSIFICATION ─────────────────────────────────────────────────────
+   * The bug was not "a pointless second transfer is allowed". It was that the second transfer
+   * WROTE — `recordTransfer` runs before `closeEncounter` refuses the state change — so the record
+   * ended up naming a hospital the patient was never sent to, while the call reported a failure.
+   * Asserting the refusal alone would pass against the broken code. The assertion that matters is
+   * the last one: the destination on file is still the real one.
+   */
+  it("does not let a REFUSED transfer rewrite where the patient actually went", async () => {
+    const real = "Apollo — regional cath lab";
+    const encounterId = await transferredOut("Sent Once, Only Once", real);
+
+    const second = await req(
+      "post",
+      "/api/v1/emergency/transfer-out",
+      doctorToken,
+      main.host,
+      siteA,
+    ).send({ encounterId, destination: "SOMEWHERE THEY NEVER WENT" });
+
+    /**
+     * ── THIS ASSERTION COMES FIRST, ON PURPOSE ──────────────────────────────
+     * The broken version REFUSED this call too — with a 422 from the state machine, after it had
+     * already written. So "the second transfer is refused" is true of the bug as well, and a test
+     * that checks the status first fails on the status and never reaches the damage. The claim
+     * worth pinning is that the record was not touched; it is asserted before anything else.
+     *
+     * Read straight from the collection, deliberately: a closed visit is off the board, and the
+     * board is the only route that returns a triage row, so this cannot be stated through the API.
+     */
+    const row = await main.connection
+      .collection("edTriage")
+      .findOne({ encounterId: new Types.ObjectId(encounterId) });
+    expect(row?.transferredTo, "a refused transfer rewrote where the patient went").toBe(real);
+
+    // And the refusal itself is the ED module's, naming the ended visit — not a state-machine 422
+    // leaking out of a write that should never have been attempted.
+    expect(second.status, second.text).toBe(409);
+    expect(second.body.error.message).toMatch(/already ended/i);
   });
 });
 
