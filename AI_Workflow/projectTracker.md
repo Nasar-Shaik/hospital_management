@@ -347,11 +347,59 @@ list. What remains here is the standing risk picture.
 | M1    | Foundation — sign in, stay signed in, know your site, fail comprehensibly | ✅ 2026-08-12 · hardware-verified      |
 | M2    | Doctor — my patients, timeline, vitals & results, writes, biometric gate  | ✅ 2026-08-13 · **0/61 device checks** |
 | M3    | Nurse — ward worklist, vitals capture, medication administration, round   | ✅ 2026-08-13 · **0/45 device checks** |
-| M4    | Alerts — **inbox ✅ 2026-08-18**; device registration + push delivery     | 🟨 Partial · **0 device checks**       |
+| M4    | Alerts — inbox ✅ 2026-08-18 · **push ✅ 2026-08-20**                     | ✅ code · 🔴 **0/18 device checks**    |
 | M5    | Department worklists — lab/imaging queue, pharmacy dispense queue         | ⬜ _re-scoped 2026-08-20_              |
 | M6    | The departments that move — ED board + triage, theatre board              | ⬜ _re-scoped 2026-08-20_              |
 | M7    | Store at the shelf + hardening — accessibility, offline reads, release    | ⬜ _re-scoped 2026-08-20_              |
 | M8    | **Patient app — deferred to the final major phase, lowest priority**      | ⬜ Deferred                            |
+
+### M4 delivered, 2026-08-20 — and it cannot be called done until a phone rings
+
+Device-token registration, push delivery through the existing notification architecture,
+notification → deep-link navigation, the token lifecycle, and the entitlement gap the audit found.
+
+**Push is not a `Channel`, on purpose.** `dedupeKey` is unique per tenant, so a template delivered
+on two channels collides on `one_message_per_cause` and the second is dropped as a duplicate —
+the problem `COMMUNICATION_POLICY.md` already records for email-plus-inapp. The fan-out hangs off
+the in-app delivery instead, which is what `channels/inapp.ts` said it would be from the day it was
+written: _"a phone notification is a push wrapper around one of these rows, not a separate
+system."_ The ledger row stays the message and stays authoritative; an Expo outage costs a buzz,
+never an alert.
+
+**The lock screen carries no identifiers.** The in-app subject reads "CRITICAL RESULT — Kamala Devi
+— Serum Potassium"; pushing it would put a name, a test and a diagnosis-shaped fact on a handset
+lying face-up on a desk. The push carries a fixed line per template — what happened, never who —
+and the ids ride in the undisplayed `data`. An unclassified template falls back to "You have a new
+alert", so forgetting one costs silence rather than disclosure.
+
+**Two defects found by M4's own tests, one of them four months old:**
+
+1. **No appointment reminder has ever been scheduled.** BullMQ builds its keys as
+   `bull:<queue>:<jobId>` and rejects a custom id containing a colon;
+   `reminder:{tenantId}:{appointmentId}` therefore made `add()` reject on every booking since A6.
+   It failed inside an awaited call in a consumer, which surfaces as an ordinary job retry, so
+   nothing said so. `scheduleTask` now refuses a colon up front (`taskQueue.test.ts`).
+2. **The same bug in M4's own job id**, caught the same way — by a test that asserted on the
+   QUEUED JOB rather than on `scheduleTask` having been called.
+
+**The entitlement gap is closed.** `/auth/me` has carried `features` since D20 and the mobile
+runtime dropped them; the session store now holds them and `tabsFor` gates on both halves, so a
+nurse at a clinic with no nursing module is no longer offered a Ward tab that can only answer
+`HMS-PLAN-002`.
+
+**Validation, in three classes:** automated ✅ (27 API integration + 9 unit + 15 mobile, plus 11
+falsifications) · emulator 🔴 none · **physical device 🔴 0 of 18, and two of them are BLOCKED
+before they can start** — no EAS project is linked (`extra.eas.projectId` is set nowhere, so no
+token can be minted) and Expo Go has not carried remote push since SDK 53, so a development build
+is required. See [`docs/MOBILE_M4_DEVICE_CHECKLIST.md`](docs/MOBILE_M4_DEVICE_CHECKLIST.md).
+
+**Adjacent finding, NOT fixed (out of M4 scope).** `RuntimeProvider` never passes `biometrics` to
+`createRuntime`, so `platform/biometrics.ts` is imported by nothing and the M2 screen lock can
+never engage a fingerprint in the shipped app. Three call sites read `runtime.biometrics` and all
+three get `undefined`. It is one line, in the file M4 just edited — left alone deliberately,
+because it is an unrelated feature whose fix needs the same hardware session to verify.
+
+---
 
 ### Coverage audit, 2026-08-20 — **the next milestone is M4, and it is a finishing job**
 
@@ -673,4 +721,5 @@ copies another tracker inherits its drift. **Read the code.**
 | 2026-08-20 | **Product audit, then General Stores v1.** A repository-wide audit re-measured every major HMS area against the code (not the trackers) and found the general store to be the only core operational department with nothing built; `packages/permissions/src/index.ts`'s lifecycle ledger — gate-enforced by `permissionLifecycle.test.ts` — was used as the authoritative module inventory. The module then shipped: 11 routes, 4 collections (migration 0054), a per-site shelf that cannot go negative, five permissions off `future()`, a `STORE_KEEPER` role holding nothing clinical, and `module.support.inventory` in the Hospital editions. Its own suite immediately caught a real defect — three of the permissions were declared `tenant`-scoped, so a branch-confined keeper was answered with both sites' shelves. See §4 G1/G3 and `docs/INVENTORY.md`.                                                                                                   |
 | 2026-08-20 | **Entitlement cleanup — the flag ledger.** The layer-1 sibling of the permission ledger now exists: `apps/api/src/featureLifecycle.test.ts` reads the shipped app and fails when a flag with no `FEATURE_LIFECYCLE` entry gates nothing, or when a declared one acquires a gate. Two defects fixed with it — `portal.patient` was sold by every edition with no portal in the product (removed from the editions; the flag stays, declared `unbuilt`), and `module.finance.packages` gated nothing because the six care-package routes carried `module.ops.opd` like the rest of billing, so PLAN_HOSPITAL and PLAN_CLINIC had a Day Care / Hospital Plus differentiator for free. Writing the ledger caught a third thing on the way past: `module.finance.ipBilling` is not `bundled` — it is `gated` by `module.ops.ipd`, which the test now verifies. Eleven unbuilt flags remain listed in premium editions and the count is pinned. Eight falsifications; see §10. |
 | 2026-08-20 | **Mobile coverage audit** (§7). Measured against the code: the doctor (8 of 9) and the nurse (7 of 7) are complete; seven other staff audiences have nothing, two of them behind `ComingLater` placeholders that promise M5. Coverage ≈50% of practical staff workflows — an estimate. Nothing is blocked by the API or the client (299 client methods, 37 called by mobile; `dispense`, the order lifecycle, `edBoard`, `triagePatient`, the OT board and `issueStoreStock` are all already typed and contract-checked). Two non-screen gaps found: push delivery does not exist at all, and mobile drops `me.features`, so its tab bar gates on permission without entitlement — the D20 rule the web shell already follows. M5–M7 re-scoped by audience. **Next milestone: M4 — finish alerts.** Validation reported in three classes: automated 1,669 ✅ · emulator none · physical device **0/106**.                                                                |
+| 2026-08-20 | **M4 — staff mobile push.** Device registration (`POST/GET/DELETE /me/devices`, self-service, one row per TOKEN so a shared ward phone has one owner), delivery via a `push.deliver` task off the existing notification architecture, notification → deep-link navigation on a generic `resourceType`/`resourceId` pair, and the entitlement gap the audit found (mobile now reads `me.features` and gates tabs on both halves). Push is NOT a `Channel` — that would collide with the in-app row on `one_message_per_cause` — and carries no identifiers on a lock screen. Two defects found by its own tests: **no appointment reminder has ever been scheduled** (a colon in the BullMQ job id, rejected silently since A6) and the same bug in M4's own id; `scheduleTask` now refuses a colon. Validation: automated ✅ · emulator none · **physical device 0/18, two rows BLOCKED** (no EAS project linked; Expo Go cannot receive push since SDK 53).             |
 | 2026-08-14 | Post-Phase-1 sync. Confirmed defects moved to `RISK_REGISTER.md` §0 (D1–D7); **T2 recorded as materialised**. Stage A marked in progress with the environment and API pre-validation done. Corrected two claims this file made: the nurse **can** write a nursing note (mobile gained the route at M3-S2 — the gap is web-only), and "M2 forces a development build" is contradicted by SDK 54's own bundled-module list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |

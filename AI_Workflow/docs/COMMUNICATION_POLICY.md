@@ -91,10 +91,38 @@ channels rather than the enum — `NOTIFICATION_CHANNELS` lists `sms`, `whatsapp
 of which have a transport, and pointing a template at one would make `notify()` return `failed`
 and send nothing.
 
+## Push shipped as a FAN-OUT, not a channel (M4, 2026-08-20)
+
+The section above is the reason. A `push` channel would have hit exactly the collision it
+describes: one cause, two channels, one `dedupeKey`, and the second message silently recorded as a
+duplicate.
+
+Push is not a second message. `channels/inapp.ts` has said what it is since it was written — _"a
+phone notification is a push wrapper around one of these rows, not a separate system"_ — so the
+in-app row is claimed, rendered, sent and left authoritative, and `notification.service.ts` then
+queues `push.deliver` for it. One row per cause, unchanged. An Expo outage costs a buzz and never
+an alert, which is also why the fan-out is best-effort and cannot fail the message.
+
+Two consequences worth stating plainly:
+
+- **The `inapp` channel is the eligibility rule.** That channel carries the staff messages BECAUSE
+  only staff have logins, so a patient — no app, no login, no device row — is excluded by
+  construction rather than by a check somebody has to remember (`shouldPush`, pinned in
+  `pushCopy.test.ts`).
+- **The push carries no identifiers.** Not the rendered subject, which reads "CRITICAL RESULT —
+  Kamala Devi — Serum Potassium" and would put a name, a test and a diagnosis-shaped fact on a
+  locked handset. A fixed line per template says what happened; the ids ride in the undisplayed
+  `data` payload and the app reads the real message from the ledger after unlock. An unclassified
+  template falls back to "You have a new alert", so the cost of forgetting one is silence, not
+  disclosure.
+
+The email question above is still open and is unaffected: it is about a second CHANNEL for one
+cause, which push deliberately is not.
+
 ## Not built, deliberately
 
-Push (FCM/APNs is an integration, P7), SMS and WhatsApp (a paid gateway), staff chat and broadcast,
-a patient-facing inbox, real-time sockets, and per-user notification preferences.
+SMS and WhatsApp (a paid gateway), staff chat and broadcast, a patient-facing inbox, real-time
+sockets, per-user notification preferences, quiet hours and digests.
 
 There is still no `POST /notifications`, and that absence is deliberate: _"a general 'send an
 arbitrary message to an arbitrary person' endpoint is a spam cannon with a REST interface"_
