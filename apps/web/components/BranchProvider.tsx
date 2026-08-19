@@ -31,7 +31,7 @@ import {
 import type { Branch } from "@medicore/api-client";
 import { useAuth } from "./AuthProvider";
 import { getActiveBranchId, setActiveBranchId } from "../lib/activeBranch";
-import { branchScopeId, reconcileBranch } from "../lib/branchScope";
+import { branchScopeId, mustChooseBranchToWrite, reconcileBranch } from "../lib/branchScope";
 import { resolveZone } from "../lib/day";
 import { currentHost } from "../lib/api";
 
@@ -46,6 +46,14 @@ interface BranchContextValue {
   loading: boolean;
   /** Whether the switcher is worth showing at all (more than one option). */
   hasChoice: boolean;
+  /**
+   * True when a write that STAMPS A BRANCH cannot succeed until a site is chosen (D19).
+   *
+   * The same predicate the server applies in `writeBranchId()` — several reachable sites and none
+   * selected — so the UI stops asking for work the API is already going to refuse. Not a security
+   * boundary: see `mustChooseBranchToWrite`.
+   */
+  mustChooseBranch: boolean;
   /**
    * Identity of the data a branch-scoped screen is showing. The routed subtree is keyed on it, so
    * a change here discards that screen and everything reloads for the new branch.
@@ -139,6 +147,7 @@ export function BranchProvider({ children }: { children: ReactNode }) {
       canAggregate,
       loading,
       hasChoice: branches.length > 1 || canAggregate,
+      mustChooseBranch: mustChooseBranchToWrite({ branches, active }),
       scopeId: branchScopeId({ tenant: currentHost(), branchId: activeId }),
       timezone: resolveZone(
         active?.timezone,

@@ -7,6 +7,7 @@ import {
   signIn,
   switchToBranch,
 } from "./support/app";
+import { apiOrigin, sites, token } from "./support/api";
 
 /**
  * WEB-20 / BR-08 — the header and the data must never disagree.
@@ -100,6 +101,89 @@ test.describe("switching sites", () => {
      */
     await page.reload();
     await expect(branchButton(page)).toHaveText(new RegExp(escapeRe(siteB)));
+  });
+
+  /**
+   * ── D19: A WRITE THAT NEEDS A SITE IS NOT OFFERED UNTIL THERE IS ONE ──────
+   *
+   * WHAT DEFECT WOULD THIS CATCH?
+   * The one that was met twice in one session and worked around in a fixture rather than fixed.
+   * With the header on "All branches", the theatre board offered "Book a procedure", the emergency
+   * board offered "Triage", and both refused on submit with `HMS-BRANCH-001` — after the user had
+   * chosen a patient, a theatre and a time, or picked a priority and typed a chief complaint.
+   * Switching site to fix it closed the modal and discarded the lot.
+   *
+   * ── WHY THIS CANNOT BE PROVEN IN JSDOM ───────────────────────────────────
+   * `emergencyBoard.test.tsx` proves the guard given a branch context. It cannot prove that the
+   * REAL application arrives at that context: the aggregate state comes from `/me/branches` plus
+   * `reconcileBranch` plus an empty `sessionStorage`, and a signed-in administrator landing in
+   * "All branches" is the starting condition the whole defect depends on. That is a property of
+   * the running app, not of a component.
+   *
+   * ── AND WHY THE SERVER IS ASSERTED IN THE SAME TEST ──────────────────────
+   * Because the two claims are only worth anything together: the button is disabled BECAUSE the
+   * write cannot succeed, and it must remain true that it cannot succeed. A version of this fix
+   * that disabled the button and relaxed the server would pass a UI-only test and would be
+   * strictly worse than the defect.
+   */
+  test("does not offer a branch-stamped write until a site is chosen", async ({
+    page,
+    request,
+    baseURL,
+  }) => {
+    await signIn(page, ACCOUNTS.admin);
+
+    // A fresh context remembers no site, and an administrator may aggregate — so this is where a
+    // real working day starts, not a state the test had to construct.
+    await expect(branchButton(page)).toHaveText(/All branches/);
+
+    await page.goto("/theatres");
+    await expect(page.getByRole("heading", { name: "Operation theatres" })).toBeVisible();
+
+    const book = page.getByRole("button", { name: "Book a procedure" });
+    await expect(book).toBeVisible();
+    await expect(book).toBeDisabled();
+    await expect(page.getByText(/Choose a site before you/)).toBeVisible();
+
+    // ── The server's half, on the same page load ─────────────────────────────
+    const api = apiOrigin(baseURL ?? "http://sunrise.localhost:3000");
+    const adminToken = await token(request, api, ACCOUNTS.admin);
+    const refused = await request.post(`${api}/api/v1/theatres`, {
+      headers: { authorization: `Bearer ${adminToken}` }, // deliberately no X-Active-Branch
+      data: { name: "Should Not Exist", code: "OTX9", kind: "major_ot" },
+    });
+    expect(refused.status()).toBe(400);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
+      "HMS-BRANCH-001",
+    );
+
+    // ── And the choice, made where the refusal was ───────────────────────────
+    const open = await sites(request, api, adminToken);
+    const site = open[0]!;
+    await page.getByRole("button", { name: site.name, exact: true }).click();
+
+    await expect(branchButton(page)).toHaveText(new RegExp(escapeRe(site.name)));
+    await expect(page.getByText(/Choose a site before you/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Book a procedure" })).toBeEnabled();
+  });
+
+  /** The same guard, on the other board it was met on. */
+  test("guards the emergency board's writes the same way", async ({ page }) => {
+    await signIn(page, ACCOUNTS.nurse);
+    await expect(branchButton(page)).toHaveText(/All branches/);
+
+    await page.goto("/emergency");
+    await expect(page.getByRole("heading", { name: "Emergency" })).toBeVisible();
+    await expect(page.getByText(/Choose a site before you/)).toBeVisible();
+
+    /**
+     * Every triage control on the board, not one of them: `.first()` would pass while the rest of
+     * the department was still offering a form nobody can submit. The board legitimately holds
+     * rows from other runs, which is exactly why the assertion is over all of them.
+     */
+    const triage = page.getByRole("button", { name: /^(Triage|Re-assess)$/ });
+    const count = await triage.count();
+    for (let i = 0; i < count; i += 1) await expect(triage.nth(i)).toBeDisabled();
   });
 });
 

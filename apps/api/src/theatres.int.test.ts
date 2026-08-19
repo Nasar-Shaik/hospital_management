@@ -989,6 +989,66 @@ describe("row scope: one site's list is not another's", () => {
     expect(res.status).toBe(404);
   });
 
+  /**
+   * ── D19: THE SITE IS CHOSEN BEFORE THE BOOKING, NOT AFTER IT ──────────────
+   * This is the screen where the refusal was first met and worked around: the Playwright fixture
+   * learned to call `switchToBranch()` before booking, and the product went on offering a form
+   * that could not be submitted. The UI now asks first — and this pins the SERVER rule that makes
+   * the asking necessary, so a fix that only disabled a button cannot pass for a fix.
+   */
+  it("refuses a booking from a hospital-wide caller who has selected no site", async () => {
+    const res = await req("post", "/api/v1/ot-bookings", main.admin, main.host).send({
+      theatreId: otA,
+      patientId: patientA,
+      surgeonId: doctorId,
+      procedureName: "No site chosen",
+      ...slot(700),
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+  });
+
+  it("refuses a NEW THEATRE the same way — the guard is on the write, not on one route", async () => {
+    const res = await req("post", "/api/v1/theatres", main.admin, main.host).send({
+      name: "Nowhere In Particular",
+      code: "OTNW",
+      kind: "major_ot",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+  });
+
+  it("accepts both once a site is named", async () => {
+    await req("post", "/api/v1/ot-bookings", main.admin, main.host, siteA)
+      .send({
+        theatreId: otA,
+        patientId: patientA,
+        surgeonId: doctorId,
+        procedureName: "Site named",
+        ...slot(710),
+      })
+      .expect(201);
+
+    await req("post", "/api/v1/theatres", main.admin, main.host, siteA)
+      .send({ name: "Somewhere Definite", code: "OTDEF", kind: "major_ot" })
+      .expect(201);
+  });
+
+  /** A surgeon bound to one site has nothing to choose, and must never be asked to. */
+  it("never asks a single-site doctor to choose", async () => {
+    await req("post", "/api/v1/ot-bookings", siteBDoctorToken, main.host)
+      .send({
+        theatreId: otB,
+        patientId: patientA,
+        surgeonId: doctorId,
+        procedureName: "One site, no question",
+        ...slot(720),
+      })
+      .expect(201);
+  });
+
   it("does not let one branch's theatre take another branch's booking window", async () => {
     // Different rooms in different buildings: the same window is legal, and must stay legal.
     await book(doctorToken, {

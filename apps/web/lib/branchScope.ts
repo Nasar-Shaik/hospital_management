@@ -115,3 +115,42 @@ export function reconcileBranch(input: ReconcileInput): ReconcileResult {
   // remembered — writing an unchanged value back would be a pointless storage write per login.
   return { branchId: reachable, persist: reachable !== input.stored };
 }
+
+/* ── which writes can succeed right now (ADR-0015, risk register D19) ───────── */
+
+export interface WriteBranchInput {
+  /** The branches the signed-in user may act in, as the server reported them. */
+  branches: readonly unknown[];
+  /** The active branch, or `null` in "All branches" / nothing-chosen mode. */
+  active: { id: string } | null;
+}
+
+/**
+ * Must the user pick a site before a branch-stamping write can succeed?
+ *
+ * ── THE DEFECT THIS CLOSES ──────────────────────────────────────────────────
+ * With the header on "All branches" the emergency board loaded, every action was enabled, and a
+ * nurse could pick a priority, type a chief complaint and press Save — and only THEN be told
+ * `HMS-BRANCH-001 No active branch selected`. Switching branch to fix it closed the modal and
+ * discarded what she had typed. The same refusal stopped a theatre booking during the Theatre
+ * milestone, where it was worked around in the Playwright fixture with `switchToBranch()` rather
+ * than fixed in the product. A test can be taught to set the branch first. A person cannot be,
+ * because nothing on the screen said so.
+ *
+ * ── IT IS THE SERVER'S RULE, RESTATED — NOT A SECOND ONE ────────────────────
+ * `writeBranchId()` (api/core/context/activeBranch.ts) refuses in exactly one situation: the
+ * caller can reach SEVERAL active branches and has selected none. One candidate is stamped without
+ * asking (a single-site hospital never sees any of this) and zero candidates writes branchless (a
+ * tenant provisioned before branches existed). The candidate set the server computes is the set
+ * `GET /me/branches` returns — active branches ∩ the caller's bindings — which is exactly
+ * `branches` here. So this is not an independent judgement that could drift from the server's; it
+ * is the same predicate over the same list.
+ *
+ * ── AND IT IS NOT A SECURITY BOUNDARY ───────────────────────────────────────
+ * Nothing here decides what may be written. A user who re-enables the button in devtools reaches
+ * the same `HMS-BRANCH-001` they reached before, because the server has not moved. This decides
+ * only whether the product ASKS somebody to do work it already knows it will refuse.
+ */
+export function mustChooseBranchToWrite(input: WriteBranchInput): boolean {
+  return input.active === null && input.branches.length > 1;
+}

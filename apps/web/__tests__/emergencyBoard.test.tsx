@@ -24,8 +24,36 @@ const AUTH = {
 };
 const PERMISSIONS = new Set(["encounter:read", "triage:perform", "encounter:update"]);
 
-vi.mock("../components/AuthProvider", () => ({ useAuth: () => AUTH }));
+/**
+ * The branch context, with the REAL predicate rather than a hand-set boolean (D19).
+ *
+ * `mustChooseBranch` is computed by `mustChooseBranchToWrite` here exactly as `BranchProvider`
+ * computes it, so a test that sets up "two sites, none chosen" is exercising the rule the
+ * application uses and not a second copy of it. Setting the flag directly would make these tests
+ * pass against a guard that had been deleted from the provider.
+ */
+const BRANCH: {
+  branches: { id: string; name: string }[];
+  active: { id: string; name: string } | null;
+  timezone: string;
+  mustChooseBranch: boolean;
+  select: (id: string | null) => void;
+} = {
+  branches: [],
+  active: null,
+  timezone: "Asia/Kolkata",
+  get mustChooseBranch() {
+    return mustChooseBranchToWrite({ branches: this.branches, active: this.active });
+  },
+  select: (id) => {
+    BRANCH.active = BRANCH.branches.find((b) => b.id === id) ?? null;
+  },
+};
 
+vi.mock("../components/AuthProvider", () => ({ useAuth: () => AUTH }));
+vi.mock("../components/BranchProvider", () => ({ useBranch: () => BRANCH }));
+
+const { mustChooseBranchToWrite } = await import("../lib/branchScope");
 const { default: EmergencyBoardPage } = await import("../app/emergency/page");
 
 interface Sent {
@@ -71,6 +99,10 @@ const posts = () => sent.filter((s) => s.method === "POST");
 
 beforeEach(() => {
   vi.useRealTimers();
+  // A single-site hospital by default: nothing to choose, so no guard applies and the existing
+  // tests below describe the ordinary case.
+  BRANCH.branches = [{ id: "b1", name: "Main Branch" }];
+  BRANCH.active = BRANCH.branches[0] ?? null;
 });
 afterEach(cleanup);
 
@@ -178,5 +210,112 @@ describe("what leaves the browser", () => {
     } finally {
       PERMISSIONS.add("triage:perform");
     }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * D19 — THE SITE IS CHOSEN BEFORE THE WORK, NOT AFTER IT
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * ── THE DEFECT THIS CLOSES ──────────────────────────────────────────────────
+ * With the header on "All branches" the board loaded, every action was enabled, and a nurse could
+ * pick a priority, type a chief complaint and press Save — and only then get `HMS-BRANCH-001 No
+ * active branch selected`. Switching branch to fix it closed the modal and discarded what she had
+ * typed, so the product asked for the work twice and explained itself neither time.
+ *
+ * ── WHAT THESE ASSERT, AND WHY IT IS NOT COSMETIC ───────────────────────────
+ * Not "a message appeared". The load-bearing claim is that the form CANNOT BE OPENED while the
+ * write is impossible, and can be immediately afterwards — so no work is ever typed into a form
+ * that is going to be thrown away. The server's refusal is untouched and is pinned separately in
+ * `emergency.int.test.ts`; this is the courtesy, not the boundary.
+ */
+describe("a branch-stamping write under All branches", () => {
+  /** Two sites and none chosen — exactly the state `writeBranchId()` refuses. */
+  function allBranches() {
+    BRANCH.branches = [
+      { id: "b1", name: "Main Branch" },
+      { id: "b2", name: "Riverside Annexe" },
+    ];
+    BRANCH.active = null;
+  }
+
+  it("does not let the nurse begin a triage she cannot finish", async () => {
+    allBranches();
+    serve([row()]);
+    render(<EmergencyBoardPage />);
+
+    const triage = await screen.findByRole("button", { name: "Triage" });
+    expect((triage as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(triage);
+    // No modal, and — the point — nothing was posted, so nothing was typed and lost.
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("disables transfer-out too — both writes create the record that carries the site", async () => {
+    allBranches();
+    PERMISSIONS.add("encounter:close"); // the permission the transfer control is gated on
+    serve([row()]);
+    try {
+      render(<EmergencyBoardPage />);
+
+      const transfer = await screen.findByRole("button", { name: "Transfer out" });
+      expect((transfer as HTMLButtonElement).disabled).toBe(true);
+    } finally {
+      PERMISSIONS.delete("encounter:close");
+    }
+  });
+
+  /**
+   * "Send to doctor" is a state transition on a visit that already exists and already carries a
+   * branch. It succeeds in aggregate mode, so disabling it would be a guard applied by superstition
+   * rather than by the rule — and it would strand a triaged patient on the board.
+   */
+  it("leaves the action that stamps nothing alone", async () => {
+    allBranches();
+    serve([row({ status: "arrived" })]);
+    render(<EmergencyBoardPage />);
+
+    const send = await screen.findByRole("button", { name: "Send to doctor" });
+    expect((send as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says WHY, and offers the sites — rather than pointing at a corner of the screen", async () => {
+    allBranches();
+    serve([row()]);
+    render(<EmergencyBoardPage />);
+
+    expect(await screen.findByText(/Choose a site before you/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Main Branch" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Riverside Annexe" })).toBeTruthy();
+  });
+
+  it("becomes usable the moment a site is chosen", async () => {
+    allBranches();
+    serve([row()]);
+    const view = render(<EmergencyBoardPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Riverside Annexe" }));
+    // The app re-keys the routed subtree on a real switch; here the re-render is enough to show
+    // that the same board, in a chosen site, offers the write.
+    view.rerender(<EmergencyBoardPage />);
+
+    await waitFor(() => {
+      const triage = screen.getAllByRole("button", { name: "Triage" }).at(-1);
+      expect((triage as HTMLButtonElement).disabled).toBe(false);
+    });
+    expect(screen.queryByText(/Choose a site before you/)).toBeNull();
+  });
+
+  /** A single-site hospital must never meet any of this. */
+  it("is invisible to a hospital with one site", async () => {
+    serve([row()]);
+    render(<EmergencyBoardPage />);
+
+    const triage = await screen.findByRole("button", { name: "Triage" });
+    expect((triage as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/Choose a site before you/)).toBeNull();
   });
 });

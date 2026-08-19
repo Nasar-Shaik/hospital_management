@@ -835,6 +835,93 @@ describe("row scope: one site's department is not another's", () => {
   });
 });
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * D19 — A WRITE THAT STAMPS A SITE MUST KNOW WHICH SITE
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * The SERVER half of D19, which is not the half that was broken.
+ *
+ * `writeBranchId()` already refused a branch-stamping write from a caller who can reach several
+ * sites and has chosen none, and it must go on doing so: the UI guard added for D19 is a courtesy,
+ * and a courtesy is not a boundary. These tests exist so that removing the server rule turns the
+ * suite red even though the screen would still look correct — which is the only way a "the button
+ * is disabled" fix can be told apart from a real one.
+ *
+ * They also pin the OTHER direction, which is the one a clumsy fix breaks: a nurse bound to one
+ * site has nothing to choose, and must not be asked to.
+ */
+describe("branch: a triage belongs to a site, and the server insists on knowing which", () => {
+  it("refuses a triage from a hospital-wide caller who has selected no site", async () => {
+    const patient = await arrive("Needs A Site Chosen");
+
+    // No `X-Active-Branch`. The admin can reach both sites, so there is nothing to infer.
+    const res = await req("post", "/api/v1/emergency/triage", main.admin, main.host).send({
+      encounterId: patient.encounterId,
+      priority: "urgent",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+  });
+
+  it("refuses a transfer-out the same way — the guard is on the WRITE, not on one route", async () => {
+    const patient = await arrive("Also Needs A Site");
+
+    const res = await req("post", "/api/v1/emergency/transfer-out", main.admin, main.host).send({
+      encounterId: patient.encounterId,
+      destination: "City General",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+  });
+
+  it("accepts the same write once a site is named", async () => {
+    const patient = await arrive("Site Named");
+
+    // 201: the first triage on a visit CREATES the record (see the upsert in the repository).
+    await req("post", "/api/v1/emergency/triage", main.admin, main.host, siteA)
+      .send({ encounterId: patient.encounterId, priority: "urgent" })
+      .expect(201);
+
+    const rows = await boardAt(nurseToken, siteA);
+    expect(rows.find((r) => r.encounterId === patient.encounterId)?.priority).toBe("urgent");
+  });
+
+  /**
+   * ── THE OVER-CORRECTION THIS RULES OUT ────────────────────────────────────
+   * A nurse bound to one site has no choice to make, and the whole multi-branch machinery is
+   * supposed to stay invisible to her. A guard that refused her — or a UI that made her pick from
+   * a list of one — would be a regression dressed as a fix.
+   */
+  it("never asks a single-site nurse to choose, header or no header", async () => {
+    const patient = await arrive("Single Site Nurse", { site: siteB, token: main.admin });
+
+    await req("post", "/api/v1/emergency/triage", siteBNurseToken, main.host)
+      .send({ encounterId: patient.encounterId, priority: "non_urgent" })
+      .expect(201);
+  });
+
+  /**
+   * A header naming a site the caller cannot reach is treated as "not selected" (ADR-0015), not as
+   * an instruction — so this hospital-wide admin does NOT get to write into another tenant's
+   * branch by quoting its id, and does not silently get a branch either. It gets the same refusal
+   * as choosing nothing, which is the honest answer.
+   */
+  it("ignores a forged branch header rather than obeying it", async () => {
+    const patient = await arrive("Forged Header");
+
+    const res = await req("post", "/api/v1/emergency/triage", main.admin, main.host, FORGED).send({
+      encounterId: patient.encounterId,
+      priority: "critical",
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-BRANCH-001");
+  });
+});
+
 describe("entitlement: a hospital that never bought an emergency department has none", () => {
   it("answers HMS-PLAN-002 on the board, on triage and on transfer alike", async () => {
     const probes: ["get" | "post", string, Record<string, unknown>?][] = [
@@ -876,5 +963,58 @@ describe("entitlement: a hospital that never bought an emergency department has 
 
   it("and an entitled hospital reaches the board", async () => {
     await req("get", "/api/v1/emergency/board", main.admin, main.host, siteA).expect(200);
+  });
+
+  /* ── D20: a client can find out BEFORE it draws a menu ──────────────────── */
+
+  /**
+   * ── THE DEFECT THIS CLOSES ────────────────────────────────────────────────
+   * The refusals above are correct and were never the problem. The problem was that no client
+   * could ASK. `GET /subscription` needs `subscription:manage`, which no clinician holds, so the
+   * web navigation gated on permission alone — and a clinic administrator, who holds every
+   * permission in the catalogue, was offered Theatres, Emergency, Ward, Ambulance and Mortuary,
+   * each opening onto `HMS-PLAN-002` printed above an empty module state (D20).
+   *
+   * `/auth/me` now carries the edition's flags beside the user's permissions: the two halves of
+   * ADR-0010's first two layers, in the one call every client already makes.
+   *
+   * It changes NO refusal. The tests above still run, unchanged, and still pass — which is the
+   * property that matters: this is a hint for drawing a menu, and the wall is still the wall.
+   */
+  it("tells a clinic, on /auth/me, which modules its edition includes", async () => {
+    const me = await req("get", "/api/v1/auth/me", clinic.admin, clinic.host).expect(200);
+
+    const features = me.body.data.features as string[];
+    expect(features).toContain("module.ops.opd"); // every edition has the entry point
+    expect(features).not.toContain("module.clinical.emergency");
+    expect(features).not.toContain("module.clinical.ot");
+    expect(features).not.toContain("module.ops.ipd");
+
+    // And the permission that made the nav wrong is still held — the two answers are independent.
+    expect(me.body.data.permissions as string[]).toContain("triage:perform");
+  });
+
+  it("and tells a hospital that it does include them", async () => {
+    const me = await req("get", "/api/v1/auth/me", main.admin, main.host).expect(200);
+
+    const features = me.body.data.features as string[];
+    expect(features).toContain("module.clinical.emergency");
+    expect(features).toContain("module.clinical.ot");
+    expect(features).toContain("module.ops.ipd");
+  });
+
+  /**
+   * The hint and the wall must agree, or the navigation is a second opinion rather than a
+   * reflection. Asserted as an implication over the real refusal: the flag is absent AND the route
+   * refuses, in the same test, so a change to either one on its own turns this red.
+   */
+  it("agrees with the route: the flag it withholds is the flag the route demands", async () => {
+    const me = await req("get", "/api/v1/auth/me", clinic.admin, clinic.host).expect(200);
+    expect(me.body.data.features as string[]).not.toContain("module.clinical.emergency");
+
+    const refused = await req("get", "/api/v1/emergency/board", clinic.admin, clinic.host);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error.code).toBe("HMS-PLAN-002");
+    expect(refused.body.error.details.feature).toBe("module.clinical.emergency");
   });
 });

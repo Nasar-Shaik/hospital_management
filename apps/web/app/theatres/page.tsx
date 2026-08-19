@@ -21,6 +21,9 @@ import {
   type Patient,
 } from "@medicore/api-client";
 import { OperativeNoteModal } from "../../components/OperativeNote";
+import { CHOOSE_BRANCH_HINT, ChooseBranchNotice } from "../../components/ChooseBranch";
+import { ModuleNotInEdition } from "../../components/ModuleNotInEdition";
+import { isFeatureUnavailable } from "../../lib/errors";
 import { useAuth } from "../../components/AuthProvider";
 import { useBranch } from "../../components/BranchProvider";
 import { todayInZone } from "../../lib/day";
@@ -376,7 +379,15 @@ function TheatresPage() {
   const canRegistry = can("facility:manage");
   const canRecord = can("ot:record");
 
-  const { timezone } = useBranch();
+  /**
+   * ── D19: THE BRANCH IS CHOSEN BEFORE THE BOOKING, NOT AFTER IT ─────────────
+   * Both writes on this screen create a record that stamps a branch — a booking and a theatre —
+   * so both are refused under "All branches" (`HMS-BRANCH-001`). This is the screen where the
+   * Playwright fixture worked around it with `switchToBranch()` instead of the product doing so.
+   * Recording an operative note is NOT guarded: it writes onto a booking that already has a
+   * branch.
+   */
+  const { timezone, mustChooseBranch } = useBranch();
   const [theatres, setTheatres] = useState<Theatre[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
   const [bookings, setBookings] = useState<OtBooking[]>([]);
@@ -566,6 +577,20 @@ function TheatresPage() {
       : []),
   ];
 
+  /**
+   * The hospital never bought operating theatres (D20). Drawing the board, the registry and two
+   * create buttons over "No theatres yet" told a clinic it had an empty module when it has no
+   * module — see `ModuleNotInEdition`.
+   */
+  if (isFeatureUnavailable(error)) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-6 p-6">
+        <h1 className="text-xl font-semibold text-[var(--color-fg)]">Operation theatres</h1>
+        <ModuleNotInEdition module="Operation theatres" />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -576,10 +601,21 @@ function TheatresPage() {
             the same theatre are refused.
           </p>
         </div>
-        {canSchedule && <Button onClick={() => setBooking(true)}>Book a procedure</Button>}
+        {canSchedule && (
+          <Button
+            disabled={mustChooseBranch}
+            title={mustChooseBranch ? CHOOSE_BRANCH_HINT : undefined}
+            onClick={() => setBooking(true)}
+          >
+            Book a procedure
+          </Button>
+        )}
       </div>
 
       {error != null && <ErrorAlert error={error} fallback="Something went wrong." />}
+
+      {/* Asked before the work, not after it — see `ChooseBranch.tsx`. */}
+      <ChooseBranchNotice action="book a procedure or add a theatre" />
 
       {/* ── OT board ── */}
       <div className="space-y-3">
@@ -607,7 +643,13 @@ function TheatresPage() {
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-[var(--color-fg)]">Theatres</h2>
           {canRegistry && (
-            <Button variant="secondary" size="sm" onClick={() => setTheatreModal({})}>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={mustChooseBranch}
+              title={mustChooseBranch ? CHOOSE_BRANCH_HINT : undefined}
+              onClick={() => setTheatreModal({})}
+            >
               Add theatre
             </Button>
           )}

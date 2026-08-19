@@ -19,6 +19,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import type { EdBoardRow, TriagePriority } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranch } from "../../components/BranchProvider";
+import { CHOOSE_BRANCH_HINT, ChooseBranchNotice } from "../../components/ChooseBranch";
+import { ModuleNotInEdition } from "../../components/ModuleNotInEdition";
+import { isFeatureUnavailable } from "../../lib/errors";
 import {
   Badge,
   Button,
@@ -224,6 +228,14 @@ function TransferModal({
 
 export default function EmergencyBoardPage() {
   const { api, can } = useAuth();
+  /**
+   * ── WHICH ACTIONS THE BRANCH GUARD APPLIES TO, AND WHICH IT DOES NOT (D19) ─
+   * Triage and transfer-out both CREATE a record (`edTriage`), so both stamp a branch and both are
+   * refused under "All branches". "Send to doctor" is a state transition on a visit that already
+   * exists and already has a branch — it stamps nothing, it succeeds in aggregate mode, and
+   * disabling it would be a guess dressed up as a guard.
+   */
+  const { mustChooseBranch } = useBranch();
   const canTriage = can("triage:perform");
   const canClose = can("encounter:close");
   const canMove = can("encounter:update");
@@ -330,7 +342,13 @@ export default function EmergencyBoardPage() {
       render: (r) => (
         <div className="flex justify-end gap-2">
           {canTriage && (
-            <Button size="sm" variant="secondary" onClick={() => setTriaging(r)}>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={mustChooseBranch}
+              title={mustChooseBranch ? CHOOSE_BRANCH_HINT : undefined}
+              onClick={() => setTriaging(r)}
+            >
               {r.priority ? "Re-assess" : "Triage"}
             </Button>
           )}
@@ -340,7 +358,13 @@ export default function EmergencyBoardPage() {
             </Button>
           )}
           {canClose && (
-            <Button size="sm" variant="ghost" onClick={() => setTransferring(r)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={mustChooseBranch}
+              title={mustChooseBranch ? CHOOSE_BRANCH_HINT : undefined}
+              onClick={() => setTransferring(r)}
+            >
               Transfer out
             </Button>
           )}
@@ -350,6 +374,20 @@ export default function EmergencyBoardPage() {
   ];
 
   const untriaged = rows.filter((r) => !r.priority).length;
+
+  /**
+   * The hospital never bought an emergency department (D20). Everything below this line — the
+   * board, its empty state, the refresh and every action — would be a screen describing a module
+   * that does not exist here, so none of it is drawn.
+   */
+  if (isFeatureUnavailable(error)) {
+    return (
+      <div className="mx-auto max-w-6xl space-y-6 p-6">
+        <h1 className="text-xl font-semibold text-[var(--color-fg)]">Emergency</h1>
+        <ModuleNotInEdition module="The emergency department" />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
@@ -368,6 +406,9 @@ export default function EmergencyBoardPage() {
       </div>
 
       {error != null && <ErrorAlert error={error} fallback="Could not load the board." />}
+
+      {/* Asked before the work, not after it — see `ChooseBranch.tsx`. */}
+      <ChooseBranchNotice action="triage or transfer a patient" />
 
       {untriaged > 0 && (
         <Card className="border-[var(--color-danger)]/30 p-4">

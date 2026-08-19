@@ -13,6 +13,7 @@ import {
   ALL_BRANCHES,
   branchScopeId,
   discardsViewState,
+  mustChooseBranchToWrite,
   reconcileBranch,
 } from "../lib/branchScope";
 
@@ -126,5 +127,40 @@ describe("reconcileBranch — what a tab does with a remembered branch", () => {
         canAggregate: true,
       }),
     ).toEqual({ branchId: null, persist: true });
+  });
+});
+
+/* ── D19: which writes can succeed right now ───────────────────────────────── */
+
+/**
+ * The one rule that decides whether the product offers a form somebody cannot submit.
+ *
+ * It restates `writeBranchId()` on the server: refuse only when the caller can reach SEVERAL
+ * active sites and has chosen none. Every other case resolves without asking, and a UI that asked
+ * anyway would be a regression — the whole multi-branch feature is supposed to stay invisible to
+ * the hospitals that do not use it.
+ */
+describe("must the user choose a site before a branch-stamping write", () => {
+  it("asks when several sites are reachable and none is chosen — the D19 case", () => {
+    expect(mustChooseBranchToWrite({ branches: [hyd, che], active: null })).toBe(true);
+  });
+
+  it("does not ask once a site is chosen", () => {
+    expect(mustChooseBranchToWrite({ branches: [hyd, che], active: hyd })).toBe(false);
+  });
+
+  /** A nurse bound to one site: there is nothing to choose, so she is never asked. */
+  it("does not ask a single-site user, chosen or not", () => {
+    expect(mustChooseBranchToWrite({ branches: [hyd], active: null })).toBe(false);
+    expect(mustChooseBranchToWrite({ branches: [hyd], active: hyd })).toBe(false);
+  });
+
+  /**
+   * A tenant provisioned before branches existed has none, and its writes are branchless — the
+   * rollout property `writeBranchId` was built around. Asking it to pick from an empty list would
+   * make the product unusable for exactly the customers the feature was meant not to disturb.
+   */
+  it("does not ask a hospital that has no branches at all", () => {
+    expect(mustChooseBranchToWrite({ branches: [], active: null })).toBe(false);
   });
 });
