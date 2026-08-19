@@ -348,10 +348,60 @@ list. What remains here is the standing risk picture.
 | M2    | Doctor — my patients, timeline, vitals & results, writes, biometric gate  | ✅ 2026-08-13 · **0/61 device checks** |
 | M3    | Nurse — ward worklist, vitals capture, medication administration, round   | ✅ 2026-08-13 · **0/45 device checks** |
 | M4    | Alerts — **inbox ✅ 2026-08-18**; device registration + push delivery     | 🟨 Partial · **0 device checks**       |
-| M5    | Reception & pharmacy — register, check in, take payment, dispense         | ⬜ _needs Stage B_                     |
-| M6    | Lab & admin — worklist, result entry, approvals                           | ⬜                                     |
-| M7    | Hardening — accessibility, offline reads, store release                   | ⬜                                     |
+| M5    | Department worklists — lab/imaging queue, pharmacy dispense queue         | ⬜ _re-scoped 2026-08-20_              |
+| M6    | The departments that move — ED board + triage, theatre board              | ⬜ _re-scoped 2026-08-20_              |
+| M7    | Store at the shelf + hardening — accessibility, offline reads, release    | ⬜ _re-scoped 2026-08-20_              |
 | M8    | **Patient app — deferred to the final major phase, lowest priority**      | ⬜ Deferred                            |
+
+### Coverage audit, 2026-08-20 — **the next milestone is M4, and it is a finishing job**
+
+Measured against the CODE, not the milestone names. Estimated coverage of practical staff
+workflows: **≈50%** — but the useful figure is by AUDIENCE, because the two that are complete are
+the two that matter most on a phone.
+
+| Audience       | On mobile                                                                       | Status                          |
+| -------------- | ------------------------------------------------------------------------------- | ------------------------------- |
+| Doctor         | queue, chart, consultation, orders, results, prescribing, inpatients, discharge | ✅ 8 of 9 — no appointment book |
+| Nurse          | ward worklist, chart, vitals, MAR, nursing notes, medication round, alerts      | ✅ 7 of 7                       |
+| Everyone       | alerts inbox — **pull only; nothing is delivered to the phone**                 | 🟨 half                         |
+| Pharmacist     | —                                                                               | 🔴 `ComingLater` placeholder    |
+| Cashier        | —                                                                               | 🔴 `ComingLater` placeholder    |
+| Lab technician | —                                                                               | 🔴 nothing                      |
+| Radiology      | —                                                                               | 🔴 nothing                      |
+| Emergency      | —                                                                               | 🔴 nothing                      |
+| Theatre        | —                                                                               | 🔴 nothing                      |
+| Store keeper   | —                                                                               | 🔴 nothing                      |
+
+**Nothing is blocked by the backend or by the client.** `@medicore/api-client` exposes 299 methods
+and mobile calls 37. `dispense`, `acceptOrder`/`startOrder`/`completeOrder`, `edBoard`,
+`triagePatient`, `listOtBookings`, `transitionOtBooking`, `issueStoreStock` and `recordPayment` are
+all already there, typed and contract-checked. Every remaining mobile milestone is UI, navigation
+and permission wiring on a client that already speaks the whole product.
+
+**Two gaps that are not screens:**
+
+1. **Push delivery does not exist.** No device-token collection, no endpoint, no worker job —
+   `grep expoPushToken` across `apps/` returns nothing. The inbox shipped 2026-08-18; the half that
+   reaches a phone did not, so every screen already built is pull-only.
+2. **Mobile does not know what the hospital bought.** `/auth/me` carries `features`;
+   `src/lib/runtime.ts` reads `me.permissions` and drops them, so `tabsFor` gates on permission
+   alone — the web shell has gated on both since D20. A nurse holding `nursing:manage` at a clinic
+   with no IPD is offered the Ward tab and meets `HMS-PLAN-002`. The refusal renders honestly
+   (`lib/net/errors.ts` has the predicate), so this is a wrong offer rather than a leak: one field
+   in the session store and one condition in `tabsFor`.
+
+**Validation, in three separate classes so none of them borrows another's credit:**
+
+| Class                    | Status                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| A · Automated            | ✅ **1,669 tests**, 19 files, plain Node — no simulator, no Xcode, no Android SDK           |
+| B · Emulator / simulator | 🔴 **none recorded.** `bundle:check` bundles both platforms headlessly; nothing is ever run |
+| C · Physical device      | 🔴 **0 of 106** — M2 0/61, M3 0/45, M4 0. Never once run.                                   |
+
+Class A cannot see a first render, a gesture, biometrics, a notch or a push token. That is the gap,
+and it is the argument for M4: **push is the one milestone that cannot be faked without hardware**,
+so choosing it converts the 106-check backlog from something perpetually deferred into a
+prerequisite of the next release.
 
 **"M2 forces a development build" is probably wrong, and this file said it.** `expo-local-authentication@~17.0.8`
 is listed in SDK 54's own `bundledNativeModules.json` and matches the installed version exactly, so
@@ -622,4 +672,5 @@ copies another tracker inherits its drift. **Read the code.**
 | 2026-08-19 | **C2 — Theatre + Emergency v1 finalised by AUDIT.** Both modules were measured against the practical workflow rather than extended: the OT lifecycle, the collision rule, the write-once record, triage, the board, every disposition, RBAC, tenant/branch isolation and entitlement were all already correct and were left alone. Two gaps closed, both small and both on the workflow's own path: the operative note now reaches the DURABLE patient chart (it was reachable only from the doctor's live queue, so it vanished when the visit closed — D15's shape, one screen on), and the ED board now names the doctor a patient was handed to (the id was always on the wire and the screen dropped it). Ten falsifications run across overlap, the OT state machine, triage priority, encounter ownership, transfer persistence, disposition, both authorization layers and both new surfaces.                                                                    |
 | 2026-08-20 | **Product audit, then General Stores v1.** A repository-wide audit re-measured every major HMS area against the code (not the trackers) and found the general store to be the only core operational department with nothing built; `packages/permissions/src/index.ts`'s lifecycle ledger — gate-enforced by `permissionLifecycle.test.ts` — was used as the authoritative module inventory. The module then shipped: 11 routes, 4 collections (migration 0054), a per-site shelf that cannot go negative, five permissions off `future()`, a `STORE_KEEPER` role holding nothing clinical, and `module.support.inventory` in the Hospital editions. Its own suite immediately caught a real defect — three of the permissions were declared `tenant`-scoped, so a branch-confined keeper was answered with both sites' shelves. See §4 G1/G3 and `docs/INVENTORY.md`.                                                                                                   |
 | 2026-08-20 | **Entitlement cleanup — the flag ledger.** The layer-1 sibling of the permission ledger now exists: `apps/api/src/featureLifecycle.test.ts` reads the shipped app and fails when a flag with no `FEATURE_LIFECYCLE` entry gates nothing, or when a declared one acquires a gate. Two defects fixed with it — `portal.patient` was sold by every edition with no portal in the product (removed from the editions; the flag stays, declared `unbuilt`), and `module.finance.packages` gated nothing because the six care-package routes carried `module.ops.opd` like the rest of billing, so PLAN_HOSPITAL and PLAN_CLINIC had a Day Care / Hospital Plus differentiator for free. Writing the ledger caught a third thing on the way past: `module.finance.ipBilling` is not `bundled` — it is `gated` by `module.ops.ipd`, which the test now verifies. Eleven unbuilt flags remain listed in premium editions and the count is pinned. Eight falsifications; see §10. |
+| 2026-08-20 | **Mobile coverage audit** (§7). Measured against the code: the doctor (8 of 9) and the nurse (7 of 7) are complete; seven other staff audiences have nothing, two of them behind `ComingLater` placeholders that promise M5. Coverage ≈50% of practical staff workflows — an estimate. Nothing is blocked by the API or the client (299 client methods, 37 called by mobile; `dispense`, the order lifecycle, `edBoard`, `triagePatient`, the OT board and `issueStoreStock` are all already typed and contract-checked). Two non-screen gaps found: push delivery does not exist at all, and mobile drops `me.features`, so its tab bar gates on permission without entitlement — the D20 rule the web shell already follows. M5–M7 re-scoped by audience. **Next milestone: M4 — finish alerts.** Validation reported in three classes: automated 1,669 ✅ · emulator none · physical device **0/106**.                                                                |
 | 2026-08-14 | Post-Phase-1 sync. Confirmed defects moved to `RISK_REGISTER.md` §0 (D1–D7); **T2 recorded as materialised**. Stage A marked in progress with the environment and API pre-validation done. Corrected two claims this file made: the nurse **can** write a nursing note (mobile gained the route at M3-S2 — the gap is web-only), and "M2 forces a development build" is contradicted by SDK 54's own bundled-module list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
