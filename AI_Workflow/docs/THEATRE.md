@@ -206,11 +206,12 @@ operated on.
 
 ## Tests
 
-| Suite                                       | Count | What it holds                                                                                       |
-| ------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------- |
-| `apps/api/src/theatres.int.test.ts`         | 47    | Overlap (incl. boundaries + concurrency), state machine, the record, tenant/branch/RBAC/entitlement |
-| `apps/web/__tests__/operativeNote.test.tsx` | 6     | Which request leaves the browser, and what a reader without `ot:record` is shown                    |
-| `e2e/theatreWorkflow.spec.ts`               | 2     | Book → refused overlap → start → record → complete → read it back, in a real browser                |
+| Suite                                           | Count | What it holds                                                                                                                                 |
+| ----------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/src/theatres.int.test.ts`             | 51    | Overlap (incl. boundaries + concurrency), state machine, the record, tenant/branch/RBAC/entitlement, and the branch a booking must name (D19) |
+| `apps/web/__tests__/operativeNote.test.tsx`     | 6     | Which request leaves the browser, and what a reader without `ot:record` is shown                                                              |
+| `apps/web/__tests__/patientProcedures.test.tsx` | 7     | The record on the durable chart, the un-written-up procedure, and the unentitled hospital that is never asked                                 |
+| `e2e/theatreWorkflow.spec.ts`                   | 3     | Book → refused overlap → start → record → complete → read it back → **and find it on the chart**                                              |
 
 Twelve deliberate falsifications were run against the integration suite (overlap removed, adjacency
 made inclusive, state machine opened, record status guard removed, write-once removed, row scope

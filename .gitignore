@@ -31,4 +31,7 @@ coverage/
 /e2e/.artifacts/
 /playwright-report/
 /test-results/
+# vitest writes this only when a run FAILS, so it appears from a local red run and then
+# breaks `format:check` — an artefact of testing must never be able to fail the gate.
+**/test-results/
 /.playwright-mcp/

@@ -1,6 +1,7 @@
 # Emergency Department (D10) — what v1 is, and what it deliberately is not
 
-**Status: v1 complete, 2026-08-19.**
+**Status: v1 complete, 2026-08-19. Re-audited against the practical workflow (C2) the same day —
+the module was found sufficient; one board column was added and nothing else changed.**
 
 ---
 
@@ -243,6 +244,9 @@ patient was assigned to has not opened them in N minutes_.
 | Ambulance / referral integration                    | The transfer records _where_, not _how_. The fleet is B6 and is not wired to this.                                  |
 | ED-specific observation charting, scores, protocols | Vitals already exist and work on an ED visit. Scores are clinical scoring, explicitly out of scope.                 |
 | Waiting-time targets, breach alerts, ED analytics   | Reporting on a module that has just started collecting data.                                                        |
+| AI triage, automated diagnosis or recommendations   | The board records a judgement a named person made and is accountable for. Software must not make that judgement.    |
+| A real-time ED "command centre" (sockets, pushes)   | The board polls every 15 seconds. A second transport to secure and tenant-scope, to save fourteen seconds.          |
+| An emergency billing engine                         | An ED visit is an encounter and bills like one. See "Billing" above.                                                |
 
 ---
 
@@ -251,18 +255,18 @@ patient was assigned to has not opened them in N minutes_.
 | Screen         | What it does                                                                                                                                                                                                                                                       |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/reception`   | An **Emergency arrival** checkbox. Kept apart from Normal/Express, which are a commercial choice about queue position and a surcharge — this is a statement about how the patient arrived, and a desk under pressure must not have to trade one against the other. |
-| `/emergency`   | The board. Triage, re-assess, send to a doctor, transfer out.                                                                                                                                                                                                      |
+| `/emergency`   | The board. Triage, re-assess, send to a doctor, transfer out. Each row names the patient, their UHID, the wait **and the time they were brought in**, the priority, **the doctor they were handed to**, and the status.                                            |
 | `/my-patients` | Unchanged — the ED patient turns up in the doctor's ordinary worklist. That is the point.                                                                                                                                                                          |
 
 ---
 
 ## Tests
 
-| Suite                                        | Count | What it holds                                                                                                    |
-| -------------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------- |
-| `apps/api/src/emergency.int.test.ts`         | 31    | Registration, triage, re-triage under concurrency, ranking, every disposition, RBAC, tenant, branch, entitlement |
-| `apps/web/__tests__/emergencyBoard.test.tsx` | 6     | That the page renders the server's order and does not invent one; which request leaves the browser               |
-| `e2e/emergencyWorkflow.spec.ts`              | 4     | Desk → board → triage → doctor's ordinary screens → transfer → gone                                              |
+| Suite                                        | Count | What it holds                                                                                                                                                                                                                    |
+| -------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/src/emergency.int.test.ts`         | 43    | Registration, triage, re-triage under concurrency, ranking, every disposition, RBAC, tenant, branch, entitlement, the branch a triage must name (D19), and that lab, imaging and prescribing all go through the ORDINARY modules |
+| `apps/web/__tests__/emergencyBoard.test.tsx` | 15    | That the page renders the server's order and does not invent one; which request leaves the browser; the branch guard on a write (D19); the doctor and arrival on each row                                                        |
+| `e2e/emergencyWorkflow.spec.ts`              | 5     | Desk → board → triage → doctor's ordinary screens → the board names who has them → transfer → gone                                                                                                                               |
 
 Eleven deliberate falsifications were run against the integration suite. Ten turned it red:
 untriaged ranked as low, ranking removed entirely, the board keeping dispositioned patients, the
