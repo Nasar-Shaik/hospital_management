@@ -7,7 +7,8 @@
  * and the REGISTRY (the theatres a hospital has). Booking rejects any window that overlaps another
  * procedure on the same theatre — the collision rule the API enforces.
  *
- * Reading needs `emr:read`; booking/moving a procedure needs `ot:schedule`; the registry needs
+ * Reading needs `emr:read`; booking/moving a procedure needs `ot:schedule`; writing the OPERATION
+ * RECORD needs `ot:record` (the surgeon's, not the coordinator's); the registry needs
  * `facility:manage`. The whole feature is gated on the OT module edition flag.
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
@@ -19,6 +20,7 @@ import {
   type DoctorRef,
   type Patient,
 } from "@medicore/api-client";
+import { OperativeNoteModal } from "../../components/OperativeNote";
 import { useAuth } from "../../components/AuthProvider";
 import { useBranch } from "../../components/BranchProvider";
 import { todayInZone } from "../../lib/day";
@@ -55,6 +57,9 @@ const NEXT_STEPS: Record<OtBookingStatus, { to: OtBookingStatus; label: string }
   cancelled: [],
 };
 
+/** The states an operation record belongs to — mirrors `RECORDABLE_STATUSES` on the API. */
+const RECORDABLE: OtBookingStatus[] = ["in_progress", "completed"];
+
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -70,6 +75,7 @@ interface BookingForm {
   procedureName: string;
   scheduledStart: string;
   scheduledEnd: string;
+  notes: string;
 }
 
 function BookingModal({
@@ -91,6 +97,7 @@ function BookingModal({
     procedureName: "",
     scheduledStart: "",
     scheduledEnd: "",
+    notes: "",
   });
   const set = (patch: Partial<BookingForm>) => setF((prev) => ({ ...prev, ...patch }));
 
@@ -120,6 +127,7 @@ function BookingModal({
         procedureName: f.procedureName.trim(),
         scheduledStart: toIso(f.scheduledStart),
         scheduledEnd: toIso(f.scheduledEnd),
+        ...(f.notes.trim() ? { notes: f.notes.trim() } : {}),
       })
       .then(() => onBooked())
       .catch((err: unknown) => setError(err))
@@ -262,6 +270,19 @@ function BookingModal({
           </label>
         </div>
 
+        <label className="block text-sm">
+          <span className="mb-1.5 block font-medium text-[var(--color-fg)]">
+            Pre-op note <span className="font-normal text-[var(--color-fg-muted)]">(optional)</span>
+          </span>
+          <textarea
+            className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-sm text-[var(--color-fg)]"
+            rows={2}
+            value={f.notes}
+            onChange={(e) => set({ notes: e.target.value })}
+            placeholder="Cross-match 2 units. Diabetic — first on the list."
+          />
+        </label>
+
         <div className="flex justify-end">
           <Button type="submit" loading={saving} disabled={!f.patientId}>
             Book procedure
@@ -353,6 +374,7 @@ function TheatresPage() {
   const { api, can } = useAuth();
   const canSchedule = can("ot:schedule");
   const canRegistry = can("facility:manage");
+  const canRecord = can("ot:record");
 
   const { timezone } = useBranch();
   const [theatres, setTheatres] = useState<Theatre[]>([]);
@@ -368,6 +390,7 @@ function TheatresPage() {
 
   const [booking, setBooking] = useState(false);
   const [theatreModal, setTheatreModal] = useState<{ initial?: Theatre } | null>(null);
+  const [noteFor, setNoteFor] = useState<OtBooking | null>(null);
 
   const loadBoard = useCallback(() => {
     setLoading(true);
@@ -447,6 +470,23 @@ function TheatresPage() {
       key: "status",
       header: "Status",
       render: (b) => <Badge tone={STATUS_TONE[b.status]}>{b.status.replace("_", " ")}</Badge>,
+    },
+    /**
+     * The operation record's own column, always visible. Whether a completed procedure has been
+     * written up is a fact about the patient's chart, not a control — a reader who cannot write
+     * one still needs to see that it is missing.
+     */
+    {
+      key: "record",
+      header: "Record",
+      render: (b) =>
+        !RECORDABLE.includes(b.status) ? (
+          <span className="text-xs text-[var(--color-fg-subtle)]">—</span>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={() => setNoteFor(b)}>
+            {b.operativeNote ? "Operation record" : "Record operation"}
+          </Button>
+        ),
     },
     ...(canSchedule
       ? ([
@@ -588,6 +628,19 @@ function TheatresPage() {
           onClose={() => setBooking(false)}
           onBooked={() => {
             setBooking(false);
+            loadBoard();
+          }}
+        />
+      )}
+      {noteFor && (
+        <OperativeNoteModal
+          api={api}
+          booking={noteFor}
+          surgeons={doctors}
+          canRecord={canRecord}
+          onClose={() => setNoteFor(null)}
+          onRecorded={() => {
+            setNoteFor(null);
             loadBoard();
           }}
         />

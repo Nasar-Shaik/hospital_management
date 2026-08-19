@@ -613,15 +613,15 @@ const CLINICAL = {
     ),
   ),
 
-  OT_RECORD: p(
-    "ot:record",
-    "Record a surgery",
-    "branch",
-    future(
-      "D8 Operation Theatre",
-      "the operation record is not built; theatres today are a bookable resource only",
-    ),
-  ),
+  /**
+   * Writes the operation record onto a completed booking — what was done, by whom, what was found.
+   * Live since Theatre v1; it gates `POST /ot-bookings/:id/operative-note`.
+   *
+   * Deliberately NOT `ot:schedule`. Running the surgical list and stating what was found inside a
+   * patient are different acts by different people, and one permission covering both would let the
+   * OT coordinator author a clinical record.
+   */
+  OT_RECORD: p("ot:record", "Record a surgery", "branch"),
   BLOODBANK_MANAGE: p(
     "bloodbank:manage",
     "Blood bank stock",
@@ -1289,6 +1289,18 @@ export const DEFAULT_ROLES = [
       CLINICAL.LAB_ORDER,
       CLINICAL.RADIOLOGY_ORDER,
       CLINICAL.OT_RECORD,
+      /**
+       * ── THE SURGEON BOOKS THE THEATRE ──────────────────────────────────────
+       * `ot:schedule` was held by TENANT_ADMIN and nobody else, so the only person in the
+       * building who could put a patient on the surgical list was the hospital administrator.
+       * That is the "a permission nobody holds is a feature nobody has" trap again — this time
+       * on an entire module: theatres, bookings, the collision rule and the OT screen all
+       * shipped, and no clinician could reach any of it.
+       *
+       * The surgeon decides the patient needs an operation and when; the theatre is the resource
+       * that decision consumes. It is `branch`-scoped, so it reaches only their own site's list.
+       */
+      ORGANIZATION.OT_SCHEDULE,
       OPERATIONS.APPOINTMENT_READ,
       /**
        * Their OWN sessions and leave — never anybody else's, and never the clinic HOURS that
@@ -1329,6 +1341,17 @@ export const DEFAULT_ROLES = [
       CLINICAL.ORDER_READ,
       CLINICAL.ORDER_PERFORM,
       ORGANIZATION.BED_ALLOCATE,
+      /**
+       * The OT nurse runs the board. In every hospital this product is sold to, the person who
+       * marks a procedure started and completed is the circulating nurse, not the surgeon — who
+       * is scrubbed in and nowhere near a keyboard for the hours in between. Without this the
+       * schedule would sit on `scheduled` all day and the record would be written from memory.
+       *
+       * It grants the OT LIST and nothing else: booking a theatre window and moving it along its
+       * own state machine. It emphatically does not grant `ot:record` — the operation record is
+       * the surgeon's statement, and it stays theirs.
+       */
+      ORGANIZATION.OT_SCHEDULE,
       // The mortuary. Receiving a body into custody and handing it over is ward/mortuary work — the
       // nurse does it. These sat in the catalog held by NOBODY (the "a permission nobody holds is a
       // feature nobody has" trap); a hospital that adds a dedicated mortuary attendant role would

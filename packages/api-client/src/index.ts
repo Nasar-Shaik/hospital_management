@@ -836,6 +836,21 @@ export interface UpdateTheatreInput {
   status?: TheatreStatus;
 }
 
+/**
+ * The operation record — what was actually done, written once after the procedure.
+ * Absent until the surgeon writes it.
+ */
+export interface OperativeNote {
+  procedurePerformed: string;
+  surgeonId: string;
+  /** ISO timestamp. */
+  performedAt: string;
+  findings?: string;
+  notes?: string;
+  recordedBy?: string;
+  recordedAt: string;
+}
+
 /** A procedure booked on a theatre, with the patient named for the board. */
 export interface OtBooking {
   id: string;
@@ -853,6 +868,7 @@ export interface OtBooking {
   scheduledEnd: string;
   status: OtBookingStatus;
   notes?: string;
+  operativeNote?: OperativeNote;
   branchId?: string;
 }
 
@@ -865,11 +881,24 @@ export interface CreateBookingInput {
   /** ISO timestamps or anything `new Date()` accepts. */
   scheduledStart: string;
   scheduledEnd: string;
+  /** The pre-op line for the OT list — "bring 2 units", "diabetic, first on the list". */
+  notes?: string;
+}
+
+export interface RecordOperativeNoteInput {
+  procedurePerformed: string;
+  surgeonId: string;
+  /** ISO timestamp. */
+  performedAt: string;
+  findings?: string;
+  notes?: string;
 }
 
 export interface ListBookingsQuery {
   from?: string;
   to?: string;
+  /** Names a patient → their whole surgical history, not one day's board. */
+  patientId?: string;
   theatreId?: string;
   status?: OtBookingStatus;
 }
@@ -3875,7 +3904,11 @@ export class ApiClient {
     return this.request<Theatre>("PATCH", `/api/v1/theatres/${id}`, input);
   }
 
-  /** The OT board — bookings intersecting a day window (defaults to today). Needs `emr:read`. */
+  /**
+   * The OT board — bookings intersecting a day window (defaults to today). Needs `emr:read`.
+   * Passing `patientId` with no window asks the chart's question instead: every procedure that
+   * patient has ever had, oldest first.
+   */
   listOtBookings(query: ListBookingsQuery = {}): Promise<OtBooking[]> {
     const qs = new URLSearchParams(
       Object.entries(query).filter(([, v]) => v != null) as [string, string][],
@@ -3894,6 +3927,14 @@ export class ApiClient {
     input: { to: OtBookingStatus; reason?: string },
   ): Promise<OtBooking> {
     return this.request<OtBooking>("POST", `/api/v1/ot-bookings/${id}/transition`, input);
+  }
+
+  /**
+   * Writes the operation record onto a started or completed procedure. Needs `ot:record`.
+   * Written once — a second call is a 409, not an overwrite.
+   */
+  recordOperativeNote(id: string, input: RecordOperativeNoteInput): Promise<OtBooking> {
+    return this.request<OtBooking>("POST", `/api/v1/ot-bookings/${id}/operative-note`, input);
   }
 
   /* ── hospital profile (B1) ── */

@@ -13,9 +13,9 @@ import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { namesByIds } from "../patients/index.js";
 import * as repo from "./theatre.repository.js";
-import { canTransition, type OtBookingStatus } from "./theatre.model.js";
+import { acceptsOperativeNote, canTransition, type OtBookingStatus } from "./theatre.model.js";
 
-export type { Theatre, OtBooking } from "./theatre.repository.js";
+export type { Theatre, OtBooking, OperativeNoteView } from "./theatre.repository.js";
 
 export const listTheatres = repo.listTheatres;
 export const getTheatre = repo.findTheatreById;
@@ -72,8 +72,9 @@ async function withPatients(bookings: repo.OtBooking[]): Promise<OtBookingView[]
 }
 
 export interface ListBookingsInput {
-  from: Date;
-  to: Date;
+  from?: Date;
+  to?: Date;
+  patientId?: string;
   theatreId?: string;
   status?: OtBookingStatus;
 }
@@ -90,6 +91,7 @@ export interface CreateBookingInput {
   procedureName: string;
   scheduledStart: Date;
   scheduledEnd: Date;
+  notes?: string;
 }
 
 export async function createBooking(input: CreateBookingInput): Promise<OtBookingView> {
@@ -172,5 +174,70 @@ export async function transitionBooking(
     ...(input.reason ? { reason: input.reason } : {}),
   });
   if (!updated) throw new AppError("HMS-GEN-404", 404, "Booking not found", { id });
+  return (await withPatients([updated]))[0]!;
+}
+
+/* ── The operative record ───────────────────────────────────────────────────── */
+
+export interface OperativeNoteInput {
+  procedurePerformed: string;
+  surgeonId: string;
+  performedAt: Date;
+  findings?: string;
+  notes?: string;
+}
+
+/**
+ * Writes the operation record onto a booking.
+ *
+ * The rules are enforced by the repository's conditional update, so this function's job is to turn
+ * the ONE ambiguous answer it can get — `undefined` — back into the truth. Three different things
+ * produce it (no such booking, wrong state, already written), and a hospital told only "conflict"
+ * cannot act. So a miss is diagnosed by re-reading the booking, and each case gets its own sentence.
+ */
+export async function recordOperativeNote(
+  id: string,
+  input: OperativeNoteInput,
+): Promise<OtBookingView> {
+  const booking = await repo.findBookingDocById(id);
+  if (!booking) throw new AppError("HMS-GEN-404", 404, "Booking not found", { id });
+
+  if (!acceptsOperativeNote(booking.status)) {
+    throw new AppError(
+      "HMS-VAL-001",
+      409,
+      `A ${booking.status} procedure has no operation record to write`,
+      {
+        status: booking.status,
+        hint: "start the procedure first — a note on a scheduled or cancelled booking would record an operation that did not happen",
+      },
+    );
+  }
+  if (booking.operativeNote) {
+    throw new AppError("HMS-VAL-001", 409, "This procedure already has an operation record", {
+      recordedAt: booking.operativeNote.recordedAt,
+      hint: "an operation record is written once and is not editable",
+    });
+  }
+
+  const recordedBy = getContext().userId;
+  const updated = await repo.recordOperativeNote(id, {
+    procedurePerformed: input.procedurePerformed,
+    surgeonId: input.surgeonId,
+    performedAt: input.performedAt,
+    ...(input.findings ? { findings: input.findings } : {}),
+    ...(input.notes ? { notes: input.notes } : {}),
+    ...(recordedBy ? { recordedBy } : {}),
+    recordedAt: new Date(),
+  });
+  // Not a redundant branch: the checks above ran against a read, and the write is what ARBITRATES.
+  // Losing the race here means somebody else wrote the note in between — which is the same answer
+  // the second attempt deserves, reached the only way that is actually safe.
+  if (!updated) {
+    throw new AppError("HMS-VAL-001", 409, "This procedure already has an operation record", {
+      id,
+      hint: "another user recorded it a moment ago — refresh the board",
+    });
+  }
   return (await withPatients([updated]))[0]!;
 }

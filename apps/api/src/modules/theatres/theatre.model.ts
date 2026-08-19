@@ -83,6 +83,50 @@ export function occupiesTheatre(status: OtBookingStatus): boolean {
   return OCCUPYING.includes(status);
 }
 
+/**
+ * States in which an operative note may be written.
+ *
+ * A `scheduled` booking has not happened yet and a `cancelled` one never did — a note on either is
+ * a record of an operation that did not take place, which is the one thing a surgical record must
+ * never contain. `in_progress` is included deliberately: the surgeon dictates while the patient is
+ * still in the room, and forcing "complete" first would mean the note is written from memory.
+ */
+export const RECORDABLE_STATUSES: OtBookingStatus[] = ["in_progress", "completed"];
+
+export function acceptsOperativeNote(status: OtBookingStatus): boolean {
+  return RECORDABLE_STATUSES.includes(status);
+}
+
+/**
+ * The operative record — what was actually done, by whom, and what was found.
+ *
+ * ── WHY IT RESTATES THE PROCEDURE AND THE SURGEON ───────────────────────────
+ * The booking says what was PLANNED. The note says what HAPPENED, and the two differ often enough
+ * that collapsing them would lose the fact: a diagnostic laparoscopy becomes an appendectomy, the
+ * consultant scrubs in for the registrar. So the note carries its own `procedurePerformed` and
+ * `surgeonId` rather than pointing at the booking's, and the chart reads the note.
+ *
+ * ── WRITE-ONCE ──────────────────────────────────────────────────────────────
+ * There is no edit path in v1. A clinical record that can be silently rewritten is not a record,
+ * and the honest alternative — an amendment that keeps the original visible — is more machinery
+ * than this milestone needs. So the write is conditional on the note being ABSENT (see
+ * `recordOperativeNote`), which also makes two devices racing the same booking safe for free.
+ * Amendment is named as future work in THEATRE.md rather than half-built here.
+ */
+export interface OperativeNote {
+  /** What was actually performed — not necessarily what was booked. */
+  procedurePerformed: string;
+  /** Who actually operated — not necessarily who was booked. A staff user id. */
+  surgeonId: string;
+  /** When the procedure was performed, as the surgeon states it. */
+  performedAt: Date;
+  findings?: string;
+  notes?: string;
+  /** The user who wrote the note — provenance, separate from the surgeon it names. */
+  recordedBy?: string;
+  recordedAt: Date;
+}
+
 export interface OtStatusChange {
   from: OtBookingStatus;
   to: OtBookingStatus;
@@ -115,6 +159,8 @@ export interface OtBookingDoc {
   occupies?: true;
 
   notes?: string;
+  /** The operative record. Absent until the surgeon writes it; written exactly once. */
+  operativeNote?: OperativeNote;
   statusHistory: OtStatusChange[];
   bookedBy?: string;
 
@@ -156,6 +202,23 @@ const otBookingSchema = new Schema<OtBookingDoc>(
     occupies: { type: Boolean, default: undefined },
 
     notes: { type: String, trim: true, maxlength: 1000 },
+    operativeNote: {
+      type: new Schema<OperativeNote>(
+        {
+          procedurePerformed: { type: String, required: true, trim: true, maxlength: 200 },
+          surgeonId: { type: String, required: true },
+          performedAt: { type: Date, required: true },
+          findings: { type: String, trim: true, maxlength: 4000 },
+          notes: { type: String, trim: true, maxlength: 4000 },
+          recordedBy: { type: String },
+          recordedAt: { type: Date, required: true },
+        },
+        { _id: false },
+      ),
+      // Absent until written — `$exists: false` is the condition the write-once guard tests, and a
+      // materialized empty object would satisfy it. Same reasoning as `occupies` above.
+      default: undefined,
+    },
     statusHistory: {
       type: [
         new Schema<OtStatusChange>(

@@ -254,7 +254,7 @@ describe("the roles a hospital is seeded with", () => {
     expect(
       idle.size,
       `Distinct not-yet-live permissions held by seeded roles: ${[...idle].sort().join(", ")}`,
-    ).toBe(70);
+    ).toBe(69);
   });
 });
 

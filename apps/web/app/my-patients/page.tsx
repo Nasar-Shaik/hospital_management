@@ -44,8 +44,10 @@ import {
   type DoctorRef,
   type DiagnosisType,
   type MedicineAvailability,
+  type OtBooking,
 } from "@medicore/api-client";
 import { VitalsPanel } from "../../components/Vitals";
+import { OperativeNoteDetail } from "../../components/OperativeNote";
 import { useAuth } from "../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ConfirmDialog, PermissionGate } from "../../components/ui";
 import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
@@ -1385,6 +1387,7 @@ function MyPatients() {
   const [allergies, setAllergies] = useState<Allergy[]>([]);
   const [vitals, setVitals] = useState<VitalsReading[]>([]);
   const [reports, setReports] = useState<ReportMeta[]>([]);
+  const [procedures, setProcedures] = useState<OtBooking[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
   const [error, setError] = useState<string | null>(null);
@@ -1497,6 +1500,21 @@ function MyPatients() {
     [api],
   );
 
+  /**
+   * Every operation this patient has ever had — no date window, so a hernia repair from two years
+   * ago is still on the chart. A hospital that does not carry surgery (no OT module) answers 403,
+   * which is an empty section here rather than an error: the doctor did not ask a wrong question.
+   */
+  const loadProcedures = useCallback(
+    (patientId: string) => {
+      void api
+        .listOtBookings({ patientId })
+        .then(setProcedures)
+        .catch(() => setProcedures([]));
+    },
+    [api],
+  );
+
   /** Reports too are the PATIENT'S — every visit, so the doctor sees prior results. */
   const loadReports = useCallback(
     (patientId: string) => {
@@ -1529,8 +1547,9 @@ function MyPatients() {
     if (selectedPatientId) {
       loadAllergies(selectedPatientId);
       loadReports(selectedPatientId);
+      loadProcedures(selectedPatientId);
     }
-  }, [selectedPatientId, loadAllergies, loadReports]);
+  }, [selectedPatientId, loadAllergies, loadReports, loadProcedures]);
 
   async function act(action: string) {
     if (!selected) return;
@@ -1890,6 +1909,19 @@ function MyPatients() {
                 <OrdersForVisit orders={orders} />
               </CollapsibleCard>
 
+              {/*
+               * ── SURGICAL HISTORY, NOT THIS VISIT'S ──────────────────────────────────
+               * Rendered only when the patient HAS been operated on. An always-visible "no
+               * procedures" panel on the 95% of patients who have never seen a theatre is noise
+               * on the screen a doctor reads under time pressure, and noise is what makes the
+               * one patient who does have a surgical history stop standing out.
+               */}
+              {procedures.length > 0 && (
+                <CollapsibleCard title="Procedures" count={procedures.length} defaultOpen={false}>
+                  <ProceduresForPatient bookings={procedures} />
+                </CollapsibleCard>
+              )}
+
               <Card className="p-5">
                 <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Reports</h3>
                 <p className="mb-3 text-xs text-[var(--color-fg-muted)]">
@@ -1911,6 +1943,50 @@ function MyPatients() {
  * and once a patient is at the lab the doctor wants the finished ones out of the way. Self-manages
  * its open state; the count sits in the header so a folded section still tells you how much is inside.
  */
+/**
+ * The patient's operations, newest first, each with its record when the surgeon has written one.
+ *
+ * A booking with NO record still appears. Hiding it would answer "has this patient had surgery?"
+ * with "only the surgery somebody wrote up", and an operation nobody documented is exactly the one
+ * a doctor needs to know happened.
+ */
+function ProceduresForPatient({ bookings }: { bookings: OtBooking[] }) {
+  const newestFirst = [...bookings].sort((a, b) =>
+    b.scheduledStart.localeCompare(a.scheduledStart),
+  );
+  return (
+    <ul className="divide-y divide-[var(--color-border)]">
+      {newestFirst.map((b) => (
+        <li key={b.id} className="py-3 first:pt-0 last:pb-0">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-medium text-[var(--color-fg)]">
+              {b.operativeNote?.procedurePerformed ?? b.procedureName}
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-[var(--color-fg-muted)]">
+                {dayLabel(b.scheduledStart)}
+              </span>
+              <Badge tone={b.status === "completed" ? "success" : "neutral"}>
+                {b.status.replace("_", " ")}
+              </Badge>
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">{b.theatreName}</p>
+          {b.operativeNote ? (
+            <div className="mt-3 rounded-lg border border-[var(--color-border)] p-3">
+              <OperativeNoteDetail note={b.operativeNote} />
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
+              No operation record written yet.
+            </p>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function CollapsibleCard({
   title,
   count,

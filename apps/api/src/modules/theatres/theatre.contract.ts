@@ -36,6 +36,17 @@ export const otBooking = contract(
     scheduledEnd: z.string(),
     status: z.enum(OT_BOOKING_STATUSES),
     notes: z.string().optional(),
+    operativeNote: z
+      .object({
+        procedurePerformed: z.string(),
+        surgeonId: z.string(),
+        performedAt: z.string(),
+        findings: z.string().optional(),
+        notes: z.string().optional(),
+        recordedBy: z.string().optional(),
+        recordedAt: z.string(),
+      })
+      .optional(),
     branchId: z.string().optional(),
     patientName: z.string(),
     uhid: z.string(),

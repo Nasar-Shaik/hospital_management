@@ -88,6 +88,13 @@ const SUITE_DB = {
    * the wrong reason, which is worse than failing.
    */
   vitals: 21,
+  /**
+   * Operation theatres (B5, Theatre v1). Its own database because it provisions three tenants —
+   * two hospitals and a clinic on an edition WITHOUT the OT flag — and the entitlement verdict is
+   * cached: a clinic's "no OT module" answer resolved from another suite's key would either pass
+   * for the wrong reason or fail for one that has nothing to do with theatres.
+   */
+  theatres: 22,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

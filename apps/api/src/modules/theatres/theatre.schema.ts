@@ -36,6 +36,23 @@ export const createBookingSchema = z
     procedureName: z.string().trim().min(1).max(200),
     scheduledStart: z.coerce.date(),
     scheduledEnd: z.coerce.date(),
+    /** The pre-op line the OT list needs — "bring 2 units", "diabetic, first on the list". */
+    notes: z.string().trim().max(1000).optional(),
+  })
+  .strict();
+
+/**
+ * The operative record. `procedurePerformed` and `surgeonId` are REQUIRED and are not defaulted
+ * from the booking: a note that silently repeats the plan is worse than no note, because it reads
+ * as a statement of what happened.
+ */
+export const operativeNoteSchema = z
+  .object({
+    procedurePerformed: z.string().trim().min(1).max(200),
+    surgeonId: objectId,
+    performedAt: z.coerce.date(),
+    findings: z.string().trim().max(4000).optional(),
+    notes: z.string().trim().max(4000).optional(),
   })
   .strict();
 
@@ -52,6 +69,8 @@ export const listBookingsQuerySchema = z
   .object({
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
+    /** Names a patient → the chart's question ("everything ever done to them"), not the board's. */
+    patientId: objectId.optional(),
     theatreId: objectId.optional(),
     status: z.enum(OT_BOOKING_STATUSES).optional(),
   })
@@ -62,5 +81,6 @@ export const idParamSchema = z.object({ id: objectId }).strict();
 export type CreateTheatreBody = z.infer<typeof createTheatreSchema>;
 export type UpdateTheatreBody = z.infer<typeof updateTheatreSchema>;
 export type CreateBookingBody = z.infer<typeof createBookingSchema>;
+export type OperativeNoteBody = z.infer<typeof operativeNoteSchema>;
 export type TransitionBookingBody = z.infer<typeof transitionBookingSchema>;
 export type ListBookingsQuery = z.infer<typeof listBookingsQuerySchema>;

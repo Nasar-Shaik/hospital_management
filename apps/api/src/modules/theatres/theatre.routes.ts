@@ -13,6 +13,16 @@
  *                           description is "buildings, floors, theatres, ICUs".
  * SCHEDULING (`ot:schedule`)   — book a procedure, move it along its lifecycle. The OT
  *                           coordinator's capability, distinct from configuring the room.
+ * RECORD (`ot:record`)     — write the operation record. SEPARATE from scheduling on purpose: the
+ *                           person who runs the list is not the person who states what was found
+ *                           inside the patient. The surgeon holds it; the coordinator does not.
+ *
+ * ── WHY THE BOARD IS `emr:read` AND THAT IS NOT A "BROAD GRANT" ─────────────
+ * A surgical list names a patient, their operation and their surgeon — it is the chart, arranged
+ * by time. Everyone who reads it (surgeon, ward nurse, anaesthetist) already holds `emr:read` for
+ * the same patients, so nothing is widened to make this screen work; the alternative — inventing
+ * an "OT board read" that hands a logistics role a list of who is having what done today — would
+ * be the broad grant, wearing a narrow name.
  */
 import { Router } from "express";
 import { FEATURE_FLAGS, PERMISSIONS } from "@medicore/permissions";
@@ -27,6 +37,7 @@ import {
   createTheatreSchema,
   updateTheatreSchema,
   createBookingSchema,
+  operativeNoteSchema,
   transitionBookingSchema,
   listBookingsQuerySchema,
   idParamSchema,
@@ -92,6 +103,20 @@ export function theatreRouter(): Router {
     validate(transitionBookingSchema),
     responds(otBooking),
     asyncHandler(controller.transitionBooking),
+  );
+
+  /**
+   * The operation record. `ot:record`, not `ot:schedule` — see the header. Written once; the
+   * repository's conditional update is what enforces that, not this route.
+   */
+  router.post(
+    "/ot-bookings/:id/operative-note",
+    authenticate(),
+    authorize(PERMISSIONS.OT_RECORD, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(operativeNoteSchema),
+    responds(otBooking, { status: 201 }),
+    asyncHandler(controller.recordOperativeNote),
   );
 
   return router;

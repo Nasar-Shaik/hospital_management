@@ -20,8 +20,10 @@ import {
   type OtBookingDoc,
   type TheatreKind,
   type TheatreStatus,
+  RECORDABLE_STATUSES,
   type OtBookingStatus,
   type OtStatusChange,
+  type OperativeNote,
 } from "./theatre.model.js";
 
 export { isDuplicateKey };
@@ -119,7 +121,31 @@ export interface OtBooking {
   scheduledEnd: string;
   status: OtBookingStatus;
   notes?: string;
+  operativeNote?: OperativeNoteView;
   branchId?: string;
+}
+
+/** The operative record as it leaves the API — dates as ISO strings, like every other contract. */
+export interface OperativeNoteView {
+  procedurePerformed: string;
+  surgeonId: string;
+  performedAt: string;
+  findings?: string;
+  notes?: string;
+  recordedBy?: string;
+  recordedAt: string;
+}
+
+function toNote(note: OperativeNote): OperativeNoteView {
+  return {
+    procedurePerformed: note.procedurePerformed,
+    surgeonId: note.surgeonId,
+    performedAt: note.performedAt.toISOString(),
+    ...(note.findings ? { findings: note.findings } : {}),
+    ...(note.notes ? { notes: note.notes } : {}),
+    ...(note.recordedBy ? { recordedBy: note.recordedBy } : {}),
+    recordedAt: note.recordedAt.toISOString(),
+  };
 }
 
 function toBooking(doc: OtBookingDoc, theatre?: TheatreDoc): OtBooking {
@@ -136,6 +162,7 @@ function toBooking(doc: OtBookingDoc, theatre?: TheatreDoc): OtBooking {
     scheduledEnd: doc.scheduledEnd.toISOString(),
     status: doc.status,
     ...(doc.notes ? { notes: doc.notes } : {}),
+    ...(doc.operativeNote ? { operativeNote: toNote(doc.operativeNote) } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
   };
 }
@@ -148,6 +175,7 @@ export interface CreateBookingInput {
   procedureName: string;
   scheduledStart: Date;
   scheduledEnd: Date;
+  notes?: string;
   bookedBy?: string;
 }
 
@@ -166,6 +194,7 @@ export async function createBooking(
     procedureName: input.procedureName,
     scheduledStart: input.scheduledStart,
     scheduledEnd: input.scheduledEnd,
+    ...(input.notes ? { notes: input.notes } : {}),
     status: "scheduled",
     occupies: true, // a fresh booking holds its window (occupiesTheatre("scheduled") === true)
     ...(input.bookedBy ? { bookedBy: input.bookedBy } : {}),
@@ -227,17 +256,23 @@ export async function findOverlap(
  * its theatre. One query per collection, joined in memory — a theatre list runs a day, not millions.
  */
 export async function listBookings(filter: {
-  from: Date;
-  to: Date;
+  from?: Date;
+  to?: Date;
+  patientId?: string;
   theatreId?: string;
   status?: OtBookingStatus;
 }): Promise<OtBooking[]> {
   const db = getTenantDb();
-  const q: Record<string, unknown> = {
-    ...scopeFilter(),
-    scheduledStart: { $lt: filter.to },
-    scheduledEnd: { $gt: filter.from },
-  };
+  const q: Record<string, unknown> = { ...scopeFilter() };
+  /**
+   * The window is OPTIONAL, and its absence is what makes this the same query the chart needs.
+   * A board asks "what is happening today"; a chart asks "what has this patient ever had done" —
+   * one collection, one scoped read, two questions. The controller supplies today's window when
+   * nobody names a patient, so the board's behaviour is unchanged.
+   */
+  if (filter.to) q.scheduledStart = { $lt: filter.to };
+  if (filter.from) q.scheduledEnd = { $gt: filter.from };
+  if (filter.patientId) q.patientId = filter.patientId;
   if (filter.theatreId && Types.ObjectId.isValid(filter.theatreId)) {
     q.theatreId = new Types.ObjectId(filter.theatreId);
   }
@@ -279,6 +314,42 @@ export async function setStatus(
         ...(Object.keys(unset).length ? { $unset: unset } : {}),
         $push: { statusHistory: change },
       },
+      { new: true },
+    )
+    .lean<OtBookingDoc>();
+  if (!doc) return undefined;
+  const theatre = await getTheatreModel(db).findById(doc.theatreId).lean<TheatreDoc>();
+  return toBooking(doc, theatre ?? undefined);
+}
+
+/**
+ * Writes the operative note — the ONLY path that ever sets it.
+ *
+ * ── THE GUARD IS THE QUERY ──────────────────────────────────────────────────
+ * Both rules live in the filter, not in an `if` above it:
+ *   `status: { $in: RECORDABLE }`   — a note cannot describe an operation that has not started or
+ *                                     was cancelled;
+ *   `operativeNote: { $exists: false }` — it is written exactly once.
+ * Read-then-write would leave a window in which two devices both see "no note yet" and the second
+ * silently overwrites a signed clinical record. A conditional update has no such window: the
+ * loser's filter matches nothing and it gets `undefined`, which the service turns into a 409. The
+ * caller distinguishes "wrong state" from "already written" by re-reading, not by guessing.
+ */
+export async function recordOperativeNote(
+  id: string,
+  note: OperativeNote,
+): Promise<OtBooking | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const db = getTenantDb();
+  const doc = await getOtBookingModel(db)
+    .findOneAndUpdate(
+      {
+        _id: new Types.ObjectId(id),
+        ...scopeFilter(),
+        status: { $in: RECORDABLE_STATUSES },
+        operativeNote: { $exists: false },
+      },
+      { $set: { operativeNote: note } },
       { new: true },
     )
     .lean<OtBookingDoc>();

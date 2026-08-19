@@ -15,9 +15,11 @@ export {
   listBookings,
   createBooking,
   transitionBooking,
+  recordOperativeNote,
   type Theatre,
   type OtBooking,
   type OtBookingView,
+  type OperativeNoteView,
 } from "./theatre.service.js";
 
 export {

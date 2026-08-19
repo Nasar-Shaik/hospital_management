@@ -4548,6 +4548,33 @@
           "notes": {
             "type": "string"
           },
+          "operativeNote": {
+            "type": "object",
+            "properties": {
+              "procedurePerformed": {
+                "type": "string"
+              },
+              "surgeonId": {
+                "type": "string"
+              },
+              "performedAt": {
+                "type": "string"
+              },
+              "findings": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "string"
+              },
+              "recordedBy": {
+                "type": "string"
+              },
+              "recordedAt": {
+                "type": "string"
+              }
+            },
+            "required": ["procedurePerformed", "surgeonId", "performedAt", "recordedAt"]
+          },
           "branchId": {
             "type": "string"
           },
@@ -21122,6 +21149,15 @@
             }
           },
           {
+            "name": "patientId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          },
+          {
             "name": "theatreId",
             "in": "query",
             "required": false,
@@ -21232,6 +21268,10 @@
                   "scheduledEnd": {
                     "type": "string",
                     "format": "date-time"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 1000
                   }
                 },
                 "required": [
@@ -21384,6 +21424,108 @@
           }
         ],
         "x-permission": "ot:schedule",
+        "x-feature": "module.clinical.ot"
+      }
+    },
+    "/api/v1/ot-bookings/{id}/operative-note": {
+      "post": {
+        "operationId": "post_v1_ot_bookings_id_operative_note",
+        "tags": ["ot-bookings"],
+        "summary": "POST /api/v1/ot-bookings/{id}/operative-note",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f\\d]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "procedurePerformed": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "surgeonId": {
+                    "type": "string",
+                    "pattern": "^[a-f\\d]{24}$"
+                  },
+                  "performedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "findings": {
+                    "type": "string",
+                    "maxLength": 4000
+                  },
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 4000
+                  }
+                },
+                "required": ["procedurePerformed", "surgeonId", "performedAt"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/OtBooking"
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed — `HMS-VAL-001`, with `details.fields`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error — `{ error: { code, message, details?, traceId } }`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-permission": "ot:record",
         "x-feature": "module.clinical.ot"
       }
     },
