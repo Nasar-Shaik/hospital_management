@@ -165,9 +165,18 @@ async function scheduleReminder(
     { appointmentId },
     {
       delayMs,
-      // BullMQ refuses a duplicate job id, so a redelivered `appointment.booked`
-      // (at-least-once — it will happen) schedules no second reminder.
-      jobId: `reminder:${tenantId}:${appointmentId}`,
+      /**
+       * BullMQ refuses a duplicate job id, so a redelivered `appointment.booked`
+       * (at-least-once — it will happen) schedules no second reminder.
+       *
+       * `-` and not `:`. BullMQ builds its keys as `bull:<queue>:<jobId>` and REJECTS a custom id
+       * containing a colon — so this line read `reminder:${tenantId}:${appointmentId}` and every
+       * day-before reminder since A6 shipped failed to schedule. It failed inside an awaited call
+       * in a consumer, which surfaces as an ordinary job retry, so nothing ever said so. Found by
+       * an M4 test that asserted on the QUEUED JOB rather than on `scheduleTask` being called;
+       * `taskQueue.ts` now refuses a colon up front, with the reason.
+       */
+      jobId: `reminder-${tenantId}-${appointmentId}`,
     },
   );
 }

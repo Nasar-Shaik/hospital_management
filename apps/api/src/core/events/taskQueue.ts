@@ -78,6 +78,16 @@ export interface ScheduleOptions {
    * it will happen) re-schedules nothing. Without this, a redelivered
    * `appointment.booked` would queue a SECOND reminder for the same appointment,
    * and the patient would be told twice, a day apart from nothing.
+   *
+   * ── IT MAY NOT CONTAIN A COLON ──────────────────────────────────────────────
+   * BullMQ builds its Redis keys as `bull:<queue>:<jobId>` and refuses a custom id that would
+   * make that ambiguous — `Custom Id cannot contain :`. Use `-` as the separator.
+   *
+   * This is not a style note. `add()` REJECTS, and every caller here is either inside a
+   * best-effort wrapper or a consumer whose throw looks like an ordinary retry, so the failure
+   * mode of getting it wrong is a feature that never fires and never complains. Both callers in
+   * this codebase had it wrong and were found by an M4 test that asserted on the queued job
+   * rather than on the function having been called.
    */
   jobId: string;
 }
@@ -97,6 +107,18 @@ export async function scheduleTask(
   data: Record<string, unknown>,
   options: ScheduleOptions,
 ): Promise<boolean> {
+  /**
+   * Checked BEFORE the queue is even reached, because it is a programming error rather than an
+   * environment one — and checked here rather than left to `add()`, whose rejection every caller
+   * either swallows (a best-effort wrapper) or turns into an ordinary-looking retry (a consumer).
+   * A scheduled job that silently never queues is precisely the defect this line makes audible.
+   */
+  if (options.jobId.includes(":")) {
+    throw new Error(
+      `job id "${options.jobId}" contains ":" — BullMQ refuses it, so nothing would be scheduled`,
+    );
+  }
+
   const q = getQueue();
   if (!q) {
     logger.warn({ task, tenantId }, "no REDIS_URL — task not scheduled");
