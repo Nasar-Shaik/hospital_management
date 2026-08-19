@@ -40,6 +40,9 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { canTransition } = await import("./modules/encounters/index.js");
 const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
+// Imported after the env is set above, like every other module in this block.
+const { dayKeyInZone } = await import("./core/time/day.js");
+const { env } = await import("./config/env.js");
 
 /** A GOVERNMENT hospital: walk-in entry, token at registration, department routing. */
 const GOV = "test-enc-gov";
@@ -815,7 +818,17 @@ describe("a page of visits carries the identity of the people on it", () => {
   });
 
   it("names them on the day's register too — the same row, the other screen", async () => {
-    const today = new Date().toISOString().slice(0, 10);
+    /**
+     * "Today" in the BRANCH's zone, not the runner's and not UTC.
+     *
+     * This read `new Date().toISOString().slice(0, 10)` — the UTC day — while `?date=` is resolved
+     * through `dayRangeInZone` against the branch's timezone. The two agree for most of the day
+     * and disagree for the 5½ hours after midnight in `Asia/Kolkata` (the default zone), so the
+     * test failed only between 00:00 and 05:30 IST and passed every other time anybody ran it.
+     * That is the exact failure the W2 slice exists to prevent, reproduced inside the test that
+     * checks it. Found 2026-08-20, at 01:20.
+     */
+    const today = dayKeyInZone(new Date(), env.DEFAULT_TIMEZONE);
     const res = await auth(request(app).get(`/api/v1/encounters?date=${today}&limit=100`), pvt);
 
     const row = (res.body.data as { id: string; patientName: string }[]).find(
