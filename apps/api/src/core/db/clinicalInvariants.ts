@@ -268,6 +268,28 @@ export const NON_CLINICAL_UNIQUE_INDEXES: readonly ExemptUniqueIndex[] = [
       "count error correctable by adjustment, and the negative-shelf guard is the conditional take",
   },
   {
+    collection: "devices",
+    index: "one_row_per_push_token",
+    /**
+     * ── LOAD-BEARING FOR PRIVACY, AND STILL NOT A CLINICAL INVARIANT ────────────
+     * Weighed rather than waved through. This index is what makes a handset have ONE owner: a
+     * shared ward phone signed into by a second doctor is REASSIGNED by the upsert instead of
+     * gaining a row, so the doctor who went home stops being reachable on it. Without the index,
+     * both rows would be active and their patients' alerts would follow the wrong pocket.
+     *
+     * It is not a CLINICAL-SAFETY invariant in the sense that list means, because it cannot make
+     * a clinician act on the wrong patient. Push carries no identifiers at all — a fixed,
+     * name-free line per template, with the ids in the undisplayed `data` payload
+     * (`push.service.ts`) — and the message itself is the in-app row, which only ever renders for
+     * the person it is addressed to after they authenticate. A duplicated row would cost a stray
+     * buzz on a handset, is visible on `GET /me/devices`, and is corrected by the next sign-in.
+     */
+    reason:
+      "delivery addressing; the register upsert arbitrates on it so a shared handset has one " +
+      "owner, but a stray row causes a content-free buzz, not a disclosure — the push payload " +
+      "carries no identifiers and the message renders only after the recipient authenticates",
+  },
+  {
     collection: "edTriage",
     index: "one_triage_per_encounter",
     /**

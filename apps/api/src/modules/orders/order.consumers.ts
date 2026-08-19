@@ -107,6 +107,8 @@ async function tellTheOrderingDoctor(
     // One message per order, not per delivery. At-least-once means this consumer WILL
     // run twice, and a doctor told twice about one result starts ignoring the channel.
     dedupeKey: `order.result.released:${orderId}`,
+    /** Where it opens (M4) — the released report itself, not the results list. */
+    resource: { type: "order", id: orderId },
     eventId: event.eventId,
   });
 }

@@ -31,6 +31,9 @@ export interface Notification {
   sentAt?: Date;
   error?: string;
   eventId?: string;
+  /** What the message is about, so a client can open it (M4). See `notification.model.ts`. */
+  resourceType?: string;
+  resourceId?: string;
   /** When the recipient opened it. Absent means unread. */
   readAt?: Date;
   /**
@@ -74,6 +77,8 @@ function toNotification(doc: NotificationDoc): Notification {
     ...(doc.eventId ? { eventId: doc.eventId } : {}),
     ...(doc.readAt ? { readAt: doc.readAt } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(doc.resourceType ? { resourceType: doc.resourceType } : {}),
+    ...(doc.resourceId ? { resourceId: doc.resourceId } : {}),
   };
 }
 
@@ -104,6 +109,8 @@ export interface ClaimInput {
   recipientId?: string;
   branchId?: string;
   eventId?: string;
+  resourceType?: string;
+  resourceId?: string;
 }
 
 export type ClaimResult =
@@ -187,6 +194,8 @@ export async function claim(input: ClaimInput): Promise<ClaimResult> {
         ...(input.recipientId ? { recipientId: input.recipientId } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
         ...(input.eventId ? { eventId: input.eventId } : {}),
+        ...(input.resourceType ? { resourceType: input.resourceType } : {}),
+        ...(input.resourceId ? { resourceId: input.resourceId } : {}),
         ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
       },
     ]);
@@ -297,6 +306,17 @@ export interface InboxMessage {
   subject?: string;
   body: string;
   branchId?: string;
+  /**
+   * Where this message goes when it is tapped (M4).
+   *
+   * On the row rather than derived from `templateKey` by each client, because the id is the half
+   * a template key cannot carry: "a critical result" is not a destination, "order 64b7…" is. The
+   * push payload and the in-app list read the same two fields, so a message opened from a
+   * notification and the same message opened from the inbox land in the same place — which is the
+   * only way the two can be guaranteed not to drift.
+   */
+  resourceType?: string;
+  resourceId?: string;
   readAt?: Date;
   createdAt: Date;
 }
@@ -309,8 +329,23 @@ function toInboxMessage(doc: NotificationDoc): InboxMessage {
     createdAt: doc.createdAt,
     ...(doc.subject ? { subject: doc.subject } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(doc.resourceType ? { resourceType: doc.resourceType } : {}),
+    ...(doc.resourceId ? { resourceId: doc.resourceId } : {}),
     ...(doc.readAt ? { readAt: doc.readAt } : {}),
   };
+}
+
+/**
+ * One message, by id — the push task's only read.
+ *
+ * `findById` with no `scopeFilter`, declared in `scopedReads.test.ts` as SERVER-DERIVED: the id
+ * comes from a task THIS module scheduled about a row it had just written, never from a request,
+ * so there is no id for a caller to substitute. The tenant plugin still binds the hospital, and
+ * the task runs inside the tenant context the queue bound for it.
+ */
+export async function findById(id: string): Promise<Notification | undefined> {
+  const doc = await getNotificationModel(getTenantDb()).findById(id).lean<NotificationDoc>();
+  return doc ? toNotification(doc) : undefined;
 }
 
 export interface InboxFilter {

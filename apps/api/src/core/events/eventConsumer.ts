@@ -50,6 +50,7 @@ import { wardNoteConsumers } from "../../modules/admissions/index.js";
 import { reportConsumers } from "../../modules/reports/index.js";
 import { documentConsumers } from "../../modules/documents/index.js";
 import { walletConsumers } from "../../modules/wallet/index.js";
+import { notificationConsumers } from "../../modules/notifications/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
 
@@ -88,6 +89,13 @@ const MODULES: ModuleConsumers[] = [
   reportConsumers,
   documentConsumers,
   walletConsumers,
+  /**
+   * The only entry here that reacts to nothing in the hospital. It registers ONE task —
+   * `push.deliver` — which this module scheduled for itself when an in-app message was delivered
+   * (M4). Push is a knock on the door after the record is already safe, so it runs on the queue
+   * with its retries and its DLQ rather than inside the request that raised the alert.
+   */
+  notificationConsumers,
 ];
 
 function mergeHandlers(): {

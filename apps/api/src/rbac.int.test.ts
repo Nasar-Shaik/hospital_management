@@ -138,6 +138,15 @@ const SELF_SERVICE_ROUTES = new Set([
   // notification.routes.ts.
   "GET /api/v1/notifications/me",
   "POST /api/v1/notifications/:id/read",
+  /**
+   * The caller's OWN handsets (M4). Same rule as the inbox they deliver: the owner is the session
+   * and cannot be named in the request. A permission would mean a hospital could build a role
+   * whose staff are silently unreachable on a phone, and the symptom is an absence nobody
+   * reports — see notification.routes.ts.
+   */
+  "POST /api/v1/me/devices",
+  "GET /api/v1/me/devices",
+  "DELETE /api/v1/me/devices/:id",
 ]);
 
 /** A concrete, callable request for each protected route — the matrix's probes. */

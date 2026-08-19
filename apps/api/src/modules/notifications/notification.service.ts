@@ -21,8 +21,10 @@ import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
 import { getContext } from "../../core/context/requestContext.js";
 import { writeBranchId } from "../../core/context/activeBranch.js";
+import { scheduleTask } from "../../core/events/taskQueue.js";
 import { getChannel } from "./channels/channel.js";
 import { renderTemplate } from "./notification.model.js";
+import { PUSH_TASK, shouldPush } from "./push.service.js";
 import * as repo from "./notification.repository.js";
 
 // Registers the channels. The registry is populated by import side effect, so
@@ -61,6 +63,14 @@ export interface NotifyInput {
   dedupeKey: string;
   branchId?: string;
   eventId?: string;
+  /**
+   * WHAT the message is about, so a client can open it (M4).
+   *
+   * Generic on purpose — this module does not know what an order is (Rule P1). The caller names
+   * the kind and the id; each client maps a kind to one of its own screens. Optional, because a
+   * password reset is about nothing anyone can open.
+   */
+  resource?: { type: string; id: string };
 }
 
 /**
@@ -99,6 +109,49 @@ async function deliveryBranchId(explicit?: string): Promise<string | undefined> 
     return await writeBranchId(explicit);
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Queues a push for a message that has just been delivered in-app (M4).
+ *
+ * ── WHY IT HANGS OFF `inapp` AND NOT A CHANNEL OF ITS OWN ───────────────────
+ * `dedupeKey` is unique per tenant, so a template delivered on two channels collides on
+ * `one_message_per_cause` and the second is dropped as a duplicate — the problem
+ * COMMUNICATION_POLICY records for email-plus-inapp, and the reason push is not a `Channel`.
+ * It is not a second message: `channels/inapp.ts` has said since it was written that a phone
+ * notification is *"a push wrapper around one of these rows, not a separate system"*.
+ *
+ * `inapp` is also exactly the right predicate for WHO gets pushed. That channel carries the staff
+ * messages and only staff have logins, so a patient — who has no app, no login and no device row —
+ * cannot be reached here by construction rather than by a check somebody has to remember.
+ *
+ * ── FAILING TO QUEUE MUST NOT FAIL THE MESSAGE ──────────────────────────────
+ * The row is already `sent`; the alert is already in the doctor's inbox. Throwing here would turn
+ * a delivered message into a retry that re-sends nothing (the dedupe sees to that) and reports a
+ * failure that did not happen. A machine with no Redis simply does not buzz any phones, which is
+ * the same degradation `scheduleTask` already documents for reminders.
+ */
+async function knockOnTheirPhone(
+  notificationId: string,
+  channel: string,
+  recipientId?: string,
+): Promise<void> {
+  if (!shouldPush(channel, recipientId)) return;
+  try {
+    await scheduleTask(
+      PUSH_TASK,
+      getContext().tenantId,
+      { notificationId },
+      // One push per message, however many times the event is redelivered. BullMQ refuses a
+      // duplicate jobId, so at-least-once delivery of the CAUSE cannot become two buzzes.
+      { jobId: `push-${notificationId}` },
+    );
+  } catch (err) {
+    logger.warn(
+      { notificationId, err: err instanceof Error ? err.message : String(err) },
+      "could not queue a push — the message is delivered, the phone will not buzz",
+    );
   }
 }
 
@@ -153,6 +206,7 @@ export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
     ...(input.recipient.id ? { recipientId: input.recipient.id } : {}),
     ...(branchId ? { branchId } : {}),
     ...(input.eventId ? { eventId: input.eventId } : {}),
+    ...(input.resource ? { resourceType: input.resource.type, resourceId: input.resource.id } : {}),
   });
 
   /** Already delivered (or already given up on). THE dedupe. */
@@ -218,6 +272,7 @@ export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
     }
 
     await repo.markSent(notification.id);
+    await knockOnTheirPhone(notification.id, template.channel, input.recipient.id);
     logger.info(
       { templateKey: input.templateKey, channel: template.channel, to: notification.to },
       "notification sent",

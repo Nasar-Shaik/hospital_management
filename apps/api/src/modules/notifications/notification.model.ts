@@ -131,6 +131,19 @@ export interface NotificationDoc {
    */
   readAt?: Date;
 
+  /**
+   * WHAT this message is about, so a client can open it (M4).
+   *
+   * Deliberately a generic pair and not `orderId`. PLATFORM_STRATEGY Rule P1: this module does not
+   * know what an order is, and a School ERP importing it must not inherit one. The CALLER names
+   * the kind — `resourceType: "order"` is data, exactly like `recipientType: "user"` above it —
+   * and each client owns the map from a kind to one of its own screens.
+   *
+   * Absent is legal and common: a password reset is about nothing you can open.
+   */
+  resourceType?: string;
+  resourceId?: string;
+
   /** The event that caused it, when there was one. For tracing a message home. */
   eventId?: string;
   traceId?: string;
@@ -154,6 +167,9 @@ const notificationSchema = new Schema<NotificationDoc>(
 
     subject: { type: String },
     body: { type: String, required: true },
+
+    resourceType: { type: String },
+    resourceId: { type: String },
 
     dedupeKey: { type: String, required: true },
 

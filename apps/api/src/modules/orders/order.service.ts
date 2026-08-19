@@ -527,6 +527,13 @@ async function raiseCriticalAlert(order: repo.Order): Promise<void> {
       },
       // One alert per order, however many times anything retries.
       dedupeKey: `order.critical:${order.id}`,
+      /**
+       * WHERE the alert opens (M4). "A critical result" is not a destination; order 64b7… is —
+       * and the doctor who is being asked to act in the next few minutes should arrive at the
+       * value, not at a list to search. The kind is a string because the notifications module is
+       * not allowed to know what an order is (Rule P1); each client maps it to its own screen.
+       */
+      resource: { type: "order", id: order.id },
       ...(order.branchId ? { branchId: order.branchId } : {}),
     });
 

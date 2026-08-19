@@ -2425,4 +2425,46 @@ export const tenantMigrations: Migration[] = [
       }
     },
   },
+  {
+    id: "0055-push-devices",
+    description: "Registered handsets — where a recipient's alerts are delivered (M4)",
+    /**
+     * ── ONE ROW PER TOKEN, NOT PER PERSON-AND-TOKEN ─────────────────────────────
+     * `{tenantId, token}` UNIQUE, and the choice is a safety rule rather than a lookup hint. An
+     * Expo push token belongs to an INSTALLATION. When a second doctor signs in on the same
+     * handset — a shared ward phone, a device passed over at shift change — registration must MOVE
+     * the phone to them. Keyed per user instead, both rows would be active and the doctor who went
+     * home would keep receiving their patients' critical results on a phone in somebody else's
+     * pocket. The index makes the two-owner state unrepresentable rather than trusting the
+     * register call to tidy up after itself.
+     *
+     * `{tenantId, userId, active}` is the sender's read verbatim — "every handset this person can
+     * be reached on right now" — so a fan-out is a range scan rather than a collection scan on
+     * every alert.
+     *
+     * ── SAFE ON EXISTING DATA ───────────────────────────────────────────────────
+     * A new collection: both indexes are built over nothing, no existing row is read or
+     * rewritten, and a hospital whose staff never install the app carries one empty collection.
+     */
+    up: async (db) => {
+      await db.createCollection("devices").catch(() => undefined);
+
+      await db
+        .collection("devices")
+        .createIndex(
+          { tenantId: 1, token: 1 },
+          { unique: true, background: true, name: "one_row_per_push_token" },
+        );
+
+      await db
+        .collection("devices")
+        .createIndex({ tenantId: 1, userId: 1, active: 1 }, { background: true });
+    },
+    down: async (db) => {
+      await db
+        .collection("devices")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

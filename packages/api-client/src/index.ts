@@ -496,6 +496,9 @@ export interface NotificationRecord {
   sentAt?: string;
   error?: string;
   eventId?: string;
+  /** What the message was about (M4) — the operator's "an alert about which order?". */
+  resourceType?: string;
+  resourceId?: string;
   /** When the recipient opened it in their inbox. Absent means unread. */
   readAt?: string;
   createdAt: string;
@@ -519,8 +522,36 @@ export interface InboxMessage {
   body: string;
   /** The site the message was raised at (ADR-0015). Shown, never used as a filter. */
   branchId?: string;
+  /**
+   * Where the message goes when it is tapped (M4).
+   *
+   * A generic pair — the notifications module is not allowed to know what an order is — so each
+   * client owns the map from a kind to one of its own screens (`src/clinical/alerts.ts` on
+   * mobile). Both absent for a message about nothing you can open, like a password reset.
+   *
+   * The same two fields ride in the push payload's undisplayed `data`, so a message opened from a
+   * notification and the same message opened from the inbox land in the same place.
+   */
+  resourceType?: string;
+  resourceId?: string;
   /** Absent means unread. */
   readAt?: string;
+  createdAt: string;
+}
+
+/**
+ * A handset a person can be reached on by push (M4).
+ *
+ * The TOKEN is deliberately absent: it is the address itself, the only code that needs it is the
+ * server's sender, and the client already has its own — it came from the OS.
+ */
+export interface Device {
+  id: string;
+  userId: string;
+  platform: "ios" | "android";
+  active: boolean;
+  /** Last registration or successful delivery — how stale this address is. */
+  lastSeenAt: string;
   createdAt: string;
 }
 
@@ -6627,6 +6658,36 @@ export class ApiClient {
    */
   markNotificationRead(id: string): Promise<InboxMessage> {
     return this.request<InboxMessage>("POST", `/api/v1/notifications/${id}/read`);
+  }
+
+  /**
+   * Registers this handset for push, or moves it to the signed-in user (M4).
+   *
+   * An UPSERT on the server, keyed on the TOKEN alone, so it is safe — and intended — to call on
+   * every sign-in rather than only the first. Two consequences the caller can rely on: a token the
+   * OS rotated replaces the old row instead of adding a second, and signing in as somebody else on
+   * a shared ward phone MOVES the handset rather than leaving the previous user reachable on it.
+   *
+   * There is no `userId` parameter: the owner is the session. That is what keeps the route safe
+   * without a permission, and it is why nobody can point a colleague's alerts at their own phone.
+   */
+  registerDevice(input: { token: string; platform: "ios" | "android" }): Promise<Device> {
+    return this.request<Device>("POST", "/api/v1/me/devices", input);
+  }
+
+  /** The caller's own handsets — "where do my alerts go?". */
+  listDevices(): Promise<Device[]> {
+    return this.request<Device[]>("GET", "/api/v1/me/devices");
+  }
+
+  /**
+   * Retires one handset — the sign-out half of the lifecycle.
+   *
+   * 404 when it is not the caller's, deliberately not 403: "that device exists but is somebody
+   * else's" answers a question the caller had no business asking.
+   */
+  releaseDevice(id: string): Promise<{ released: boolean }> {
+    return this.request<{ released: boolean }>("DELETE", `/api/v1/me/devices/${id}`);
   }
 
   /**

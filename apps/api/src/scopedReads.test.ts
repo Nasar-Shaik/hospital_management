@@ -63,6 +63,15 @@ const EXEMPT: Record<string, { lines: number; why: string }> = {
     lines: 1,
     why: "TENANT-WIDE: a patient has ONE advance balance for the hospital, not one per site. The branch-isolation suite pins the receipt as readable from either counter, with the statement read as its premise.",
   },
+  /**
+   * M4's push task. The id it reads is one this module minted and queued for itself moments
+   * earlier (`notification.service.ts` schedules `push.deliver` with the row it just claimed), so
+   * unlike every other entry here there is no request-supplied id in the path at all.
+   */
+  "notifications/notification.repository.ts": {
+    lines: 1,
+    why: "SERVER-DERIVED ID: `findById` is called only by the `push.deliver` task, on the notification id that task was scheduled with. Nothing in a request reaches it, and a message is addressed to a PERSON rather than a site — the inbox is deliberately not branch-filtered (COMMUNICATION_POLICY).",
+  },
   "allergies/allergy.repository.ts": {
     lines: 1,
     why: "TENANT-WIDE: an allergy follows the person, not the site. Same ADR-0015 §5 reasoning, asserted in the branch-isolation suite ('carries allergies across branches').",

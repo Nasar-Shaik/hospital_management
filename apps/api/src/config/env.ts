@@ -226,6 +226,24 @@ const envSchema = z.object({
   NOTIFY_EMAIL_ENABLED: envBool(true),
 
   /**
+   * The push kill switch (M4). Same shape and same purpose as `NOTIFY_EMAIL_ENABLED`: the thing
+   * you reach for when a template starts buzzing every phone in the building at 3am.
+   *
+   * Switching it off changes NOTHING about what staff see. The in-app row is written and delivered
+   * either way — push is a knock on the door, never the message (`channels/expoPush.ts`) — so an
+   * operator can silence it without hiding a single alert.
+   */
+  PUSH_ENABLED: envBool(true),
+  /**
+   * Expo's push endpoint. Overridable so an integration test can point it at a loopback server and
+   * exercise the REAL request shape, ticket parsing and `DeviceNotRegistered` handling — the same
+   * reason the mail suite talks to a real Mailhog rather than a mock (`test/mailTestEnv.ts`).
+   */
+  EXPO_PUSH_URL: z.string().default("https://exp.host/--/api/v2/push/send"),
+  /** Only needed if the Expo project has enhanced security enabled. Absent is the normal case. */
+  EXPO_ACCESS_TOKEN: z.string().optional(),
+
+  /**
    * SMTP. Unset host = no email transport: the service records every message as
    * `unreachable` rather than crashing, so a dev machine with no mail server is a
    * degraded pipeline, never a broken one.

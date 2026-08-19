@@ -4,9 +4,11 @@
 import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as notifications from "./notification.service.js";
+import * as push from "./push.service.js";
 import type {
   InboxQuery,
   ListNotificationsQuery,
+  RegisterDeviceBody,
   UpdateTemplateBody,
 } from "./notification.schema.js";
 import { ok } from "../../core/http/respond.js";
@@ -84,4 +86,39 @@ export const updateTemplate: RequestHandler = async (req, res) => {
   if (!updated) throw new AppError("HMS-GEN-404", 404, "No such notification template", { key });
 
   ok(res, updated);
+};
+
+/* ── the caller's own handsets (M4) ───────────────────────────────────────── */
+
+/**
+ * Registers this phone for push. Called on every sign-in, not just the first.
+ *
+ * An UPSERT rather than a create, so it is safe to call on every bootstrap — which is what makes
+ * the client simple: it never has to remember whether it has registered, and a token the OS
+ * rotated replaces the old row instead of adding a second. 200, not 201, because "your phone is
+ * registered" is the outcome either way and the client has nothing to do differently.
+ */
+export const registerDevice: RequestHandler = async (req, res) => {
+  const body = req.body as RegisterDeviceBody;
+  ok(res, await push.registerDevice(body));
+};
+
+/** The caller's own handsets. Useful to a person asking "where do my alerts go?". */
+export const listDevices: RequestHandler = async (_req, res) => {
+  ok(res, await push.listOwnDevices());
+};
+
+/**
+ * Retires one handset — the sign-out half of the lifecycle.
+ *
+ * A 404 when it is not theirs, deliberately not a 403: telling a caller "that device exists but
+ * belongs to somebody else" answers a question they had no business asking. The repository puts
+ * `userId` in the filter, so the two cases are indistinguishable by construction rather than by
+ * this handler remembering to conflate them.
+ */
+export const releaseDevice: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const released = await push.releaseDevice(id);
+  if (!released) throw new AppError("HMS-GEN-404", 404, "No such device");
+  ok(res, { released: true });
 };

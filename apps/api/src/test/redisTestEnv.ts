@@ -114,6 +114,13 @@ const SUITE_DB = {
    * for a reason that has nothing to do with the store.
    */
   inventory: 25,
+  /**
+   * Staff push (M4). Its own database because the push path runs through the TASK QUEUE, whose
+   * jobs are Redis keys: `push:<notificationId>` shared with another suite's database would let
+   * one suite's scheduled buzz be refused as another's duplicate, and the symptom is an
+   * assertion that finds no push for a reason unrelated to push.
+   */
+  push: 26,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

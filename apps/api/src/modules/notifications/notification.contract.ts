@@ -7,6 +7,8 @@
 import { z } from "@medicore/validation";
 import { contract, type Matches, type Proves } from "../../core/http/contract.js";
 import { NOTIFICATION_CHANNELS, NOTIFICATION_STATUSES } from "./notification.model.js";
+import { DEVICE_PLATFORMS } from "./device.model.js";
+import type { Device } from "./device.repository.js";
 import type {
   InboxMessage,
   Notification,
@@ -35,6 +37,9 @@ export const notification = contract(
     sentAt: z.string().optional(),
     error: z.string().optional(),
     eventId: z.string().optional(),
+    /** What the message was about (M4) — the operator's "an alert about which order?". */
+    resourceType: z.string().optional(),
+    resourceId: z.string().optional(),
     /** When the recipient opened it in their inbox. Absent means unread. */
     readAt: z.string().optional(),
     /** The site the message was raised at (ADR-0015). */
@@ -70,12 +75,42 @@ export const inboxMessage = contract(
     body: z.string(),
     /** The site the message was raised at (ADR-0015) — shown, never used as a filter. */
     branchId: z.string().optional(),
+    /**
+     * Where the message goes when it is tapped (M4). A generic pair, because this module does not
+     * know what an order is (Rule P1): the client owns the map from a kind to one of its screens.
+     * Both absent for a message about nothing you can open.
+     */
+    resourceType: z.string().optional(),
+    resourceId: z.string().optional(),
     /** Absent means unread. */
     readAt: z.string().optional(),
     createdAt: z.string(),
   }),
 );
 export type InboxMessageProof = Proves<Matches<typeof inboxMessage, InboxMessage>>;
+
+/**
+ * A handset this person can be reached on (M4).
+ *
+ * ── THE TOKEN IS NOT IN IT ──────────────────────────────────────────────────
+ * It is the address itself, and the only code that needs it is the sender. The client already has
+ * its own — it came from the OS — so returning it would add nothing except a route that reads back
+ * the push addresses of every phone in the building. What comes back is the id, which is what
+ * `DELETE /me/devices/:id` needs.
+ */
+export const device = contract(
+  "Device",
+  z.object({
+    id: z.string(),
+    userId: z.string(),
+    platform: z.enum(DEVICE_PLATFORMS),
+    active: z.boolean(),
+    /** Last registration or successful delivery — how stale this address is. */
+    lastSeenAt: z.string(),
+    createdAt: z.string(),
+  }),
+);
+export type DeviceProof = Proves<Matches<typeof device, Device>>;
 
 export const notificationTemplate = contract(
   "NotificationTemplate",
