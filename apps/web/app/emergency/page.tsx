@@ -17,7 +17,7 @@
  * keep a tab spinning after a navigation.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import type { EdBoardRow, TriagePriority } from "@medicore/api-client";
+import type { DoctorRef, EdBoardRow, TriagePriority } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
 import { useBranch } from "../../components/BranchProvider";
 import { CHOOSE_BRANCH_HINT, ChooseBranchNotice } from "../../components/ChooseBranch";
@@ -46,6 +46,11 @@ const PRIORITIES: {
 ];
 
 const priorityOf = (p: TriagePriority) => PRIORITIES.find((x) => x.value === p);
+
+/** The clock time a patient was brought in, in the reader's locale — for the handover line. */
+function time(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 /** `1h 20m`, because "80 minutes" is a number a tired person has to convert. */
 function waited(minutes: number): string {
@@ -241,6 +246,16 @@ export default function EmergencyBoardPage() {
   const canMove = can("encounter:update");
 
   const [rows, setRows] = useState<EdBoardRow[]>([]);
+  /**
+   * Who is looking after each patient (C2).
+   *
+   * The board has always carried `doctorId` and always dropped it, so a row read "With doctor"
+   * without saying which — and on a shift with three doctors on the floor that is the question the
+   * nurse is actually being asked, by the relative at the desk and by the lab ringing with a
+   * result. Names only, through the same `listDoctors()` the reception register and the theatre
+   * board use: `encounter:read`, no personnel file.
+   */
+  const [doctors, setDoctors] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
   const [triaging, setTriaging] = useState<EdBoardRow | null>(null);
@@ -286,6 +301,14 @@ export default function EmergencyBoardPage() {
     return () => clearInterval(id);
   }, [load]);
 
+  // Once, not on every poll: the roster does not change between refreshes of a board.
+  useEffect(() => {
+    void api
+      .listDoctors()
+      .then((list: DoctorRef[]) => setDoctors(new Map(list.map((d) => [d.id, d.name]))))
+      .catch(() => undefined);
+  }, [api]);
+
   const columns: Column<EdBoardRow>[] = [
     {
       key: "priority",
@@ -324,7 +347,24 @@ export default function EmergencyBoardPage() {
       key: "waiting",
       header: "Waiting",
       cellClassName: "font-mono text-xs whitespace-nowrap text-[var(--color-fg-muted)]",
-      render: (r) => waited(r.waitingMinutes),
+      /**
+       * The wait is the number that drives the next decision; the arrival time is what goes into
+       * the handover ("brought in at 21:40"). Both, because the board is read for both — and the
+       * wait is the SERVER's, so a wall-mounted screen and a nurse's phone cannot disagree.
+       */
+      render: (r) => (
+        <>
+          {waited(r.waitingMinutes)}
+          <span className="block text-[var(--color-fg-subtle)]">{time(r.arrivedAt)}</span>
+        </>
+      ),
+    },
+    {
+      key: "doctor",
+      header: "Doctor",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      // Not yet handed to anybody — a dash here is a real state, not a failed lookup.
+      render: (r) => (r.doctorId ? (doctors.get(r.doctorId) ?? "—") : "—"),
     },
     {
       key: "status",

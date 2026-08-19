@@ -14,7 +14,7 @@
  * the same standard `medicationRound.test.tsx` set.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ApiClient, type EdBoardRow } from "@medicore/api-client";
 
 const AUTH = {
@@ -86,7 +86,12 @@ function serve(rows: EdBoardRow[]) {
       url: String(url),
       body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined,
     });
-    const data = method === "GET" ? rows : { encounterId: "e1", patientId: "p1" };
+    const data =
+      method === "GET"
+        ? String(url).includes("/doctors")
+          ? [{ id: "doc-7", name: "Dr Ivy Menon" }]
+          : rows
+        : { encounterId: "e1", patientId: "p1" };
     return new Response(JSON.stringify({ success: true, data }), {
       status: method === "GET" ? 200 : 201,
       headers: { "content-type": "application/json" },
@@ -319,3 +324,51 @@ describe("a branch-stamping write under All branches", () => {
     expect(screen.queryByText(/Choose a site before you/)).toBeNull();
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * C2 — THE BOARD SAYS WHO IS LOOKING AFTER THE PATIENT
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * `doctorId` has always been on the wire (`edBoardRow` in the contract) and the board dropped it,
+ * so a row read "With doctor" without saying WHICH. On a shift with three doctors on the floor
+ * that is the question the nurse is actually being asked — by the relative at the desk, and by the
+ * lab ringing with a result.
+ *
+ * The board is a WORKLIST, so this is the whole of the addition: no ownership rules, no assignment
+ * control. Handing a patient to a doctor already happens through "Send to doctor", which is the
+ * ordinary encounter route.
+ */
+describe("the board names the doctor and the arrival", () => {
+  it("shows the doctor a patient has been handed to", async () => {
+    serve([row({ status: "in_progress", doctorId: "doc-7" })]);
+    render(<EmergencyBoardPage />);
+
+    expect(await screen.findByText("Dr Ivy Menon")).toBeTruthy();
+    // The id itself is never what a person reads — the D15/D18 rule, on a third screen.
+    expect(screen.queryByText("doc-7")).toBeNull();
+  });
+
+  /** Nobody has taken them yet. A real state, and it must not read as a failed lookup. */
+  it("shows a dash for a patient nobody has been handed", async () => {
+    serve([row({ status: "arrived" })]);
+    render(<EmergencyBoardPage />);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the wait AND says what time they were brought in", async () => {
+    serve([row({ arrivedAt: "2026-08-19T03:00:00.000Z", waitingMinutes: 95 })]);
+    render(<EmergencyBoardPage />);
+
+    // The wait is the server's number, unchanged — the arrival is the handover line beside it.
+    expect(await screen.findByText("1h 35m")).toBeTruthy();
+    expect(screen.getByText(new RegExp(fmtTime("2026-08-19T03:00:00.000Z")))).toBeTruthy();
+  });
+});
+
+/** The same formatting the page uses, so the assertion is locale-independent. */
+function fmtTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}

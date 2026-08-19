@@ -173,6 +173,29 @@ test.describe.serial("the emergency department, from the door to the disposition
     await expect(page.getByRole("button", { name: "Order" })).toBeVisible({ timeout: 20_000 });
   });
 
+  /**
+   * ── THE BOARD SAYS WHO HAS THE PATIENT ────────────────────────────────────
+   *
+   * WHAT DEFECT WOULD THIS CATCH?
+   * `doctorId` was on the board's contract from the start and the screen dropped it, so a row read
+   * "With doctor" without saying which — the question a nurse is actually asked, by the relative
+   * at the desk and by the lab ringing with a result. It is asserted HERE rather than in jsdom
+   * because the name has to survive a real join: the board sends an id, `/doctors` sends the
+   * roster, and only the running application puts the two together.
+   */
+  test("the board names the doctor the patient was handed to", async ({ page }) => {
+    const f = fixture;
+    await signIn(page, ACCOUNTS.nurse);
+    await switchToBranch(page, f.siteName);
+    await page.goto("/emergency");
+
+    const row = boardRow(page, f.patientName);
+    await expect(row).toHaveCount(1, { timeout: 20_000 });
+    // The previous test called them in, so this is the doctor who actually has them.
+    await expect(row).toContainText("With doctor");
+    await expect(row).toContainText(f.doctorName.replace(/^Dr\s+/, "").split(" (")[0] ?? "");
+  });
+
   test("a disposition takes them off the board", async ({ page }) => {
     const f = fixture;
     await signIn(page, ACCOUNTS.doctor);

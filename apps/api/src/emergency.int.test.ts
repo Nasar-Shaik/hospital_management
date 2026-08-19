@@ -356,6 +356,81 @@ describe("an emergency arrival is a visit, registered the ordinary way", () => {
       "an emergency lab order did not reach the ordinary bench",
     ).toContain(order.body.data.order.id);
   });
+
+  /**
+   * ── THE REUSE INVARIANT, STATED FOR EVERY CLINICAL MODULE THE ED TOUCHES ──
+   * The lab case above is the pattern; this is the claim generalised, and it is the load-bearing
+   * design decision of the whole module. An emergency department that grew its own ordering, its
+   * own imaging queue and its own prescribing would be a second hospital inside the first — two
+   * places to look for a patient's results, two sets of safety checks, and a drug interaction
+   * screen that only knows about half of what the patient has been given.
+   *
+   * So there is no emergency copy of anything. What is asserted is not that a route answered 201:
+   * it is that the record produced lands on the SAME worklist, the SAME imaging bench and the SAME
+   * prescription list that a routine outpatient's would.
+   */
+  it("takes radiology and a prescription through the ordinary modules too", async () => {
+    const { encounterId, patientId } = await arrive("Worked Up In The ED");
+    await req("post", `/api/v1/encounters/${encounterId}/queue`, deskToken, main.host, siteA);
+    await req(
+      "post",
+      `/api/v1/encounters/${encounterId}/start`,
+      doctorToken,
+      main.host,
+      siteA,
+    ).expect(200);
+
+    // ── imaging: the ordinary orders module, a different category ─────────────
+    const xray = await req("post", "/api/v1/orders", doctorToken, main.host, siteA).send({
+      encounterId,
+      category: "radiology",
+      code: "CXR",
+      name: "Chest X-ray",
+      priority: "emergency",
+    });
+    expect(xray.status, xray.text).toBe(201);
+
+    const imaging = await req(
+      "get",
+      "/api/v1/orders?category=radiology&status=placed",
+      main.admin,
+      main.host,
+      siteA,
+    ).expect(200);
+    expect(
+      (imaging.body.data as { id: string }[]).map((o) => o.id),
+      "an emergency X-ray did not reach the ordinary imaging bench",
+    ).toContain(xray.body.data.order.id);
+
+    // ── prescribing: the ordinary prescriptions module ────────────────────────
+    const rx = await req("post", "/api/v1/prescriptions", doctorToken, main.host, siteA).send({
+      encounterId,
+      lines: [
+        {
+          drugCode: "PARA500",
+          drugName: "Paracetamol 500mg",
+          dose: "1 tablet",
+          route: "oral",
+          frequency: "TDS",
+          durationDays: 3,
+          quantity: 9,
+        },
+      ],
+    });
+    expect(rx.status, rx.text).toBe(201);
+
+    const chart = await req(
+      "get",
+      `/api/v1/prescriptions?patientId=${patientId}`,
+      doctorToken,
+      main.host,
+      siteA,
+    ).expect(200);
+    expect(
+      (chart.body.data as { id: string }[]).map((p) => p.id),
+      "a prescription written in the ED is missing from the patient's ordinary chart",
+    ).toContain(rx.body.data.id);
+  });
 });
 
 /* ══ 2. triage and the ordering it produces ══════════════════════════════════ */
