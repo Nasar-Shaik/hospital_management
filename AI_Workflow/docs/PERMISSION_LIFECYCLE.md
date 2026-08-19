@@ -65,6 +65,40 @@ catalogue held by somebody who could not use them:
 | `ot:record`      | `future` — "the operation record is not built"   | Gates `POST /ot-bookings/:id/operative-note`. |
 | `triage:perform` | `future` — "the ED triage workflow is not built" | Gates `POST /emergency/triage`.               |
 
+### And since then (2026-08-20)
+
+**160 permissions · 92 active · 68 declared — 55 future, 11 superseded, 2 service.**
+
+Five codes went live with General Stores v1, and every one of them was held by **TENANT_ADMIN
+alone** — the fifth instance of the pattern below.
+
+| Code                 | Was                                                | Now                                        |
+| -------------------- | -------------------------------------------------- | ------------------------------------------ |
+| `inventory:manage`   | `future` — "general stores inventory is not built" | Gates the store master and every read.     |
+| `inventory:purchase` | `future` — "purchasing is not built"               | Gates `POST /inventory-items/:id/receive`. |
+| `inventory:issue`    | `future` — "general stores inventory is not built" | Gates `POST /inventory-items/:id/issue`.   |
+| `inventory:audit`    | `future` — "general stores inventory is not built" | Gates `POST /inventory-items/:id/adjust`.  |
+| `vendor:manage`      | `future` — "vendors arrive with purchasing"        | Gates `/suppliers`.                        |
+
+Three things the gate could not see, and they are again the interesting half:
+
+- **A new role, `STORE_KEEPER`, ships with them.** Without it the fifth instance would have been
+  the fifth: five permissions, eleven routes, a screen, and only the hospital administrator able to
+  open any of it. The role holds those five codes and **nothing clinical** — no `patient:read`, no
+  `emr:read` — which is what forced `GET /inventory-destinations` into existence rather than
+  granting a store keeper the patient list to fill in a picker.
+- **Three of the five were declared at the wrong SCOPE.** `inventory:manage`, `:purchase` and
+  `:audit` said `tenant`, copied from catalogue entries written before the module existed. The
+  scope declared here _is_ the row-scoping level (`authorize` publishes it as `scope.level`, and
+  `scopeFilter()` narrows only on `"branch"`), so a keeper bound to one site, sending no branch
+  header, was answered with the SUM of every site's shelf. The permission looked confining and
+  confined nothing. Caught by the module's own integration suite on its first run — the ledger
+  gate cannot see this, because a wrongly-scoped permission still gates a route.
+- **`pharmacy:purchase` kept a reason that had become false** — the same failure as
+  `ed:board:manage` below. It said "PROJECT_MEMORY records that the pharmacy has no inventory",
+  which stopped being true at migration 0052. Rewritten to name what is actually missing: a
+  pharmacy receipt names no supplier, cost or invoice.
+
 Two more things were corrected that the gate cannot see, and they are the interesting half:
 
 - **`ot:schedule` was granted to no clinical role.** It was active and correctly routed, so nothing

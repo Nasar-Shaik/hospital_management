@@ -255,12 +255,16 @@ const ORGANIZATION = {
   AMBULANCE_MANAGE: p("ambulance:manage", "Manage the ambulance fleet"),
   AMBULANCE_DISPATCH: p("ambulance:dispatch", "Dispatch an ambulance", "branch"),
   ASSET_MANAGE: p("asset:manage", "Manage assets and maintenance"),
-  VENDOR_MANAGE: p(
-    "vendor:manage",
-    "Manage vendors and insurers",
-    "tenant",
-    future("G3 Procurement", "vendors and insurer masters arrive with purchasing"),
-  ),
+  /**
+   * The supplier master — who the hospital buys from. Live since General Stores v1; it gates
+   * `/suppliers`.
+   *
+   * Named `vendor:` rather than `supplier:` because the code is permanent and this is the code the
+   * catalogue has always carried. It reads the SUPPLIER list, which is the only master it has: the
+   * insurer master the old description promised is `insurance:link`'s territory and was never
+   * built here.
+   */
+  VENDOR_MANAGE: p("vendor:manage", "Manage suppliers", "tenant"),
 
   FACILITYOPS_MANAGE: p(
     "facilityops:manage",
@@ -859,34 +863,44 @@ const FINANCE = {
     "tenant",
     future(
       "F4 Pharmacy",
-      "pharmacy purchasing arrives with stock — PROJECT_MEMORY records that the pharmacy has no inventory",
+      "the pharmacy has stock (migration 0052) but buys it from nowhere: a receipt names no supplier, cost or invoice. The supplier master now exists under `vendor:manage` — wiring the drug shelf to it is a pharmacy change and the pharmacy is frozen",
     ),
   ),
 
-  INVENTORY_MANAGE: p(
-    "inventory:manage",
-    "Manage inventory",
-    "tenant",
-    future("G1 Inventory", "general stores inventory is not built"),
-  ),
-  INVENTORY_ISSUE: p(
-    "inventory:issue",
-    "Issue stock",
-    "branch",
-    future("G1 Inventory", "general stores inventory is not built"),
-  ),
-  INVENTORY_AUDIT: p(
-    "inventory:audit",
-    "Stock audit",
-    "tenant",
-    future("G1 Inventory", "general stores inventory is not built"),
-  ),
-  INVENTORY_PURCHASE: p(
-    "inventory:purchase",
-    "Purchasing",
-    "tenant",
-    future("G3 Procurement", "purchasing is not built"),
-  ),
+  /**
+   * ── THE FOUR ACTS OF A STORE, AND WHY THEY ARE FOUR ─────────────────────────
+   * All live since General Stores v1. They are not seniority tiers — they are different jobs, and
+   * a hospital that wants one person doing all of them grants all four (STORE_KEEPER does).
+   *
+   *   manage   — the item master AND the shelf as a whole. It is the BASELINE: every store route
+   *              that only READS is gated on it, because a person who may not see what is on the
+   *              shelf cannot do any of the other three either.
+   *   purchase — book a delivery IN, against a supplier. The money-facing act.
+   *   issue    — hand stock OUT to a department. The one that runs all day.
+   *   audit    — correct the count against a physical stock-take. Deliberately separate from
+   *              `issue`: a clerk who can both take stock out AND rewrite the number to match has
+   *              no shortfall anyone can see.
+   *
+   * There is no `inventory:read`. It would be a fifth code whose only holder is everybody who
+   * already holds `manage`, and the catalogue has enough permissions nobody holds.
+   */
+  /**
+   * ── AND ALL FOUR ARE `branch`, WHICH IS NOT COSMETIC ────────────────────────
+   * The scope declared here IS the row-scoping level: `authorize` publishes it as
+   * `scope.level`, and `scopeFilter()` only narrows to the caller's branches when it reads
+   * `"branch"`. Three of these were `"tenant"` when this module was written — copied from the
+   * catalogue entries that predated it — and the store's own integration suite caught it
+   * immediately: a keeper bound to the annexe, sending no branch header, was answered with the
+   * SUM of both sites' shelves. The permission looked confining and confined nothing.
+   *
+   * `vendor:manage` stays `"tenant"` on purpose: `suppliers` carries no `branchId` at all, so
+   * there is nothing for a branch filter to narrow and declaring one would be a lie in the other
+   * direction.
+   */
+  INVENTORY_MANAGE: p("inventory:manage", "The store's item master and its shelf", "branch"),
+  INVENTORY_ISSUE: p("inventory:issue", "Issue stock to a department", "branch"),
+  INVENTORY_AUDIT: p("inventory:audit", "Correct the count after a stock-take", "branch"),
+  INVENTORY_PURCHASE: p("inventory:purchase", "Receive a delivery from a supplier", "branch"),
 
   FINANCE_LEDGER: p(
     "finance:ledger",
@@ -1040,6 +1054,16 @@ export const FEATURE_FLAGS = {
 
   // Support
   SUPPORT_CSSD: "module.support.cssd",
+  /**
+   * The general store — non-drug consumables, their shelf and who they were issued to.
+   *
+   * DELIBERATELY SEPARATE from `module.pharmacy.full`, which is the drug shelf. They are two
+   * rooms with two keepers: a clinic that bought dispensing has no store keeper, and a hospital
+   * that runs a store still buys its drugs through the pharmacy. Folding them together would
+   * either sell a clinic a store room it does not have or hand every dispensing hospital a
+   * general store for free.
+   */
+  SUPPORT_INVENTORY: "module.support.inventory",
   SUPPORT_MORTUARY: "module.support.mortuary",
   SUPPORT_MRD: "module.support.mrd",
   SUPPORT_AMBULANCE: "module.support.ambulance",
@@ -1125,6 +1149,8 @@ const HOSPITAL_FLAGS: FeatureFlag[] = [
   F.SUPPORT_AMBULANCE,
   // A hospital owns equipment that must be serviced on a cycle — the asset register + maintenance log.
   F.SUPPORT_ASSETS,
+  // Gloves, syringes, IV sets, sutures. A hospital consumes them by the crate and a clinic does not.
+  F.SUPPORT_INVENTORY,
 ];
 
 export const EDITIONS = {
@@ -1511,6 +1537,36 @@ export const DEFAULT_ROLES = [
       // A pharmacist about to hand over a drug is the LAST person who can catch an
       // allergy the prescriber missed. They read the list; they do not edit it.
       CLINICAL.ALLERGY_READ,
+    ),
+  },
+  /**
+   * ── THE PERSON THIS MODULE IS FOR ───────────────────────────────────────────
+   * A store keeper is not a pharmacist and not an administrator. Before this role the four
+   * `inventory:*` codes and `vendor:manage` were held by TENANT_ADMIN alone — which is the
+   * "a permission nobody holds is a feature nobody has" trap this codebase has fallen into five
+   * times now (`user:read` for the receptionist, the admit pair, `nursing:manage`, `ot:schedule`).
+   * Shipping a store room whose only key is the hospital administrator's would have been the
+   * sixth.
+   *
+   * ── AND IT TOUCHES NO PATIENT ───────────────────────────────────────────────
+   * No `patient:read`, no `emr:read`, nothing clinical. Every other operational role in this list
+   * carries `patient:read` because their work is ABOUT a person; a store keeper's work is about a
+   * box of gloves. Granting them the patient list "so the screen works" is exactly the broad-grant
+   * mistake the catalogue exists to avoid — and nothing in the store screens asks for it.
+   */
+  {
+    code: "STORE_KEEPER",
+    name: "Store Keeper",
+    description: "The general store: item master, deliveries in, issues out, stock corrections.",
+    permissions: codes(
+      // The baseline — the master and the shelf. Every read in the module is gated on this.
+      FINANCE.INVENTORY_MANAGE,
+      FINANCE.INVENTORY_PURCHASE,
+      FINANCE.INVENTORY_ISSUE,
+      FINANCE.INVENTORY_AUDIT,
+      // Who the deliveries come from. A receipt that cannot name a supplier is a receipt that
+      // cannot answer "what did we buy and from whom", which is half the reason to record it.
+      ORGANIZATION.VENDOR_MANAGE,
     ),
   },
   {

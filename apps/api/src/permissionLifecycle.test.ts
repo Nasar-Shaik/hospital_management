@@ -251,10 +251,16 @@ describe("the roles a hospital is seeded with", () => {
       ),
     );
 
+    /**
+     * 68 → 63 when General Stores v1 shipped. The five that went live are the four `inventory:*`
+     * codes and `vendor:manage`, all of which TENANT_ADMIN already held — which is exactly why
+     * this number is pinned. A module landing should make it FALL; a number that only ever grows
+     * means capabilities are being declared faster than they are being built.
+     */
     expect(
       idle.size,
       `Distinct not-yet-live permissions held by seeded roles: ${[...idle].sort().join(", ")}`,
-    ).toBe(68);
+    ).toBe(63);
   });
 });
 
