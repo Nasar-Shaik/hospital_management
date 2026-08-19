@@ -34,10 +34,16 @@ import { execSync } from "node:child_process";
 
 const WEB_PORT = process.env.WEB_PORT ?? "3000";
 const API_PORT = process.env.API_PORT ?? "4000";
-const SLUG = process.argv[2] ?? "demo";
+/**
+ * Which hospital to check. `sunrise` because that is what `seed:demo` actually creates and what
+ * TESTING.md §0 tells a first-time reader to open — the default used to be `demo`, a hospital no
+ * documented command has ever produced, so the "is it working?" check failed on a working stack
+ * and sent people debugging the login screen. Pass a slug to check a different one.
+ */
+const SLUG = process.argv[2] ?? "sunrise";
 const HOST = `${SLUG}.localhost`;
 
-const EMAIL = process.env.DOCTOR_EMAIL ?? "admin@demo.test";
+const EMAIL = process.env.DOCTOR_EMAIL ?? `admin@${SLUG}.test`;
 const PASSWORD = process.env.DOCTOR_PASSWORD ?? "123456";
 
 const results = [];
@@ -221,7 +227,9 @@ try {
     const code = body.error?.code;
     const fixes = {
       "HMS-AUTH-001": `Wrong password, or no such account in "${SLUG}".\n      Re-provision:  pnpm --filter @medicore/api provision -- --slug ${SLUG} --name "Demo" --admin-email ${EMAIL} --admin-password '${PASSWORD}'`,
-      "HMS-TEN-001": `No hospital named "${SLUG}". Provision it (see TESTING.md §4).`,
+      "HMS-TEN-001":
+        `No hospital named "${SLUG}".\n      Load the demo hospitals:  pnpm --filter @medicore/api seed:demo` +
+        `\n      …or provision your own (TESTING.md §4), then:  pnpm verify <slug>`,
       "HMS-TEN-002": `The hospital "${SLUG}" is suspended.`,
     };
     record(
