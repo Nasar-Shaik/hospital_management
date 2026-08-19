@@ -84,6 +84,15 @@ read-then-write, so two devices racing converge on one record. The re-triage his
 log, which already records every field change with its actor; a second history array beside it would
 be the same facts written twice, drifting.
 
+> **This claim was false for the first three weeks of the module, and is now enforced.** Because
+> `recordTriage` is an upsert, the FIRST triage of a patient produced no audit entry at all — the
+> plugin's query path discarded any write it had found no pre-image for, so only a _re_-triage was
+> recorded (risk register **D17**, found by Stage A manual validation on 2026-08-19). The history
+> this paragraph points at therefore began at the second assessment, and for the common case —
+> triaged once, never revised — it did not exist. Fixed platform-wide on 2026-08-19: **an audited
+> first write performed through an upsert is recorded as a CREATE, and later mutations as UPDATEs.**
+> Pinned by `auditPlugin.int.test.ts`, which asserts the create/update pair on this exact flow.
+
 **Triage does not move the encounter.** Priority is a property of the patient; the queue is a
 property of the visit. Coupling them would mean a re-triage dragged a patient back out of the
 consulting room. Sending the patient to a doctor is a separate act with its own button, calling the

@@ -1210,6 +1210,27 @@ listeners showed **zero DOM events arriving** — so the input never reached the
 reload restored it. A harness artefact, recorded here because the obvious reading ("the modal will
 not open") would have been filed as a product bug.
 
+### D17, and the subsystem that had no tests
+
+Closed on the same day it was filed, and worth recording for how it hid rather than for what it was.
+
+`auditPlugin` carries Doc 09 §9's requirement — an entry for every mutation of PHI or money — for
+54 models. When D17 was found, **not one test asserted that it wrote anything.** Route permissions
+were covered, the export's content type was covered, `/audit` loaded in Playwright; the trail's
+contents were not checked by anything. So a whole branch of the plugin could be wrong indefinitely,
+and was: the query path discarded any write it had found no pre-image for, which silently threw
+away the first write of every document created by an upsert.
+
+Fixing it turned up a second defect (**D21**) inside an hour, from the first assertion in the
+project that recomputed a stored audit hash: an update that only ADDS fields produced an empty
+`before`, Mongoose's default `minimize` stripped it after the hash had been taken over it, and the
+entry could never verify. The tamper alarm would have fired on an entry nobody touched.
+
+`apps/api/src/auditPlugin.int.test.ts` is the suite that should have existed. It asserts the
+create/update pair on the real ED triage flow, that a no-op and a failed write record nothing, that
+the trail stays inside one hospital and stamps the right branch, that each entry names its own
+actor — and that every entry recomputes to its stored hash.
+
 ### The environment notes
 
 - `pnpm verify` defaulted to a hospital called `demo` that no documented command creates, so the

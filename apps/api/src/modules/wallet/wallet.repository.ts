@@ -366,10 +366,17 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
     .findOneAndDelete({ patientId: new Types.ObjectId(ref.from) })
     .lean<WalletAccountDoc>();
   if (loser && loser.balance !== 0) {
+    /**
+     * `new: true` is not for this caller — the result is discarded. It is what lets the audit
+     * plugin see that the upsert INSERTED a wallet account: `findOneAndUpdate` returns null on an
+     * insert unless the new document is asked for, and a null result is indistinguishable from a
+     * write that matched nothing (risk register D17). Without it, the survivor's account could be
+     * created by a merge and never appear in the financial trail.
+     */
     await accounts.findOneAndUpdate(
       { patientId: new Types.ObjectId(ref.to) },
       { $inc: { balance: loser.balance } },
-      { upsert: true, setDefaultsOnInsert: true },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
     );
   }
 

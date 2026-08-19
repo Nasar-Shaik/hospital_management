@@ -101,6 +101,12 @@ const SUITE_DB = {
    * emergency module" answer resolved from another suite's key would pass for the wrong reason.
    */
   emergency: 23,
+  /**
+   * The audit plugin's own semantics (D17). Its own database because it asserts on the CONTENTS of
+   * `auditLogs` and on `seq`, which is a per-tenant counter — a suite sharing a database would
+   * interleave its own writes into the trail these assertions count.
+   */
+  auditPlugin: 24,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

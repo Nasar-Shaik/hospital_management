@@ -134,7 +134,26 @@ const auditLogSchema = new Schema<AuditLogDoc>(
   },
   // No `timestamps`: `at` is the event time and there is no update time, because
   // there are no updates. Indexes belong to migration 0003/0007 (Doc 03 §4).
-  { timestamps: false, collection: "auditLogs", autoIndex: false },
+  {
+    timestamps: false,
+    collection: "auditLogs",
+    autoIndex: false,
+    /**
+     * ── `minimize: false` IS A TAMPER-EVIDENCE REQUIREMENT, NOT A PREFERENCE ──
+     * Mongoose's default strips empty objects from a document on the way to the database. The leaf
+     * hash is computed over the entry the writer BUILT, so a `before: {}` that Mongoose quietly
+     * removed leaves a stored entry that can never recompute to its own hash — and
+     * `verifyAuditChain` would report it as content-tampered, on an entry nobody touched.
+     *
+     * That is not hypothetical. Found on 2026-08-19 by the first test ever written against the
+     * trail's contents: an update that only ADDS fields to a document (`transferredTo` and friends
+     * appearing on an existing triage row) produces an empty `before` delta, because `diff` records
+     * a previous value only where one existed. One entry in 202 failed to recompute, and it was
+     * this. The audit log is a record, not a document to be tidied — it stores exactly what it was
+     * handed, or the chain it anchors means nothing.
+     */
+    minimize: false,
+  },
 );
 
 /**

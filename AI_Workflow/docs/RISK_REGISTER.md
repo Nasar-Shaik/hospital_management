@@ -35,16 +35,21 @@ Found by execution, reproducible. Each names the evidence so the next person doe
 | D14 | ED triage/transfer accepted on a visit that had already ended           | P1  | ✅ **FIXED** 2026-08-19 (`9d4715b`)                                   |
 | D15 | The operating surgeon is required, stored — and never displayed         | P3  | ✅ **FIXED** 2026-08-19 (`ffd481c`)                                   |
 | D16 | Stock lookup 400s past a 2,000-character formulary, silently            | P2  | ✅ **FIXED** 2026-08-19 (`ac4bae9`)                                   |
-| D17 | A document created by an UPSERT is never audited                        | P2  | 🟡 **OPEN** — platform, see below                                     |
+| D17 | A document created by an UPSERT is never audited                        | P2  | ✅ **FIXED** 2026-08-19 — see below                                   |
 | D18 | The doctor's queue renders "—" instead of a patient's name              | P2  | 🟡 **OPEN** — see below                                               |
 | D19 | A write is offered under "All branches" and refused only on submit      | P3  | 🟡 **OPEN** — see below                                               |
 | D20 | The nav advertises modules the hospital's edition does not include      | P3  | 🟡 **OPEN** — see below                                               |
+| D21 | An audit entry with an empty diff side could never recompute its hash   | P2  | ✅ **FIXED** 2026-08-19 — found while fixing D17                      |
 
 > **D14–D20 were all found on 2026-08-19, in a browser, in one sitting** — the first execution of
 > the Stage A validation the tracker has been asking for since 2026-08-14. Seven defects in a
 > product whose automated gate was green: 2,060 integration tests, 45 Playwright specs, 0 boundary
-> violations. That ratio is the finding. `TESTING.md` §12 records how it was run and what it could
+> violations. That ratio is the finding. `TESTING.md` §11b records how it was run and what it could
 > not cover.
+>
+> **D21 came out of fixing D17 the same day** — the first test in the project to recompute a stored
+> audit hash found an entry that could never have verified. Neither defect was reachable by reading
+> the code; both needed something to actually look at what the trail contained.
 
 ### D9 — the appointment state machine used the unscoped twin
 
@@ -374,10 +379,51 @@ that the audit log **is** the re-triage history — with this gap the original a
 it, and in the common case (triaged once, never revised) there is no trail of the clinical decision
 at all.
 
-Not fixed here, on purpose. The hook is shared by every audited model — encounters, patients,
-billing, wallet, consultations, MRD codings, appointments, medicine batches — so changing when it
-writes is a platform change with its own blast radius and its own test surface. It should be the
-next fix, scoped on its own, not slipped in behind a validation pass.
+**FIXED 2026-08-19.** The early return was protecting a real case and could not simply be deleted:
+a `findOneAndUpdate` that matches nothing and does not upsert changed nothing, and an entry for it
+would be a fabricated event. The two cases are now told apart by what the DRIVER reports, measured
+rather than assumed (Mongoose 8.13 / Mongo 7):
+
+| call                             | inserted                       | matched nothing |
+| -------------------------------- | ------------------------------ | --------------- |
+| `findOneAndUpdate` + `new: true` | the document                   | `null`          |
+| `findOneAndUpdate`, no `new`     | **`null`** — same as no-op     | `null`          |
+| `updateOne` + `upsert`           | UpdateResult with `upsertedId` | all-zero result |
+| a write that throws              | post hook does not run at all  | —               |
+
+So the create path keys its read on the id the driver reported. A re-read on the FILTER would have
+covered the second row of that table too, and is exactly what this must not do: under a concurrent
+insert it would attribute another caller's document to this one. The second row is closed at the
+call sites instead — an audited upsert must ask for the new document, which was true everywhere
+except `wallet.repointPatient` (a wallet account created by a patient merge, in a `financial`
+collection, absent from the financial trail). `auditedUpsertsReturnTheNewDocument.test.ts` fails
+the build if a new call site drops it.
+
+**The vocabulary did not need extending.** `verbFor` has always answered `created` for an absent
+pre-image — the `save()` path has used it since the beginning. The query path simply never reached
+it. No new event type was added.
+
+**What made this survivable for so long:** `auditPlugin` had **no test of any kind**. Route
+permissions were covered, the export's content type was covered, the page loaded in Playwright —
+nothing asserted the trail's contents. `auditPlugin.int.test.ts` is now that suite.
+
+### D21 — an audit entry whose diff had an empty side could never verify
+
+Found while writing the D17 tests, by the first assertion in the project that recomputed a stored
+audit hash.
+
+`diff` records a previous value only where one existed, so an update that merely ADDS fields — a
+transfer-out putting `transferredTo` on a triage row that never had one — produces `before: {}`.
+Mongoose's default `minimize` strips empty objects on the way to the database, but the leaf hash had
+already been computed over the entry as BUILT. The stored entry could therefore never recompute to
+its own hash, and `verifyAuditChain` would report **content-tampered on an entry nobody touched** —
+turning the tamper alarm into noise, which is the one failure mode a tamper-evident log cannot
+afford.
+
+One entry in 202 in the new suite's fixture hit it. Fixed at both ends, because either alone leaves
+a sharp edge: `audit.model.ts` sets `minimize: false` so storage cannot alter what was hashed, and
+the plugin no longer writes an empty side at all — absence says "none of the changed fields had a
+previous value", which is what actually happened and how a CREATE already reads.
 
 ### D18 — the doctor's queue shows a dash where a name belongs
 
