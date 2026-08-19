@@ -22,6 +22,7 @@ import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
 import { seedLabTests } from "../seed/labTests.js";
+import { seedStoreItems } from "../seed/storeItems.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedMainBranch } from "../seed/mainBranch.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
@@ -132,6 +133,12 @@ async function main(): Promise<void> {
   // which is the failure the catalogue module was built to end.
   const labTests = await seedLabTests(result.tenant.id, result.tenant.slug, connection);
   logger.info({ labTests }, "lab test catalogue seeded");
+
+  // The general store's starter list — twelve things a store room runs out of. Reference data
+  // only (no shelf rows): a store keeper receives the actual quantities, exactly as the pharmacist
+  // does. A master that ships empty is a module nobody opens twice.
+  const storeItems = await seedStoreItems(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ storeItems }, "store item list seeded");
 
   // The hospital's own public website — a presentable landing page from the first minute, so a
   // brand-new tenant at <slug>.<domain> shows a real page rather than a bare login.

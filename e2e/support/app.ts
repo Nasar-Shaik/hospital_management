@@ -26,6 +26,13 @@ export const ACCOUNTS = {
   radiographer: "radiographer@sunrise.test",
   /** The counter. Holds `pharmacy:dispense` and `pharmacy:stock`, and no EMR write. */
   pharmacist: "pharmacy@sunrise.test",
+  /**
+   * The store room. Holds the four `inventory:*` codes plus `vendor:manage`, and NOTHING
+   * clinical — no `patient:read`, no `emr:read`. Checked by preflight like every other account,
+   * so a database seeded before `STORE_KEEPER` existed fails loudly instead of producing a
+   * store spec that cannot sign in.
+   */
+  storekeeper: "store@sunrise.test",
 } as const;
 
 /**

@@ -32,6 +32,7 @@ import { seedTariff } from "../seed/tariff.js";
 import { seedIcdCodes } from "../seed/icdCodes.js";
 import { seedFormulary } from "../seed/formulary.js";
 import { seedLabTests } from "../seed/labTests.js";
+import { seedStoreItems } from "../seed/storeItems.js";
 import { seedSiteSettings } from "../seed/siteSettings.js";
 import { seedMainBranch } from "../seed/mainBranch.js";
 import { seedPlans } from "../modules/subscriptions/index.js";
@@ -118,6 +119,7 @@ interface Outcome {
   formularyAdded: number;
   icdAdded: number;
   labTestsAdded: number;
+  storeItemsAdded: number;
   siteSeeded: boolean;
   mainBranchBackfilled?: number;
   error?: string;
@@ -173,6 +175,9 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
   // this release, was all of them: `labTests` shipped empty, so the analyte grid never pre-filled
   // and the module did nothing anywhere. Insert-only, so a curated catalogue is safe.
   const labTestsAdded = await seedLabTests(tenant.id, tenant.slug, connection);
+  // The general store's starter list. Backfills every hospital provisioned before the store
+  // existed — which is all of them. Insert-only, so an edited list is safe.
+  const storeItemsAdded = await seedStoreItems(tenant.id, tenant.slug, connection);
 
   return {
     slug: tenant.slug,
@@ -184,6 +189,7 @@ async function converge(tenant: TenantRegistryEntry): Promise<Outcome> {
     formularyAdded,
     icdAdded,
     labTestsAdded,
+    storeItemsAdded,
     siteSeeded,
     mainBranchBackfilled: Object.values(mainBranch.backfilled).reduce((a, b) => a + b, 0),
   };
@@ -370,6 +376,7 @@ async function main(): Promise<void> {
         formularyAdded: 0,
         icdAdded: 0,
         labTestsAdded: 0,
+        storeItemsAdded: 0,
         siteSeeded: false,
         error: err instanceof Error ? err.message : String(err),
       });

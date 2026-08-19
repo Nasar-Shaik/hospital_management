@@ -119,6 +119,26 @@ setup("the seeded hospital this suite needs is present", async ({ request, baseU
     tokens.get("admin") ?? "",
   );
   expect(staff.length, `the staff directory is empty — ${FIX}`).toBeGreaterThan(0);
+
+  /* ── 6. A store with the starter item on its shelf ────────────────────────
+   * `inventoryStore.spec.ts` works one NAMED item (`GLOVE-M`) and asserts against the opening
+   * balance it reads. A hospital seeded before the store existed has neither the item nor the
+   * shelf, and the spec's failure would read as "the store is broken" rather than "run the seed".
+   * Checked at the site the spec works in, because the shelf is per site.
+   */
+  const keeper = tokens.get("storekeeper") ?? "";
+  const store = await json<{ code: string; onHand: number }[]>(
+    request,
+    `${api}/api/v1/inventory-items`,
+    keeper,
+    siteA.id,
+  );
+  const gloves = store.find((i) => i.code === "GLOVE-M");
+  expect(gloves, `the store list has no GLOVE-M — ${FIX}`).toBeTruthy();
+  expect(
+    gloves?.onHand ?? 0,
+    `${siteA.name} has no GLOVE-M on the shelf, so the store spec has nothing to issue — ${FIX}`,
+  ).toBeGreaterThan(0);
 });
 
 /* ── the small amount of HTTP this needs ───────────────────────────────────── */

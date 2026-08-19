@@ -34,6 +34,9 @@ import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
 import { listMedicines, receiveStock } from "../modules/medicines/index.js";
+import { createSupplier, listStore, listSuppliers, receive } from "../modules/inventory/index.js";
+import { listBranches } from "../modules/branches/index.js";
+import { createDepartment, listDepartments } from "../modules/departments/index.js";
 
 const logger = createLogger({ service: "seed-demo" });
 
@@ -154,6 +157,19 @@ const STAFF: StaffSeed[] = [
     does: "dispense prescriptions, take money",
   },
   { key: "cashier", name: "Ravi (Billing)", role: "CASHIER", does: "finalize bills, take payment" },
+  /**
+   * The store room. Seeded for the same reason the two nurses were: `STORE_KEEPER` is the only
+   * role that holds the four `inventory:*` codes plus `vendor:manage`, and until somebody HAS it
+   * the general store is a screen only the hospital administrator can open — the "a permission
+   * nobody holds is a feature nobody has" trap, which this codebase has now fallen into five
+   * times. This account also proves the narrow grant works: it holds nothing clinical at all.
+   */
+  {
+    key: "store",
+    name: "Bose (General Store)",
+    role: "STORE_KEEPER",
+    does: "the store room: receive deliveries, issue to a ward, correct the count",
+  },
 ];
 
 interface DemoHospital {
@@ -274,6 +290,86 @@ async function seedHospital(h: DemoHospital): Promise<void> {
         stocked += 1;
       }
       if (stocked > 0) logger.info({ slug: h.slug, stocked }, "opening stock received");
+    },
+  );
+
+  /**
+   * The hospital's departments — DEMO ONLY.
+   *
+   * `departments` has always shipped empty, and until now nothing broke visibly: the Departments
+   * screen simply showed none, and `seedClinical` routes Sunrise's patients to a NAMED DOCTOR
+   * rather than a department. The general store is the first feature that cannot work without one
+   * — stock that leaves the store has to arrive somewhere nameable, and an empty picker means the
+   * Issue button opens onto a dead end.
+   *
+   * Four, not forty: enough for a demo to route a box of gloves somewhere believable, and few
+   * enough that nobody mistakes it for a hospital's real structure. Idempotent — it seeds only
+   * when the hospital has none, so an edited structure is never overwritten.
+   */
+  await runWithContext(
+    { traceId: `seed-demo-depts-${h.slug}`, tenantId: tenant.id, tenantSlug: h.slug, connection },
+    async () => {
+      if ((await listDepartments()).length > 0) return;
+      for (const d of [
+        { name: "General Ward", code: "GW", kind: "nursing" as const },
+        { name: "Operation Theatre", code: "OT", kind: "clinical" as const },
+        { name: "Emergency", code: "ER", kind: "clinical" as const },
+        { name: "Housekeeping", code: "HK", kind: "support" as const },
+      ]) {
+        await createDepartment(d);
+      }
+      logger.info({ slug: h.slug, departments: 4 }, "demo departments seeded");
+    },
+  );
+
+  /**
+   * The store room's opening stock — DEMO ONLY, and through the real `receive` service so every
+   * box on the shelf has an honest ledger entry behind it (never a raw `onHand` write). Idempotent
+   * twice over: one supplier is created only if none exists, and an item is topped up only when
+   * this site's shelf is empty, so re-running the seed does not inflate the store.
+   *
+   * ── AND IT NAMES THE BRANCH, WHICH IS NOT OPTIONAL ─────────────────────────
+   * A seed runs with no user, so `ctx.scope` is absent and `writeBranchId()` finds NO candidates
+   * and returns `undefined` — a branchless shelf row. That row is then invisible to every user
+   * with a site selected, because `scopeFilter()` narrows on `branchId`. It is the pharmacy's own
+   * "31 branchless stock movements" defect, reproduced from a seed script instead of a controller,
+   * and on a two-site demo hospital it would have made the whole store read empty.
+   *
+   * So the first active branch is resolved and published as the active one, exactly as an HTTP
+   * request would carry it in `X-Active-Branch`.
+   */
+  const [demoBranch] = await runWithContext(
+    { traceId: `seed-demo-branch-${h.slug}`, tenantId: tenant.id, tenantSlug: h.slug, connection },
+    async () => (await listBranches()).filter((b) => b.status === "active"),
+  );
+
+  await runWithContext(
+    {
+      traceId: `seed-demo-store-${h.slug}`,
+      tenantId: tenant.id,
+      tenantSlug: h.slug,
+      connection,
+      ...(demoBranch ? { activeBranchId: demoBranch.id } : {}),
+    },
+    async () => {
+      const existing = await listSuppliers({});
+      const supplier =
+        existing[0] ??
+        (await createSupplier({
+          code: "MEDISUP",
+          name: "Medisupply Distributors",
+          phone: "9848012345",
+        }));
+
+      let stocked = 0;
+      for (const row of await listStore({})) {
+        if (row.onHand > 0) continue;
+        // Comfortably above each starter reorder level, so the demo opens on a working store
+        // rather than a wall of red.
+        await receive(row.id, { quantity: row.reorderLevel * 4 + 20, supplierId: supplier.id });
+        stocked += 1;
+      }
+      if (stocked > 0) logger.info({ slug: h.slug, stocked }, "opening store stock received");
     },
   );
 }
