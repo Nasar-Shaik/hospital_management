@@ -163,8 +163,24 @@ test.describe("the back-office pages, loaded against the real API", () => {
       firstPatient,
       "the register listed no patients — is the hospital seeded?",
     ).toBeVisible({ timeout: 30_000 });
-    await firstPatient.click();
-    await expect(page).toHaveURL(/\/patients\/[a-f0-9]{8,}/);
+
+    /**
+     * ── THE CLICK IS RETRIED, AND THE GUARD IS THE URL ──────────────────────
+     * A row can be visible a moment before the register's own load replaces the table, and a click
+     * that lands in that gap hits a node that is being unmounted: nothing navigates, and the
+     * failure reads as "the patient chart is broken" when the register simply re-rendered. Seen
+     * once in roughly ten full-suite runs.
+     *
+     * The pathname check is what makes retrying safe. Without it, a click that DID navigate — just
+     * slower than the inner timeout — would be followed by a second click on the chart page, on
+     * whatever row `.nth(1)` happens to be there.
+     */
+    await expect(async () => {
+      if (new URL(page.url()).pathname === "/patients") {
+        await page.getByRole("main").getByRole("row").nth(1).click();
+      }
+      await expect(page).toHaveURL(/\/patients\/[a-f0-9]{8,}/, { timeout: 5_000 });
+    }).toPass({ timeout: 30_000 });
 
     await watch.settled();
 
