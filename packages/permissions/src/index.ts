@@ -1079,6 +1079,19 @@ export const FEATURE_FLAGS = {
   FINANCE_INSURANCE: "module.finance.insurance",
 
   // Platform
+  /**
+   * The PATIENT-facing portal — book, view a report, pay, from outside the building.
+   *
+   * Declared, deliberately unbuilt, and — since 2026-08-20 — sold by NO edition. It was in
+   * `CLINIC_FLAGS`, which every edition extends, so every hospital on the platform was shown
+   * "Patient portal" among the modules included in its plan (`/subscription`, "Included in this
+   * plan") and there was no portal, in any edition, at all. An entitlement that grants nothing is
+   * a promise on an invoice with no software behind it; this one was on every invoice.
+   *
+   * The flag STAYS defined. The portal is a real future milestone with a real audience, and
+   * deleting the constant would only mean re-inventing its name later. `FEATURE_LIFECYCLE` records
+   * that it is not built, and the ledger test refuses to let it gate a route while it says so.
+   */
   PORTAL_PATIENT: "portal.patient",
   PLATFORM_MULTI_ENTITY: "module.platform.multiEntity",
   PLATFORM_DEDICATED_DB: "platform.dedicatedDb",
@@ -1116,7 +1129,6 @@ const CLINIC_FLAGS: FeatureFlag[] = [
   F.OPS_APPOINTMENTS,
   F.CLINICAL_EMR_BASIC,
   F.FINANCE_OP_BILLING,
-  F.PORTAL_PATIENT,
 ];
 
 const HOSPITAL_FLAGS: FeatureFlag[] = [
@@ -1236,6 +1248,156 @@ export function getEdition(code: string | undefined): EditionDefinition | undefi
   if (!code) return undefined;
   return (EDITIONS as Record<string, EditionDefinition>)[code];
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE FLAG LEDGER — every flag gates something, or says why not.
+ *
+ * ── THE DEFECT CLASS ────────────────────────────────────────────────────────
+ * This is `permissionLifecycle.test.ts`'s rule, one layer up. A permission that gates nothing is
+ * a feature nobody has; a FLAG that gates nothing is a feature everybody has — the opposite
+ * failure, and the more expensive one, because the thing it fails to withhold has a price.
+ *
+ * Two live examples, both found by audit rather than by a gate:
+ *
+ *   `module.finance.packages` appeared in three editions and gated no line of code. Care
+ *   packages are sold as a Day Care / Hospital Plus differentiator, and every hospital on
+ *   PLAN_HOSPITAL had them, because the package routes gate on `module.ops.opd` like the rest of
+ *   billing. Fixed 2026-08-20 by gating the six package routes on this flag.
+ *
+ *   `portal.patient` was in CLINIC_FLAGS — every edition — with no portal in the product. Fixed
+ *   the same day by removing it from the editions, not by building a portal.
+ *
+ * Neither is visible in a diff, neither breaks a test, and both are on the customer's screen:
+ * `/subscription` lists an edition's flags under "Included in this plan".
+ *
+ * ── WHAT A DECLARATION MEANS ────────────────────────────────────────────────
+ * Absent means LIVE: some code reads this flag, and `featureLifecycle.test.ts` fails if none
+ * does. Present means it deliberately gates nothing, for one of two reasons:
+ *
+ *   `unbuilt`  — the module does not exist yet. It may still be listed in an edition (a contract
+ *                signed for a department we are building), but that number is PINNED, so selling
+ *                one more thing that does not exist is a decision somebody makes on purpose.
+ *   `bundled`  — the capability EXISTS and ships to EVERY edition, so it has no gate of its own.
+ *                `module.finance.opBilling` is the case: there is no edition in which a hospital
+ *                takes patients and issues no bill, so the flag is a line on a price list rather
+ *                than a switch (billing.routes.ts says the same thing from the other side).
+ *   `gated`    — the capability exists and IS withheld, by a different flag that has to be named.
+ *                `module.finance.ipBilling` is the case: an inpatient bill can only be raised
+ *                against an admission, and admission is gated by `module.ops.ipd`.
+ *
+ * The last two are the statuses worth distrusting, because they are what a missing gate would
+ * claim about itself — `module.finance.packages` could have been written as either. So neither is
+ * taken on its word: `bundled` is checked against every edition actually carrying the flag, and
+ * `gated` must name a flag that is itself live and that every edition selling this one also has.
+ * A capability some editions are meant to be without, with nothing withholding it, is the bug.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type FeatureStatus = "unbuilt" | "bundled" | "gated";
+
+export interface FeatureLifecycle {
+  status: FeatureStatus;
+  /** The owning module or milestone — "D12 Dialysis", "G2 Patient portal". Never blank. */
+  module: string;
+  /** Why this flag gates nothing, in a sentence another engineer can act on. */
+  reason: string;
+  /** For `gated`: the flag that actually withholds the capability. Verified, not believed. */
+  gatedBy?: FeatureFlag;
+}
+
+const unbuilt = (module: string, reason: string): FeatureLifecycle => ({
+  status: "unbuilt",
+  module,
+  reason,
+});
+
+const bundled = (module: string, reason: string): FeatureLifecycle => ({
+  status: "bundled",
+  module,
+  reason,
+});
+
+const gatedBy = (module: string, flag: FeatureFlag, reason: string): FeatureLifecycle => ({
+  status: "gated",
+  module,
+  gatedBy: flag,
+  reason,
+});
+
+/**
+ * Flags that deliberately gate nothing. Everything NOT in here must gate something on the shipped
+ * app — see `apps/api/src/featureLifecycle.test.ts`, which reads both and checks the claim.
+ */
+export const FEATURE_LIFECYCLE: Partial<Record<FeatureFlag, FeatureLifecycle>> = {
+  [F.PORTAL_PATIENT]: unbuilt(
+    "G2 Patient portal",
+    "the patient-facing product — book, view a report, pay — is a separate milestone with a " +
+      "different audience. Sold by no edition as of 2026-08-20.",
+  ),
+  [F.OPS_INTER_BRANCH]: unbuilt(
+    "B11 Inter-branch transfer",
+    "moving a patient or stock between sites is not built; branches today are a scoping " +
+      "boundary (ADR-0015), not a transfer network.",
+  ),
+  [F.CLINICAL_BLOODBANK]: unbuilt("D9 Blood bank", "donors, units, cross-match — not built."),
+  [F.CLINICAL_CRITICAL_CARE]: unbuilt(
+    "D11 Critical care",
+    "ICU flowsheets and scoring — not built. Admissions cover the bed, not the chart.",
+  ),
+  [F.CLINICAL_DIALYSIS]: unbuilt(
+    "D12 Dialysis",
+    "session scheduling and the machine register — not built.",
+  ),
+  [F.CLINICAL_PHYSIOTHERAPY]: unbuilt(
+    "D13 Physiotherapy",
+    "therapy plans and session notes — not built.",
+  ),
+  [F.CLINICAL_TELECONSULT]: unbuilt(
+    "D4 Teleconsult",
+    "the video visit and its consent trail — not built.",
+  ),
+  [F.CLINICAL_HOME_HEALTHCARE]: unbuilt(
+    "D15 Home healthcare",
+    "visit scheduling outside the building — not built, and sold by no edition.",
+  ),
+  [F.CLINICAL_OCCUPATIONAL_HEALTH]: unbuilt(
+    "D16 Occupational health",
+    "corporate health checks and fitness certificates — not built, and sold by no edition.",
+  ),
+  [F.SUPPORT_CSSD]: unbuilt(
+    "B12 CSSD",
+    "sterile supply cycles and instrument sets — not built. The general store is a different " +
+      "room and has its own flag.",
+  ),
+  [F.FINANCE_PREAUTH]: unbuilt(
+    "F2 Insurance pre-authorization",
+    "the pre-auth request flow is not split out; `insurance:preauth` is declared future beside " +
+      "it. Claims exist and gate on `module.finance.insurance`.",
+  ),
+  [F.PLATFORM_MULTI_ENTITY]: unbuilt(
+    "A10 Multi-entity",
+    "legal-entity consolidation across tenants — not built.",
+  ),
+  [F.PLATFORM_DEDICATED_DB]: unbuilt(
+    "Platform · dedicated database",
+    "an infrastructure commitment, not a code path: every tenant already gets its own database " +
+      "(ADR-0005), so there is nothing for this flag to switch on.",
+  ),
+  [F.ANALYTICS_GROUP_DASHBOARDS]: unbuilt(
+    "I2 Group dashboards",
+    "cross-branch consolidated reporting — not built. Reports today are per-tenant.",
+  ),
+  [F.FINANCE_OP_BILLING]: bundled(
+    "F1 Billing",
+    "every edition bills, including the government hospital that bills zero and needs the " +
+      "invoice for its own reporting. The billing routes gate on `module.ops.opd` and say so.",
+  ),
+  [F.FINANCE_IP_BILLING]: gatedBy(
+    "F1 Billing",
+    F.OPS_IPD,
+    "the same bill, raised against an admission instead of a visit. There is no separate IP " +
+      "billing surface to gate: a hospital that cannot admit never has an inpatient to bill.",
+  ),
+};
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Default role grants — the roles seeded into every new hospital.

@@ -160,3 +160,54 @@ explicitly and does not include it, which is why this change moved no contract.
 `Permission` contract and badging non-active codes, or by narrowing what is seeded? The first
 changes an API response shape; the second changes what existing tenants hold. Either belongs in
 its own slice. Until then, the eleven superseded codes remain selectable and inert.
+
+---
+
+## The same rule, one layer up: feature flags (2026-08-20)
+
+**Status:** live. Enforced by `apps/api/src/featureLifecycle.test.ts`.
+
+> A flag with no entry in `FEATURE_LIFECYCLE` **must** be read by shipped code. Anything else must
+> say why not — and a declared flag must be read by nothing, so the declaration cannot rot.
+
+A permission that gates nothing is a feature **nobody** has. A flag that gates nothing is a feature
+**everybody** has — the mirror failure, and the more expensive one, because the thing it fails to
+withhold is the thing with a price on it. Editions are not internal, either: `/subscription` lists
+an edition's flags to the hospital under "Included in this plan".
+
+This was found four times by hand before it became a test — `module.clinical.ris` (2026-08-18),
+`module.clinical.emergency` (2026-08-19), and then two together:
+
+- **`module.finance.packages`** sat in three editions and gated nothing. The six care-package
+  routes carried `module.ops.opd` like the rest of billing, so every PLAN_HOSPITAL and PLAN_CLINIC
+  tenant had a Day Care / Hospital Plus differentiator for free. Fixed by naming the flag the price
+  list already named.
+- **`portal.patient`** sat in `CLINIC_FLAGS`, which every edition extends, with no portal anywhere
+  in the product. Fixed by removing it from the editions — not by building a portal.
+
+### The four states
+
+|                    | Meaning                                                                | Must gate something?                  |
+| ------------------ | ---------------------------------------------------------------------- | ------------------------------------- |
+| _(no declaration)_ | **Live.** A route's `feature`, or a check like `order.entitlement.ts`. | **Yes** — the gate fails otherwise    |
+| `unbuilt`          | The module does not exist yet.                                         | **No** — acquiring a gate fails       |
+| `bundled`          | Built, and in **every** edition, so it has no gate of its own.         | **No**, and every edition is checked  |
+| `gated`            | Built, and withheld by a **different** named flag.                     | **No**, and the named flag is checked |
+
+`bundled` and `gated` are the statuses worth distrusting: they are what a _missing_ gate would
+claim about itself. So neither is believed. `bundled` is checked against every edition actually
+carrying the flag — which is what stopped `module.finance.ipBilling` being filed there on the way
+past; it is `gated` by `module.ops.ipd`, a different and verifiable claim. `gated` must name a flag
+that exists, is itself live, and is held by every edition that sells the gated one.
+
+### The ledger, not a failure
+
+Eleven `unbuilt` flags are still listed in an edition — blood bank, critical care, dialysis,
+physiotherapy, teleconsult, CSSD, pre-auth, inter-branch, multi-entity, dedicated DB, group
+dashboards. That is legitimate: Enterprise sells inter-branch transfer as a contract somebody signs
+for a department we are building. So the count is **pinned** exactly like the permission ledger's
+idle count (12 → 11 when the portal left), and it should FALL as modules ship.
+
+One rule is absolute, and it is the one `portal.patient` broke: **nothing unbuilt may be in the
+flags every edition shares.** A premium edition's list is negotiated; the base bundle is not — every
+customer receives it, and nobody signs for it.
