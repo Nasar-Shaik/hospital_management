@@ -18,12 +18,13 @@
  * and is unaffected. The whole file therefore returns `undefined` rather than reporting a problem,
  * which is also why the app has no "push is broken" state to design.
  *
- * ── THE PROJECT ID IS A REAL PREREQUISITE ───────────────────────────────────
- * `extra.eas.projectId` is not set in this repository, because no EAS project has been linked yet.
- * Until it is, `getExpoPushTokenAsync` throws and this returns undefined — which is the correct
- * behaviour and also means push CANNOT be validated on hardware until the project is linked. That
- * is recorded as a BLOCKER in `MOBILE_M4_DEVICE_CHECKLIST.md` rather than hidden behind a silent
- * fallback that looks like it works.
+ * ── THE PROJECT ID IS A REAL PREREQUISITE, AND AN EXTERNAL ONE ──────────────
+ * `extra.eas.projectId` is plumbed through `app.config.ts` from either `app.json` or
+ * `EAS_PROJECT_ID`, and is populated by neither until somebody runs `eas init` against a real Expo
+ * account. Until then `getExpoPushTokenAsync` is never reached, this returns undefined, and no
+ * device registers — correct behaviour, and also the reason push cannot be validated on hardware
+ * yet. `AI_Workflow/docs/MOBILE_PUSH_ENABLEMENT.md` is the runbook; the blocker is recorded in
+ * `MOBILE_M4_DEVICE_CHECKLIST.md` rather than hidden behind a fallback that looks like it works.
  */
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
@@ -34,6 +35,21 @@ import {
   type PushPayload,
   type PushRegistrar,
 } from "../lib/push";
+import { createLogger } from "../lib/log";
+import { appConfig } from "./config";
+
+/**
+ * ── WHY THE ONLY PLATFORM FILE THAT LOGS ────────────────────────────────────
+ * Four ordinary situations produce no token and the app must react to none of them, so the
+ * function returns `undefined` and the user is told nothing. Correct in the app; useless on the
+ * bench. A tester holding a phone that never buzzes needs to distinguish "no EAS project" from
+ * "the user declined" from "this is Expo Go", and there is no other way to see it — the whole
+ * reason M4 shipped without a single device check is a silence exactly like this one.
+ *
+ * `debug`, so it is dropped entirely in a release build (see `createLogger`). It names a REASON
+ * and nothing else — no token, ever: an Expo push token is a bearer address for a person's phone.
+ */
+const logger = createLogger({ verbose: appConfig.environment !== "production" });
 
 /**
  * Show the banner even while the app is open.
@@ -62,7 +78,10 @@ export const pushNotifications: PushRegistrar = {
     try {
       const platform = Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : null;
       // Web and anything else Expo grows: no push address, no registration, no complaint.
-      if (!platform) return undefined;
+      if (!platform) {
+        logger.debug("push unavailable", { code: "unsupported-platform" });
+        return undefined;
+      }
 
       /**
        * Android needs a channel before a notification can be shown at all, and the channel is
@@ -80,16 +99,35 @@ export const pushNotifications: PushRegistrar = {
 
       const existing = await Notifications.getPermissionsAsync();
       const granted = existing.granted || (await Notifications.requestPermissionsAsync()).granted;
-      if (!granted) return undefined;
+      if (!granted) {
+        logger.debug("push unavailable", { code: "permission-denied" });
+        return undefined;
+      }
 
       const id = projectId();
-      if (!id) return undefined;
+      if (!id) {
+        // The blocker M4 shipped with. `eas init`, or set EAS_PROJECT_ID — see app.config.ts.
+        logger.debug("push unavailable", { code: "no-eas-project-id" });
+        return undefined;
+      }
 
       const token = await Notifications.getExpoPushTokenAsync({ projectId: id });
-      return token.data ? { token: token.data, platform } : undefined;
-    } catch {
-      // A simulator, Expo Go, a revoked permission, a network failure at APNs. All the same
-      // answer: this phone will not buzz, and nothing else changes.
+      if (!token.data) {
+        logger.debug("push unavailable", { code: "no-token-issued" });
+        return undefined;
+      }
+      return { token: token.data, platform };
+    } catch (err) {
+      /**
+       * A simulator, Expo Go (no remote push since SDK 53), a revoked permission, a network
+       * failure at APNs. All the same answer to the app: this phone will not buzz, and nothing
+       * else changes. The CLASS of the error is logged — never its message, which can quote a
+       * request — because "which of these is it" is the first question on a bench.
+       */
+      logger.debug("push unavailable", {
+        code: "registrar-threw",
+        errorName: err instanceof Error ? err.name : "unknown",
+      });
       return undefined;
     }
   },
