@@ -119,6 +119,35 @@ Two consequences worth stating plainly:
 The email question above is still open and is unaffected: it is about a second CHANNEL for one
 cause, which push deliberately is not.
 
+### Urgency is a CHANNEL on Android, not a priority (K4-01)
+
+Two levers that sound like one. `priority: high` is about DELIVERY — whether FCM wakes a dozing
+handset. On Android 8+ the **notification channel** is what decides INTERRUPTION: sound, heads-up
+banner, lock-screen visibility. M4 shipped with `priority` set correctly and a single channel at
+HIGH importance, so every routine released result buzzed like a critical potassium. A ward
+interrupted by everything stops reacting to anything, and the alert that pays for it is the one
+push exists to deliver.
+
+Two channels now, both created by the app before a token is minted, both ids defined once in
+`@medicore/types`:
+
+| Channel    | Importance | What travels on it                                    |
+| ---------- | ---------- | ----------------------------------------------------- |
+| `critical` | HIGH       | `order.critical`, and anything else marked `urgent`   |
+| `default`  | DEFAULT    | every other template, **including unclassified ones** |
+
+Three rules for anyone adding a template:
+
+1. **The channel is derived, never chosen.** `channelFor()` reads `urgent` off the same copy entry
+   that decides the wording, so the words and the noise cannot disagree.
+2. **Unclassified means quiet.** Same direction as the copy fallback: forgetting to classify costs
+   a notification nobody heard, never a false alarm at 3am.
+3. **A new channel id must be created by the app in the same change.** Android does not fall back
+   and does not warn — a push naming a channel the handset never created is discarded, while Expo
+   returns an `ok` ticket and the ledger records a delivery. `push.test.ts` counts them for this
+   reason. And note an id's importance is fixed the first time the OS creates it: changing it later
+   needs a NEW id, not an edit.
+
 ## Not built, deliberately
 
 SMS and WhatsApp (a paid gateway), staff chat and broadcast, a patient-facing inbox, real-time

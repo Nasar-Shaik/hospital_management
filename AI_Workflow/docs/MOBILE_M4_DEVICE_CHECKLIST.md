@@ -38,14 +38,14 @@ untested**, and it must be reported that way.
 
 ---
 
-## 0b. Two rows that are already known not to pass
+## 0b. Known items
 
-Recorded here so a real defect is not rediscovered as a surprise, and so neither is quietly ticked.
+Recorded so neither is rediscovered as a surprise on the bench, and neither is quietly ticked.
 
-| Item  | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| K4-01 | **M4-10 cannot pass as written.** `push.service.ts` sends `priority: "high" \| "default"`, but `platform/pushNotifications.ts` creates ONE Android channel at HIGH importance, and on Android 8+ the channel decides interruption, not the priority. A routine result will buzz exactly like a critical one. Fixing it means a second channel and a `channelId` on the message — a change to notification channels, which M4 was told not to make. Left as a decision, not made silently. |
-| K4-02 | **Biometrics is wired to nothing.** `RuntimeProvider` passes `secureStore`, `preferences`, `push` and `logger` to `createRuntime` — and not `biometrics`. `platform/biometrics.ts` is therefore imported by no shipping code, `runtime.biometrics` is always undefined, and the M2 screen lock can only ever ask for a passcode. One line. Unrelated to push, so not fixed under M4; it needs the same hardware session, so it belongs in the same booking.                               |
+| Item  | What                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| K4-01 | ✅ **FIXED 2026-08-20.** Two channels now: `critical` at HIGH importance and `default` at DEFAULT, both created by the app before any token is minted, and every push names one. The ids live in `@medicore/types` because a server and an app that disagree on a channel id lose the notification outright — Android discards it, Expo still returns `ok`. **M4-10 is now expected to PASS**, and is the one row that verifies it.                         |
+| K4-02 | **Biometrics is wired to nothing.** `RuntimeProvider` passes `secureStore`, `preferences`, `push` and `logger` to `createRuntime` — and not `biometrics`. `platform/biometrics.ts` is therefore imported by no shipping code, `runtime.biometrics` is always undefined, and the M2 screen lock can only ever ask for a passcode. One line. Unrelated to push, so not fixed under M4; it needs the same hardware session, so it belongs in the same booking. |
 
 ---
 
@@ -61,14 +61,14 @@ Recorded here so a real defect is not rediscovered as a surprise, and so neither
 
 ## 2. Delivery (6) — MANUAL REQUIRED
 
-| #     | Check                                                                                                                                                         | Result |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| M4-06 | A critical result recorded on web arrives on the phone **within seconds**, app in the foreground                                                              | ☐      |
-| M4-07 | …with the app **backgrounded**                                                                                                                                | ☐      |
-| M4-08 | …with the app **force-quit**                                                                                                                                  | ☐      |
-| M4-09 | …with the screen **locked**, and the banner shows "Critical result" — **no patient name, no test name, no value**                                             | ☐      |
-| M4-10 | A routine released result arrives, and does NOT interrupt the way a critical one does (Android: default vs high importance) — **expected to FAIL, see K4-01** | ☐      |
-| M4-11 | Airplane mode for ten minutes, then back: the alert arrives late rather than never, and the inbox had it all along                                            | ☐      |
+| #     | Check                                                                                                                                                              | Result |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| M4-06 | A critical result recorded on web arrives on the phone **within seconds**, app in the foreground                                                                   | ☐      |
+| M4-07 | …with the app **backgrounded**                                                                                                                                     | ☐      |
+| M4-08 | …with the app **force-quit**                                                                                                                                       | ☐      |
+| M4-09 | …with the screen **locked**, and the banner shows "Critical result" — **no patient name, no test name, no value**                                                  | ☐      |
+| M4-10 | A routine released result arrives, and does NOT interrupt the way a critical one does (Android: `default` channel vs `critical`) — **the row that verifies K4-01** | ☐      |
+| M4-11 | Airplane mode for ten minutes, then back: the alert arrives late rather than never, and the inbox had it all along                                                 | ☐      |
 
 ## 3. The tap (4) — MANUAL REQUIRED
 

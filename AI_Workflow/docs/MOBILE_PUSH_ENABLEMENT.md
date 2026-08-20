@@ -207,12 +207,11 @@ the `order.critical` template, and it is the one the checklist's delivery rows a
 
 Two things to know before you start, so a real result is not mistaken for a bug:
 
-- **M4-10 will not pass as written.** The server sends `priority: high | default`, but the app
-  creates a single Android channel at HIGH importance, and on Android 8+ the channel — not the
-  priority — decides whether a notification interrupts. Routine and critical will behave
-  identically. This is a real M4 defect, found while writing this runbook, and deliberately not
-  fixed here: it is a change to notification channels, which this milestone was told not to make.
-  Record the row as FAILED with that reason.
+- **M4-10 is the row that verifies K4-01.** It was going to fail — one Android channel at HIGH
+  importance meant a routine result interrupted exactly like a critical one — and that was fixed
+  on 2026-08-20. There are two channels now, `critical` and `default`, and the check is whether a
+  released result arrives quietly while a critical one takes over the screen. It is the only place
+  that can be confirmed.
 - **Biometric rows in the M2 checklist cannot pass either.** `RuntimeProvider` never passes
   `biometrics` to `createRuntime`, so `platform/biometrics.ts` is imported by nothing and the
   screen lock can only ever ask for a passcode. One line, unrelated to push, still open — see the
