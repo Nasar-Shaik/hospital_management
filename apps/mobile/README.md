@@ -215,6 +215,38 @@ curl http://<your-ip>:19000/        # must be an Expo manifest, not another app'
   terminal has the real error; `start -c` clears it.
 - **Expo Go older than the project's SDK.** This app is on SDK 54 — see the top of this file.
 
+## Push needs a development build, not Expo Go
+
+Everything above is about Expo Go, which is still the right way to work on screens. It cannot
+receive remote push — Expo dropped that in SDK 53 — so the whole of M4 is invisible in it: the app
+mints no token, registers no device, and behaves exactly as a phone whose user declined the
+permission. That is by design (the inbox is the message), which also means **nothing goes wrong to
+tell you push is not being tested**.
+
+Two prerequisites, in order:
+
+1. **An EAS project.** Without `extra.eas.projectId` there is no token. `pnpm start` prints which
+   state you are in on every launch:
+
+   ```
+   🔔 push: EAS project <uuid> — a development build can mint a token
+   🔕 push: no EAS project id — `eas init`, or set EAS_PROJECT_ID.
+   ```
+
+   `eas init` cannot write into a dynamic config, so it writes `apps/mobile/app.json` — which is
+   `{}` and exists for exactly that. `EAS_PROJECT_ID` in the environment works too and wins.
+
+2. **A development build**, `eas build --profile development --platform android`. The profile is
+   already in `eas.json`.
+
+`AI_Workflow/docs/MOBILE_PUSH_ENABLEMENT.md` is the full runbook — Firebase, credentials, costs,
+and how to confirm a handset actually registered.
+
+When a token still does not appear, the adapter now says why. Look in the Metro console for
+`push unavailable` and a `code`: `no-eas-project-id`, `permission-denied`, `unsupported-platform`,
+`no-token-issued`, or `registrar-threw`. It never logs the token itself — that is a bearer address
+for somebody's phone.
+
 ## Things that will bite
 
 - **`Asia/Kolkata` is not in `Intl.supportedValuesOf("timeZone")`.** That list carries the legacy

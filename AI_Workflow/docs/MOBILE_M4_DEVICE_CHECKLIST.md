@@ -1,6 +1,7 @@
 # MOBILE M4 — STAFF PUSH: REAL-DEVICE VERIFICATION CHECKLIST
 
-**Status: 🔴 BLOCKED — 0 of 18 performed, and the first two cannot be performed at all yet.**
+**Status: 🔴 BLOCKED — 0 of 18 performed. The repository side is now clear; what remains is an
+Expo account, a build and a phone (see §0 and `MOBILE_PUSH_ENABLEMENT.md`).**
 
 M4 is engineering-complete on automated evidence: 27 API integration tests drive the real push path
 against a loopback server speaking Expo's protocol, 9 unit tests pin the two pure decisions, and 15
@@ -14,15 +15,37 @@ where the automated boundary genuinely ends.
 
 ---
 
-## 0. Two blockers, before any of this can start
+## 0. Prerequisites — what is closed, and what still needs you
 
-| #     | Blocker                                                                                                                                                                                                                                                                                                                                                    | Owner   |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| B4-01 | **No EAS project is linked.** `extra.eas.projectId` is set nowhere in this repository, and `getExpoPushTokenAsync` cannot mint a token without it. `platform/pushNotifications.ts` returns `undefined` in that case — correctly, and silently — so **the app will register no device until this is done**, and every row below is unreachable. `eas init`. | release |
-| B4-02 | **Expo Go cannot receive remote push from SDK 53 onward.** A development build (`eas build --profile development`) is required. This is a different question from M2's — that one asks whether `expo-local-authentication` runs inside Expo Go, and the answer there may well be yes. This one is settled by Expo's own release notes: for push, it is no. | release |
+`AI_Workflow/docs/MOBILE_PUSH_ENABLEMENT.md` is the runbook with the exact commands. In short:
 
-Until both are closed the honest status of push on hardware is **not "failing" — untested**, and it
-must be reported that way.
+| #     | Prerequisite                                                                                                                                                                        | State                                                                                                                                                                                                     |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B4-01 | **An EAS project.** `getExpoPushTokenAsync` cannot mint a token without `extra.eas.projectId`, so until this exists the app registers no device and every row below is unreachable. | 🟡 **plumbed, not populated.** The config now carries an id from `app.json` or `EAS_PROJECT_ID` — and a `🔕` line at startup says when it has neither. Someone with the Expo account must run `eas init`. |
+| B4-02 | **A development build.** Expo Go has not carried remote push since SDK 53. `eas.json`'s `development` profile is ready and unmodified.                                              | 🔴 **external.** `eas build --profile development --platform android`, after B4-01.                                                                                                                       |
+| B4-03 | **Apple Developer Program**, $99/yr, for iOS push credentials and device registration.                                                                                              | 🔴 **external, and optional for now** — it blocks 4 of the 18 rows, not the other 14.                                                                                                                     |
+| B4-04 | **A Firebase project + FCM V1 service-account key**, for Android delivery. `android.googleServicesFile` is referenced conditionally, so a checkout without it still builds.         | 🔴 **external.** Free.                                                                                                                                                                                    |
+
+**The defect that was found while closing B4-01, and would have wasted the first device session:**
+`app.config.ts` rebuilt its `extra` object from scratch, with no `...config.extra`. Anything
+`eas init` wrote to `app.json` was silently discarded on the way through — the repository would
+have shown a linked project, `expo config` would have shown none, and the app would have gone on
+returning `undefined` with nothing logged anywhere. Same shape as the colon in the BullMQ job id: a
+step that reports success and does nothing.
+
+Until B4-01 and B4-02 are closed, the honest status of push on hardware is **not "failing" —
+untested**, and it must be reported that way.
+
+---
+
+## 0b. Two rows that are already known not to pass
+
+Recorded here so a real defect is not rediscovered as a surprise, and so neither is quietly ticked.
+
+| Item  | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| K4-01 | **M4-10 cannot pass as written.** `push.service.ts` sends `priority: "high" \| "default"`, but `platform/pushNotifications.ts` creates ONE Android channel at HIGH importance, and on Android 8+ the channel decides interruption, not the priority. A routine result will buzz exactly like a critical one. Fixing it means a second channel and a `channelId` on the message — a change to notification channels, which M4 was told not to make. Left as a decision, not made silently. |
+| K4-02 | **Biometrics is wired to nothing.** `RuntimeProvider` passes `secureStore`, `preferences`, `push` and `logger` to `createRuntime` — and not `biometrics`. `platform/biometrics.ts` is therefore imported by no shipping code, `runtime.biometrics` is always undefined, and the M2 screen lock can only ever ask for a passcode. One line. Unrelated to push, so not fixed under M4; it needs the same hardware session, so it belongs in the same booking.                               |
 
 ---
 
@@ -38,14 +61,14 @@ must be reported that way.
 
 ## 2. Delivery (6) — MANUAL REQUIRED
 
-| #     | Check                                                                                                                       | Result |
-| ----- | --------------------------------------------------------------------------------------------------------------------------- | ------ |
-| M4-06 | A critical result recorded on web arrives on the phone **within seconds**, app in the foreground                            | ☐      |
-| M4-07 | …with the app **backgrounded**                                                                                              | ☐      |
-| M4-08 | …with the app **force-quit**                                                                                                | ☐      |
-| M4-09 | …with the screen **locked**, and the banner shows "Critical result" — **no patient name, no test name, no value**           | ☐      |
-| M4-10 | A routine released result arrives, and does NOT interrupt the way a critical one does (Android: default vs high importance) | ☐      |
-| M4-11 | Airplane mode for ten minutes, then back: the alert arrives late rather than never, and the inbox had it all along          | ☐      |
+| #     | Check                                                                                                                                                         | Result |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| M4-06 | A critical result recorded on web arrives on the phone **within seconds**, app in the foreground                                                              | ☐      |
+| M4-07 | …with the app **backgrounded**                                                                                                                                | ☐      |
+| M4-08 | …with the app **force-quit**                                                                                                                                  | ☐      |
+| M4-09 | …with the screen **locked**, and the banner shows "Critical result" — **no patient name, no test name, no value**                                             | ☐      |
+| M4-10 | A routine released result arrives, and does NOT interrupt the way a critical one does (Android: default vs high importance) — **expected to FAIL, see K4-01** | ☐      |
+| M4-11 | Airplane mode for ten minutes, then back: the alert arrives late rather than never, and the inbox had it all along                                            | ☐      |
 
 ## 3. The tap (4) — MANUAL REQUIRED
 
