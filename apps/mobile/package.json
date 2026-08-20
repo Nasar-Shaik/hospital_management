@@ -5,6 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start --port 19000",
+    "eas-build-post-install": "pnpm --filter \"@medicore/mobile^...\" build",
     "android": "expo start --port 19000 --android",
     "ios": "expo start --port 19000 --ios",
     "start:tunnel": "expo start --port 19000 --tunnel",

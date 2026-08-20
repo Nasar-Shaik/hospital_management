@@ -4,7 +4,11 @@
     "appVersionSource": "remote"
   },
   "build": {
+    "base": {
+      "node": "22.11.0"
+    },
     "development": {
+      "extends": "base",
       "developmentClient": true,
       "distribution": "internal",
       "env": {
@@ -16,6 +20,7 @@
       "environment": "development"
     },
     "preview": {
+      "extends": "base",
       "distribution": "internal",
       "channel": "preview",
       "env": {
@@ -27,6 +32,7 @@
       "environment": "preview"
     },
     "production": {
+      "extends": "base",
       "channel": "production",
       "env": {
         "EXPO_PUBLIC_ENV": "production"
