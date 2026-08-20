@@ -20,6 +20,9 @@ environment. This is the shortest correct path to the point where they can.
 | `app.json` — emptied to `{}`                                | It held a stale `plugins` array that `app.config.ts` silently overrode. It is now purely somewhere for `eas init` to write.                                                                                                                            |
 | `platform/pushNotifications.ts` — a reason on every failure | Four different situations produced an identical silence. On a bench you cannot debug that. Now logs `no-eas-project-id`, `permission-denied`, `unsupported-platform`, `no-token-issued` or `registrar-threw` — a reason only, never a token.           |
 | `app.config.ts` — a startup line                            | `🔕 push: no EAS project id …` prints on every `expo start` until step 1 is done.                                                                                                                                                                      |
+| `eas.json` — `environment` per profile                      | Binds each build profile to an EAS environment. Without it a server-side variable — including the Firebase config below — is never injected into the build.                                                                                            |
+| `expo-dev-client` added                                     | `eas.json`'s `development` profile sets `developmentClient: true` and the package was not installed. A build without it cannot attach to Metro, which is the entire point of a development build.                                                      |
+| root `.gitignore` — service-account key patterns            | A real FCM key downloads as `<project>-firebase-adminsdk-<hash>.json`; no existing rule matched that shape, so it would have been committed from anywhere in the tree.                                                                                 |     |
 
 Nothing above mints a token. **Step 1 is the boundary; it needs your account.**
 
@@ -92,23 +95,55 @@ Firebase feature is used.
    - production: `in.paperlesstech.medicore`
 
    These come from `app.config.ts` and differ per profile deliberately, so all three can sit on one
-   phone. **Register all three now** — realising later that the preview build has no Firebase app
-   costs another round trip.
+   phone. **Register all three** — realising later that the preview build has no Firebase app costs
+   another round trip.
 
 3. Download `google-services.json` → save to `apps/mobile/google-services.json`. It is gitignored
    with the signing material; do not commit it.
-4. Firebase Console → ⚙ **Project settings → Service accounts → Generate new private key**. This
-   downloads a JSON file. Then:
+
+4. **Upload it to EAS as a file variable. This step is not optional and its absence is silent.**
+
+   ```bash
+   cd apps/mobile
+   eas env:set --scope project --name GOOGLE_SERVICES_JSON --type file \
+     --value ./google-services.json --visibility secret --environment development
+   ```
+
+   > **Why, and how this was found.** EAS Build uploads the project as a git archive, so a
+   > **gitignored file is not in it**. Confirmed rather than assumed, with
+   > `eas build:inspect --platform android --stage archive --profile development --output <dir>`,
+   > which produces the exact tarball a build would receive: `google-services.json` was absent from
+   > it. The build would still have SUCCEEDED — producing an app with no Firebase config, whose
+   > `getExpoPushTokenAsync` fails, whose registration returns nothing, and which looks precisely
+   > like a phone whose user declined the permission. Run `build:inspect` yourself if a build ever
+   > produces an app that will not register; it answers "was the file even there" in ten seconds.
+   >
+   > `app.config.ts` reads `process.env.GOOGLE_SERVICES_JSON` and falls back to the local path, so
+   > the same config works on a laptop, on EAS, and in a checkout that has neither. All three
+   > branches are verified.
+   >
+   > Each build profile is bound to its environment in `eas.json` (`"environment": "development"`),
+   > which is what makes a server-side variable reach the build at all. A profile without it gets
+   > none of them.
+
+5. Firebase Console → ⚙ **Project settings → Service accounts → Generate new private key**, then:
 
    ```bash
    cd apps/mobile
    eas credentials --platform android
-   # → the profile → Google Service Account → Manage → Upload a new key
+   # → development → Google Service Account
+   #   → Manage your Google Service Account Key for Push Notifications (FCM V1)
+   #   → Set up a Google Service Account Key → point it at the downloaded file
    ```
 
-   Upload the service-account JSON, **not** `google-services.json`. They are different files and
-   swapping them is the commonest failure here: builds succeed, tokens mint, and every push returns
-   a credentials error.
+   Upload the **service-account key**, not `google-services.json`. They are different files and
+   swapping them is the commonest failure here: the build succeeds, a token mints, and every push
+   comes back with a credentials error.
+
+   **Delete the key from your disk afterwards.** It authorises sending push to every handset this
+   hospital owns. The root `.gitignore` catches `*firebase-adminsdk*.json`,
+   `*service-account*.json` and `*fcm*.json` anywhere in the tree, so a stray copy cannot be
+   committed — but that is a seatbelt, not a reason to keep it.
 
 ### 2b. iOS — Apple (B4-03), only if you have the paid account
 

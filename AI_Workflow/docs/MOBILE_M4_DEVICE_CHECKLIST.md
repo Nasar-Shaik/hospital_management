@@ -19,22 +19,27 @@ where the automated boundary genuinely ends.
 
 `AI_Workflow/docs/MOBILE_PUSH_ENABLEMENT.md` is the runbook with the exact commands. In short:
 
-| #     | Prerequisite                                                                                                                                                                        | State                                                                                                                                                                                                     |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B4-01 | **An EAS project.** `getExpoPushTokenAsync` cannot mint a token without `extra.eas.projectId`, so until this exists the app registers no device and every row below is unreachable. | 🟡 **plumbed, not populated.** The config now carries an id from `app.json` or `EAS_PROJECT_ID` — and a `🔕` line at startup says when it has neither. Someone with the Expo account must run `eas init`. |
-| B4-02 | **A development build.** Expo Go has not carried remote push since SDK 53. `eas.json`'s `development` profile is ready and unmodified.                                              | 🔴 **external.** `eas build --profile development --platform android`, after B4-01.                                                                                                                       |
-| B4-03 | **Apple Developer Program**, $99/yr, for iOS push credentials and device registration.                                                                                              | 🔴 **external, and optional for now** — it blocks 4 of the 18 rows, not the other 14.                                                                                                                     |
-| B4-04 | **A Firebase project + FCM V1 service-account key**, for Android delivery. `android.googleServicesFile` is referenced conditionally, so a checkout without it still builds.         | 🔴 **external.** Free.                                                                                                                                                                                    |
+| #     | Prerequisite                                                                                                                                                | State                                                                                                                                                                                                                                                                                                      |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B4-01 | **An EAS project.** No push token can be minted without `extra.eas.projectId`.                                                                              | ✅ **DONE.** `@nasarj/medicore-staff`, id `d568ae8c…`, recorded in `app.json`.                                                                                                                                                                                                                             |
+| B4-04 | **Firebase + FCM.** Android delivery goes through FCM; the app needs `google-services.json` at build time and EAS needs the V1 service-account key to send. | 🟡 **half done.** Project `medicore-staff-mobile-69d87` exists, the Android app is registered for `in.paperlesstech.medicore.development`, and `google-services.json` is in place and uploaded to EAS as a secret file variable. **The service-account key still has to be uploaded** — `eas credentials`. |
+| B4-02 | **A development build.** Expo Go has carried no remote push since SDK 53.                                                                                   | 🔴 **next.** `expo-dev-client` is now installed and the profile is ready: `eas build --profile development --platform android`.                                                                                                                                                                            |
+| B4-03 | **Apple Developer Program**, $99/yr, for iOS push credentials and device registration.                                                                      | 🔴 **external, still optional** — it blocks 4 of the 18 rows, not the other 14.                                                                                                                                                                                                                            |
 
-**The defect that was found while closing B4-01, and would have wasted the first device session:**
-`app.config.ts` rebuilt its `extra` object from scratch, with no `...config.extra`. Anything
-`eas init` wrote to `app.json` was silently discarded on the way through — the repository would
-have shown a linked project, `expo config` would have shown none, and the app would have gone on
-returning `undefined` with nothing logged anywhere. Same shape as the colon in the BullMQ job id: a
-step that reports success and does nothing.
+**Two silent-nothing defects were found closing these**, both of the same family as the colon in
+the BullMQ job id — a step that reports success and does nothing:
 
-Until B4-01 and B4-02 are closed, the honest status of push on hardware is **not "failing" —
-untested**, and it must be reported that way.
+1. `app.config.ts` rebuilt its `extra` object with no `...config.extra`, so the project id
+   `eas init` wrote to `app.json` would have been discarded in transit. A linked project the app
+   could not see.
+2. **`google-services.json` is gitignored, and EAS Build uploads a git archive** — so the file was
+   not in the tarball. Proven with `eas build:inspect --stage archive`, which produces the exact
+   upload: absent. The build would have SUCCEEDED and produced an app that can never mint an FCM
+   token, indistinguishable on a bench from a declined permission. Fixed by uploading it as an EAS
+   file variable, which `app.config.ts` already knew how to read.
+
+Until B4-02 and the service-account key are done, the honest status of push on hardware is **not
+"failing" — untested**, and it must be reported that way.
 
 ---
 
