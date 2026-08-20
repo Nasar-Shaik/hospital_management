@@ -153,35 +153,53 @@ UI work, useless for push. A simulator has no APNs.
 ## 4. Point the phone at an API that can send
 
 ```bash
-pnpm --filter @medicore/api dev      # runs the notifications worker in-process
-cd apps/mobile && pnpm start         # note the TENANT_BASE_DOMAIN line it prints
+pnpm --filter @medicore/api dev                    # runs the notifications worker in-process
+pnpm --filter @medicore/api dev:device-domains     # once, and again after changing network
+cd apps/mobile && pnpm start
 ```
 
-Three things have to be true at once, and they are easy to get two out of three:
+`dev:device-domains` is the right way to make a handset reach this machine, and it is not obvious:
+it attaches `<slug>.<your-ip>.sslip.io` to every local tenant as a **custom domain**, using the
+same resolution path a hospital with its own hostname uses in production. Both hosts then work at
+once — `apollo.localhost:4000` for the browser and `apollo.192.168.1.7.sslip.io:4000` for the
+phone. Repointing `TENANT_BASE_DOMAIN` instead (as `MANUAL_VALIDATION_RUNBOOK.md` ENV-06 describes)
+also works, but that value drives the dev CORS allowlist, so it moves the web app onto sslip URLs
+for the rest of the session. Prefer the script.
 
-1. **`apps/api/.env` has `TENANT_BASE_DOMAIN` set to whatever `pnpm start` printed.** It is derived
-   from your current LAN address via `sslip.io`, so it changes when you change network.
-2. **`REDIS_URL` is set for the API.** `push.deliver` is a queued task; with no Redis the in-app
-   notification is still written and delivered and no push is ever scheduled. This looks exactly
-   like a broken phone. The notifications worker runs inside the API process
-   (`eventConsumer.ts`), so there is no separate service to start.
-3. **`PUSH_ENABLED` is not `false`.** It defaults on.
+Three more things have to be true, and it is easy to get two of the three:
 
-Then, on the phone: sign in as a doctor, accept the permission prompt, and confirm registration
-landed — from your machine, against the same account:
+1. **`REDIS_URL` is set for the API.** `push.deliver` is a queued task; with no Redis the in-app
+   notification is still written and still delivered, and no push is ever scheduled. On a phone
+   that is indistinguishable from broken push. The notifications worker runs inside the API process
+   (`eventConsumer.ts`) — there is no separate service to start.
+2. **`PUSH_ENABLED` is not `false`.** It defaults on.
+3. **The tenant resolves before you pick up the phone.** A tenancy failure and a wifi failure look
+   identical from a handset:
+
+   ```bash
+   curl -s -H 'Host: apollo.192.168.1.7.sslip.io' http://192.168.1.7:4000/api/v1/auth/login \
+     -X POST -H 'Content-Type: application/json' -d '{}'
+   # HMS-VAL-001 → tenant resolved, only credentials missing. Good.
+   # HMS-TEN-001 → the host matched no tenant. Re-run dev:device-domains.
+   ```
+
+Then sign in on the phone as a doctor, accept the permission prompt, and confirm the registration
+landed — from your machine, on the same account:
 
 ```bash
-curl -H "Host: <slug>.<domain>" -H "Authorization: Bearer <token>" \
-  http://localhost:4000/api/v1/me/devices
+TOKEN=$(curl -s -H 'Host: apollo.192.168.1.7.sslip.io' -H 'Content-Type: application/json' \
+  -d '{"email":"<doctor-email>","password":"<password>"}' \
+  http://192.168.1.7:4000/api/v1/auth/login | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["accessToken"])')
+
+curl -s -H 'Host: apollo.192.168.1.7.sslip.io' -H "Authorization: Bearer $TOKEN" \
+  http://192.168.1.7:4000/api/v1/me/devices
 ```
 
-One active device, platform `android`. If the list is empty, read the Metro console: the app now
-logs `push unavailable` with a reason.
+One active device, platform `android`. If the list is empty, read the Metro console — the app now
+logs `push unavailable` with a `code` saying which of the five reasons it was.
 
-To fire an alert, record a critical result on web for a patient whose order that doctor placed —
-that is the `order.critical` template, and it is the one the checklist's delivery rows use.
-
----
+To fire an alert, record a **critical** result on web against an order that doctor placed. That is
+the `order.critical` template, and it is the one the checklist's delivery rows assume.
 
 ## 5. Then run the checklist
 

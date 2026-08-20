@@ -306,6 +306,18 @@ If either fails in Expo Go, record **ENVIRONMENT ISSUE**, build a development bu
 > Known caveat: `expo-secure-store` inside Expo Go shares storage scope with other Expo Go projects.
 > Harmless for validation; it is not how a real build behaves.
 
+> **M4 push is settled, and the answer is no (2026-08-20).** Expo Go has not carried remote
+> notifications since SDK 53, so the eighteen rows of `MOBILE_M4_DEVICE_CHECKLIST.md` cannot be run
+> in it at all — the app mints no token, registers no device, and looks exactly like a handset whose
+> user declined the permission. A development build is required, and so is an EAS project before
+> that. `MOBILE_PUSH_ENABLEMENT.md` is the runbook. This does not change the answer for M2 and M3,
+> which may well be fine in Expo Go; it means the M4 rows have a prerequisite the others do not.
+
+> **Reaching the API: prefer `pnpm --filter @medicore/api dev:device-domains` over ENV-06's
+> `TENANT_BASE_DOMAIN` switch.** It attaches `<slug>.<ip>.sslip.io` to each tenant as a custom
+> domain — the production path for a hospital with its own hostname — so the phone and the browser
+> both work without moving CORS, and without the switching cost the box above warns about.
+
 ### ENV-08 · Devices and browsers
 
 See §17. Confirm what you actually have before planning the day — several tests need **two
