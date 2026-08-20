@@ -24,7 +24,15 @@
  *
  * Nothing is lost by the omission: EAS Update does not serve development builds, so the field has
  * no meaning there. `preview` and `production` — the two profiles that DO receive updates — set it.
+ *
+ * ── AND WHAT `app.json` IS FOR, NOW THAT THIS FILE EXISTS ───────────────────
+ * Writing. Nothing else. Expo reads `app.json` first and hands it here as `config`, and everything
+ * this function names explicitly WINS — so a key set over there is a key that appears to work and
+ * does not. It held a stale `plugins: [..., "expo-status-bar"]` on exactly that basis, inert for
+ * months. It is `{}` now, kept only because `eas init` needs a static file to record the project
+ * id and owner in, and because `...config` and `...config.extra` below are what carry them through.
  */
+import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
 import type { ConfigContext, ExpoConfig } from "expo/config";
 
@@ -88,6 +96,41 @@ const TENANT_DOMAIN: Record<Environment, string> = {
 };
 
 /**
+ * The EAS project this binary belongs to — the ONE thing without which no push token exists.
+ *
+ * ── IT IS READ FROM TWO PLACES, AND THAT IS DELIBERATE ──────────────────────
+ * `eas init` records the id at `extra.eas.projectId`. With a DYNAMIC config — this file — it
+ * CANNOT write here, so it writes `app.json` and prints a note that is easy to miss. The id is
+ * therefore accepted from either: `app.json` (which arrives as `config.extra`) or `EAS_PROJECT_ID`
+ * in the environment, environment first. Neither is a secret — a project id names an Expo project,
+ * it authorises nothing — which is why it may sit in a committed file.
+ *
+ * ── THE DEFECT THIS FUNCTION EXISTS TO CLOSE ────────────────────────────────
+ * `extra` below used to be written FRESH, with no `...config.extra`. Anything `eas init` put in
+ * app.json was silently discarded on its way through this function: the repository would show a
+ * linked project, `expo config` would show none, and `getExpoPushTokenAsync` would go on returning
+ * undefined with nothing logged anywhere. The same shape of bug as the colon in the BullMQ job id
+ * — a step that reports success and does nothing — and it would have wasted the first device
+ * session outright.
+ */
+function easProjectId(configured: unknown): string | undefined {
+  const fromAppJson = (configured as { eas?: { projectId?: string } } | undefined)?.eas?.projectId;
+  return process.env.EAS_PROJECT_ID ?? fromAppJson;
+}
+
+/**
+ * Firebase's client config. Android cannot obtain an FCM token without it, and Expo's push service
+ * cannot reach the handset without the matching V1 service-account key held in EAS credentials.
+ *
+ * It is NEVER committed — `.gitignore` files it with the signing material — so the reference is
+ * conditional on the file being there. A checkout without it still installs, still type-checks,
+ * still exports a bundle and still runs on a simulator; only a real Android push build needs it.
+ * Naming a missing path unconditionally would break `expo prebuild` for everyone not doing push
+ * work today, which is the wrong trade for a file three people will ever hold.
+ */
+const GOOGLE_SERVICES = process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json";
+
+/**
  * Both halves have to agree — the server matches the Host header against its OWN base domain, and
  * a mismatch surfaces as `HMS-TEN-001 Organization not found`, which reads like a bad hospital code
  * rather than a configuration error. Printing the required value costs one line and removes the
@@ -101,42 +144,103 @@ if (ENVIRONMENT === "development") {
   );
 }
 
-export default ({ config }: ConfigContext): ExpoConfig => ({
-  ...config,
-  name: ENVIRONMENT === "production" ? "MediCore" : `MediCore (${ENVIRONMENT})`,
-  slug: "medicore-staff",
-  scheme: "medicore",
-  version: "0.1.0",
-  orientation: "portrait",
-  userInterfaceStyle: "automatic",
-  // See the header: set for the profiles that receive EAS Updates, omitted for Expo Go.
-  ...(ENVIRONMENT === "development" ? {} : { runtimeVersion: { policy: "appVersion" as const } }),
+export default ({ config }: ConfigContext): ExpoConfig => {
+  const projectId = easProjectId(config.extra);
 
-  ios: {
-    supportsTablet: true,
-    bundleIdentifier:
-      ENVIRONMENT === "production"
-        ? "in.paperlesstech.medicore"
-        : `in.paperlesstech.medicore.${ENVIRONMENT}`,
-  },
-  android: {
-    package:
-      ENVIRONMENT === "production"
-        ? "in.paperlesstech.medicore"
-        : `in.paperlesstech.medicore.${ENVIRONMENT}`,
-  },
+  /**
+   * Said out loud, because the alternative is a silent shrug on a phone.
+   *
+   * `platform/pushNotifications.ts` returns `undefined` for four ordinary reasons and reports
+   * none of them — correctly, since none is a problem to show a doctor. That is the right
+   * behaviour in the app and the wrong one on the bench: a tester who sees no notification cannot
+   * tell "no EAS project" from "permission declined". This line settles the first of the four
+   * before the app has even started.
+   */
+  if (ENVIRONMENT === "development") {
+    console.log(
+      projectId
+        ? `  🔔 push: EAS project ${projectId} — a development build can mint a token\n`
+        : "  🔕 push: no EAS project id — `eas init`, or set EAS_PROJECT_ID. " +
+            "No token will be minted and no device will register.\n",
+    );
+  }
 
-  plugins: ["expo-router", "expo-secure-store"],
+  return {
+    ...config,
+    name: ENVIRONMENT === "production" ? "MediCore" : `MediCore (${ENVIRONMENT})`,
+    slug: "medicore-staff",
+    scheme: "medicore",
+    version: "0.1.0",
+    orientation: "portrait",
+    userInterfaceStyle: "automatic",
+    // See the header: set for the profiles that receive EAS Updates, omitted for Expo Go.
+    ...(ENVIRONMENT === "development" ? {} : { runtimeVersion: { policy: "appVersion" as const } }),
 
-  experiments: { typedRoutes: true },
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier:
+        ENVIRONMENT === "production"
+          ? "in.paperlesstech.medicore"
+          : `in.paperlesstech.medicore.${ENVIRONMENT}`,
+    },
+    android: {
+      package:
+        ENVIRONMENT === "production"
+          ? "in.paperlesstech.medicore"
+          : `in.paperlesstech.medicore.${ENVIRONMENT}`,
+      // Present only on a machine doing Android push work — see GOOGLE_SERVICES above.
+      ...(existsSync(GOOGLE_SERVICES) ? { googleServicesFile: GOOGLE_SERVICES } : {}),
+    },
 
-  extra: {
-    environment: ENVIRONMENT,
-    tenantDomain: TENANT_DOMAIN[ENVIRONMENT],
-    /**
-     * Plain `http` for local development only. A staging or production build uses HTTPS with no
-     * way to opt out — see `resolveBaseUrl`, which refuses to build an insecure URL outside dev.
-     */
-    insecureTransportAllowed: ENVIRONMENT === "development",
-  },
-});
+    plugins: [
+      "expo-router",
+      "expo-secure-store",
+      /**
+       * ── WHY THE PLUGIN, WHEN THE MODULE IS ALREADY AUTOLINKED ─────────────
+       * `expo-notifications` delivers LOCAL notifications without any of this. Two things it does
+       * that a REMOTE push build cannot do without:
+       *
+       *   `mode`            writes the iOS `aps-environment` entitlement. A binary signed for the
+       *                     production APNs estate cannot receive a token minted against the
+       *                     sandbox, and the mismatch does not error anywhere — Expo accepts the
+       *                     push, returns an `ok` ticket, and the phone stays silent. It is the
+       *                     single most confusing way for iOS push to "work" and not arrive, and
+       *                     it is why this is derived from the build profile rather than left at
+       *                     its default.
+       *   `defaultChannel`  names the Android channel an FCM message carrying none of its own
+       *                     lands in. `platform/pushNotifications.ts` creates exactly one —
+       *                     `default`, at HIGH importance — so naming anything else here would
+       *                     route every alert to a channel the app never configured, which
+       *                     Android resolves by showing it silently.
+       */
+      [
+        "expo-notifications",
+        {
+          mode: ENVIRONMENT === "production" ? "production" : "development",
+          defaultChannel: "default",
+        },
+      ],
+    ],
+
+    experiments: { typedRoutes: true },
+
+    extra: {
+      /**
+       * FIRST, and it matters: this carries whatever `eas init` wrote to app.json — the project
+       * id, and `owner` alongside it. Writing this object without the spread is what silently
+       * unlinked the EAS project before (see `easProjectId`).
+       */
+      ...config.extra,
+      environment: ENVIRONMENT,
+      tenantDomain: TENANT_DOMAIN[ENVIRONMENT],
+      /**
+       * Plain `http` for local development only. A staging or production build uses HTTPS with no
+       * way to opt out — see `resolveBaseUrl`, which refuses to build an insecure URL outside dev.
+       */
+      insecureTransportAllowed: ENVIRONMENT === "development",
+      // Absent rather than `{ eas: { projectId: undefined } }`: `getExpoPushTokenAsync` reads the
+      // shape, and an explicit undefined is a different thing to debug than a missing key.
+      ...(projectId ? { eas: { ...(config.extra?.eas ?? {}), projectId } } : {}),
+    },
+  };
+};
