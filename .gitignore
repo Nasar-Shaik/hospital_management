@@ -15,6 +15,34 @@ out/
 !.env.example
 !**/.env.example
 
+# Cloud service-account keys, ANYWHERE in the tree (M4 · Firebase FCM V1).
+#
+# These arrive from a console as a download with a name nobody chooses —
+# `medicore-staff-mobile-69d87-firebase-adminsdk-fbsvc-a1b2c3d4e5.json` — so the rule has to match
+# the SHAPE of the name rather than a path. apps/mobile/.gitignore already covers the client-side
+# `google-services.json`; this covers the one that actually matters, the private key that lets a
+# holder send push to every handset this hospital owns. Verified against the real filename Firebase
+# produced, not against a guess at it.
+#
+# The key is never meant to sit in a checkout at all — it goes straight to EAS
+# (`eas credentials`) and is deleted. This is the seatbelt for the minute it spends on disk.
+*firebase-adminsdk*.json
+*service-account*.json
+*serviceaccount*.json
+service-account*.json
+*fcm*.json
+
+# The CLIENT-side Firebase configs. Not private keys — they carry a package-restricted API key —
+# but they identify a customer's project and this repository does not ship them.
+#
+# ── AND THEY HAVE TO BE IGNORED *HERE*, NOT IN apps/mobile/.gitignore ───────
+# Prettier 3 honours only the ROOT .gitignore (see .prettierignore, which already learned this the
+# same way with `expo-env.d.ts`). Listed only in the app's own .gitignore, `google-services.json`
+# stayed invisible to git and visible to `prettier --check .` — so `pnpm gate` failed for anyone
+# who had actually completed the Firebase setup, on a file they were told to put there.
+google-services.json
+GoogleService-Info.plist
+
 # logs & coverage
 *.log
 coverage/
