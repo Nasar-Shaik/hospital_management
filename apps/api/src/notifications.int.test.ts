@@ -19,6 +19,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
+import Redis from "ioredis";
 import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -57,6 +58,7 @@ const { listNotifications, listTemplates, updateTemplate, notify } =
   await import("./modules/notifications/index.js");
 const { tenantMigrations } = await import("./core/db/migrations/tenantMigrations.js");
 const { cancelAppointment } = await import("./modules/appointments/index.js");
+const { closeTaskQueue } = await import("./core/events/taskQueue.js");
 
 const SLUG = "test-notify-apollo";
 const DB = `hms_${SLUG}`;
@@ -203,6 +205,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  // The task queue holds its OWN ioredis connection, separate from the cache's — see taskQueue.ts.
+  await closeTaskQueue();
   await closeAllTenantConnections();
   await closeMaster();
   await closeRedis();
@@ -330,6 +334,60 @@ describe("the reminder is a trigger; the database is the truth", () => {
 
     const mail = await waitForMail(2, 1_500);
     expect(mail).toHaveLength(1);
+  });
+});
+
+/**
+ * THE ASSERTION WHOSE ABSENCE HID A FOUR-MONTH-OLD BUG.
+ *
+ * Everything above dispatches `appointment.reminder` BY HAND. That proves the handler decides
+ * correctly — and says nothing whatever about whether a booking ever schedules the job that would
+ * call it. It did not: `jobId` read `reminder:${tenantId}:${appointmentId}`, BullMQ rejects a
+ * custom id containing a colon, and `add()` threw inside a consumer where a throw is
+ * indistinguishable from an ordinary retry. Every test in this file passed for four months while
+ * not one day-before reminder was ever scheduled in production.
+ *
+ * So this one asserts on REDIS, which is the only witness that cannot be satisfied by a function
+ * having been called. `taskQueue.ts` now also refuses a colon up front (`taskQueue.test.ts`), but
+ * that guard only fires for a mistake somebody makes later — this is what proves the feature works
+ * today, end to end, through the real queue.
+ */
+describe("booking actually SCHEDULES the reminder — asserted on the queue, not on a call", () => {
+  const redis = new Redis(testRedisUrl("notifications"));
+
+  afterAll(() => {
+    redis.disconnect();
+  });
+
+  it("puts a real, delayed job on the notifications queue that BullMQ accepted", async () => {
+    const { appointmentId, event } = await book(slotAt(12, 30));
+
+    await asTenant(() => dispatchEventInline(event));
+
+    // The key BullMQ builds is `bull:<queue>:<jobId>`. Its existence is the whole claim: the id
+    // was accepted, the job is stored, and a worker will pick it up when the delay elapses.
+    const key = `bull:notifications:reminder-${tenant.id}-${appointmentId}`;
+    expect(await redis.exists(key)).toBe(1);
+
+    // And it is DELAYED, not waiting — a reminder that fires immediately is a reminder sent a week
+    // early, which the handler's re-read would not save us from.
+    const delay = Number(await redis.hget(key, "delay"));
+    expect(delay).toBeGreaterThan(0);
+  });
+
+  /**
+   * The same at-least-once redelivery the confirmation is protected from, one layer down. Here the
+   * defence is BullMQ's own refusal of a duplicate job id rather than our dedupe key — which only
+   * works while the id is deterministic, so this is what pins that it stays so.
+   */
+  it("redelivering the booking event does not queue a second reminder", async () => {
+    const { appointmentId, event } = await book(slotAt(12, 45));
+
+    await asTenant(() => dispatchEventInline(event));
+    await asTenant(() => dispatchEventInline(event));
+
+    const jobs = await redis.keys(`bull:notifications:reminder-${tenant.id}-${appointmentId}*`);
+    expect(jobs).toHaveLength(1);
   });
 });
 
