@@ -25,6 +25,7 @@
  * tickets and retires what Expo says is gone.
  */
 import { createLogger } from "@medicore/logger";
+import type { PushChannelId } from "@medicore/types";
 import { env } from "../../../config/env.js";
 
 const logger = createLogger({ service: "expo-push" });
@@ -44,6 +45,23 @@ export interface PushMessage {
    * the OS to deprioritise the urgent one.
    */
   priority: "default" | "high";
+  /**
+   * Which Android channel presents it (K4-01). Android only — iOS ignores the field.
+   *
+   * ── PRIORITY IS NOT ENOUGH, WHICH IS THE WHOLE DEFECT ───────────────────
+   * `priority` governs DELIVERY: whether FCM wakes a dozing handset. On Android 8+ the
+   * INTERRUPTION — sound, heads-up banner, lock-screen visibility — is decided by the channel and
+   * by nothing else, and the user owns it from the moment it is created. Sending `high` to a
+   * single channel therefore bought delivery speed and left every routine result buzzing exactly
+   * like a critical potassium.
+   *
+   * ── AND IT IS NOT OPTIONAL ──────────────────────────────────────────────
+   * Required, not `?`. If a message names a channel the app has not created, Android displays
+   * NOTHING — no fallback, no error, an `ok` ticket from Expo either way. Making this optional
+   * would let a new call site omit it and lose alerts silently, so the type refuses instead. The
+   * ids come from `@medicore/types`, which is also what the app creates.
+   */
+  channelId: PushChannelId;
 }
 
 export type PushTicket =

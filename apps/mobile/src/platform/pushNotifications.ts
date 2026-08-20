@@ -29,6 +29,7 @@
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { PUSH_CHANNEL } from "@medicore/types";
 import {
   readPayload,
   type PushCredential,
@@ -84,15 +85,34 @@ export const pushNotifications: PushRegistrar = {
       }
 
       /**
-       * Android needs a channel before a notification can be shown at all, and the channel is
-       * what carries importance — a HIGH channel is what gets a critical result past Doze. It is
-       * created here rather than in a config plugin so the one place that owns push owns all of
-       * it, and so the value cannot drift from the `priority` the server sends.
+       * ── TWO CHANNELS, BECAUSE ONE MADE EVERYTHING URGENT (K4-01) ──────────
+       * Android needs a channel before a notification can be shown at all, and on Android 8+ the
+       * CHANNEL — not the message's priority — decides whether something interrupts a human. A
+       * single HIGH channel therefore made a routine released result buzz, light the screen and
+       * talk over a ward round exactly like a critical potassium. A ward that is interrupted by
+       * everything learns to ignore the phone, which costs precisely the alert this feature
+       * exists for.
+       *
+       * Both are created here rather than in a config plugin, so the one module that owns push
+       * owns all of it — and both are created UNCONDITIONALLY, before any token is minted. A push
+       * naming a channel the app has not created is not downgraded by Android, it is DISCARDED,
+       * with an `ok` ticket from Expo and nothing in any log. Creating them lazily, or only the
+       * one a given build expects to use, is how that happens.
+       *
+       * The ids come from `@medicore/types`, which is where the server reads them too.
        */
       if (platform === "android") {
-        await Notifications.setNotificationChannelAsync("default", {
-          name: "Alerts",
+        await Notifications.setNotificationChannelAsync(PUSH_CHANNEL.critical, {
+          name: "Critical alerts",
+          description: "Results and events that need attention now.",
           importance: Notifications.AndroidImportance.HIGH,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        });
+        await Notifications.setNotificationChannelAsync(PUSH_CHANNEL.routine, {
+          name: "Alerts",
+          description: "Everything else addressed to you.",
+          // DEFAULT: it arrives, it waits, it does not take over the screen.
+          importance: Notifications.AndroidImportance.DEFAULT,
           lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
         });
       }

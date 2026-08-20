@@ -29,6 +29,7 @@
  * forgetting one is silence about the patient rather than disclosure.
  */
 import { createLogger } from "@medicore/logger";
+import { PUSH_CHANNEL, type PushChannelId } from "@medicore/types";
 import { getContext } from "../../core/context/requestContext.js";
 import { isPushEnabled, sendPush, type PushMessage } from "./channels/expoPush.js";
 import * as devices from "./device.repository.js";
@@ -62,6 +63,30 @@ const FALLBACK: PushCopy = { title: "MediCore", body: "You have a new alert." };
 
 export function copyFor(templateKey: string): PushCopy {
   return COPY[templateKey] ?? FALLBACK;
+}
+
+/**
+ * Which Android channel presents this template (K4-01).
+ *
+ * ── ONE FACT, TWO CONSEQUENCES ──────────────────────────────────────────────
+ * `urgent` on the copy above is the single place a template is called clinically urgent, and it
+ * now decides BOTH how the message travels (`priority`, which is about Doze) and how it arrives
+ * (the channel, which is about interrupting a human). Deriving them separately is how they come
+ * to disagree — and the disagreement that matters is a critical result routed to a quiet channel,
+ * which looks exactly like a phone that never rang.
+ *
+ * A named function rather than a ternary inline in `deliver`, for the same reason `shouldPush` is
+ * one: the integration suite can prove a message went out with a channel on it, but only a pure
+ * predicate can be falsified cheaply in every direction — including the direction that matters
+ * most, which is "would this still pass if both mapped to the same channel". See
+ * `notificationChannels.test.ts`.
+ *
+ * An unclassified template is not urgent, so it lands on the routine channel. That matches the
+ * copy fallback ("You have a new alert"): forgetting to classify a template costs a quiet
+ * notification, never a false alarm at 3am.
+ */
+export function channelFor(templateKey: string): PushChannelId {
+  return copyFor(templateKey).urgent ? PUSH_CHANNEL.critical : PUSH_CHANNEL.routine;
 }
 
 /**
@@ -127,6 +152,7 @@ export async function deliver(data: Record<string, unknown>): Promise<void> {
     title: copy.title,
     body: copy.body,
     priority: copy.urgent ? "high" : "default",
+    channelId: channelFor(notification.templateKey),
     data: {
       notificationId,
       templateKey: notification.templateKey,

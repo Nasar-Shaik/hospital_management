@@ -208,10 +208,17 @@ export default ({ config }: ConfigContext): ExpoConfig => {
        *                     it is why this is derived from the build profile rather than left at
        *                     its default.
        *   `defaultChannel`  names the Android channel an FCM message carrying none of its own
-       *                     lands in. `platform/pushNotifications.ts` creates exactly one —
-       *                     `default`, at HIGH importance — so naming anything else here would
-       *                     route every alert to a channel the app never configured, which
-       *                     Android resolves by showing it silently.
+       *                     lands in. It must be `PUSH_CHANNEL.routine` from `@medicore/types` —
+       *                     the DEFAULT-importance one — so an unclassified message waits quietly
+       *                     instead of interrupting a ward round. Naming a channel the app does
+       *                     not create is worse than either: Android discards the notification
+       *                     outright, with an `ok` ticket from Expo and nothing in any log.
+       *
+       *                     Spelled as a literal rather than imported. This file is evaluated by
+       *                     Expo's config loader before anything in the workspace is built, so an
+       *                     import of `@medicore/types` would make `expo start` depend on a
+       *                     prior `pnpm build`. `notificationChannels.test.ts` pins the pair
+       *                     instead.
        */
       [
         "expo-notifications",
