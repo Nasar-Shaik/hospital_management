@@ -34,8 +34,10 @@ cd apps/mobile
 eas init
 ```
 
-`eas init` creates the project and prints the id. Because the config is dynamic it **cannot write
-it for you** — put it in `apps/mobile/app.json`, which exists for exactly this:
+`eas init` creates the project and prints the id. A **dynamic** config — `app.config.ts` — is one
+the CLI generally refuses to edit, so expect it to hand you the id rather than record it. Put it in
+`apps/mobile/app.json`, which is `{}` and exists for exactly this (and if `eas init` already wrote
+it there, leave it):
 
 ```json
 {
