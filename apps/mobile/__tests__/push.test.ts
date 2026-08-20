@@ -22,7 +22,11 @@
  *   A tap that opens the wrong thing, or nothing. The mapping is pure and therefore testable; the
  *   listener plumbing above it is not, and is a device check.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { PUSH_CHANNEL } from "@medicore/types";
 import { createHarness, PASSWORD, USER } from "./support/harness";
 import { destinationFor, readPayload } from "../src/lib/push";
 import { tabsFor, splitTabs, homeFor } from "../src/navigation/tabsFor";
@@ -268,5 +272,68 @@ describe("4. the tab bar answers to the edition as well as the role", () => {
     expect(splitTabs(everything, clinic).visible.map((t) => t.name)).not.toContain("ward");
     expect(splitTabs(everything, clinic).overflow.map((t) => t.name)).not.toContain("pharmacy");
     expect(homeFor(["PHARMACIST"], everything, clinic)).not.toBe("pharmacy");
+  });
+});
+
+/**
+ * K4-01 — THE HANDSET MUST CREATE EVERY CHANNEL THE SERVER CAN NAME.
+ *
+ * ── WHY THIS IS A SOURCE SCAN AND NOT A BEHAVIOURAL TEST ────────────────────
+ * `platform/pushNotifications.ts` is the native boundary: it is the one file allowed to import
+ * `expo-notifications`, it is substituted by a fake everywhere else, and driving it for real needs
+ * an Android runtime. So the thing worth defending here is not behaviour, it is a CORRESPONDENCE —
+ * that every id the API can put in a message is an id this file creates.
+ *
+ * Getting that wrong has no visible failure. Android does not fall back to another channel and does
+ * not warn: a push naming a channel the app never created is DISCARDED, while Expo returns an `ok`
+ * ticket and the server records a successful delivery. A critical potassium would vanish between a
+ * green log line and a silent phone. The shared `PUSH_CHANNEL` constant makes the ids agree; this
+ * makes the app actually build all of them.
+ *
+ * The same pattern `routes.test.ts` uses for `requireRuntime`, and for the same reason: a rule is
+ * only useful if it is enforced the day it is written.
+ */
+describe("the app creates every push channel the server can address", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "src", "platform", "pushNotifications.ts"),
+    "utf8",
+  );
+
+  it.each(Object.entries(PUSH_CHANNEL))("creates the %s channel (%s)", (_role, id) => {
+    expect(source).toContain(`setNotificationChannelAsync(PUSH_CHANNEL.`);
+    expect(Object.values(PUSH_CHANNEL)).toContain(id);
+  });
+
+  /**
+   * Counted, not just spot-checked. A third channel added to `PUSH_CHANNEL` — the moment somebody
+   * decides medication rounds deserve their own — fails here until the app creates it, which is
+   * the only place that gap is cheap to notice.
+   */
+  it("creates as many channels as there are ids, so a new one cannot be forgotten", () => {
+    const created = source.match(/setNotificationChannelAsync\(/g) ?? [];
+    expect(created).toHaveLength(Object.keys(PUSH_CHANNEL).length);
+  });
+
+  /**
+   * And they must differ in importance, or two channels are one channel wearing two names — the
+   * defect restated. HIGH is what interrupts; DEFAULT is what waits.
+   */
+  it("gives them different importance — a quiet channel and a loud one", () => {
+    expect(source).toContain("AndroidImportance.HIGH");
+    expect(source).toContain("AndroidImportance.DEFAULT");
+  });
+
+  /**
+   * `app.config.ts` names the channel an FCM message with none of its own lands in. It must be the
+   * QUIET one: an unclassified message that interrupts is the failure this whole item is about, and
+   * naming a channel the app does not create loses the message entirely.
+   */
+  it("points the config plugin's defaultChannel at the routine channel", () => {
+    const config = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "app.config.ts"),
+      "utf8",
+    );
+    expect(config).toContain(`defaultChannel: "${PUSH_CHANNEL.routine}"`);
+    expect(PUSH_CHANNEL.routine).not.toBe(PUSH_CHANNEL.critical);
   });
 });

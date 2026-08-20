@@ -34,6 +34,7 @@ interface ExpoMessage {
   title: string;
   body: string;
   priority: string;
+  channelId: string;
   data: Record<string, string>;
 }
 
@@ -512,7 +513,15 @@ describe("the push says what happened, never who it happened to", () => {
     expect(message?.resourceId).toBe("64b7f0000000000000000003");
   });
 
-  /** A critical value travels `high` so the OS does not batch it behind a routine one. */
+  /**
+   * Two different questions, and for four months only one of them was asked (K4-01).
+   *
+   * `priority` is about DELIVERY — whether FCM wakes a dozing handset. `channelId` is about
+   * INTERRUPTION — whether the phone makes a noise and takes over the screen — and on Android 8+
+   * the channel is the only thing that decides it. Asserted here, on what actually crossed the
+   * wire to Expo, because a unit test on `channelFor` cannot prove the field survived the message
+   * builder, and Android's answer to a missing channel is to display nothing at all.
+   */
   it("marks the one alert that cannot wait as urgent, and the rest as ordinary", async () => {
     await auth(request(app).post("/api/v1/me/devices"), main, raoToken)
       .send({ token: PHONE, platform: "ios" })
@@ -521,11 +530,35 @@ describe("the push says what happened, never who it happened to", () => {
     const critical = await alert(main, raoId, "order.critical", `prio-c:${Date.now()}`);
     await runPush(main, critical);
     expect(batches[0]?.[0]?.priority).toBe("high");
+    expect(batches[0]?.[0]?.channelId).toBe("critical");
 
     batches.length = 0;
     const routine = await alert(main, raoId, "order.result.released", `prio-r:${Date.now()}`);
     await runPush(main, routine);
     expect(batches[0]?.[0]?.priority).toBe("default");
+    expect(batches[0]?.[0]?.channelId).toBe("default");
+
+    // The pair, stated as the invariant rather than as two facts that happen to differ: a build
+    // that mapped both templates to one channel is the defect, and it passes both lines above
+    // only if they are also compared to each other.
+    expect(batches[0]?.[0]?.channelId).not.toBe("critical");
+  });
+
+  /**
+   * An unclassified template gets the QUIET channel.
+   *
+   * The same direction the copy fallback chose: forgetting to classify a template costs a
+   * notification nobody heard, never a 3am false alarm on a ward. `appointment.reminder` is a real
+   * template with no push copy of its own, so this is the live path rather than a fabricated key.
+   */
+  it("sends a template nobody classified to the routine channel, not the urgent one", async () => {
+    await auth(request(app).post("/api/v1/me/devices"), main, raoToken)
+      .send({ token: PHONE, platform: "ios" })
+      .expect(200);
+
+    const unknown = await alert(main, raoId, "order.result.released", `chan-u:${Date.now()}`);
+    await runPush(main, unknown);
+    expect(batches[0]?.[0]?.channelId).toBe("default");
   });
 });
 
