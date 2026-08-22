@@ -19,6 +19,8 @@ import {
   PatientNotFoundError,
 } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { dayRangeInZone } from "../../core/time/day.js";
+import { branchZone } from "../branches/index.js";
 import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { recordAudit } from "../../core/audit/auditWriter.js";
@@ -339,11 +341,39 @@ export async function getPatientByUhid(uhid: string): Promise<Patient> {
   return patient;
 }
 
-export async function listPatients(filter: repo.ListPatientsFilter): Promise<{
+/**
+ * The register, optionally narrowed to a span of days.
+ *
+ * ── THE DAYS ARE THE SITE'S, NOT UTC's AND NOT THE BROWSER's (D2) ───────────
+ * `from`/`to` arrive as `YYYY-MM-DD` and mean whole days at the hospital. Resolving them here —
+ * against the ACTIVE BRANCH's timezone, the same rule `listEncounters` follows — is what stops a
+ * clerk in a far-flung site asking for "today" and being shown a window that starts at 05:30 the
+ * previous morning. With no branch selected there is no single clock, and `branchZone` falls back
+ * to the hospital default, which is the only honest answer for "all sites at once".
+ *
+ * Async and in the service rather than the controller because it is a lookup and a domain rule,
+ * and the controller is HTTP only (Doc 09 §11).
+ */
+export async function listPatients(
+  filter: Omit<repo.ListPatientsFilter, "createdFrom" | "createdBefore"> & {
+    from?: string;
+    to?: string;
+  },
+): Promise<{
   patients: Patient[];
   total: number;
 }> {
-  return repo.list(filter);
+  const { from, to, ...rest } = filter;
+  if (!from && !to) return repo.list(rest);
+
+  const zone = await branchZone(getContext().activeBranchId);
+  return repo.list({
+    ...rest,
+    // `from` opens at the START of its day; `to` closes at the start of the day AFTER it, so the
+    // closing day is included whole. Both come from the same helper the reception register uses.
+    ...(from ? { createdFrom: dayRangeInZone(from, zone).from } : {}),
+    ...(to ? { createdBefore: dayRangeInZone(to, zone).before } : {}),
+  });
 }
 
 /**

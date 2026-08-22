@@ -4010,14 +4010,28 @@ export class ApiClient {
 
   /* ── patients (Doc 02 C1) ── */
 
+  /**
+   * The register. `from`/`to` are `YYYY-MM-DD`, inclusive at both ends, and mean the day the
+   * patient was REGISTERED — resolved by the server in the hospital's timezone, so a caller never
+   * has to know the offset and a browser clock can never decide which day a hospital had.
+   */
   listPatients(
-    params: { page?: number; limit?: number; q?: string; status?: PatientStatus } = {},
+    params: {
+      page?: number;
+      limit?: number;
+      q?: string;
+      status?: PatientStatus;
+      from?: string;
+      to?: string;
+    } = {},
   ): Promise<Paged<Patient>> {
     const query = new URLSearchParams();
     if (params.page) query.set("page", String(params.page));
     if (params.limit) query.set("limit", String(params.limit));
     if (params.q) query.set("q", params.q);
     if (params.status) query.set("status", params.status);
+    if (params.from) query.set("from", params.from);
+    if (params.to) query.set("to", params.to);
     const qs = query.toString();
     return this.paged<Patient>(`/api/v1/patients${qs ? `?${qs}` : ""}`);
   }
@@ -5029,6 +5043,8 @@ export class ApiClient {
   listEncounters(
     params: {
       date?: string;
+      /** The last day of a span. With `date`, inclusive at both ends; without, `date` is one day. */
+      dateTo?: string;
       status?: EncounterStatus;
       doctorId?: string;
       departmentId?: string;

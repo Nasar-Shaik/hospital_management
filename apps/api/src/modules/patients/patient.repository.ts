@@ -282,6 +282,9 @@ export interface ListPatientsFilter {
   limit: number;
   q?: string;
   status?: PatientStatus;
+  /** Half-open, already resolved to instants by the service — see `listPatients`. */
+  createdFrom?: Date;
+  createdBefore?: Date;
 }
 
 export async function list(
@@ -292,6 +295,20 @@ export async function list(
   // Merged records are hidden by default: to a clerk they are not a patient, they
   // are an artifact of a mistake that has already been corrected.
   const query: Record<string, unknown> = { status: filter.status ?? "active", ...scopeFilter() };
+
+  /**
+   * Half-open — `$gte` the first instant of the first day, `$lt` the first instant of the day
+   * AFTER the last. The alternative, `$lte` the last millisecond, is the classic off-by-one that
+   * drops whoever registered at 23:59:59.7 on the closing day, and does it silently.
+   *
+   * Sorting is already `createdAt: -1`, so this narrows the same index the list is ordered by.
+   */
+  if (filter.createdFrom || filter.createdBefore) {
+    query.createdAt = {
+      ...(filter.createdFrom ? { $gte: filter.createdFrom } : {}),
+      ...(filter.createdBefore ? { $lt: filter.createdBefore } : {}),
+    };
+  }
 
   if (filter.q) {
     // Escaped: an unescaped user string in a regex is both a correctness bug and
