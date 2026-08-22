@@ -30,6 +30,10 @@ import { closeRedis } from "../core/redis/redis.js";
 import { getBySlug } from "../modules/tenants/index.js";
 import { getByEmail } from "../modules/users/index.js";
 import { registerPatient, type Gender } from "../modules/patients/index.js";
+import { Types } from "mongoose";
+import { getPatientModel } from "../modules/patients/patient.model.js";
+import { listBranches } from "../modules/branches/index.js";
+import { getTenantDb } from "../core/context/requestContext.js";
 import {
   startEncounter,
   queuePatient,
@@ -49,6 +53,8 @@ function arg(flag: string): string | undefined {
 //   pnpm --filter @medicore/api seed:clinical -- --slug apollo --doctor drx@apollo.test
 const SLUG = arg("--slug") ?? "sunrise";
 const DOCTOR_EMAIL = arg("--doctor") ?? `drrao@${SLUG}.test`;
+/** `--patients 300` adds a register big enough for paging and date ranges to be visible. */
+const BULK = Number(arg("--patients") ?? 0);
 
 /** A test the doctor can order — the code resolves against Sunrise's seeded tariff. */
 interface OrderSpec {
@@ -134,6 +140,225 @@ function dobForAge(years: number): Date {
   const d = new Date();
   d.setFullYear(d.getFullYear() - years);
   return d;
+}
+
+/**
+ * ── A REGISTER BIG ENOUGH TO BEHAVE LIKE A REGISTER ─────────────────────────
+ * `pnpm seed:clinical -- --patients 300`
+ *
+ * The six specs above are a cross-section of ONE DAY, and they are the right shape for testing
+ * the queue. They are the wrong shape for testing the patient register: with six rows, paging,
+ * newest-first ordering and a date range are all invisible — the page looks identical whether it
+ * works or not. That is how manual testing reported "it loads every patient" against a screen
+ * that has paged at 50 since it was written.
+ *
+ * These are deliberately BORING. No encounters, no orders, no bills — just identities in the MPI,
+ * which is exactly what the register lists. Anything else would make the queue screens lie.
+ *
+ * ── WHY createdAt IS BACKDATED ──────────────────────────────────────────────
+ * Mongoose stamps `createdAt` at insert, so a bulk seed lands three hundred patients inside one
+ * second. Every one of them then matches every date range, and the filter cannot be told from a
+ * no-op. Spread over the last six months instead, weighted towards recent, the way a real
+ * hospital's register grows. `timestamps: false` on the update is required or Mongoose overwrites
+ * the value we just set.
+ */
+const GIVEN = [
+  "Aarav",
+  "Vivaan",
+  "Aditya",
+  "Arjun",
+  "Reyansh",
+  "Krishna",
+  "Ishaan",
+  "Rohan",
+  "Ananya",
+  "Diya",
+  "Saanvi",
+  "Aadhya",
+  "Kavya",
+  "Meera",
+  "Priya",
+  "Riya",
+  "Fatima",
+  "Zainab",
+  "Ayesha",
+  "Imran",
+  "Rizwan",
+  "Farhan",
+  "Lakshmi",
+  "Padma",
+  "Sunita",
+  "Kamala",
+  "Radha",
+  "Geeta",
+] as const;
+const FAMILY = [
+  "Sharma",
+  "Verma",
+  "Reddy",
+  "Naidu",
+  "Iyer",
+  "Nair",
+  "Menon",
+  "Pillai",
+  "Kumar",
+  "Singh",
+  "Patel",
+  "Shah",
+  "Desai",
+  "Joshi",
+  "Rao",
+  "Gupta",
+  "Sheikh",
+  "Khan",
+  "Ansari",
+  "Das",
+  "Bose",
+  "Chatterjee",
+] as const;
+
+/** Deterministic, so a re-run produces the same register rather than a second one. */
+function syntheticSpec(n: number): {
+  name: string;
+  gender: Gender;
+  ageYears: number;
+  phone: string;
+  dob: Date;
+} {
+  const given = GIVEN[n % GIVEN.length] as string;
+  const family = FAMILY[(n * 7) % FAMILY.length] as string;
+  // The name alone repeats every ~600; the serial keeps them distinct for duplicate detection
+  // without making the list look generated.
+  const name = `${given} ${family}`;
+  const female = [
+    "Ananya",
+    "Diya",
+    "Saanvi",
+    "Aadhya",
+    "Kavya",
+    "Meera",
+    "Priya",
+    "Riya",
+    "Fatima",
+    "Zainab",
+    "Ayesha",
+    "Lakshmi",
+    "Padma",
+    "Sunita",
+    "Kamala",
+    "Radha",
+    "Geeta",
+  ];
+  return {
+    name,
+    gender: female.includes(given) ? "female" : "male",
+    ageYears: 6 + ((n * 13) % 78),
+    // 9 8 …: a valid Indian mobile shape, unique per index so no two collide.
+    phone: `98${String(10_000_000 + n * 37).slice(0, 8)}`,
+    /**
+     * A real birthday, not `dobForAge` — which returns TODAY minus N years, so every synthetic
+     * patient of the same age shares one date. `findCandidates` matches on exact `dob`, so that
+     * handed the duplicate detector a pile of same-birthday, same-gender people and it refused
+     * 17 of the first 20 registrations. The detector was right; the data was wrong.
+     */
+    dob: birthday(n, 6 + ((n * 13) % 78)),
+  };
+}
+
+/** Spread across the year and the month, so no two synthetic patients share a birthday by accident. */
+function birthday(n: number, ageYears: number): Date {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - ageYears);
+  d.setMonth(n % 12, 1 + ((n * 11) % 28));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Weighted towards the present: half the register arrived in the last six weeks, the rest trails
+ * back six months. A flat spread would make "last 7 days" and "last 6 months" return suspiciously
+ * similar counts, which is the sort of thing that makes a tester doubt a working filter.
+ */
+function backdatedAt(n: number, total: number): Date {
+  const fraction = n / Math.max(1, total - 1);
+  const daysAgo = Math.round(180 * fraction ** 2);
+  const at = new Date();
+  at.setDate(at.getDate() - daysAgo);
+  at.setHours(8 + (n % 10), (n * 17) % 60, 0, 0);
+  return at;
+}
+
+async function seedRegister(count: number): Promise<void> {
+  const model = getPatientModel(getTenantDb());
+  const skipped: string[] = [];
+  let made = 0;
+
+  for (let n = 0; n < count; n++) {
+    const spec = syntheticSpec(n);
+    let id: string;
+    try {
+      const { patient } = await registerPatient({
+        name: spec.name,
+        gender: spec.gender,
+        dob: spec.dob,
+        contact: { phone: spec.phone },
+        /**
+         * A seed asked for N distinct people and knows they are distinct — the names come from a
+         * fixed pool, so a big enough register WILL eventually re-use one, and the detector will
+         * correctly flag it. Forcing here is the same judgement a clerk makes on the review
+         * screen, made once, in writing. It is not a workaround for the bug above: that was a
+         * shared birthday, and it is fixed at the source.
+         */
+        force: true,
+      });
+      id = patient.id;
+    } catch (err) {
+      /**
+       * SAYS WHY. The first version of this loop was `catch { continue }` with a comment
+       * assuring the reader it was fine — and it silently skipped 17 of 20 patients while
+       * reporting nothing, in a repository whose recurring defect is a step that reports success
+       * and does nothing. The reason is almost always the duplicate detector doing its job on a
+       * re-run; if it is anything else, this is where you find out.
+       */
+      skipped.push(`${spec.name} (${spec.phone}): ${(err as Error).message}`);
+      continue;
+    }
+
+    /**
+     * Mongoose stamps `createdAt` on insert, so without this every synthetic patient shares one
+     * second and no date range can be distinguished from a no-op. `timestamps: false` stops the
+     * update itself re-stamping `updatedAt` over the value.
+     *
+     * The result is CHECKED. A filter that matches nothing is the same silence as the catch above.
+     */
+    const at = backdatedAt(n, count);
+    /**
+     * `model.collection`, not `model` — the RAW driver, deliberately.
+     *
+     * `patientSchema` carries `auditPlugin`, which hooks `updateOne` and wrote back a result with
+     * no `matchedCount` (this loop caught that, because it checks). Two reasons not to fight it:
+     * the audit trail is a record of what people did to a patient, and three hundred rows saying
+     * "patient updated" would be noise in a log somebody has to read; and correcting the insert
+     * timestamp of a row this same function just inserted is not a clinical event. The model is
+     * already bound to the tenant connection, so this is the right collection either way.
+     */
+    const result = await model.collection.updateOne(
+      { _id: new Types.ObjectId(id) },
+      { $set: { createdAt: at } },
+    );
+    if (result.matchedCount !== 1) {
+      throw new Error(
+        `could not backdate ${spec.name} (${id}) — matched ${String(result.matchedCount)}`,
+      );
+    }
+
+    made++;
+    if (made % 50 === 0) logger.info({ made, of: count }, "registering…");
+  }
+
+  logger.info({ requested: count, created: made, skipped: skipped.length }, "register seeded");
+  for (const reason of skipped.slice(0, 5)) logger.info({ reason }, "skipped");
+  if (skipped.length > 5) logger.info({ more: skipped.length - 5 }, "…and more skipped");
 }
 
 /**
@@ -239,6 +464,20 @@ async function main(): Promise<void> {
       if (!doctor) {
         throw new Error(`${DOCTOR_EMAIL} not found — run \`seed:demo\` first`);
       }
+
+      /**
+       * ── THE SITE THE WRITES BELONG TO (ADR-0015) ──────────────────────────
+       * This script predates the branch model and never set one, so every `startEncounter` it
+       * attempted died on `branchId: Path \`branchId\` is required` — after the first patient had
+       * already been registered, leaving a half-seeded hospital and an exit code nobody reads in a
+       * seed script. A request carries the site in `X-Active-Branch`; a script has to say it out
+       * loud, exactly as `seedValidation` does.
+       */
+      const branches = await listBranches();
+      const site = branches.find((b) => b.isMain) ?? branches[0];
+      if (!site) {
+        throw new Error(`${SLUG} has no branch — provisioning did not finish`);
+      }
       // The clinical actions are attributed to Dr Rao — orders carry them as the requester.
       await runWithContext(
         {
@@ -247,9 +486,11 @@ async function main(): Promise<void> {
           tenantSlug: SLUG,
           connection,
           userId: doctor.id,
+          activeBranchId: site.id,
         },
         async () => {
           for (const spec of PATIENTS) await seedPatient(spec, doctor.id);
+          if (BULK > 0) await seedRegister(BULK);
         },
       );
     },
