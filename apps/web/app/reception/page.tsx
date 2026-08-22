@@ -373,6 +373,14 @@ function Reception() {
 
   const [day, setDay] = useState(() => todayInZone(timezone));
   /**
+   * The far end of a span, empty by default.
+   *
+   * Empty means ONE DAY, which is what the desk asks for almost every time and what this
+   * screen has always answered. A range that defaulted to a week would change the number under
+   * the heading for every existing user, on a screen whose whole job is "who came in today".
+   */
+  const [until, setUntil] = useState("");
+  /**
    * The day's register, and it NAMES its patients (D18).
    *
    * The `patients` list below is the REGISTRATION PICKER — a page of people you might be about to
@@ -434,7 +442,11 @@ function Reception() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const page = await api.listEncounters({ date: day, limit: 100 });
+      const page = await api.listEncounters({
+        date: day,
+        ...(until ? { dateTo: until } : {}),
+        limit: 100,
+      });
       setRegister(page.items);
       // The pay-before-queue gate reads the consultation's payment state. One call for the day;
       // a failure here must not blank the register, so it degrades to "unknown" (gate stays shut).
@@ -448,7 +460,7 @@ function Reception() {
     } finally {
       setLoading(false);
     }
-  }, [api, day]);
+  }, [api, day, until]);
 
   useEffect(() => {
     void load();
@@ -711,24 +723,54 @@ function Reception() {
             </p>
           </div>
 
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-[var(--color-fg-muted)]">
-              Day
-            </span>
-            <input
-              type="date"
-              value={day}
-              onChange={(e) => setDay(e.target.value)}
-              className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
-            />
-          </label>
+          {/*
+            One day by default, a span when asked for. The second input is not a second "Day" —
+            it is labelled `to` and starts empty, so the screen still answers "who came in today"
+            until somebody deliberately widens it. `min` stops an inverted range being submitted
+            at all, which is a cheaper answer than an error message about it.
+          */}
+          <div className="flex items-end gap-2">
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-[var(--color-fg-muted)]">
+                Day
+              </span>
+              <input
+                type="date"
+                value={day}
+                max={until || undefined}
+                onChange={(e) => setDay(e.target.value)}
+                aria-label="From day"
+                className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium text-[var(--color-fg-muted)]">
+                to
+              </span>
+              <input
+                type="date"
+                value={until}
+                min={day}
+                onChange={(e) => setUntil(e.target.value)}
+                aria-label="To day"
+                className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]"
+              />
+            </label>
+
+            {until && (
+              <Button variant="secondary" onClick={() => setUntil("")}>
+                Just one day
+              </Button>
+            )}
+          </div>
         </div>
 
         {loading ? (
           <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
         ) : register.length === 0 ? (
           <div className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">
-            <p>Nobody has come in on this day.</p>
+            <p>{until ? "Nobody came in over those days." : "Nobody has come in on this day."}</p>
             <p className="mt-1 text-xs">
               Looking for someone mid-visit from another day? Find them on the{" "}
               <a

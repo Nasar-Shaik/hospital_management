@@ -35,8 +35,14 @@ import {
   type Column,
 } from "../../components/ui";
 
-/** One screenful of the register. The server caps a page at 100; 50 keeps the list scannable. */
-const PAGE_SIZE = 50;
+/**
+ * One screenful of the register. The server caps a page at 100.
+ *
+ * 25, not 50: a clerk scans a page looking for one person, and fifty rows is past the point
+ * where that is a glance rather than a search. Halving it also makes the pager visible on a
+ * register of any realistic size, which is what stops the page reading as "that is everyone".
+ */
+const PAGE_SIZE = 25;
 
 const EMPTY_FORM = {
   name: "",
@@ -148,6 +154,13 @@ function Patients() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [query, setQuery] = useState("");
   /**
+   * Registered between, as `YYYY-MM-DD`. Sent as DATES, never as instants: the server resolves
+   * them in the hospital's timezone, so a clerk on a laptop whose clock is set wrong still gets
+   * the hospital's days rather than their own (risk register D2).
+   */
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  /**
    * How many patients the search matches, against the page we hold.
    *
    * The list asked for 50 rows and rendered them with no page controls and no count, so a
@@ -176,6 +189,8 @@ function Patients() {
         limit: PAGE_SIZE,
         page,
         ...(query ? { q: query } : {}),
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
       });
       setPatients(result.items);
       setTotal(result.meta.total ?? result.items.length);
@@ -185,7 +200,7 @@ function Patients() {
     } finally {
       setLoading(false);
     }
-  }, [api, query, page]);
+  }, [api, query, from, to, page]);
 
   useEffect(() => {
     void load();
@@ -195,7 +210,7 @@ function Patients() {
   // on an empty page 2 reads as "no such patient".
   useEffect(() => {
     setPage(1);
-  }, [query]);
+  }, [query, from, to]);
 
   /**
    * The live duplicate check. Debounced, and deliberately fired on the fields that
@@ -414,19 +429,66 @@ function Patients() {
         </Card>
       )}
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search by UHID, name or phone…"
-        className="w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
-      />
+      <div className="flex flex-wrap items-end gap-3">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by UHID, name or phone…"
+          className="min-w-56 flex-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3.5 py-2.5 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+        />
+
+        {/*
+          Registered between. Two plain date inputs rather than a preset menu ("today", "this
+          week"): the desk's question is genuinely open-ended — an insurer asks for a named month,
+          an audit asks for a named fortnight — and a preset list that does not contain the answer
+          is worse than none. Either end may be left empty; the server treats that as open.
+        */}
+        <label className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)]">
+          Registered
+          <input
+            type="date"
+            value={from}
+            max={to || undefined}
+            onChange={(e) => setFrom(e.target.value)}
+            aria-label="Registered on or after"
+            className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+          />
+          to
+          <input
+            type="date"
+            value={to}
+            min={from || undefined}
+            onChange={(e) => setTo(e.target.value)}
+            aria-label="Registered on or before"
+            className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)] outline-none focus:border-[var(--color-brand-500)]"
+          />
+        </label>
+
+        {/*
+          Only when something is set. A permanently visible "Clear" is a control that does nothing
+          most of the time, and a filtered list with no obvious way back is how a clerk concludes a
+          patient has vanished.
+        */}
+        {(from || to || query) && (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setQuery("");
+              setFrom("");
+              setTo("");
+            }}
+          >
+            Clear filters
+          </Button>
+        )}
+      </div>
 
       <DataTable<Patient>
         columns={patientColumns}
         rows={loading ? [] : patients}
         keyOf={(p) => p.id}
         loading={loading}
-        empty={query ? "No patient matches that." : "No patients yet."}
+        empty={query || from || to ? "No patient matches those filters." : "No patients yet."}
         onRowClick={(p) => router.push(`/patients/${p.id}`)}
       />
 

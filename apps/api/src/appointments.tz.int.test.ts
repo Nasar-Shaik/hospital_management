@@ -29,6 +29,7 @@ import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
+import { Types } from "mongoose";
 
 process.env.MONGO_URI = TEST_MONGO_URI;
 process.env.REDIS_URL = testRedisUrl("appointmentsTz");
@@ -46,6 +47,7 @@ const { createUser, transitionStatus } = await import("./modules/users/index.js"
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { getEncounterModel } = await import("./modules/encounters/encounter.model.js");
+const { getPatientModel } = await import("./modules/patients/patient.model.js");
 
 const SLUG = "test-appttz";
 const DB = `hms_${SLUG}`;
@@ -397,5 +399,140 @@ describe("the register's day is the BRANCH's day, not the hospital default's", (
       (res.body.data as { id: string }[]).some((e) => e.id === encounterId),
       `the register for ${defaultDay} returned a visit that, at the clinic, happened the day before`,
     ).toBe(false);
+  });
+
+  /**
+   * ── THE SPAN, NOT JUST THE DAY ────────────────────────────────────────────
+   * `dateTo` widens the register to "the 16th through the 22nd". Two things have to hold and both
+   * are easy to get wrong: the far end must include its whole day (a half-open bug drops every
+   * evening arrival on the closing date), and the span must still be resolved on the BRANCH's
+   * clock — a range is just two boundaries, and each one can be computed in the wrong zone
+   * independently of the other.
+   */
+  it("a span includes a visit on its CLOSING day, whole", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters"))
+      .query({ date: "2026-08-10", dateTo: clinicDay })
+      .expect(200);
+
+    expect(
+      (res.body.data as { id: string }[]).some((e) => e.id === encounterId),
+      "a span ending on the clinic's day dropped a visit that arrived that evening",
+    ).toBe(true);
+  });
+
+  it("a span that ends the day before excludes it", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters"))
+      .query({ date: "2026-08-01", dateTo: "2026-08-15" })
+      .expect(200);
+
+    expect((res.body.data as { id: string }[]).some((e) => e.id === encounterId)).toBe(false);
+  });
+
+  /** The compatibility promise: `date` with no `dateTo` is still exactly one day. */
+  it("still means ONE day when no end is given", async () => {
+    const res = await auth(request(app).get("/api/v1/encounters"))
+      .query({ date: defaultDay })
+      .expect(200);
+
+    expect((res.body.data as { id: string }[]).some((e) => e.id === encounterId)).toBe(false);
+  });
+});
+
+/**
+ * THE PATIENT REGISTER'S DATE RANGE — the same rule, on the other list.
+ *
+ * `GET /patients?from=&to=` narrows the MPI to the days a patient was REGISTERED. It has exactly
+ * the failure the encounter register above was built to prove absent: resolve the boundary in the
+ * process zone and a clerk in New York asking for "the 16th" is answered with a window that opens
+ * at 14:30 on the 15th, silently including and excluding the wrong people. Nine and a half hours
+ * of gap means no rounding or DST edge can let a broken implementation through.
+ *
+ * The half-open end is tested too, because `$lte` the last millisecond is the off-by-one that
+ * quietly drops whoever registered just before midnight on the closing day.
+ */
+describe("the register's DATE RANGE is the branch's days too", () => {
+  /** Late evening at the clinic — 22:00 on the 16th in New York, which is the 17th in Kolkata. */
+  const REGISTERED_AT = new Date("2026-08-17T02:00:00.000Z");
+
+  function dayKeyIn(instant: Date, zone: string): string {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(instant);
+  }
+
+  let lateId = "";
+  let clinicDay = "";
+  let defaultDay = "";
+
+  beforeAll(async () => {
+    clinicDay = dayKeyIn(REGISTERED_AT, CLINIC_ZONE);
+    defaultDay = dayKeyIn(REGISTERED_AT, "Asia/Kolkata");
+
+    const created = await auth(request(app).post("/api/v1/patients"))
+      .send({ name: "Late Evening Walkin", gender: "female", contact: { phone: "9700000042" } })
+      .expect(201);
+    lateId = created.body.data.patient.id as string;
+
+    /**
+     * Backdated straight on the collection: `createdAt` is server-stamped at insert, and what is
+     * under test is which DAY a given instant belongs to, not the clock. The raw collection avoids
+     * auditPlugin writing "patient updated" for a test fixture.
+     */
+    const connection = await getTenantConnection({
+      id: tenant.id,
+      databaseName: tenant.databaseName,
+    });
+    await runWithContext(
+      { traceId: "appttz-mpi-range", tenantId: tenant.id, tenantSlug: SLUG, connection },
+      async () => {
+        await getPatientModel(connection).collection.updateOne(
+          { _id: new Types.ObjectId(lateId) },
+          { $set: { createdAt: REGISTERED_AT } },
+        );
+      },
+    );
+  }, 60_000);
+
+  const listed = async (query: Record<string, string>): Promise<string[]> => {
+    const res = await auth(request(app).get("/api/v1/patients")).query(query).expect(200);
+    return (res.body.data as { id: string }[]).map((p) => p.id);
+  };
+
+  it("the two zones genuinely disagree about which day this registration is", () => {
+    expect(clinicDay).not.toBe(defaultDay);
+  });
+
+  it("finds the patient on the day they registered AT THE CLINIC", async () => {
+    expect(await listed({ from: clinicDay, to: clinicDay })).toContain(lateId);
+  });
+
+  it("does NOT find them on the hospital default's day", async () => {
+    expect(await listed({ from: defaultDay, to: defaultDay })).not.toContain(lateId);
+  });
+
+  /** `to` closes at the END of its day. A half-open bug drops the last evening of the range. */
+  it("includes the closing day whole, not up to its first instant", async () => {
+    expect(await listed({ from: "2026-08-10", to: clinicDay })).toContain(lateId);
+  });
+
+  it("excludes a range that ends the day before", async () => {
+    expect(await listed({ from: "2026-08-01", to: "2026-08-15" })).not.toContain(lateId);
+  });
+
+  /** An open-ended range is legal at either end — "everyone since March", "everyone before June". */
+  it("accepts `from` alone and `to` alone", async () => {
+    expect(await listed({ from: clinicDay })).toContain(lateId);
+    expect(await listed({ to: "2026-08-15" })).not.toContain(lateId);
+  });
+
+  it("still returns the register when neither bound is given", async () => {
+    expect((await listed({})).length).toBeGreaterThan(0);
+  });
+
+  it("refuses a malformed date rather than silently ignoring it", async () => {
+    await auth(request(app).get("/api/v1/patients")).query({ from: "16-08-2026" }).expect(400);
   });
 });
