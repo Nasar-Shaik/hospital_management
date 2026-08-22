@@ -48,6 +48,7 @@ export const listEncounters: RequestHandler = async (req, res) => {
     ...(query.patientId ? { patientId: query.patientId } : {}),
     ...(query.queued ? { queuedOnly: true } : {}),
     ...(query.date ? { date: query.date } : {}),
+    ...(query.dateTo ? { dateTo: query.dateTo } : {}),
   });
 
   ok(res, items, 200, {

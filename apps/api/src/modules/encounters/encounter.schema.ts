@@ -49,6 +49,21 @@ export const listEncountersQuerySchema = z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
       .optional(),
+    /**
+     * The LAST day of a span, when the desk is asking about more than one.
+     *
+     * `date` alone still means exactly that day, which is what every existing caller sends and
+     * what the register defaults to — adding an end is additive and changes nothing for them. With
+     * both, the range is inclusive at both ends: "the 16th to the 22nd" covers seven whole days,
+     * because that is what those words mean to the person asking.
+     *
+     * A separate name rather than reusing `date` as a start: a caller that sent `date` and now
+     * sends `dateTo` gets a span, and a caller that never heard of it keeps its day.
+     */
+    dateTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })

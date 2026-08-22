@@ -1136,14 +1136,29 @@ export async function recordVisitSummary(
  * controller is HTTP only (Doc 09 §11).
  */
 export async function listEncounters(
-  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & { date?: string },
+  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & {
+    date?: string;
+    dateTo?: string;
+  },
 ): Promise<{ items: repo.Encounter[]; total: number }> {
-  const { date, ...rest } = filter;
-  if (!date) return repo.list(rest);
+  const { date, dateTo, ...rest } = filter;
+  if (!date && !dateTo) return repo.list(rest);
 
   const zone = await branchZone(getContext().activeBranchId);
-  const { from, before } = dayRangeInZone(date, zone);
-  return repo.list({ ...rest, arrivedFrom: from, arrivedBefore: before });
+  /**
+   * One helper, called at each end. `date` opens at the START of its day and `dateTo` closes at
+   * the start of the day AFTER it, so a span is inclusive at both ends and a single `date` — both
+   * bounds from the same day — is exactly the behaviour every existing caller already has.
+   */
+  return repo.list({
+    ...rest,
+    ...(date ? { arrivedFrom: dayRangeInZone(date, zone).from } : {}),
+    ...(dateTo
+      ? { arrivedBefore: dayRangeInZone(dateTo, zone).before }
+      : date
+        ? { arrivedBefore: dayRangeInZone(date, zone).before }
+        : {}),
+  });
 }
 
 /**
@@ -1161,7 +1176,10 @@ export async function listEncounters(
  * paying for the identity twice would be the cost of a tidier call graph.
  */
 export async function listEncountersWithIdentity(
-  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & { date?: string },
+  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & {
+    date?: string;
+    dateTo?: string;
+  },
 ): Promise<{ items: EncounterRow[]; total: number }> {
   const { items, total } = await listEncounters(filter);
   return { items: await withIdentity(items), total };
