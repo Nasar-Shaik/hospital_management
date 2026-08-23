@@ -179,8 +179,27 @@ beforeAll(async () => {
     .send({ email: "doc@notify.test", password: PASSWORD });
   doctorToken = docLogin.body.data.accessToken as string;
 
+  /**
+   * The day every slot in this file is booked on: the Monday of NEXT week, never the nearest one.
+   *
+   * MONDAY because that is the only weekday the doctor's schedule below opens (`weekday: 1`), so
+   * the fixture has no choice about which day of the week it books.
+   *
+   * NEXT WEEK because of the reminder rule. `scheduleReminder` deliberately declines to enqueue
+   * anything less than 24 hours out — the confirmation the patient just received IS the reminder —
+   * so a slot inside that window makes the two queue assertions below unprovable rather than
+   * false. The NEAREST Monday is inside it whenever the suite runs late on a Sunday: on
+   * 2026-08-23 at 12:59 IST the nearest Monday was the next day, the 12:30 slot was 22 h 31 m
+   * away, and both tests went red with no product code having changed.
+   *
+   * The extra week is what makes this independent of the day it is run. Worst case is a Sunday
+   * one second before midnight — still 7 days 9 hours to the earliest slot — and best case is a
+   * Monday just after it, at 14 days. The margin never falls below a week, so no hour of no day
+   * puts a booking inside the reminder window. `the fixture books outside the reminder window`
+   * below asserts all of that rather than trusting this comment.
+   */
   clinicDay = new Date();
-  clinicDay.setDate(clinicDay.getDate() + ((8 - clinicDay.getDay()) % 7 || 7));
+  clinicDay.setDate(clinicDay.getDate() + ((8 - clinicDay.getDay()) % 7 || 7) + 7);
   clinicDay.setHours(0, 0, 0, 0);
 
   await auth(request(app).put("/api/v1/doctors/schedule"))
@@ -357,6 +376,34 @@ describe("booking actually SCHEDULES the reminder — asserted on the queue, not
 
   afterAll(() => {
     redis.disconnect();
+  });
+
+  /**
+   * THE FIXTURE, CHECKED BEFORE THE FEATURE.
+   *
+   * Both assertions after this one are unprovable if the appointment sits inside the reminder
+   * window, because the product is RIGHT to schedule nothing there — so a fixture that drifts into
+   * it reports a product regression that has not happened. That is what it did on Sunday
+   * 2026-08-23. Three claims, each failing for a different and legible reason:
+   *
+   *   the weekday — the doctor's schedule opens on Mondays only, so a booking on any other day is
+   *                 refused before any of this is reached;
+   *   the offset  — 8 to 14 days, which is the nearest Monday plus a week. A revert to the nearest
+   *                 Monday gives 1 to 7 and fails here on EVERY day, not on one in seven;
+   *   the window  — the earliest slot the file books, measured against the rule it must clear.
+   */
+  it("the fixture books outside the reminder window, whatever day the suite runs", () => {
+    const earliest = slotAt(9, 0);
+    const midnightToday = new Date();
+    midnightToday.setHours(0, 0, 0, 0);
+    const daysAhead = Math.round((clinicDay.getTime() - midnightToday.getTime()) / 86_400_000);
+
+    expect(earliest.getDay()).toBe(1);
+    expect(daysAhead).toBeGreaterThanOrEqual(8);
+    expect(daysAhead).toBeLessThanOrEqual(14);
+    // `REMINDER_LEAD_MS` in appointment.consumers.ts is 24 h. The floor here is the whole week the
+    // fixture promises, so this fails on a fixture that drifted and not on a rule that changed.
+    expect(earliest.getTime() - Date.now()).toBeGreaterThan(7 * 86_400_000);
   });
 
   it("puts a real, delayed job on the notifications queue that BullMQ accepted", async () => {
