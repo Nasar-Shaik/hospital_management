@@ -49,6 +49,7 @@ import { FEATURE_FLAGS } from "@medicore/permissions";
 import { useAuth } from "../../../components/AuthProvider";
 import { Alert, Badge, Button, Card, ConfirmDialog } from "../../../components/ui";
 import { VitalsByVisit } from "../../../components/PatientVitals";
+import { ProblemPanel } from "../../../components/ProblemList";
 import { OperativeNoteDetail } from "../../../components/OperativeNote";
 import { rupees, toPaise } from "../../../lib/money";
 import {
@@ -142,6 +143,7 @@ function Profile() {
   const canFileClaim = can("insurance:claim");
   const canReconcile = can("insurance:reconcile");
   const canReadVitals = can("emr:read");
+  const canWriteEmr = can("emr:write");
   const canRecordVitals = can("vitals:record");
   const canManageConsent = can("consent:manage");
   const canEnrollPackage = can("package:enroll");
@@ -390,6 +392,18 @@ function Profile() {
         ) : (
           <div className="mt-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-4 py-2 text-sm text-[var(--color-fg-muted)]">
             No known allergies on record.
+          </div>
+        )}
+
+        {/**
+         * The problem list sits with the allergies, not in a tab, and for the same reason: it is
+         * what a clinician needs to know BEFORE they decide anything, and a fact one click away
+         * is a fact somebody reads after they have already prescribed. Behind `emr:read` — a
+         * receptionist opening this chart simply has no panel.
+         */}
+        {canReadVitals && (
+          <div className="mt-4 rounded-lg border border-[var(--color-border)] px-4 py-3">
+            <ProblemPanel api={api} patientId={id} canWrite={canWriteEmr} />
           </div>
         )}
       </Card>

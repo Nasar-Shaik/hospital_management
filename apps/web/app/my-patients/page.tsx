@@ -42,6 +42,7 @@ import {
   type SafetyAlert,
   type VitalsReading,
   type DoctorRef,
+  type Diagnosis,
   type DiagnosisType,
   type MedicineAvailability,
   type OtBooking,
@@ -49,6 +50,7 @@ import {
 import { VitalsPanel } from "../../components/Vitals";
 import { OperativeNoteDetail } from "../../components/OperativeNote";
 import { useAuth } from "../../components/AuthProvider";
+import { ProblemPanel } from "../../components/ProblemList";
 import { Alert, Badge, Button, Card, ConfirmDialog, PermissionGate } from "../../components/ui";
 import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
 import { groupReportsByOrder } from "../../lib/reports";
@@ -2065,6 +2067,13 @@ function ConsultationNoteEditor({
   const [history, setHistory] = useState("");
   const [examination, setExamination] = useState("");
   const [diagnoses, setDiagnoses] = useState<DxRow[]>([]);
+  /**
+   * The diagnoses AS THE SERVER HOLDS THEM. Separate from the edit buffer above because promotion
+   * is by index into the SAVED note — offering it against unsaved rows would promote whatever
+   * happens to sit at that index on the server, which is a different condition the moment the
+   * doctor adds a line and has not pressed save.
+   */
+  const [savedDiagnoses, setSavedDiagnoses] = useState<Diagnosis[]>([]);
   const [plan, setPlan] = useState("");
   const [followUp, setFollowUp] = useState("");
   const [busy, setBusy] = useState(false);
@@ -2083,6 +2092,7 @@ function ConsultationNoteEditor({
         setDiagnoses(
           (n?.diagnoses ?? []).map((d) => ({ text: d.text, code: d.code ?? "", type: d.type })),
         );
+        setSavedDiagnoses(n?.diagnoses ?? []);
         setPlan(n?.plan ?? "");
         setFollowUp(n?.followUpDays != null ? String(n.followUpDays) : "");
       })
@@ -2100,7 +2110,7 @@ function ConsultationNoteEditor({
     setBusy(true);
     setError(null);
     try {
-      await api.saveConsultation(encounter.id, {
+      const saved = await api.saveConsultation(encounter.id, {
         chiefComplaint,
         history,
         examination,
@@ -2114,6 +2124,8 @@ function ConsultationNoteEditor({
         plan,
         ...(followUp.trim() ? { followUpDays: Number(followUp) } : { followUpDays: 0 }),
       });
+      // What the server now holds — the only diagnoses a promotion may be offered against.
+      setSavedDiagnoses(saved.diagnoses);
       onSaved();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not save the note.");
@@ -2233,6 +2245,22 @@ function ConsultationNoteEditor({
       <Button disabled={busy} onClick={() => void save()}>
         {busy ? "Saving…" : "Save note"}
       </Button>
+
+      {/**
+       * The patient's longitudinal problem list, beneath the note that feeds it. Here rather than
+       * only on the chart because this is where the decision is made: the doctor has just written
+       * "Type 2 diabetes" as a diagnosis for THIS visit, and whether it belongs on the patient's
+       * standing list is a judgement they make in the same breath — not one they will come back
+       * for from another screen.
+       */}
+      <div className="mt-4 border-t border-[var(--color-border)] pt-3">
+        <ProblemPanel
+          api={api}
+          patientId={encounter.patientId}
+          canWrite
+          promoteFrom={{ encounterId: encounter.id, diagnoses: savedDiagnoses }}
+        />
+      </div>
     </div>
   );
 }
