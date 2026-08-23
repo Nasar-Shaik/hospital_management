@@ -558,7 +558,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg-subtle)]">
       {/* ── Desktop rail ─────────────────────────────────────────────────────── */}
       <aside
-        className={`hidden shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-[width] duration-[var(--dur)] ease-[var(--ease-standard)] lg:flex ${
+        className={`relative hidden shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-[width] duration-[var(--dur)] ease-[var(--ease-standard)] lg:flex ${
           collapsed ? "w-16" : "w-64"
         }`}
       >
@@ -570,26 +570,49 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Brandmark collapsed={collapsed} />
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        {/*
+         * `min-h-0` IS THE FIX, NOT A TIDY-UP.
+         *
+         * A flex child defaults to `min-height: auto`, which means it refuses to shrink below its
+         * own content however much `overflow-y-auto` you put on it. With enough nav sections — a
+         * tenant admin sees every one — this pane grew taller than the rail, pushed the branch
+         * footer and the collapse control past the bottom of a `h-screen overflow-hidden` shell,
+         * and they were clipped away. The rail could then be collapsed and never expanded again,
+         * because the only control that expands it had been pushed off the screen.
+         */}
+        <div id="app-sidebar-nav" className="min-h-0 flex-1 overflow-y-auto">
           <SidebarNav sections={sections} pathname={pathname} collapsed={collapsed} />
         </div>
 
         <BranchFooter collapsed={collapsed} />
 
+        {/*
+         * ── THE RAIL'S HANDLE, ON THE SEAM ──────────────────────────────────
+         * Deliberately floated on the border between the rail and the page rather than docked as
+         * the last row of the nav. A control that expands the sidebar must not live inside the
+         * thing it expands: at `w-16` that row was an unlabelled chevron at the foot of a
+         * scrolling column, and when the column overflowed it was not on the screen at all.
+         *
+         * Anchored to the aside (`relative` above), so it tracks the rail's width as it animates
+         * and needs no second source of truth about how wide the rail currently is. It overhangs
+         * into the main column by half its width — twelve pixels, comfortably inside that
+         * column's padding, so it never sits on top of a page's content.
+         */}
         <button
           type="button"
           onClick={toggleCollapsed}
-          className={`flex items-center gap-2 border-t border-[var(--color-border)] px-4 py-2.5 text-xs font-medium text-[var(--color-fg-muted)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-fg)] ${
-            collapsed ? "justify-center" : ""
-          }`}
+          className="absolute top-1/2 -right-3 z-40 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-fg-muted)] shadow-[var(--shadow-sm)] transition-[background-color,color,box-shadow] duration-[var(--dur)] ease-[var(--ease-standard)] hover:bg-[var(--color-brand-600)] hover:text-[var(--color-on-accent)] hover:shadow-[var(--shadow-md)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-600)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg-elevated)] focus-visible:outline-none"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          aria-controls="app-sidebar-nav"
         >
           <Icon
             name="chevron"
-            className={`h-4 w-4 transition-transform ${collapsed ? "" : "rotate-180"}`}
+            className={`h-3.5 w-3.5 transition-transform duration-[var(--dur)] ease-[var(--ease-standard)] ${
+              collapsed ? "" : "rotate-180"
+            }`}
           />
-          {!collapsed && <span>Collapse</span>}
         </button>
       </aside>
 
@@ -613,7 +636,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <Icon name="close" className="h-5 w-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto">
+            {/* `min-h-0` for the same reason as the rail above — the drawer's footer is pinned. */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
               <SidebarNav
                 sections={sections}
                 pathname={pathname}
