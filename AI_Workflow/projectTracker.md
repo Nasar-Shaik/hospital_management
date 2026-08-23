@@ -255,6 +255,23 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 
 ## 5. Pending
 
+### 5.0 Patient-merge re-pointing — **CLOSED 2026-08-23**
+
+The invariant in `repointPatient.ts` ("every module that stores a `patientId` re-points its own
+references") was a comment, and comments do not fail. An audit of the real schemas found **29
+patient-bearing collections; 15 had a consumer and 14 did not** — the MAR, the consultation note,
+the coded diagnosis, ED triage, theatre bookings, insurance cover and claims, consent, death
+records, the mortuary register, ambulance trips, feedback tickets, the portal identity, and
+`packageEnrollments`, which sat inside a module that already had a consumer and was missed by it.
+
+All 14 now re-point through the existing `onPatientsMerged` architecture — no second mechanism.
+`REPOINTED_PATIENT_REFERENCES` / `EXEMPT_PATIENT_REFERENCES` in `repointPatient.ts` are the
+register, and `patientMergeCoverage.int.test.ts` reads the REAL schemas off a provisioned tenant
+and fails on anything in neither list. Two exemptions, both because moving them would be the bug:
+`auditLogs` (hash-chained history) and `outboxEvents` (a record of what was published).
+
+**Still open, and recorded in the risk table:** the two-open-encounter collision.
+
 ### 5.1 Finish P2 — core operations
 
 - [x] **B8** Partner masters — **suppliers landed 2026-08-20** (`vendor:manage`, §4 G1/G3), which
@@ -326,16 +343,17 @@ resolution so the next audit does not re-investigate them.
 with its evidence. A found defect and a predicted risk are different things and no longer share a
 list. What remains here is the standing risk picture.
 
-| Risk                                                                                          | Severity                                                                                                                          |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Nothing has been validated on a device or in a browser by a human** — 106 checks unticked   | 🔴 Highest. The API layer beneath them was pre-validated 2026-08-14; the UI was not.                                              |
-| **Tenant databases do not converge on their own** — risk register T2, materialised 2026-08-14 | 🔴 A stale tenant silently loses its safety indexes. `seed:migrate --all` is a workaround for a missing control, not a fix.       |
-| **CI is billing-locked**; 8 commits unpushed                                                  | 🔴 The work exists on one machine and has never been built anywhere else.                                                         |
-| **F5 expiry is captured and never read**                                                      | 🟠 An expired batch can be dispensed with no signal.                                                                              |
-| **Web has no nursing-note surface** — the ward page gates notes on `emr:write`                | 🟠 Mobile gained `POST /nursing-notes` (`nursing:manage`) at M3-S2; web did not. The boundary is correct; the surface is missing. |
-| **Allergy screening covers 15 demo drugs and is not a formulary**                             | 🟠 Do not widen the drug list without widening the safety data.                                                                   |
-| **Vitals render in the reader's timezone, not the ward's**                                    | 🟡 Display only; the stored instant is correct.                                                                                   |
-| Integration suite is **environment-sensitive**, not flaky — the host swaps under load         | 🟡 Re-run before investigating; check Docker memory first.                                                                        |
+| Risk                                                                                                                                          | Severity                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Nothing has been validated on a device or in a browser by a human** — 106 checks unticked                                                   | 🔴 Highest. The API layer beneath them was pre-validated 2026-08-14; the UI was not.                                                                                                                                                                                                                                                                                     |
+| **Tenant databases do not converge on their own** — risk register T2, materialised 2026-08-14                                                 | 🔴 A stale tenant silently loses its safety indexes. `seed:migrate --all` is a workaround for a missing control, not a fix.                                                                                                                                                                                                                                              |
+| **CI is billing-locked**; 8 commits unpushed                                                                                                  | 🔴 The work exists on one machine and has never been built anywhere else.                                                                                                                                                                                                                                                                                                |
+| ~~**A merge collides on two open encounters**~~                                                                                               | ✅ **CLOSED 2026-08-23.** `mergePatients` now refuses with `409 HMS-PAT-003` naming both visits, before any state changes. The rule lives in `encounters` and is reached through `core/policy/mergeGuards.ts` — an inverted port, because `encounters` already imports `patients` for identity. Neither encounter is closed: which visit is real is a clinical decision. |
+| **F5 expiry is captured and never read**                                                                                                      | 🟠 An expired batch can be dispensed with no signal.                                                                                                                                                                                                                                                                                                                     |
+| ~~**Web has no nursing-note surface**~~ — **CLOSED.** F-2 shipped `AddChartNote` + `chartNoteCapability`; both clients write the nurse's note | 🟠 Mobile gained `POST /nursing-notes` (`nursing:manage`) at M3-S2; web did not. The boundary is correct; the surface is missing.                                                                                                                                                                                                                                        |
+| **Allergy screening covers 15 demo drugs and is not a formulary**                                                                             | 🟠 Do not widen the drug list without widening the safety data.                                                                                                                                                                                                                                                                                                          |
+| **Vitals render in the reader's timezone, not the ward's**                                                                                    | 🟡 Display only; the stored instant is correct.                                                                                                                                                                                                                                                                                                                          |
+| Integration suite is **environment-sensitive**, not flaky — the host swaps under load                                                         | 🟡 Re-run before investigating; check Docker memory first.                                                                                                                                                                                                                                                                                                               |
 
 ---
 
