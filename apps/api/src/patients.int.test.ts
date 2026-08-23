@@ -67,6 +67,7 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { getPatientModel } = await import("./modules/patients/patient.model.js");
 const { DUPLICATE_THRESHOLD } = await import("./modules/patients/mpi.js");
+const { registeredMergeGuards } = await import("./core/policy/mergeGuards.js");
 
 const SLUG = "test-mpi-apollo";
 const SLUG_OTHER = "test-mpi-sunshine";
@@ -800,5 +801,145 @@ describe("the MPI reaches across sites, and stops at the hospital", () => {
     const thereIds = (there.body.data as { patient: { id: string } }[]).map((c) => c.patient.id);
     expect(thereIds).toContain(otherId);
     expect(thereIds).not.toContain(hereId);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 7. TWO OPEN VISITS CANNOT BECOME ONE PATIENT
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("two open visits cannot become one patient", () => {
+  /**
+   * A department to route visits to. `startEncounter` needs a doctor OR a department depending on
+   * the tenant's `encounterPolicy.routing`, and this suite has neither — it has never opened a
+   * visit before.
+   */
+  let departmentId = "";
+
+  beforeAll(async () => {
+    const res = await post("/api/v1/departments", tokenAdmin, HOST, branchA)
+      .send({ name: "General Medicine", code: "GEN-MERGE", kind: "clinical" })
+      .expect(201);
+    departmentId = res.body.data.id as string;
+  });
+
+  /** Opens a visit and returns its id. */
+  async function openVisit(patientId: string): Promise<string> {
+    const res = await post("/api/v1/encounters", tokenAdmin, HOST, branchA)
+      .send({ patientId, departmentId, reason: "fever" })
+      .expect(201);
+    return res.body.data.encounter.id as string;
+  }
+
+  async function statusOf(patientId: string): Promise<string> {
+    const res = await get(`/api/v1/patients/${patientId}`, tokenAdmin, HOST, branchA).expect(200);
+    return res.body.data.status as string;
+  }
+
+  /**
+   * ── WHAT THIS REFUSAL IS PROTECTING ─────────────────────────────────────────
+   * `one_open_encounter_per_patient` allows a patient at most one open encounter. Re-pointing the
+   * duplicate's visit onto a survivor who already has one is E11000 — raised inside the merge
+   * fan-out, AFTER the bills, notes, doses and coding have already moved and the patient is
+   * already marked `merged`. The job then retries into the same collision forever and the
+   * survivor holds everything except the visit history.
+   *
+   * It is also the commonest merge there is: one walk-in registered twice on a morning with a
+   * visit started on each. So the merge is refused before the first write instead.
+   */
+  it("refuses the merge, and says which two visits are in the way", async () => {
+    const survivor = await register({ name: "Sunil Open", gender: "male", phone: "9440500001" });
+    const duplicate = await register({ name: "Sunil Openn", gender: "male", phone: "9440500002" });
+    const survivorVisit = await openVisit(survivor.id);
+    const duplicateVisit = await openVisit(duplicate.id);
+
+    const res = await post("/api/v1/patients/merge", tokenAdmin, HOST, branchA)
+      .send({ survivorId: survivor.id, duplicateId: duplicate.id, reason: "same person" })
+      .expect(409);
+
+    expect(res.body.error.code).toBe("HMS-PAT-003");
+    // Both encounters named: a clerk has to know WHICH visits to go and close.
+    expect(res.body.error.details.survivorEncounterId).toBe(survivorVisit);
+    expect(res.body.error.details.duplicateEncounterId).toBe(duplicateVisit);
+    expect(String(res.body.error.details.hint)).toMatch(/close or cancel/i);
+  });
+
+  it("changes nothing at all — the refusal is before the first write", async () => {
+    const survivor = await register({ name: "Latha Open", gender: "male", phone: "9440500003" });
+    const duplicate = await register({ name: "Lathaa Open", gender: "male", phone: "9440500004" });
+    await openVisit(survivor.id);
+    await openVisit(duplicate.id);
+
+    await post("/api/v1/patients/merge", tokenAdmin, HOST, branchA)
+      .send({ survivorId: survivor.id, duplicateId: duplicate.id, reason: "same person" })
+      .expect(409);
+
+    // Still two live charts. A half-applied merge is the thing this whole guard exists to prevent,
+    // so "it was refused" is not enough — the duplicate must still be usable.
+    expect(await statusOf(duplicate.id)).toBe("active");
+    expect(await statusOf(survivor.id)).toBe("active");
+
+    // And no audit entry claiming a merge happened.
+    const entries = await inTenant(tenant, async () => {
+      const res = await get(
+        "/api/v1/audit?action=patient.merged&limit=100",
+        tokenAdmin,
+        HOST,
+        branchA,
+      );
+      return (res.body.data as { resourceId: string }[]) ?? [];
+    });
+    expect(entries.some((e) => e.resourceId === survivor.id)).toBe(false);
+  });
+
+  it("merges normally when only ONE of the two has a visit open", async () => {
+    /**
+     * The control, and the more important half: the guard must refuse the collision WITHOUT
+     * refusing the ordinary case. One open visit moving to the survivor is exactly what a merge is
+     * for, and a guard that blocked it would be worse than the bug.
+     */
+    const survivor = await register({ name: "Ganesh Solo", gender: "male", phone: "9440500005" });
+    const duplicate = await register({ name: "Ganeshh Solo", gender: "male", phone: "9440500006" });
+    const duplicateVisit = await openVisit(duplicate.id);
+
+    await post("/api/v1/patients/merge", tokenAdmin, HOST, branchA)
+      .send({ survivorId: survivor.id, duplicateId: duplicate.id, reason: "same person" })
+      .expect(200);
+
+    expect(await statusOf(duplicate.id)).toBe("merged");
+
+    /**
+     * The visit itself is NOT asserted here, and the omission is deliberate. Re-pointing happens on
+     * the merge EVENT, which travels through the outbox to a worker this suite does not run — so a
+     * `patientId` read back now would still name the duplicate, and asserting otherwise would only
+     * prove the test had learned to run the relay. That the encounter follows the survivor is
+     * proven where the event is dispatched for real: `patientMergeCoverage.int.test.ts` §2,
+     * "encounters follows the surviving patient".
+     *
+     * What matters here is narrower, and is exactly what the guard could get wrong: ONE open visit
+     * must not be refused.
+     */
+    expect(duplicateVisit).toBeTruthy();
+  });
+
+  it("merges normally when NEITHER has a visit open", async () => {
+    const survivor = await register({ name: "Priya None", gender: "male", phone: "9440500007" });
+    const duplicate = await register({ name: "Priyaa None", gender: "male", phone: "9440500008" });
+
+    await post("/api/v1/patients/merge", tokenAdmin, HOST, branchA)
+      .send({ survivorId: survivor.id, duplicateId: duplicate.id, reason: "same person" })
+      .expect(200);
+
+    expect(await statusOf(duplicate.id)).toBe("merged");
+  });
+
+  it("has the guard actually registered — not merely written", () => {
+    /**
+     * The bug class this repository keeps meeting: a capability wired to nothing. A guard that
+     * `app.ts` forgot to register would make every assertion above pass except the first two, and
+     * those would fail as "the merge succeeded" — which reads like a product change, not a missing
+     * line of composition. This says it plainly instead.
+     */
+    expect(registeredMergeGuards()).toContain("open-visit");
   });
 });

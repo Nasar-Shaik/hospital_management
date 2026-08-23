@@ -369,13 +369,18 @@ describe("3. a merge is a pointer, never a cull", () => {
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
- * 4. THE COLLISION THIS AUDIT FOUND — A KNOWN DEFECT, PINNED
+ * 4. THE COLLISION THE SERVICE-LEVEL GUARD EXISTS TO PREVENT
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("4. two open encounters collide, and the merge half-applies", () => {
   /**
-   * ⚠️ THIS TEST ASSERTS A DEFECT, NOT A FEATURE. It is here so the behaviour cannot change
-   * without somebody noticing, and so the fix — when it is made — has a test that turns red.
+   * ⚠️ THIS ASSERTS THE RAW CONSUMER, WHICH IS STILL VULNERABLE — and that is the point: it is the
+   * evidence for why `mergePatients` refuses the merge before publishing. Reachable only by
+   * dispatching the event by hand, as this suite does; through the product it cannot happen,
+   * because the guard turns it into a `409 HMS-PAT-003` first (`patients.int.test.ts` §7).
+   *
+   * Kept rather than deleted. If the guard is ever removed or bypassed, THIS is the failure that
+   * comes back, and a reader needs to be able to see exactly what it looks like.
    *
    * `encounters` carries a unique partial index on `{tenantId, patientId}` where `open: true`:
    * "a patient has at most one open encounter" (clinicalInvariants.ts, migration 0012). The
@@ -395,11 +400,11 @@ describe("4. two open encounters collide, and the merge half-applies", () => {
    * survivor's chart is missing the duplicate's entire visit history and nothing on any screen
    * says so.
    *
-   * NOT FIXED HERE, deliberately. Deciding which of two open visits closes is clinical
-   * reconciliation, and the sane fix is upstream — refuse the merge in `mergePatients` and tell
-   * the clerk to close one visit first, which keeps the decision with the human the MPI already
-   * insists on. That is a change to merge semantics and belongs in its own slice with its own
-   * error code.
+   * FIXED UPSTREAM, not here. Deciding which of two open visits closes is clinical reconciliation,
+   * so the merge refuses instead and tells the clerk to close one — keeping the decision with the
+   * human the MPI already insists on. The guard lives in `encounters` and is reached through
+   * `core/policy/mergeGuards.ts`, because `encounters` already imports `patients` for identity and
+   * the reverse edge would close a cycle.
    */
   it("throws on the unique index and leaves the duplicate's encounter behind", async () => {
     const encounters = connection.collection("encounters");

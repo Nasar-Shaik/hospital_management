@@ -69,3 +69,9 @@ export { encounterConsumers } from "./encounter.consumers.js";
 
 /** For the reporting response contract. */
 export type { DischargeRegister as DischargeRegisterReport } from "./encounter.repository.js";
+
+/**
+ * The module's one objection to a patient merge: two open visits cannot become one patient.
+ * Registered at the composition root (`app.ts`), never by import side effect.
+ */
+export { openVisitMergeGuard } from "./encounter.mergeGuard.js";

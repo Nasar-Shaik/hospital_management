@@ -25,7 +25,8 @@ import { rbacRouter } from "./modules/rbac/rbac.routes.js";
 import { staffRouter } from "./modules/staff/index.js";
 import { subscriptionRouter } from "./modules/subscriptions/index.js";
 import { patientRouter } from "./modules/patients/index.js";
-import { encounterRouter } from "./modules/encounters/index.js";
+import { encounterRouter, openVisitMergeGuard } from "./modules/encounters/index.js";
+import { registerMergeGuard } from "./core/policy/mergeGuards.js";
 import { orderRouter } from "./modules/orders/index.js";
 import { billingRouter } from "./modules/billing/index.js";
 import { prescriptionRouter } from "./modules/prescriptions/index.js";
@@ -238,6 +239,16 @@ export function createApp(logger: Logger): Express {
       return Promise.resolve();
     }),
   );
+
+  /**
+   * ── PRECONDITIONS ON A PATIENT MERGE ──────────────────────────────────────
+   * Registered HERE, in the composition root, for the same reason the event consumers are: a
+   * module that self-registered by import side effect would be a rule nobody can find, and a rule
+   * nobody registered would be a guard silently wired to nothing — a bug class this repository has
+   * already met more than once. `mergeGuards.registeredMergeGuards()` is asserted in the merge
+   * suite so an unregistered guard fails loudly rather than passing quietly.
+   */
+  registerMergeGuard("open-visit", openVisitMergeGuard);
 
   app.use("/api/v1", resolveTenant(), v1Router);
 

@@ -21,6 +21,7 @@ import {
 import { getContext } from "../../core/context/requestContext.js";
 import { dayRangeInZone } from "../../core/time/day.js";
 import { branchZone } from "../branches/index.js";
+import { assertMergeAllowed } from "../../core/policy/mergeGuards.js";
 import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { recordAudit } from "../../core/audit/auditWriter.js";
@@ -282,6 +283,19 @@ export async function mergePatients(input: {
         reason: "this record has already been merged",
       });
     }
+
+    /**
+     * ── REFUSED BEFORE ANYTHING MOVES ───────────────────────────────────────
+     * The preconditions a merge must clear, asked before the first write. Today there is exactly
+     * one — two open visits collide on the `one_open_encounter_per_patient` index and would leave
+     * the merge half-applied — and this module deliberately does not know that. `encounters`
+     * already imports `patients` for identity, so the reverse edge would close a cycle;
+     * `core/policy/mergeGuards.ts` explains the inversion and why a guard may only refuse.
+     *
+     * Placed here, above `markMerged`, so a refusal costs nothing: no row has changed, the
+     * transaction has written nothing, and no event is published.
+     */
+    await assertMergeAllowed(survivor.id, duplicate.id);
 
     const merged = await repo.markMerged(duplicate.id, survivor.id, session);
     if (!merged) throw new PatientNotFoundError({ patientId: input.duplicateId });
