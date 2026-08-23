@@ -16,6 +16,14 @@
 > several of them are quoted verbatim in test comments. Read it to understand a scenario. Do not
 > work through it as a checklist.
 >
+> **All 232 IDs have since been re-homed into
+> [`docs/testing/HMS_ROLE_BASED_UAT_TEST_PLAN.md`](../../docs/testing/HMS_ROLE_BASED_UAT_TEST_PLAN.md)
+> (2026-08-22)** — reorganised role → module → workflow → scenario, each carrying the test files that
+> cover it and a manual status. **Nothing was dropped**; the mapping table in its §21 names the new
+> home of every row here, and its §21.2 lists the eleven rows whose expected result has changed since
+> this document was written. **That plan is what a person executes. This file is what they read to
+> understand a row.**
+>
 > **No row here has ever been executed by a human, and none may be marked PASS.** Automated
 > coverage is recorded as `AUTOMATED — PROVEN` / `STRENGTHENED` / `PLAYWRIGHT`, never as a manual
 > pass.

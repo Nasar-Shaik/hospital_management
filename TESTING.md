@@ -158,6 +158,15 @@ password problem. To add another operator, log in as `ops@…` first and create 
 - **Section 1d** — the same demo in more depth, plus "try to break it" security tests.
 - **Section 1** — ports and URLs, if a port is taken.
 - **Sections 23–47** — one feature at a time (wallet, express visits, receipts, vitals, branches…).
+- **[`docs/testing/HMS_ROLE_BASED_UAT_TEST_PLAN.md`](docs/testing/HMS_ROLE_BASED_UAT_TEST_PLAN.md)** —
+  the master role-based UAT plan: 149 scenarios organised role → module → workflow, each carrying its
+  automated coverage and a manual status. It is the document to work through when you want to validate
+  MediCore as a hospital rather than as a set of screens. §11 below is what decides which layer proves
+  what; the UAT plan is what a person actually executes.
+- **[`docs/testing/HMS_UAT_EXECUTION_WAVES.md`](docs/testing/HMS_UAT_EXECUTION_WAVES.md)** — the
+  execution companion to that plan: the 95 P0/C0 scenarios scheduled into six waves, with the
+  fixtures, the cross-role handoffs and the clock constraints each one needs. Open it on the morning
+  of a manual campaign; open the plan above to find out what any single scenario means.
 
 ---
 
