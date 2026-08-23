@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OrderRow, ReportMeta } from "@medicore/api-client";
-import { groupByPatient, waited } from "../lib/worklist";
+import { groupByPatient, openOrderKey, waited } from "../lib/worklist";
 import { groupReportsByOrder } from "../lib/reports";
 
 function order(over: Partial<OrderRow> = {}): OrderRow {
@@ -177,6 +177,51 @@ describe("the worklist groups by patient", () => {
   });
 });
 
+/**
+ * The key exists to be COMPARED BY VALUE, so every test here is about identity: the same work
+ * must produce the same string out of arrays the render rebuilt, or the effect that holds it
+ * fires forever.
+ */
+describe("the open patient's orders, as an effect can safely hold them", () => {
+  const rows = [
+    order({ id: "o1", patientId: "p1" }),
+    order({ id: "o2", patientId: "p1" }),
+    order({ id: "o3", patientId: "p2" }),
+  ];
+
+  it("two separately-built groupings of the same queue give the SAME key", () => {
+    // Exactly what the page does twice in a row: fresh arrays, identical work.
+    const a = groupByPatient([...rows]);
+    const b = groupByPatient([...rows]);
+    expect(a).not.toBe(b);
+    expect(openOrderKey(a, "p1")).toBe(openOrderKey(b, "p1"));
+  });
+
+  it("names only the open patient's orders, not the whole queue", () => {
+    expect(openOrderKey(groupByPatient(rows), "p1")).toBe("o1,o2");
+    expect(openOrderKey(groupByPatient(rows), "p2")).toBe("o3");
+  });
+
+  it("changes when that patient's work changes — the effect must still refetch", () => {
+    const before = openOrderKey(groupByPatient(rows), "p1");
+    const after = openOrderKey(
+      groupByPatient([...rows, order({ id: "o4", patientId: "p1" })]),
+      "p1",
+    );
+    expect(after).not.toBe(before);
+  });
+
+  it("nothing open is the empty string, not a key that looks like work", () => {
+    expect(openOrderKey(groupByPatient(rows), null)).toBe("");
+    expect(openOrderKey([], null)).toBe("");
+  });
+
+  it("a selection the current tab no longer holds is also empty", () => {
+    // The patient whose last test just finished, while their id is still the selection.
+    expect(openOrderKey(groupByPatient(rows), "p9")).toBe("");
+  });
+});
+
 describe("how long a patient has been waiting", () => {
   const now = Date.parse("2026-08-16T12:00:00.000Z");
 
@@ -290,6 +335,29 @@ describe("the pages consume the grouping rather than re-listing rows", () => {
     // The uploads happened twice because nothing on screen said the first one had landed.
     expect(WORKLIST).toMatch(/reports? attached/);
     expect(WORKLIST).toMatch(/Upload another/);
+  });
+
+  /**
+   * The dependency list is the defect. `groups` is rebuilt on every render, so an effect holding
+   * it runs on every render — and this one calls `setAttached`, which causes the render that runs
+   * it again. React stopped the page with "Maximum update depth exceeded" on any tab with nothing
+   * in it, because that path set state synchronously with no request in between.
+   */
+  it("the attachment fetch depends on a primitive, never on the groups array", () => {
+    // The dependency list of the effect that calls `reportsForOrders` — located from that call
+    // rather than by position, so moving the effect does not quietly stop this from checking.
+    const effect = /reportsForOrders[\s\S]*?\}, \[([^\]]*)\]\);/.exec(WORKLIST)?.[1] ?? "";
+    expect(effect).toBe("api, openOrders");
+    expect(WORKLIST).toMatch(/openOrderKey\(groups, openPatientId\)/);
+  });
+
+  it("clearing an already-empty attachment map is not a state change", () => {
+    // The updater form is what makes the empty branch unable to re-enter itself.
+    expect(WORKLIST).toMatch(
+      /setAttached\(\(prev\) => \(prev\.size === 0 \? prev : new Map\(\)\)\)/,
+    );
+    // And the bare set that looped is gone.
+    expect(WORKLIST).not.toMatch(/setAttached\(new Map\(\)\)/);
   });
 });
 

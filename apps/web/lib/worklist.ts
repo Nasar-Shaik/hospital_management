@@ -65,6 +65,31 @@ export function groupByPatient(orders: readonly OrderRow[]): PatientGroup[] {
 }
 
 /**
+ * The open patient's order ids as ONE STRING — the dependency a fetching effect can safely hold.
+ *
+ * ── THE LOOP THIS EXISTS TO BREAK ───────────────────────────────────────────
+ * `groupByPatient` builds fresh objects every call, and the page calls it every render: the tab's
+ * rows come off `.filter()` chains, so the `useMemo` wrapping it is handed a new array each time
+ * and memoizes nothing. An effect listing `groups` in its dependencies therefore re-runs on every
+ * render — and when that effect also SETS STATE, the render it causes re-runs it. Clearing the
+ * attachment map to `new Map()` is a new object, so React saw a change, re-rendered, ran the
+ * effect, cleared it again: "Maximum update depth exceeded", thrown before the page could paint.
+ *
+ * A primitive breaks the cycle BY VALUE. The same patient with the same orders yields the same
+ * string no matter how many new arrays the render built to say so, so the effect fires when the
+ * open patient's work actually changes and at no other time.
+ *
+ * Returns `""` when nothing is open — the empty queue, or a selection the current tab no longer
+ * contains. Order ids are hex, so a comma can never appear inside one.
+ */
+export function openOrderKey(groups: readonly PatientGroup[], patientId: string | null): string {
+  if (patientId === null) return "";
+  const group = groups.find((g) => g.patientId === patientId);
+  if (!group) return "";
+  return group.orders.map((o) => o.id).join(",");
+}
+
+/**
  * "25 min" / "3 h" / "2 d" — how long the oldest thing in a group has been sitting.
  *
  * Coarse on purpose. A technician needs "this one has been waiting since this morning", not a

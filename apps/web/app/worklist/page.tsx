@@ -54,7 +54,7 @@ import {
   PermissionGate,
 } from "../../components/ui";
 import { rupees } from "../../lib/money";
-import { groupByPatient, waited } from "../../lib/worklist";
+import { groupByPatient, openOrderKey, waited } from "../../lib/worklist";
 import { isHeldForPayment, type PaymentState } from "../../lib/payment";
 
 /** Per-order settle-from-advance info for admitted patients. */
@@ -526,19 +526,30 @@ function Worklist() {
   const openPatientId = group?.patientId ?? null;
 
   /**
+   * The open patient's orders, as a primitive — see `openOrderKey`. The effect below MUST NOT
+   * depend on `groups`: that array is rebuilt every render, so an effect holding it re-runs every
+   * render, and this one sets state, which caused the render. That is the "Maximum update depth
+   * exceeded" this page threw on any tab with nothing in it.
+   */
+  const openOrders = openOrderKey(groups, openPatientId);
+
+  /**
    * The documents already attached to the OPEN patient's orders — one request per patient, made
    * when they are opened rather than for the whole queue up front. The flat list used to fetch this
    * for every patient with in-progress work on every reload, which is the same information at many
    * times the cost, and it went stale the moment an order left `in_progress`.
    */
   useEffect(() => {
-    const orderIds = openPatientId
-      ? (groups.find((g) => g.patientId === openPatientId)?.orders ?? []).map((o) => o.id)
-      : [];
-    if (orderIds.length === 0) {
-      setAttached(new Map());
+    if (openOrders === "") {
+      /**
+       * Clearing what is ALREADY clear must not be a state change. Returning the previous map
+       * when it is empty means this branch cannot re-render the page, so it cannot re-enter
+       * itself even if a future dependency goes unstable again — the guard outlives the fix.
+       */
+      setAttached((prev) => (prev.size === 0 ? prev : new Map()));
       return;
     }
+    const orderIds = openOrders.split(",");
     let live = true;
     /**
      * Keyed on the ORDERS, not the patient.
@@ -559,12 +570,12 @@ function Worklist() {
       })
       // Still advisory: a lookup that fails must not stop somebody entering a result.
       .catch(() => {
-        if (live) setAttached(new Map());
+        if (live) setAttached((prev) => (prev.size === 0 ? prev : new Map()));
       });
     return () => {
       live = false;
     };
-  }, [api, openPatientId, groups]);
+  }, [api, openOrders]);
 
   /**
    * The edges that need no extra information. `complete` and `cancel` are NOT here — both collect
