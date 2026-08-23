@@ -75,6 +75,22 @@ export async function listIcd(
   return docs.map(toIcd);
 }
 
+/**
+ * One ACTIVE code from the master, by its code. The lookup behind "is this a real ICD code?" —
+ * used by the problem list, which stores a code only when the master recognises it. Inactive
+ * codes are deliberately not returned: a retired code is not a code a new record may be filed
+ * under, and `listIcd` already hides them from the picker for the same reason.
+ *
+ * The master is tenant reference data, not PHI and not branch-owned, so there is no
+ * `scopeFilter()` here — none of the ICD reads has one.
+ */
+export async function findActiveIcdByCode(code: string): Promise<IcdCode | undefined> {
+  const doc = await getIcdCodeModel(getTenantDb())
+    .findOne({ code: code.toUpperCase().trim(), active: true })
+    .lean<IcdCodeDoc>();
+  return doc ? toIcd(doc) : undefined;
+}
+
 export async function updateIcd(
   id: string,
   patch: { title?: string; chapter?: string; active?: boolean },

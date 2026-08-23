@@ -18,6 +18,8 @@ export type {
 } from "./mrd.repository.js";
 
 export const listIcd = repo.listIcd;
+/** Does this hospital's ICD master recognise this code? Used by the problem list. */
+export const findActiveIcdByCode = repo.findActiveIcdByCode;
 export const getCoding = repo.getCoding;
 export const diseaseRegister = repo.diseaseRegister;
 

@@ -2467,4 +2467,55 @@ export const tenantMigrations: Migration[] = [
         .catch(() => undefined);
     },
   },
+  {
+    id: "0056-problems",
+    description: "The patient's problem list — what is true of them today, across every visit",
+    /**
+     * ── THE CHART READ ──────────────────────────────────────────────────────────
+     * `{tenantId, patientId, status}` is the question both surfaces ask verbatim: "what is still
+     * wrong with this person?" — the banner on the chart and the panel on the consultation
+     * screen. Keyed on the patient and NOT the branch, because a problem follows the person
+     * across every site of the hospital (problem.model.ts, and the allergy argument it inherits).
+     *
+     * ── ONE ACTIVE ROW PER CODE, PER PATIENT ────────────────────────────────────
+     * Two active "E11.9 Type 2 diabetes" rows are one fact entered twice. The likeliest way to
+     * produce them is a clinician promoting the same consultation diagnosis twice in one sitting,
+     * and the cost is a chart that lists the same condition repeatedly with different onset dates.
+     *
+     * PARTIAL on `status: "active"`, so a RESOLVED diabetes does not block recording it again if
+     * it returns — which is exactly the record a real problem list produces. Partial on
+     * `code: {$exists: true}` as well, and that half is a real limitation rather than a
+     * refinement: UNCODED problems are free text, two of them are not provably the same fact, and
+     * a unique index over missing fields would treat every uncoded problem as a duplicate of
+     * every other. So duplicate uncoded problems are possible, visible on the list, and
+     * resolvable by a human — the failure mode is untidiness, not a wrong answer.
+     *
+     * ── SAFE ON EXISTING DATA ───────────────────────────────────────────────────
+     * A new collection: both indexes are built over nothing and no existing row is read or
+     * rewritten. A hospital that never promotes a diagnosis carries one empty collection.
+     */
+    up: async (db) => {
+      await db.createCollection("problems").catch(() => undefined);
+
+      await db
+        .collection("problems")
+        .createIndex({ tenantId: 1, patientId: 1, status: 1, notedAt: -1 }, { background: true });
+
+      await db.collection("problems").createIndex(
+        { tenantId: 1, patientId: 1, code: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { status: "active", code: { $exists: true } },
+          background: true,
+          name: "one_active_problem_per_code",
+        },
+      );
+    },
+    down: async (db) => {
+      await db
+        .collection("problems")
+        .drop()
+        .catch(() => undefined);
+    },
+  },
 ];

@@ -69,6 +69,7 @@ import { mortuaryConsumers } from "../../modules/mortuary/index.js";
 import { ambulanceConsumers } from "../../modules/ambulance/index.js";
 import { feedbackConsumers } from "../../modules/feedback/index.js";
 import { userConsumers } from "../../modules/users/index.js";
+import { problemConsumers } from "../../modules/problems/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
 
@@ -122,6 +123,9 @@ const MODULES: ModuleConsumers[] = [
   ambulanceConsumers,
   feedbackConsumers,
   userConsumers,
+  // The problem list (Problem List V1) — a patient-level collection, so it joins the fan-out
+  // the day it ships rather than the day somebody notices.
+  problemConsumers,
   /**
    * The only entry here that reacts to nothing in the hospital. It registers ONE task —
    * `push.deliver` — which this module scheduled for itself when an in-app message was delivered

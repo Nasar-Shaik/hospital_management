@@ -121,6 +121,7 @@ export const REPOINTED_PATIENT_REFERENCES: readonly PatientReference[] = [
   { collection: "mortuaryRegister", module: "mortuary", as: "ObjectId" },
   { collection: "ambulanceTrips", module: "ambulance", as: "string" },
   { collection: "feedbackTickets", module: "feedback", as: "string" },
+  { collection: "problems", module: "problems", as: "ObjectId" },
   { collection: "users", module: "users", as: "string" },
 ] as const;
 

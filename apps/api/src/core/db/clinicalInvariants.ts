@@ -491,6 +491,15 @@ export const NON_CLINICAL_UNIQUE_INDEXES: readonly ExemptUniqueIndex[] = [
       "a duplicate active allergy row would make the prescribing check fire TWICE for the same " +
       "allergen, which is noisy but fails safe — it never makes a screen miss",
   },
+  {
+    collection: "problems",
+    index: "one_active_problem_per_code",
+    reason:
+      "a duplicate active problem is the same condition listed twice on a chart — untidy, " +
+      "visible to the clinician reading it, and resolvable by hand. Nothing arbitrates on it: " +
+      "the list is displayed, never counted or screened against. Note the index covers only " +
+      "CODED problems (see migration 0056), so uncoded duplicates are possible by design",
+  },
 
   /* ── catalogue, continued ───────────────────────────────────────────────── */
   {

@@ -8,6 +8,7 @@ export { mrdRouter } from "./mrd.routes.js";
 
 export {
   listIcd,
+  findActiveIcdByCode,
   createIcd,
   updateIcd,
   getCoding,

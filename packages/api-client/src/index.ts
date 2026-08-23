@@ -767,6 +767,39 @@ export interface Allergy {
   branchId?: string;
 }
 
+/* ── Problem list (Problem List V1) ───────────────────────────────────────────── */
+
+/**
+ * A condition that is true of the PATIENT, across every visit — not a diagnosis made at one.
+ *
+ * The distinction matters when reading this type next to `Diagnosis` and `CodedDiagnosis`, which
+ * both exist and both stay: `Diagnosis` is what a clinician concluded at one consultation and is
+ * frozen there; `CodedDiagnosis` is how one visit was classified for the register and may be
+ * revised by a coder. A `Problem` is the only one with a lifecycle — a clinician promotes it from
+ * a consultation diagnosis, and resolves it when the condition ends. It is never deleted.
+ */
+export type ProblemStatus = "active" | "resolved";
+
+export interface Problem {
+  id: string;
+  patientId: string;
+  /** An ICD-10 code from this hospital's master, when the problem is coded. Optional by design. */
+  code?: string;
+  /** The condition in words — always present. */
+  title: string;
+  status: ProblemStatus;
+  onsetDate?: string;
+  /** The visit whose diagnosis this was promoted from. Absent when added directly. */
+  sourceEncounterId?: string;
+  notedBy: string;
+  notedAt: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  resolvedReason?: string;
+  /** Provenance only. A problem list is read hospital-wide, like an allergy — never filtered. */
+  branchId?: string;
+}
+
 /* ── Branches (ADR-0015) ──────────────────────────────────────────────────────── */
 
 export type BranchStatus = "active" | "inactive";
@@ -4079,6 +4112,53 @@ export class ApiClient {
   /** Rules an allergy out. It stops firing the prescribing check but stays on the record. */
   refuteAllergy(id: string, reason: string): Promise<Allergy> {
     return this.request<Allergy>("POST", `/api/v1/allergies/${id}/refute`, { reason });
+  }
+
+  /* ── problem list (Problem List V1) ── */
+
+  /**
+   * A patient's problem list — active first, then resolved. Read hospital-wide, never
+   * branch-scoped: a problem list that stopped at a branch boundary would show a referred
+   * patient as having nothing wrong with them. Needs `emr:read` + `module.clinical.emr`.
+   */
+  listProblems(patientId: string): Promise<Problem[]> {
+    return this.request<Problem[]>("GET", `/api/v1/patients/${patientId}/problems`);
+  }
+
+  /** Adds a problem directly. `code`, when given, must exist in the hospital's ICD master. */
+  addProblem(
+    patientId: string,
+    input: { title: string; code?: string; onsetDate?: string },
+  ): Promise<Problem> {
+    return this.request<Problem>("POST", `/api/v1/patients/${patientId}/problems`, input);
+  }
+
+  /**
+   * Promotes one of a visit's consultation diagnoses onto the patient's problem list.
+   *
+   * `diagnosisIndex` is the position in the saved note's `diagnoses[]`. The title comes from the
+   * note; the note's own free-text code is carried over ONLY if the ICD master recognises it, so
+   * pass `code` when the clinician picked one at promotion time. There is deliberately no
+   * equivalent call on the MRD coding panel — promotion is a clinician's act.
+   */
+  promoteDiagnosis(
+    encounterId: string,
+    input: { diagnosisIndex: number; code?: string; onsetDate?: string },
+  ): Promise<Problem> {
+    return this.request<Problem>(
+      "POST",
+      `/api/v1/encounters/${encounterId}/problems/promote`,
+      input,
+    );
+  }
+
+  /** Closes a problem. It leaves the active list and stays on the record. Never deleted. */
+  resolveProblem(id: string, reason?: string): Promise<Problem> {
+    return this.request<Problem>(
+      "POST",
+      `/api/v1/problems/${id}/resolve`,
+      reason ? { reason } : {},
+    );
   }
 
   /* ── branches (ADR-0015) ── */
