@@ -1378,15 +1378,73 @@ const PROBES: Record<string, Probe> = {
   "GET /api/v1/reports/dues-ageing": { method: "get", url: "/api/v1/reports/dues-ageing" },
 };
 
-/** The roles under test. Chosen to span the privilege range, not to be exhaustive. */
 /**
- * PHARMACIST is here because it is the only role that may hand a controlled drug to a
- * human being, and until the pharmacy shipped it had never had a single route tested.
- * The matrix is derived from `DEFAULT_ROLES`, so adding the name is enough — every route
- * is now probed against it.
+ * ── EVERY OPERATIONAL ROLE THE PRODUCT SHIPS ─────────────────────────────────
+ * This list was five for a long time, and "chosen to span the privilege range, not to be
+ * exhaustive" was the reason given. That reasoning does not survive contact with what the
+ * matrix actually is: it is the only test in the repository that answers "may this role call
+ * this route" for a route **nobody thought about**. A role outside the sweep gets that answer
+ * from its own module's suite, which by definition only covers the routes that module's author
+ * remembered — and a NEW route wired to the wrong permission is invisible to all of them.
+ *
+ * PHARMACIST was added when the pharmacy shipped, for exactly that reason. The other eight
+ * below are added now, for exactly that reason, and the argument is strongest where the
+ * previous coverage looked most adequate:
+ *
+ *   CASHIER               money. Its own description is a boundary — "cannot discount or refund
+ *                         without approval" — and nothing swept it.
+ *   FRONT_OFFICE          the union of RECEPTIONIST and CASHIER, assembled BY HAND. Sweeping the
+ *                         two parents proves nothing about the union: a permission added here
+ *                         that belongs to neither parent is a silent privilege grant.
+ *   LAB_TECHNICIAN        holds `order:perform` and deliberately NOT `order:verify`. The
+ *   PATHOLOGIST           two-person rule is a patient-safety property, and it is a property of
+ *                         these two grants being DIFFERENT.
+ *   RADIOLOGY_TECHNICIAN  the subtlest grant in the catalogue: it holds `order:verify`,
+ *                         `order:release` and `radiology:sign` — and NOT `emr:read`. "Widen the
+ *                         role until the worklist works" is a mistake this product has made
+ *                         before, and this is where it would show up.
+ *   RADIOLOGIST           the optional consultant; its authority must stay confined to imaging.
+ *   STORE_KEEPER          the narrow-grant claim in the flesh — it holds NOTHING clinical, and
+ *                         that is a property of the whole route surface, not of one module.
+ *   AUDITOR               a role defined entirely by what it cannot do. Any un-swept write it
+ *                         can reach is the whole role being wrong.
+ *
+ * The matrix is derived from `DEFAULT_ROLES`, so adding the name is enough.
  */
-const ROLES_UNDER_TEST = ["TENANT_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST"] as const;
+const ROLES_UNDER_TEST = [
+  "TENANT_ADMIN",
+  "DOCTOR",
+  "NURSE",
+  "RECEPTIONIST",
+  "FRONT_OFFICE",
+  "CASHIER",
+  "PHARMACIST",
+  "STORE_KEEPER",
+  "LAB_TECHNICIAN",
+  "PATHOLOGIST",
+  "RADIOLOGY_TECHNICIAN",
+  "RADIOLOGIST",
+  "AUDITOR",
+] as const;
 type TestedRole = (typeof ROLES_UNDER_TEST)[number];
+
+/**
+ * Roles deliberately OUTSIDE the sweep, each with the reason. An exclusion has to be written
+ * down or it is indistinguishable from an oversight — which is what the previous five-role list
+ * became.
+ *
+ * `PATIENT` is not a staff role. It is a portal identity holding `self:manage` and
+ * `booking:public`, neither of which gates a single `/api/v1` route, so sweeping it would
+ * generate ~250 assertions all restating what the `noRole` baseline already proves in one.
+ * **The risk it would have covered is covered directly instead** — see "an excluded role cannot
+ * reach the staff API", which fails the moment a route is wired to a permission this identity
+ * holds. That is the actual thing worth protecting, and it costs one test rather than 250.
+ */
+const ROLES_EXCLUDED_FROM_SWEEP: Record<string, string> = {
+  PATIENT:
+    "a patient-portal identity, not staff. Holds only self:manage and booking:public, neither of " +
+    "which gates an /api/v1 route; proved directly below rather than by 250 redundant probes.",
+};
 
 /** Permission codes each role holds — read from the catalog the app itself seeds from. */
 function permissionsOf(roleCode: string): Set<string> {
@@ -1585,6 +1643,59 @@ describe("route coverage (the unprotected-route problem)", () => {
     // exercising nothing.
     const live = new Set(routes.map(key));
     expect(Object.keys(PROBES).filter((id) => !live.has(id))).toEqual([]);
+  });
+
+  /**
+   * ── THE GAP THIS SUITE HAD, MADE UNREPEATABLE ──────────────────────────────
+   * The route side has been guarded since day one: a new protected route with no probe fails
+   * CI. The ROLE side never was. So `STORE_KEEPER` and `CASHIER` could ship — and did — with
+   * every route in the product unprobed against them, and nothing said so.
+   *
+   * This is the same guard, pointed the other way. A new role is either swept or excluded
+   * with a written reason; there is no third state.
+   */
+  it("every role in the catalogue is either swept or excluded for a written reason", () => {
+    const swept = new Set<string>(ROLES_UNDER_TEST);
+    const undecided = DEFAULT_ROLES.map((r) => r.code).filter(
+      (code) => !swept.has(code) && !(code in ROLES_EXCLUDED_FROM_SWEEP),
+    );
+
+    expect(
+      undecided,
+      "A role shipped without anyone deciding whether the matrix should probe it. " +
+        "Add it to ROLES_UNDER_TEST, or to ROLES_EXCLUDED_FROM_SWEEP with the reason.",
+    ).toEqual([]);
+  });
+
+  it("no excluded role can reach the staff API at all", () => {
+    /**
+     * What the exclusion actually claims, asserted rather than asserted-by-omission: an
+     * excluded role holds NO permission that gates a tenant route. The day somebody wires a
+     * patient-portal route into `/api/v1` under `self:manage`, this fails — which is the whole
+     * risk that sweeping `PATIENT` through 250 probes would have covered, at 1/250th the cost.
+     */
+    const gating = new Set(routes.map((r) => r.permission).filter((p): p is string => Boolean(p)));
+
+    for (const code of Object.keys(ROLES_EXCLUDED_FROM_SWEEP)) {
+      const role = DEFAULT_ROLES.find((r) => r.code === code);
+      expect(role, `excluded role ${code} is not in the catalogue`).toBeDefined();
+
+      const reachable = (role?.permissions ?? []).filter((p) => gating.has(p));
+      expect(
+        reachable,
+        `${code} is excluded from the matrix but holds a permission that gates a tenant route. ` +
+          `Either sweep it, or move the route off ${reachable.join(", ")}.`,
+      ).toEqual([]);
+    }
+  });
+
+  it("every role the matrix sweeps resolves to a non-empty grant", () => {
+    // `permissionsOf` throws on an empty set, but it is called lazily inside the matrix loop —
+    // a role whose grant vanished would surface as a wall of confusing "may NOT" passes long
+    // before anyone read the throw. Check it once, up front, where the message is legible.
+    for (const role of ROLES_UNDER_TEST) {
+      expect(permissionsOf(role).size, `${role} holds nothing`).toBeGreaterThan(0);
+    }
   });
 });
 
