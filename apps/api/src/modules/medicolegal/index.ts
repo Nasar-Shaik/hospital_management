@@ -18,3 +18,6 @@ export {
   type Consent,
   type DeathRecord,
 } from "./medicolegal.service.js";
+
+/** Re-points consents and death records onto the survivor on merge. Registered by eventConsumer.ts. */
+export { medicolegalConsumers } from "./medicolegal.consumers.js";

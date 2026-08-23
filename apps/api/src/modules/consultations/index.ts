@@ -14,3 +14,6 @@ export {
 } from "./consultation.service.js";
 
 export { DIAGNOSIS_TYPES, type DiagnosisType, type Diagnosis } from "./consultation.model.js";
+
+/** Re-points consultation notes onto the survivor on merge. Registered by eventConsumer.ts. */
+export { consultationConsumers } from "./consultation.consumers.js";

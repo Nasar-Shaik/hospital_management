@@ -48,3 +48,6 @@ export {
   type Course,
   type FrequencyKind,
 } from "./schedule.js";
+
+/** Re-points the administration record onto the survivor on merge — the safety-critical one. Registered by eventConsumer.ts. */
+export { marConsumers } from "./mar.consumers.js";

@@ -11,6 +11,7 @@ import {
   type ConsultationNoteDoc,
   type Diagnosis,
 } from "./consultation.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export interface ConsultationNote {
   encounterId: string;
@@ -108,4 +109,18 @@ export async function upsert(
     { new: true, upsert: true },
   );
   return toNote(doc);
+}
+
+/**
+ * The note follows the person. A consultation is the doctor's account of one visit, and a merge
+ * says the visit belonged to the survivor all along — a note left pointing at the duplicate is a
+ * paragraph of the patient's history that their chart no longer shows.
+ *
+ * `patientId` is a STRING here, not an ObjectId. The flag is not a guess: a mismatch matches
+ * nothing and re-points silently zero rows.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getConsultationNoteModel(getTenantDb()), "patientId", ref, {
+    objectId: false,
+  });
 }

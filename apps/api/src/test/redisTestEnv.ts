@@ -121,6 +121,13 @@ const SUITE_DB = {
    * assertion that finds no push for a reason unrelated to push.
    */
   push: 26,
+  /**
+   * Patient-merge reference coverage. Its own database because it registers EVERY model on one
+   * connection and drives the merge fan-out across twenty-nine collections — a tenant registry
+   * entry resolved from another suite's key would point the fan-out at that suite's database, and
+   * the symptom would be a coverage assertion passing over somebody else's rows.
+   */
+  mergeCoverage: 27,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

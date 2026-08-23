@@ -1136,7 +1136,15 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
   const invoices = await repointPatientId(getInvoiceModel(conn), "patientId", ref, {
     objectId: true,
   });
-  return charges + invoices;
+  /**
+   * Package enrolments were MISSED when this consumer was written, and they are money: an
+   * enrolment is what zeroes the covered codes on a bill. Left on the duplicate, the survivor is
+   * charged full price for care the hospital has already been paid for under a package.
+   */
+  const enrollments = await repointPatientId(getPackageEnrollmentModel(conn), "patientId", ref, {
+    objectId: true,
+  });
+  return charges + invoices + enrollments;
 }
 
 /**

@@ -18,6 +18,7 @@ import {
   type ClaimStatus,
   type ClaimStatusChange,
 } from "./insurance.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 /* ── Policies ────────────────────────────────────────────────────────────────── */
 
@@ -255,4 +256,25 @@ export async function setClaimStatus(
     )
     .lean<InsuranceClaimDoc>();
   return doc ? toClaim(doc) : undefined;
+}
+
+/**
+ * Cover and claims follow the person — both collections, because they fail differently. A policy
+ * left behind means the survivor appears uninsured at the counter; a claim left behind means money
+ * owed to the hospital is filed against a chart that has been retired.
+ *
+ * Both store `patientId` as a STRING.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  const conn = getTenantDb();
+  let moved = 0;
+  // policies
+  moved += await repointPatientId(getInsurancePolicyModel(conn), "patientId", ref, {
+    objectId: false,
+  });
+  // claims
+  moved += await repointPatientId(getInsuranceClaimModel(conn), "patientId", ref, {
+    objectId: false,
+  });
+  return moved;
 }

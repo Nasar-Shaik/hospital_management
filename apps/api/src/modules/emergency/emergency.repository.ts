@@ -11,6 +11,7 @@ import { writeBranchId } from "../../core/context/activeBranch.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import { upsertRetryingOnDuplicate } from "../../core/db/mongoErrors.js";
 import { getEdTriageModel, type EdTriageDoc, type TriagePriority } from "./emergency.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export interface Triage {
   encounterId: string;
@@ -141,4 +142,13 @@ export async function recordTransfer(input: TransferInput): Promise<Triage> {
       .lean<EdTriageDoc>(),
   );
   return toTriage(doc);
+}
+
+/**
+ * Triage assessments follow the person. The ED board is built from these, and a re-triage is a
+ * revision of the same row rather than a new one, so the sequence only reads correctly if the whole
+ * sequence sits on one chart.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getEdTriageModel(getTenantDb()), "patientId", ref, { objectId: true });
 }

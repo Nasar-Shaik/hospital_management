@@ -34,3 +34,6 @@ export {
   type StaffGender,
   type StaffProfile,
 } from "./user.model.js";
+
+/** Re-points a patient-portal identity onto the survivor on merge. Registered by eventConsumer.ts. */
+export { userConsumers } from "./user.consumers.js";

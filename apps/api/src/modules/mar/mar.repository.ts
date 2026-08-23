@@ -8,6 +8,7 @@ import { writeBranchId } from "../../core/context/activeBranch.js";
 import { isDuplicateKey } from "../../core/db/mongoErrors.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import { getMarModel, type MedicationAdministrationDoc, type MarStatus } from "./mar.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export interface MedicationAdministration {
   id: string;
@@ -166,4 +167,16 @@ export async function record(input: RecordInput): Promise<RecordResult> {
       existing: await findBySlot(input.prescriptionId, input.lineIndex, input.scheduledFor),
     };
   }
+}
+
+/**
+ * The medication administration record follows the person, and this is the one on this list with a
+ * safety argument rather than a tidiness one: "what has this patient already been given?" is asked
+ * before every dose, and an answer that silently omits everything charted under the duplicate is
+ * how a dose gets repeated.
+ *
+ * `patientId` is a STRING in this collection.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getMarModel(getTenantDb()), "patientId", ref, { objectId: false });
 }

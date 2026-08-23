@@ -25,6 +25,7 @@ import {
   type OtStatusChange,
   type OperativeNote,
 } from "./theatre.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export { isDuplicateKey };
 
@@ -356,4 +357,17 @@ export async function recordOperativeNote(
   if (!doc) return undefined;
   const theatre = await getTheatreModel(db).findById(doc.theatreId).lean<TheatreDoc>();
   return toBooking(doc, theatre ?? undefined);
+}
+
+/**
+ * Bookings — and the operative notes they carry — follow the person. The note is write-once and is
+ * the durable record of what was done to a body; leaving it on the duplicate takes a procedure out
+ * of the survivor's history entirely.
+ *
+ * The theatre REGISTRY is not touched: a theatre is a room, and a room has no patient.
+ *
+ * `patientId` is a STRING on the booking.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getOtBookingModel(getTenantDb()), "patientId", ref, { objectId: false });
 }

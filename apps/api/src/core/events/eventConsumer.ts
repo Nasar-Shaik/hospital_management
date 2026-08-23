@@ -51,6 +51,24 @@ import { reportConsumers } from "../../modules/reports/index.js";
 import { documentConsumers } from "../../modules/documents/index.js";
 import { walletConsumers } from "../../modules/wallet/index.js";
 import { notificationConsumers } from "../../modules/notifications/index.js";
+/**
+ * ── THE REST OF THE MERGE FAN-OUT (added when the invariant was audited) ────
+ * repointPatient.ts states the rule as "EVERY module that stores a patientId must re-point its
+ * own references". Thirteen collections across these eleven modules did not, and nothing failed
+ * when they did not — the merge simply left part of a person's record on the retired chart. The
+ * guard that now catches the next one is `patientMergeCoverage.int.test.ts`.
+ */
+import { consultationConsumers } from "../../modules/consultations/index.js";
+import { marConsumers } from "../../modules/mar/index.js";
+import { mrdConsumers } from "../../modules/mrd/index.js";
+import { emergencyConsumers } from "../../modules/emergency/index.js";
+import { theatreConsumers } from "../../modules/theatres/index.js";
+import { insuranceConsumers } from "../../modules/insurance/index.js";
+import { medicolegalConsumers } from "../../modules/medicolegal/index.js";
+import { mortuaryConsumers } from "../../modules/mortuary/index.js";
+import { ambulanceConsumers } from "../../modules/ambulance/index.js";
+import { feedbackConsumers } from "../../modules/feedback/index.js";
+import { userConsumers } from "../../modules/users/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
 
@@ -89,6 +107,21 @@ const MODULES: ModuleConsumers[] = [
   reportConsumers,
   documentConsumers,
   walletConsumers,
+  // The rest of the merge fan-out. Every one of these reacts to PATIENTS_MERGED and nothing else:
+  // the clinical record (the note, the administrations, the coding, triage, theatre), the
+  // medico-legal record (consent, death, the mortuary register), the money (cover and claims),
+  // the operational links (ambulance, feedback) and the portal identity.
+  consultationConsumers,
+  marConsumers,
+  mrdConsumers,
+  emergencyConsumers,
+  theatreConsumers,
+  insuranceConsumers,
+  medicolegalConsumers,
+  mortuaryConsumers,
+  ambulanceConsumers,
+  feedbackConsumers,
+  userConsumers,
   /**
    * The only entry here that reacts to nothing in the hospital. It registers ONE task —
    * `push.deliver` — which this module scheduled for itself when an in-app message was delivered

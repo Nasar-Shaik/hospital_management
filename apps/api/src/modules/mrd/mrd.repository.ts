@@ -13,6 +13,7 @@ import {
   type EncounterCodingDoc,
   type CodedDiagnosis,
 } from "./mrd.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export { isDuplicateKey };
 export type { CodedDiagnosis };
@@ -177,4 +178,17 @@ export async function diseaseRegister(from: Date, to: Date): Promise<DiseaseRegi
     { $sort: { cases: -1, "_id.code": 1 } },
   ]);
   return rows.map((r) => ({ code: r._id.code, title: r._id.title, cases: r.cases }));
+}
+
+/**
+ * Coded diagnoses follow the person. A coding row IS the diagnosis (it is audited as PHI for that
+ * reason), and the disease register counts these — so a merge that left them behind would both
+ * hide a condition from the survivor's chart and under-count it in the hospital's returns.
+ *
+ * The ICD master is deliberately not touched: it is reference data and holds no patient.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getEncounterCodingModel(getTenantDb()), "patientId", ref, {
+    objectId: true,
+  });
 }

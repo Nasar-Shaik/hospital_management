@@ -30,3 +30,6 @@ export {
   type TheatreStatus,
   type OtBookingStatus,
 } from "./theatre.model.js";
+
+/** Re-points theatre bookings and their operative notes onto the survivor on merge. Registered by eventConsumer.ts. */
+export { theatreConsumers } from "./theatre.consumers.js";

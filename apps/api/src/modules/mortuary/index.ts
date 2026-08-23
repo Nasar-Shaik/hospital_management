@@ -16,3 +16,6 @@ export {
   type MortuaryEntry,
   type MortuaryStatus,
 } from "./mortuary.service.js";
+
+/** Re-points mortuary entries onto the survivor on merge. Registered by eventConsumer.ts. */
+export { mortuaryConsumers } from "./mortuary.consumers.js";

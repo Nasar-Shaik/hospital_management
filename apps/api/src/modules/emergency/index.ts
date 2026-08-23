@@ -19,3 +19,6 @@ export {
   UNTRIAGED_RANK,
   type TriagePriority,
 } from "./emergency.model.js";
+
+/** Re-points triage rows onto the survivor on merge. Registered by eventConsumer.ts. */
+export { emergencyConsumers } from "./emergency.consumers.js";

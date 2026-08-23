@@ -30,3 +30,6 @@ export {
   type AmbulanceTripStatus,
   type AmbulanceTripPurpose,
 } from "./ambulance.model.js";
+
+/** Re-points linked ambulance trips onto the survivor on merge. Registered by eventConsumer.ts. */
+export { ambulanceConsumers } from "./ambulance.consumers.js";

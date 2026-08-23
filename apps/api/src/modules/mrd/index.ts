@@ -18,3 +18,6 @@ export {
   type CodedDiagnosis,
   type DiseaseRegisterRow,
 } from "./mrd.service.js";
+
+/** Re-points coded diagnoses onto the survivor on merge. Registered by eventConsumer.ts. */
+export { mrdConsumers } from "./mrd.consumers.js";

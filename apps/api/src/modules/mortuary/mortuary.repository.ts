@@ -12,6 +12,7 @@ import {
   type MortuaryEntryDoc,
   type MortuaryStatus,
 } from "./mortuary.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export { isDuplicateKey };
 
@@ -151,4 +152,16 @@ export async function release(id: string, input: ReleaseInput): Promise<Mortuary
     )
     .lean<MortuaryEntryDoc>();
   return doc ? toEntry(doc) : undefined;
+}
+
+/**
+ * The mortuary register follows the person, for the reason above it: release refuses a
+ * medico-legal body without a clearance reference, and the entry carries the snapshot of that flag.
+ * An entry orphaned on a retired chart is a body whose custody the surviving record cannot account
+ * for.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getMortuaryEntryModel(getTenantDb()), "patientId", ref, {
+    objectId: true,
+  });
 }

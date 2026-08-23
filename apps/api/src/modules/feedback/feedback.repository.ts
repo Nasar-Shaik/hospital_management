@@ -18,6 +18,7 @@ import {
   type FeedbackStatus,
   type FeedbackStatusChange,
 } from "./feedback.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export interface FeedbackTicket {
   id: string;
@@ -176,4 +177,16 @@ export async function setStatus(
     )
     .lean<FeedbackTicketDoc>();
   return doc ? toTicket(doc) : undefined;
+}
+
+/**
+ * A complaint about a patient's care follows that patient. Optional, like the ambulance link — a
+ * visitor's complaint names nobody — so only the linked tickets move.
+ *
+ * `patientId` is a STRING.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getFeedbackTicketModel(getTenantDb()), "patientId", ref, {
+    objectId: false,
+  });
 }

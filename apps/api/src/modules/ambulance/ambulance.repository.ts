@@ -24,6 +24,7 @@ import {
   type AmbulanceTripPurpose,
   type AmbulanceTripStatusChange,
 } from "./ambulance.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export { isDuplicateKey };
 
@@ -304,4 +305,19 @@ export async function setStatus(
   if (!doc) return undefined;
   const vehicle = await getAmbulanceModel(db).findById(doc.ambulanceId).lean<AmbulanceDoc>();
   return toTrip(doc, vehicle ?? undefined);
+}
+
+/**
+ * Trips follow the person where one was named. `patientId` is OPTIONAL here on purpose — an
+ * ambulance is dispatched to a road, not to a UHID — so this re-points the trips that were linked
+ * and leaves the anonymous ones alone, which is what the filter already does.
+ *
+ * The vehicle registry is not touched: an ambulance is an asset, not a patient reference.
+ *
+ * `patientId` is a STRING.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getAmbulanceTripModel(getTenantDb()), "patientId", ref, {
+    objectId: false,
+  });
 }

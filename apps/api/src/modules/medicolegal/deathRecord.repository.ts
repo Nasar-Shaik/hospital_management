@@ -12,6 +12,7 @@ import {
   type DeathRecordDoc,
   type MannerOfDeath,
 } from "./deathRecord.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export { isDuplicateKey };
 
@@ -117,4 +118,14 @@ export async function findForPatient(patientId: string): Promise<DeathRecord | u
     .sort({ diedAt: -1 })
     .lean<DeathRecordDoc>();
   return doc ? toRecord(doc) : undefined;
+}
+
+/**
+ * A death record follows the person. Two charts for one deceased patient is a real thing —
+ * a casualty arrival registered afresh under a name the desk could not confirm — and the
+ * certificate, the manner of death and the medico-legal flag must end up on the record that
+ * survives, because the mortuary reads that flag before it releases a body.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getDeathRecordModel(getTenantDb()), "patientId", ref, { objectId: true });
 }

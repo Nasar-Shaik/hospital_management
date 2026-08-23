@@ -33,3 +33,6 @@ export {
   type ClaimType,
   type ClaimStatus,
 } from "./insurance.model.js";
+
+/** Re-points policies and claims onto the survivor on merge. Registered by eventConsumer.ts. */
+export { insuranceConsumers } from "./insurance.consumers.js";

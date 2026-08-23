@@ -29,3 +29,6 @@ export {
   type ComplaintSeverity,
   type FeedbackStatus,
 } from "./feedback.model.js";
+
+/** Re-points linked feedback tickets onto the survivor on merge. Registered by eventConsumer.ts. */
+export { feedbackConsumers } from "./feedback.consumers.js";

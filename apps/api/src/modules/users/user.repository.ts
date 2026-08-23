@@ -9,6 +9,7 @@ import { Types } from "mongoose";
 import type { StaffProfile, UserDoc, UserStatus } from "./user.model.js";
 import { getUserModel } from "./user.model.js";
 import { getTenantDb } from "../../core/context/requestContext.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 /** What the rest of the system is allowed to see. Never the raw Mongoose document (Doc 09 §5). */
 export interface User {
@@ -186,4 +187,22 @@ export async function list(filter: ListUsersFilter): Promise<UserPage> {
   ]);
 
   return { users: docs.map(toUser), total };
+}
+
+/**
+ * A patient-portal login follows the chart it can read.
+ *
+ * Nothing writes `patientId` today — the portal is declared and not built — so this re-points zero
+ * rows and will keep doing so until it ships. It is here rather than on an exemption list because
+ * of what the alternative costs: the day the portal lands, a merged patient keeps a login pointing
+ * at a chart marked `merged`, and the symptom is a patient who signs in to an empty record. An
+ * exemption written today would still be sitting there on that day.
+ *
+ * If BOTH records had a login, both now reach the survivor. Two accounts for one human is untidy
+ * and correct; one account reaching a retired chart is neither.
+ *
+ * `patientId` is a STRING.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getUserModel(getTenantDb()), "patientId", ref, { objectId: false });
 }

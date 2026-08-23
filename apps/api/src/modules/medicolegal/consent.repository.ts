@@ -13,6 +13,7 @@ import {
   type ConsentSigner,
   type ConsentStatus,
 } from "./consent.model.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 export interface Consent {
   id: string;
@@ -119,4 +120,13 @@ export async function withdraw(id: string, reason: string): Promise<Consent | un
     )
     .lean<ConsentDoc>();
   return doc ? toConsent(doc) : undefined;
+}
+
+/**
+ * Consent follows the person. A procedure consent that stayed on the duplicate is a procedure the
+ * survivor's chart cannot show authority for — which is exactly the document that gets asked for
+ * when something is disputed.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getConsentModel(getTenantDb()), "patientId", ref, { objectId: true });
 }
