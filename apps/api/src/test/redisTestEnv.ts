@@ -128,6 +128,13 @@ const SUITE_DB = {
    * the symptom would be a coverage assertion passing over somebody else's rows.
    */
   mergeCoverage: 27,
+  /**
+   * The problem list (Problem List V1). Its own database because it provisions a SECOND tenant to
+   * prove the list does not cross hospitals — a tenant registry entry resolved from another
+   * suite's key would answer for the wrong database, and the isolation assertion would pass for a
+   * reason unrelated to isolation.
+   */
+  problems: 28,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

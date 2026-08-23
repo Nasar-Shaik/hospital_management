@@ -114,6 +114,18 @@ not absent, and calling them zero hid real gaps behind an easy number. See §10.
 
 ### D · Clinical
 
+- [x] **D1 (part) Problem list V1 — 2026-08-23.** The patient's longitudinal list of what is true
+      of them TODAY: `problems` (migration 0056), four routes, `active → resolved` and **no delete
+      path**. It is deliberately NOT a third diagnosis system — `consultation.diagnoses[]` stays
+      the clinician's account of one visit and `encounterCoding.codes[]` stays the statutory
+      classification of one visit; a problem is **promoted** from the first by a human, points
+      back at it (`sourceEncounterId`), and is coded against the existing `icdCodes` master or not
+      coded at all. **A code is stored only if the master recognises it** — the difference from
+      the note's free-text code. Tenant-wide like allergies (no `scopeFilter()`, asserted), PHI
+      audit, existing `emr:read`/`emr:write`, and registered in the merge fan-out.
+      **NOT built, deliberately:** SNOMED, automatic promotion, promotion from the MRD coding
+      panel (guarded by `problemPromotionSource.test.ts`), reconciliation, categories/severity,
+      order sets, billing links, a new permission family, mobile UI, historic backfill.
 - [x] **D2 Doctor management** — session roster, leave, and a doctor managing their **own** availability
 - [x] **D5 Nursing — the safe core.** Vitals (3), ward notes, and the **Medication Administration
       Record** (3) hardened to a clinical-safety envelope: administration identity is
@@ -283,7 +295,8 @@ and fails on anything in neither list. Two exemptions, both because moving them 
 
 ### 5.2 P3 — clinical
 
-- [ ] **D1** EMR depth — ICD code master + search, order sets, problem list (encounters: 14 routes)
+- [ ] **D1** EMR depth — order sets. _ICD code master + search landed with MRD; **problem list
+      V1 landed 2026-08-23** — see §4._ (encounters: 14 routes)
 - [ ] **D3** Consultation workspace — structured note only (2 routes); templates, order sets
 - [ ] **D5** Nursing depth — **intake/output, wound care, care plan, handover, and the nurse's own
       note permission.** The M3 audit named all five out of scope; they are the rest of a shift.

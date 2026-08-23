@@ -76,6 +76,10 @@ const EXEMPT: Record<string, { lines: number; why: string }> = {
     lines: 1,
     why: "TENANT-WIDE: an allergy follows the person, not the site. Same ADR-0015 §5 reasoning, asserted in the branch-isolation suite ('carries allergies across branches').",
   },
+  "problems/problem.repository.ts": {
+    lines: 1,
+    why: "TENANT-WIDE: a problem list follows the person, not the site — the same ADR-0015 §5 reasoning as allergies, argued at length in problem.repository.ts's header and asserted in the problems suite ('is visible at a site that has never seen the patient').",
+  },
   "medicines/medicine.repository.ts": {
     lines: 1,
     why: "TENANT-WIDE: the drug catalogue is one hospital-wide price/stock list, like `serviceItems`. Scoping it hides the formulary from anyone with a branch selected.",

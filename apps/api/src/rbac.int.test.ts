@@ -1221,6 +1221,36 @@ const PROBES: Record<string, Probe> = {
     body: { chiefComplaint: "Probe complaint" },
   },
 
+  /* ── problem list (Problem List V1) ─────────────────────────────────────────
+   * The same `emr:read`/`emr:write` pair as the consultation note, deliberately — a problem is
+   * the same kind of clinical statement made by the same people, and a `problem:*` family would
+   * be role-catalogue churn for a distinction nobody in a hospital would recognise. So the READ
+   * reaches everyone clinical (the pharmacist included) and the WRITE is the doctor's.
+   *
+   * Note the reach is NOT what the probe measures: `emr:read` is declared `branch`-scoped and the
+   * list is nonetheless hospital-wide, because `problem.repository.ts` does not call
+   * `scopeFilter()`. That property is asserted in `problems.int.test.ts` §4.
+   */
+  "GET /api/v1/patients/:patientId/problems": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/problems",
+  },
+  "POST /api/v1/patients/:patientId/problems": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/problems",
+    body: { title: "Matrix probe" },
+  },
+  "POST /api/v1/encounters/:id/problems/promote": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/problems/promote",
+    body: { diagnosisIndex: 0 },
+  },
+  "POST /api/v1/problems/:id/resolve": {
+    method: "post",
+    url: "/api/v1/problems/64b7f0000000000000000001/resolve",
+    body: { reason: "matrix probe" },
+  },
+
   // ── medication administration record (D5) ──────────────────────────────────
   "GET /api/v1/encounters/:id/medication-administrations": {
     method: "get",

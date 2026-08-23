@@ -33,25 +33,26 @@ The **only** legal source of API error codes. Every thrown `AppError` uses a cod
 
 ## Patient & Clinical
 
-| Code        | HTTP | Message                                                                         | Recovery                                                               | Retry         |
-| ----------- | ---- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------- |
-| HMS-PAT-001 | 404  | Patient not found                                                               | Verify UHID/search                                                     | no            |
-| HMS-PAT-002 | 409  | Possible duplicate patient                                                      | Review `details.candidates`; merge or override with permission         | no            |
-| HMS-PAT-003 | 409  | Both patients have an open visit — merge refused                                | Close or cancel one visit, then merge. `details` names both encounters | no            |
-| HMS-APT-001 | 409  | Slot no longer available                                                        | Pick another slot (`details.alternatives`)                             | no            |
-| HMS-APT-002 | 422  | Doctor not available at this time                                               | Check schedule                                                         | no            |
-| HMS-ADM-001 | 409  | Bed already occupied                                                            | Bed board refresh; pick another                                        | no            |
-| HMS-ADM-002 | 422  | Discharge blocked: pending items                                                | Clear `details.blockers` (bill/orders/summary)                         | no            |
-| HMS-ADM-003 | 503  | Bed assignment unavailable: this database cannot enforce one-stay-per-bed       | Allocate on the ward board and escalate; respect `Retry-After`         | yes (backoff) |
-| HMS-EMR-001 | 403  | Record is signed and immutable                                                  | Create an amendment/new version                                        | no            |
-| HMS-RX-001  | 422  | Allergy conflict (`details.allergen`)                                           | Licensed override with reason, or change drug                          | no            |
-| HMS-RX-002  | 422  | Drug interaction (`details.severity`)                                           | Review; override per policy                                            | no            |
-| HMS-LAB-001 | 422  | Sample rejected (`details.reason`)                                              | Recollect                                                              | no            |
-| HMS-LAB-002 | 403  | Result approval requires pathologist role                                       | Route to approver                                                      | no            |
-| HMS-MAR-001 | 409  | This dose has already been administered                                         | Show `details.existing`; do NOT retry — see below                      | no            |
-| HMS-MAR-002 | 503  | Charting is unavailable: this database cannot enforce the dose-duplication rule | Chart on paper and escalate; respect `Retry-After` — see below         | yes (backoff) |
-| HMS-ORD-001 | 503  | Ordering is unavailable: this database cannot enforce one-order-per-request     | Order on paper and escalate; respect `Retry-After` — see below         | yes (backoff) |
-| HMS-ENC-001 | 503  | Starting a visit unavailable: cannot enforce one open encounter per patient     | Register on paper and escalate; respect `Retry-After` — see below      | yes (backoff) |
+| Code         | HTTP | Message                                                                         | Recovery                                                               | Retry         |
+| ------------ | ---- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------- |
+| HMS-PAT-001  | 404  | Patient not found                                                               | Verify UHID/search                                                     | no            |
+| HMS-PAT-002  | 409  | Possible duplicate patient                                                      | Review `details.candidates`; merge or override with permission         | no            |
+| HMS-PAT-003  | 409  | Both patients have an open visit — merge refused                                | Close or cancel one visit, then merge. `details` names both encounters | no            |
+| HMS-APT-001  | 409  | Slot no longer available                                                        | Pick another slot (`details.alternatives`)                             | no            |
+| HMS-APT-002  | 422  | Doctor not available at this time                                               | Check schedule                                                         | no            |
+| HMS-ADM-001  | 409  | Bed already occupied                                                            | Bed board refresh; pick another                                        | no            |
+| HMS-ADM-002  | 422  | Discharge blocked: pending items                                                | Clear `details.blockers` (bill/orders/summary)                         | no            |
+| HMS-ADM-003  | 503  | Bed assignment unavailable: this database cannot enforce one-stay-per-bed       | Allocate on the ward board and escalate; respect `Retry-After`         | yes (backoff) |
+| HMS-EMR-001  | 403  | Record is signed and immutable                                                  | Create an amendment/new version                                        | no            |
+| HMS-PROB-001 | 409  | That problem is already on the active list                                      | Resolve the existing entry first if it was recorded in error           | no            |
+| HMS-RX-001   | 422  | Allergy conflict (`details.allergen`)                                           | Licensed override with reason, or change drug                          | no            |
+| HMS-RX-002   | 422  | Drug interaction (`details.severity`)                                           | Review; override per policy                                            | no            |
+| HMS-LAB-001  | 422  | Sample rejected (`details.reason`)                                              | Recollect                                                              | no            |
+| HMS-LAB-002  | 403  | Result approval requires pathologist role                                       | Route to approver                                                      | no            |
+| HMS-MAR-001  | 409  | This dose has already been administered                                         | Show `details.existing`; do NOT retry — see below                      | no            |
+| HMS-MAR-002  | 503  | Charting is unavailable: this database cannot enforce the dose-duplication rule | Chart on paper and escalate; respect `Retry-After` — see below         | yes (backoff) |
+| HMS-ORD-001  | 503  | Ordering is unavailable: this database cannot enforce one-order-per-request     | Order on paper and escalate; respect `Retry-After` — see below         | yes (backoff) |
+| HMS-ENC-001  | 503  | Starting a visit unavailable: cannot enforce one open encounter per patient     | Register on paper and escalate; respect `Retry-After` — see below      | yes (backoff) |
 
 ## Financial
 
