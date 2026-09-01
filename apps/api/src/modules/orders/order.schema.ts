@@ -68,6 +68,18 @@ export const listOrdersQuerySchema = z
     patientId: objectId.optional(),
     /** The department worklist: everything not yet released or cancelled. */
     outstanding: z.coerce.boolean().optional(),
+    /**
+     * WHICH QUESTION IS BEING ASKED OF THIS LIST.
+     *
+     * `queue` (the default, and what every existing caller gets) is a WORKLIST: sickest first,
+     * then longest-waiting. That is how a bench is worked and it must not change.
+     *
+     * `recent` is a CHART: what came back most recently. The patient page was asking the worklist
+     * question and rendering the answer as a history — which is wrong on its own, and becomes a
+     * defect at the `limit` ceiling of 100: a long-stay patient's newest results, the ones a
+     * doctor is actually waiting for, were the first to be cut off and were never shown at all.
+     */
+    sort: z.enum(["queue", "recent"]).default("queue"),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })

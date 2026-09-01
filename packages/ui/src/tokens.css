@@ -73,9 +73,36 @@
    */
   --color-on-accent: #ffffff;
 
-  /* elevation (Doc 08 §5) — shadow on light, see the dark block for why it changes */
+  /**
+   * Elevation (Doc 08 §5) — a 6-step scale. Shadows are soft, low-alpha and tinted with the
+   * slate ink (not pure black), so a raised surface reads as "lifted", never as "outlined in
+   * grey". The dark block re-tunes these — see the header note.
+   */
+  --shadow-xs: 0 1px 2px 0 rgb(15 23 42 / 0.04);
   --shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.06);
   --shadow-md: 0 4px 12px -2px rgb(15 23 42 / 0.1);
+  --shadow-lg: 0 12px 28px -6px rgb(15 23 42 / 0.14);
+  --shadow-xl: 0 24px 48px -12px rgb(15 23 42 / 0.2);
+
+  /**
+   * The focus ring — ONE definition, used by every interactive control, so keyboard focus looks
+   * the same everywhere and always clears WCAG's non-text-contrast bar. Brand-tinted so it
+   * follows a tenant's colour (A8 white-label) like everything else.
+   */
+  --ring-focus: 0 0 0 3px color-mix(in srgb, var(--color-brand-500) 35%, transparent);
+
+  /**
+   * Motion vocabulary (Doc 08). Three easings and three durations — the whole app moves in this
+   * one language, so nothing feels ad-hoc. `standard` for most transitions, `emphasized` for
+   * entrances, `spring` for playful affordances (a toggle, a check). All of it collapses to
+   * nothing under `prefers-reduced-motion` (globals.css).
+   */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 240ms;
 
   /* spacing 4px grid (Doc 08 §3) */
   --space-1: 4px;
@@ -89,6 +116,38 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /**
+   * Surface effects, used with RESTRAINT (calm > flashy — this is a hospital ERP):
+   * - `glass`   — a translucent fill for the ONE frosted element per view (the sticky top bar,
+   *               a modal scrim). Pair with `backdrop-filter: blur()`.
+   * - `gradient-brand`   — a solid-feeling brand wash for a hero stat or the logo lockup. Derived
+   *               from the brand ramp, so it re-tints per tenant.
+   * - `gradient-surface` — a barely-there top-down tint that lifts a card off the page without a
+   *               hard border. Whisper-quiet on purpose.
+   */
+  --surface-glass: color-mix(in srgb, var(--color-bg-elevated) 72%, transparent);
+  --gradient-brand: linear-gradient(135deg, var(--color-brand-500), var(--color-brand-700));
+  --gradient-surface: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-brand-50) 55%, var(--color-bg-elevated)),
+    var(--color-bg-elevated)
+  );
+
+  /**
+   * Typography. `--font-sans` is Inter (loaded self-hosted via next/font, which fills
+   * `--font-inter`); `--font-mono` is JetBrains Mono for the UHID / code / traceId cells. The
+   * `var(--font-inter, …)` fallback means the app still renders in a clean system stack if the
+   * webfont is ever unavailable.
+   */
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    var(--font-jetbrains), ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 /**
@@ -145,8 +204,23 @@
   /**
    * Shadows barely read on a dark page — a black shadow on near-black is nothing.
    * Depth comes from the lighter elevated SURFACE instead, so the shadow's job
-   * shrinks to a soft ambient edge rather than the primary depth cue.
+   * shrinks to a soft ambient edge rather than the primary depth cue. Deeper alphas
+   * than light, because the shadow has less contrast to work with.
    */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.3);
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
   --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 12px 28px -6px rgb(0 0 0 / 0.6);
+  --shadow-xl: 0 24px 48px -12px rgb(0 0 0 / 0.7);
+
+  /* The ring needs more presence against a dark surface to stay obviously "focused". */
+  --ring-focus: 0 0 0 3px color-mix(in srgb, var(--color-brand-500) 45%, transparent);
+
+  /* Effects re-tuned for the dark surface — the light-mode washes would glow on near-black. */
+  --surface-glass: color-mix(in srgb, var(--color-bg-elevated) 66%, transparent);
+  --gradient-surface: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-brand-100) 20%, var(--color-bg-elevated)),
+    var(--color-bg-elevated)
+  );
 }

@@ -1,23 +1,18 @@
 /**
  * Encounter controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope, PageMeta } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
-import { env } from "../../config/env.js";
-import { dayRangeInZone } from "../../core/time/day.js";
 import * as encounters from "./encounter.service.js";
 import type {
   AdmitBody,
   ListEncountersQuery,
+  ListInpatientsQuery,
   StartEncounterBody,
   TransferBody,
+  VisitSummaryBody,
 } from "./encounter.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /**
  * A patient arrives.
@@ -38,15 +33,13 @@ export const listEncounters: RequestHandler = async (req, res) => {
   const query = req.query as unknown as ListEncountersQuery;
 
   /**
-   * `?date=2026-07-16` — the front desk's register for one day.
+   * `?date=2026-07-16` — the front desk's register for one day, passed through as the DAY it is.
    *
-   * Resolved in the HOSPITAL's timezone, not UTC and not the browser's: a clerk in
-   * Kolkata asking for today means today there. See `core/time/day.ts` for why this
-   * is not `new Date(query.date)`.
+   * Which instants that day covers depends on the zone the site's clock runs in, and resolving a
+   * branch is an async domain lookup rather than HTTP work, so the service owns it (Doc 09 §11).
+   * This used to call `dayRangeInZone(date, env.DEFAULT_TIMEZONE)` here — see risk register D2.
    */
-  const day = query.date ? dayRangeInZone(query.date, env.DEFAULT_TIMEZONE) : undefined;
-
-  const { items, total } = await encounters.listEncounters({
+  const { items, total } = await encounters.listEncountersWithIdentity({
     limit: query.limit,
     skip: (query.page - 1) * query.limit,
     ...(query.status ? { status: query.status } : {}),
@@ -54,7 +47,8 @@ export const listEncounters: RequestHandler = async (req, res) => {
     ...(query.departmentId ? { departmentId: query.departmentId } : {}),
     ...(query.patientId ? { patientId: query.patientId } : {}),
     ...(query.queued ? { queuedOnly: true } : {}),
-    ...(day ? { arrivedFrom: day.from, arrivedBefore: day.before } : {}),
+    ...(query.date ? { date: query.date } : {}),
+    ...(query.dateTo ? { dateTo: query.dateTo } : {}),
   });
 
   ok(res, items, 200, {
@@ -105,6 +99,13 @@ export const closeEncounter: RequestHandler = async (req, res) => {
   ok(res, await encounters.closeEncounter(id, reason));
 };
 
+/** The doctor records the OP visit summary (diagnosis / advice) for the OPD slip. */
+export const recordVisitSummary: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const body = req.body as VisitSummaryBody;
+  ok(res, await encounters.recordVisitSummary(id, body));
+};
+
 export const cancelEncounter: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   const { reason } = req.body as { reason: string };
@@ -134,8 +135,31 @@ export const transferDoctor: RequestHandler = async (req, res) => {
   ok(res, await encounters.transferDoctor(id, body.doctorId, body.reason));
 };
 
-/** Everyone in a bed right now — the ward round's list. */
-export const listInpatients: RequestHandler = async (_req, res) => {
-  const { items } = await encounters.listInpatients({ limit: 100, skip: 0 });
-  ok(res, items);
+/**
+ * Everyone in a bed right now, one page at a time.
+ *
+ * ── THE `total` WAS COMPUTED AND THROWN AWAY ────────────────────────────────
+ * The repository has always returned `{ items, total }` and this controller used to discard the
+ * second half, send a bare array, and hard-code `{ limit: 100, skip: 0 }`. A hospital with more
+ * than a hundred open stays therefore saw a hundred, with nothing in the response to say so —
+ * admitted patients silently absent from the ward round, which is the worst shape a list bug can
+ * take. `meta` now carries the same four fields every other list on this API sends.
+ */
+export const listInpatients: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as ListInpatientsQuery;
+
+  // Identity is resolved SERVER-side (see `listInpatientsWithIdentity`): the ward list names the
+  // patient in the bed, rather than leaving every client to reconstruct it from a patient page.
+  const { items, total } = await encounters.listInpatientsWithIdentity({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+    ...(query.ward ? { ward: query.ward } : {}),
+  });
+
+  ok(res, items, 200, {
+    page: query.page,
+    limit: query.limit,
+    total,
+    hasMore: query.page * query.limit < total,
+  });
 };

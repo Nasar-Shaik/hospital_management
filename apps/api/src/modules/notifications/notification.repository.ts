@@ -31,6 +31,17 @@ export interface Notification {
   sentAt?: Date;
   error?: string;
   eventId?: string;
+  /** What the message is about, so a client can open it (M4). See `notification.model.ts`. */
+  resourceType?: string;
+  resourceId?: string;
+  /** When the recipient opened it. Absent means unread. */
+  readAt?: Date;
+  /**
+   * The site the message was raised at (ADR-0015). Stored since Phase 1 and, until now, never
+   * returned — the write stamped it and the read dropped it, so the record knew which hospital it
+   * belonged to and no caller could find out.
+   */
+  branchId?: string;
   createdAt: Date;
 }
 
@@ -64,6 +75,10 @@ function toNotification(doc: NotificationDoc): Notification {
     ...(doc.sentAt ? { sentAt: doc.sentAt } : {}),
     ...(doc.error ? { error: doc.error } : {}),
     ...(doc.eventId ? { eventId: doc.eventId } : {}),
+    ...(doc.readAt ? { readAt: doc.readAt } : {}),
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(doc.resourceType ? { resourceType: doc.resourceType } : {}),
+    ...(doc.resourceId ? { resourceId: doc.resourceId } : {}),
   };
 }
 
@@ -94,6 +109,8 @@ export interface ClaimInput {
   recipientId?: string;
   branchId?: string;
   eventId?: string;
+  resourceType?: string;
+  resourceId?: string;
 }
 
 export type ClaimResult =
@@ -177,6 +194,8 @@ export async function claim(input: ClaimInput): Promise<ClaimResult> {
         ...(input.recipientId ? { recipientId: input.recipientId } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
         ...(input.eventId ? { eventId: input.eventId } : {}),
+        ...(input.resourceType ? { resourceType: input.resourceType } : {}),
+        ...(input.resourceId ? { resourceId: input.resourceId } : {}),
         ...(ctx.traceId ? { traceId: ctx.traceId } : {}),
       },
     ]);
@@ -267,6 +286,158 @@ export async function list(filter: ListFilter): Promise<{ items: Notification[];
   ]);
 
   return { items: docs.map(toNotification), total };
+}
+
+/* ── The recipient's own inbox ─────────────────────────────────────────────── */
+
+/**
+ * One message as its RECIPIENT sees it.
+ *
+ * ── WHY THIS IS MAPPED AND NOT JUST DECLARED ────────────────────────────────
+ * `responds(inboxMessage.array())` VALIDATES the payload against the contract; it does not trim
+ * it. The first version of this route returned the full `Notification` and passed its own
+ * contract check, because every field the contract requires was present — the extra eleven
+ * (`to`, `dedupeKey`, `attempts`, `status`, `recipientId`, …) simply rode along. A shape test
+ * caught it. Narrowing has to happen HERE, where the document is read, or it does not happen.
+ */
+export interface InboxMessage {
+  id: string;
+  templateKey: string;
+  subject?: string;
+  body: string;
+  branchId?: string;
+  /**
+   * Where this message goes when it is tapped (M4).
+   *
+   * On the row rather than derived from `templateKey` by each client, because the id is the half
+   * a template key cannot carry: "a critical result" is not a destination, "order 64b7…" is. The
+   * push payload and the in-app list read the same two fields, so a message opened from a
+   * notification and the same message opened from the inbox land in the same place — which is the
+   * only way the two can be guaranteed not to drift.
+   */
+  resourceType?: string;
+  resourceId?: string;
+  readAt?: Date;
+  createdAt: Date;
+}
+
+function toInboxMessage(doc: NotificationDoc): InboxMessage {
+  return {
+    id: doc._id.toString(),
+    templateKey: doc.templateKey,
+    body: doc.body,
+    createdAt: doc.createdAt,
+    ...(doc.subject ? { subject: doc.subject } : {}),
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(doc.resourceType ? { resourceType: doc.resourceType } : {}),
+    ...(doc.resourceId ? { resourceId: doc.resourceId } : {}),
+    ...(doc.readAt ? { readAt: doc.readAt } : {}),
+  };
+}
+
+/**
+ * One message, by id — the push task's only read.
+ *
+ * `findById` with no `scopeFilter`, declared in `scopedReads.test.ts` as SERVER-DERIVED: the id
+ * comes from a task THIS module scheduled about a row it had just written, never from a request,
+ * so there is no id for a caller to substitute. The tenant plugin still binds the hospital, and
+ * the task runs inside the tenant context the queue bound for it.
+ */
+export async function findById(id: string): Promise<Notification | undefined> {
+  const doc = await getNotificationModel(getTenantDb()).findById(id).lean<NotificationDoc>();
+  return doc ? toNotification(doc) : undefined;
+}
+
+export interface InboxFilter {
+  recipientId: string;
+  /** Only what has not been opened yet — what the badge counts. */
+  unreadOnly?: boolean;
+  limit: number;
+  skip: number;
+}
+
+/**
+ * ── WHY THE INBOX SHOWS ONLY `sent` ─────────────────────────────────────────
+ * The ledger records every ATTEMPT, including the ones that went nowhere: a template somebody
+ * disabled, an email with no SMTP host, a patient with no address. Those rows exist so an
+ * administrator can answer "did they get it?" — and the honest answer for all of them is no.
+ *
+ * Listing them in a person's inbox would deliver, after the fact, a message the system already
+ * recorded as undelivered. It would also make the read receipt meaningless: `readAt` on a
+ * `suppressed` row says somebody read a message nobody sent.
+ *
+ * The suppressed ones are not lost — `GET /notifications?status=suppressed` is exactly the screen
+ * for them, and it belongs to the administrator who can fix the cause, not to the clinician who
+ * would only learn that something was withheld from them.
+ *
+ * ── THERE IS NO SEPARATE UNREAD COUNT, AND THAT IS THE POINT ────────────────
+ * The bell needs a number and the dropdown needs the newest few. Both come from ONE call —
+ * `?unread=true&limit=5` — because under that filter `meta.total` IS the unread count. An
+ * `unread` field in the page meta would have had to live on `PageMeta`, which every paged
+ * endpoint in the product shares, to serve one screen.
+ *
+ * ── AND WHY IT IS NOT BRANCH-SCOPED ─────────────────────────────────────────
+ * Every other clinical read in this codebase narrows to the active branch, and this one
+ * deliberately does not. A message is addressed to a PERSON, not to a site: a consultant who
+ * switches the branch picker to look at another hospital site must not thereby lose the critical
+ * potassium raised twenty minutes ago at the first one. Branch is recorded on the row and shown
+ * on screen; it is not a filter. There is no leak in this — the only way a row names you is that
+ * the domain addressed it to you.
+ */
+export async function listForRecipient(
+  filter: InboxFilter,
+): Promise<{ items: InboxMessage[]; total: number }> {
+  const model = getNotificationModel(getTenantDb());
+
+  const query = {
+    recipientId: filter.recipientId,
+    status: "sent" as NotificationStatus,
+    ...(filter.unreadOnly ? { readAt: { $exists: false } } : {}),
+  };
+
+  const [docs, total] = await Promise.all([
+    model
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(filter.skip)
+      .limit(filter.limit)
+      .lean<NotificationDoc[]>(),
+    model.countDocuments(query),
+  ]);
+
+  return { items: docs.map(toInboxMessage), total };
+}
+
+/**
+ * Opening a message.
+ *
+ * ── THE FILTER IS THE AUTHORIZATION ─────────────────────────────────────────
+ * `recipientId` is part of the WHERE clause, not checked afterwards. A caller holding somebody
+ * else's notification id updates nothing and is told the message does not exist — which is the
+ * truthful answer to them, and the one that does not confirm the row's existence to someone
+ * fishing for ids.
+ *
+ * ── IDEMPOTENT, AND IT KEEPS THE FIRST TIME ─────────────────────────────────
+ * Two tabs, or a retry, must not move `readAt` forward. The update only matches rows that have
+ * no `readAt` yet, so the first read wins and the second finds nothing to change — at which point
+ * the second query below distinguishes "already read" (return it as it stands) from "not yours"
+ * (undefined). That distinction is the whole reason this is not one call: without it a re-read
+ * and a forged id are indistinguishable, and one of them is a 404 and the other is not.
+ */
+export async function markRead(id: string): Promise<InboxMessage | undefined> {
+  const ctx = getContext();
+  const model = getNotificationModel(getTenantDb());
+  const mine = { _id: id, recipientId: ctx.userId, status: "sent" as NotificationStatus };
+
+  const opened = await model.findOneAndUpdate(
+    { ...mine, readAt: { $exists: false } },
+    { $set: { readAt: new Date() } },
+    { new: true },
+  );
+  if (opened) return toInboxMessage(opened);
+
+  const already = await model.findOne(mine).lean<NotificationDoc>();
+  return already ? toInboxMessage(already) : undefined;
 }
 
 /* ── Templates ─────────────────────────────────────────────────────────────── */

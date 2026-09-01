@@ -18,12 +18,18 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
-import { getPatient } from "../patients/index.js";
+import { getPatient, namesByIds } from "../patients/index.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
+import { getBed } from "../wards/index.js";
+import { branchZone } from "../branches/index.js";
+import { dayRangeInZone } from "../../core/time/day.js";
 import * as repo from "./encounter.repository.js";
 import {
   canTransition,
@@ -39,6 +45,69 @@ const logger = createLogger({ service: "encounters" });
 
 export type { Encounter } from "./encounter.repository.js";
 
+/**
+ * An encounter WITH the patient it belongs to — the row shape of every list a human reads.
+ *
+ * The ward list is read by somebody walking a ward and the queue by a doctor calling the next
+ * patient in: both need to know WHO, and leaving them to reconstruct it from a separate patient
+ * list is what produced the same defect twice. First on the ward (a medication confirmation
+ * reaching a nurse with no name and no UHID because the patient had been admitted longer ago than
+ * the client's patient page reached back), then — after that was fixed here and not there — on the
+ * doctor's queue, where 15 of 99 rows rendered a dash where a person should be (D18).
+ */
+export interface EncounterRow extends repo.Encounter {
+  /** `Unknown patient` when the record cannot be read — never silently blank. */
+  patientName: string;
+  /** Empty only when the patient record itself carries none. */
+  uhid: string;
+}
+
+/** The ward list is the same row. The name is kept because `/inpatients` documents it. */
+export type InpatientRow = EncounterRow;
+
+/**
+ * Attaches each encounter's patient identity — ONE query for the page, not one per row.
+ *
+ * `namesByIds` takes the whole page's patient ids at once — the same call `/bed-board` and
+ * `/medication-round` already make, with the same hospital-wide semantics. It deliberately does
+ * NOT apply `scopeFilter()`: naming a patient whose encounter this caller can already see reveals
+ * nothing new, and branch-scoping the lookup would blank the identity of anyone registered at
+ * another site, which is the failure mode rather than the protection.
+ *
+ * ── WHY A LOOKUP BY ID AND NOT A JOIN AGAINST A PAGE OF PATIENTS ────────────
+ * Because the two are only the same when the page happens to be big enough. A client asking for
+ * `/patients?limit=100` and matching locally resolves whoever is in that page of RECENT
+ * REGISTRATIONS and silently dashes everyone else — and the queue it is labelling is a different
+ * population, ordered by arrival. `$in` on the ids actually present cannot miss.
+ */
+async function withIdentity<T extends repo.Encounter>(items: T[]): Promise<(T & EncounterRow)[]> {
+  if (items.length === 0) return [];
+
+  const names = await namesByIds([...new Set(items.map((e) => e.patientId))]);
+  const byId = new Map(names.map((n) => [n.id, n]));
+
+  return items.map((encounter) => {
+    const who = byId.get(encounter.patientId);
+    return {
+      ...encounter,
+      // The bed board says "Unknown patient" in the same situation and for the same reason: a
+      // row that silently drops its identity is worse than one that says the lookup failed.
+      patientName: who?.name ?? "Unknown patient",
+      uhid: who?.uhid ?? "",
+    };
+  });
+}
+
+/** One page of the ward, with each stay's patient resolved. */
+export async function listInpatientsWithIdentity(filter: {
+  limit: number;
+  skip: number;
+  ward?: string;
+}): Promise<{ items: InpatientRow[]; total: number }> {
+  const { items, total } = await repo.listInpatients(filter);
+  return { items: await withIdentity(items), total };
+}
+
 export interface StartEncounterInput {
   patientId: string;
   origin: EncounterOrigin;
@@ -47,6 +116,8 @@ export interface StartEncounterInput {
   departmentId?: string;
   appointmentId?: string;
   reason?: string;
+  /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
+  express?: boolean;
   branchId?: string;
 }
 
@@ -75,6 +146,112 @@ function invalidTransition(from: EncounterStatus, to: EncounterStatus): AppError
 function isBedOccupiedConflict(err: unknown): boolean {
   const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
   return keyPattern ? "bed.bedCode" in keyPattern : false;
+}
+
+/**
+ * The capability that PUTTING A PATIENT IN A BED rests on. One, and only its own.
+ *
+ * ── WHY NOT `open-encounter` AS WELL ────────────────────────────────────────
+ * `one_open_encounter_per_patient` (0012) is what `arrive()` rests on, and admission's own
+ * "already admitted" refusal is an application check on `current.class === "IP"` — not an index.
+ * Losing 0012 lets a patient hold two open encounters, which is a different capability's problem
+ * and is protected separately; it does not make the BED assignment ambiguous, because every
+ * admission still passes through the occupancy key. Requiring it here would block admissions for
+ * a fault that cannot put two patients in one bed.
+ */
+const BED_REQUIRES: readonly ClinicalCapability[] = ["bed-occupancy"];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * Neither `admitPatient` nor `transferBed` reads occupancy before writing it. Both insert or
+ * update and then read E11000 as "somebody is already in that bed" — `getBed` checks the
+ * catalogue's `blocked` flag, which is a maintenance state and says nothing about who is lying
+ * there. `one_open_stay_per_bed_per_branch` (migration 0046, which widened 0020's key) is the
+ * sole arbiter.
+ *
+ * Measured against Mongo 7 on 2026-08-17 with the index absent: two patients are admitted into
+ * ICU/A-12 at the same branch, both ACCEPTED, and the bed board then shows one bed with two
+ * occupants and no way to say which is real. Recreating the index over that pair is REFUSED
+ * (11000), so the drift entrenches exactly as MAR's and dispensing's do.
+ *
+ * ── WHAT THIS DELIBERATELY DOES NOT GUARD ───────────────────────────────────
+ * Discharge, and every other way a stay ends. Closing a stay REMOVES the row from the partial
+ * filter, so it can never violate the key — measured: after `open: false` the bed accepts the
+ * next patient immediately. A drifted hospital must still be able to send people home; refusing
+ * that would fill the ward it was trying to protect. Ward-board reads are untouched for the same
+ * reason — a board that goes dark is a board nobody can use to sort the mess out.
+ */
+async function assertBedAssignmentIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), BED_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-ADM-003",
+    503,
+    "Bed assignment is unavailable on this system — allocate on the ward board and escalate",
+    {
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    60,
+  );
+}
+
+/**
+ * The capability that OPENING A VISIT rests on.
+ *
+ * `one_open_encounter_per_patient` (migration 0012) is not merely a duplicate guard here — it is
+ * the mechanism by which `startEncounter` RESUMES a visit instead of forking it. The service has
+ * no read-before-write at all, and says so: "two desks registering the same patient at the same
+ * instant both read 'no open encounter' and both write. Only the database can arbitrate that."
+ */
+const ARRIVAL_REQUIRES: readonly ClinicalCapability[] = ["open-encounter"];
+
+/**
+ * ── WITHOUT THE INDEX, THE RESUME BECOMES A FORK ────────────────────────────
+ * Measured against Mongo 7 on 2026-08-17 with the index absent: the same patient is admitted to
+ * the queue twice, two open encounters exist, and the `catch` that would have handed back the
+ * first one never runs because nothing threw. That is the commonest data-quality disaster in an
+ * OPD, and this codebase already calls it a modelling failure rather than a training one: the
+ * census double-counts, the bill splits across two records that no longer reconcile, and the
+ * doctor's history has a hole in it — notes land on whichever encounter the screen happened to
+ * find. Every duplicate also strands a whole EPISODE, because `createEpisode` runs first inside
+ * the same transaction and commits with the row.
+ *
+ * Recreating the index over that pair is REFUSED (11000), so it entrenches like the others.
+ *
+ * ── THE KEY IS TENANT-WIDE ON PURPOSE ───────────────────────────────────────
+ * Migration 0046 made four keys branch-aware and deliberately left this one alone. A ward name
+ * may legitimately repeat across sites; a patient may not be in two places at once. Measured:
+ * with the index present, the same patient is refused a second open visit at a DIFFERENT branch,
+ * and that is correct rather than a multi-branch bug.
+ */
+async function assertArrivalIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), ARRIVAL_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-ENC-001",
+    503,
+    "Starting a visit is unavailable on this system — register on paper and escalate",
+    {
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    60,
+  );
 }
 
 /** The queue a patient is placed in — a named doctor, or a department/OP room. */
@@ -108,6 +285,13 @@ function queueKeyOf(input: { doctorId?: string; departmentId?: string }): string
  */
 export async function startEncounter(input: StartEncounterInput): Promise<StartEncounterResult> {
   const ctx = getContext();
+
+  /**
+   * Guarded here rather than at each caller: the appointment desk's check-in reaches this same
+   * function, so there is one door into a visit and one place to hold it. Before the patient read
+   * only so the refusal is the first thing the clerk hears — the read is harmless either way.
+   */
+  await assertArrivalIsSafe();
 
   const patient = await getPatient(input.patientId);
   if (!patient) {
@@ -143,6 +327,15 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
     });
   }
 
+  /**
+   * The TREATING branch (ADR-0015) — the site this visit happens at, which is the active branch and
+   * NOT necessarily where the patient was first registered (a patient may be seen at any branch). An
+   * appointment-originated visit carries its slot's branch in `input.branchId`; a walk-in resolves
+   * the active one. Everything the visit spawns downstream — orders, charges, prescriptions, vitals —
+   * inherits this branch through the events it publishes.
+   */
+  const branchId = await writeBranchId(input.branchId);
+
   try {
     return await withTransaction(async (session) => {
       const episodeId = await repo.createEpisode(input.patientId, session, input.reason);
@@ -168,11 +361,12 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
           class: input.class ?? "OP",
           status,
           ...(token !== undefined ? { token } : {}),
+          ...(input.express ? { express: true } : {}),
           ...(input.doctorId ? { doctorId: input.doctorId } : {}),
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.appointmentId ? { appointmentId: input.appointmentId } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
         },
         session,
       );
@@ -190,10 +384,13 @@ export async function startEncounter(input: StartEncounterInput): Promise<StartE
             origin: encounter.origin,
             class: encounter.class,
             ...(encounter.token !== undefined ? { token: encounter.token } : {}),
+            // Carried so the billing consumer can add the express surcharge — money lives in
+            // billing, and the clinical module only says WHAT happened (a paid fast-track visit).
+            ...(encounter.express ? { express: true } : {}),
             ...(encounter.doctorId ? { doctorId: encounter.doctorId } : {}),
             ...(encounter.departmentId ? { departmentId: encounter.departmentId } : {}),
           },
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
         },
         session,
       );
@@ -267,6 +464,9 @@ async function transition(
       await publish(
         {
           name: EVENTS.ENCOUNTER_CLOSED,
+          // The visit's own branch. Billing closes the bill off this event, so a missing branch
+          // here is an invoice that cannot say which site raised it (ADR-0015).
+          ...(updated.branchId ? { branchId: updated.branchId } : {}),
           payload: {
             encounterId: updated.id,
             episodeId: updated.episodeId,
@@ -284,12 +484,17 @@ async function transition(
 }
 
 export interface AdmitInput {
-  /** `General Ward`, `ICU` — what a human calls the place. */
-  ward: string;
-  /** `A-12`. Free text: there is no bed inventory to validate against (see the model). */
-  bedCode: string;
-  /** The tariff code the bed-day is billed at — `BED_GEN`, `BED_ICU`. */
-  tariffCode: string;
+  /**
+   * The bed to admit into, picked from the inventory (B4). When present, the ward name, bed code
+   * and tariff are taken from the catalogue and the three free-text fields below are ignored.
+   */
+  bedId?: string;
+  /** `General Ward`, `ICU` — legacy free-text path, used only when `bedId` is absent. */
+  ward?: string;
+  /** `A-12`. Legacy free-text path, used only when `bedId` is absent. */
+  bedCode?: string;
+  /** The tariff code the bed-day is billed at — legacy free-text path, ignored when `bedId` set. */
+  tariffCode?: string;
   /** The consultant who owns the patient on the ward. Defaults to the OP doctor. */
   doctorId?: string;
   reason?: string;
@@ -333,6 +538,12 @@ export interface AdmitResult {
 export async function admitPatient(id: string, input: AdmitInput): Promise<AdmitResult> {
   const ctx = getContext();
 
+  /**
+   * Before the transaction opens, so a refusal cannot leave the OP encounter closed with nothing
+   * to admit into — the very state the transaction exists to make impossible.
+   */
+  await assertBedAssignmentIsSafe();
+
   return withTransaction(async (session) => {
     const current = await repo.findById(id);
     if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
@@ -352,6 +563,56 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
       throw new AppError("HMS-STATE-001", 422, "This patient is already admitted", {
         id,
         hint: "to move them to another bed, transfer the bed — do not admit them again",
+      });
+    }
+
+    /**
+     * Resolve the bed. When a `bedId` is given, the ward name, code and tariff come from the
+     * INVENTORY (B4) — a real bed, priced as configured — rather than from whatever was typed.
+     * Absent a `bedId`, the legacy free-text fields are used as-is (the schema guarantees all
+     * three are present in that case). Either way the values flow through identically from here.
+     */
+    let ward = input.ward;
+    let bedCode = input.bedCode;
+    let tariffCode = input.tariffCode;
+    let bedId: string | undefined;
+    if (input.bedId) {
+      const catalogueBed = await getBed(input.bedId);
+      if (!catalogueBed) {
+        throw new AppError("HMS-GEN-404", 404, "Bed not found", { bedId: input.bedId });
+      }
+      if (catalogueBed.wardStatus !== "active") {
+        throw new AppError("HMS-STATE-001", 422, "That ward is not in service", {
+          bedId: input.bedId,
+          hint: "the ward is retired — pick a bed in an active ward",
+        });
+      }
+      if (catalogueBed.status === "blocked") {
+        throw new AppError("HMS-STATE-001", 422, "That bed is out of service", {
+          bedId: input.bedId,
+          ...(catalogueBed.blockedReason ? { reason: catalogueBed.blockedReason } : {}),
+          hint: "this bed is blocked — pick a free bed",
+        });
+      }
+      // A bed belongs to exactly one site. Admitting a Chennai patient into a Hyderabad bed would
+      // corrupt both sites' census — the same isolation `branchId` gives every other record.
+      if (current.branchId && catalogueBed.branchId && current.branchId !== catalogueBed.branchId) {
+        throw new AppError("HMS-STATE-001", 422, "That bed is at another branch", {
+          bedId: input.bedId,
+          hint: "pick a bed at the patient's current site",
+        });
+      }
+      ward = catalogueBed.wardName;
+      bedCode = catalogueBed.code;
+      tariffCode = catalogueBed.tariffCode;
+      bedId = catalogueBed.id;
+    }
+    // The schema already refuses an admit that has neither a bedId nor the three fields; this is a
+    // belt-and-braces guard so the types below are non-optional and a service caller cannot slip
+    // an empty bed through.
+    if (!ward || !bedCode || !tariffCode) {
+      throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+        bedId: ["pick a bed (bedId) or give the ward, bedCode and tariffCode"],
       });
     }
 
@@ -388,7 +649,7 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
           // waiting to be seen — they are in the ward, and somebody is responsible for them
           // from this second.
           status: "in_progress",
-          bed: { ward: input.ward, bedCode: input.bedCode, tariffCode: input.tariffCode },
+          bed: { ward, bedCode, tariffCode, ...(bedId ? { bedId } : {}) },
           admittedAt,
           admittedFrom: current.id,
           ...((input.doctorId ?? current.doctorId)
@@ -410,8 +671,8 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
        */
       if (repo.isDuplicateKey(err) && isBedOccupiedConflict(err)) {
         throw new AppError("HMS-STATE-001", 409, "That bed is already occupied", {
-          ward: input.ward,
-          bedCode: input.bedCode,
+          ward,
+          bedCode,
           hint: "another patient is currently admitted in this bed — choose a free bed",
         });
       }
@@ -431,9 +692,9 @@ export async function admitPatient(id: string, input: AdmitInput): Promise<Admit
           outpatientEncounterId: outpatient.id,
           episodeId: inpatient.episodeId,
           patientId: inpatient.patientId,
-          ward: input.ward,
-          bedCode: input.bedCode,
-          tariffCode: input.tariffCode,
+          ward,
+          bedCode,
+          tariffCode,
           admittedAt: admittedAt.toISOString(),
           ...(inpatient.doctorId ? { doctorId: inpatient.doctorId } : {}),
         },
@@ -530,6 +791,128 @@ export async function transferDoctor(
 
     return updated;
   });
+}
+
+export interface TransferBedInput {
+  /** The target bed, picked from the inventory (B4). Ward name, code come from the catalogue. */
+  bedId?: string;
+  /** Legacy free-text path, used only when `bedId` is absent (a hospital with no bed catalogue). */
+  ward?: string;
+  bedCode?: string;
+  reason?: string;
+}
+
+export interface TransferBedResult {
+  encounter: repo.Encounter;
+  from: { ward: string; bedCode: string };
+  to: { ward: string; bedCode: string };
+}
+
+/**
+ * Moves an admitted patient from one bed to another (B4 bed-to-bed transfer).
+ *
+ * ── THE PHYSICAL BED MOVES; THE BILLING TARIFF DOES NOT ─────────────────────
+ * A transfer records that the patient is now in a different bed — nothing else. It deliberately
+ * KEEPS the stay's `tariffCode`: bed-days are billed at a single rate for the whole stay (charged
+ * at admission and again at discharge from `bed.tariffCode`, with no per-night cron), so silently
+ * adopting the new bed's rate would re-price every night already spent, not just the ones ahead. A
+ * genuine rate change is a deliberate billing action, not a side effect of wheeling a bed — so this
+ * does not make one. What it guarantees is the same occupancy invariant admission does: the target
+ * bed must be a real, active, unblocked bed at the patient's site, and it must be FREE — enforced by
+ * `one_open_stay_per_bed`, which turns a move onto a taken bed into a 409.
+ *
+ * No transaction: this is a single-document update, and the unique index is its own atomic guard.
+ * The reason for the move is recorded by the caller (admissions) as a ward note — the durable
+ * clinical record of why the patient was moved.
+ */
+export async function transferBed(id: string, input: TransferBedInput): Promise<TransferBedResult> {
+  /**
+   * A move is an assignment: it vacates one bed and claims another, and the claim is arbitrated by
+   * the same key. `admissions.transferBed` delegates here, so guarding this function covers the
+   * ward-round wrapper too — there is no second door into a bed.
+   */
+  await assertBedAssignmentIsSafe();
+
+  const current = await repo.findById(id);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+  if (current.class !== "IP" || !isOpen(current.status) || !current.bed) {
+    throw new AppError("HMS-STATE-001", 422, "This patient is not admitted", {
+      id,
+      hint: "a bed transfer needs an open inpatient stay",
+    });
+  }
+
+  // Keep the stay's tariff (see the header); only the physical location changes.
+  const tariffCode = current.bed.tariffCode;
+  let ward = input.ward;
+  let bedCode = input.bedCode;
+  let bedId: string | undefined;
+
+  if (input.bedId) {
+    const catalogueBed = await getBed(input.bedId);
+    if (!catalogueBed) {
+      throw new AppError("HMS-GEN-404", 404, "Bed not found", { bedId: input.bedId });
+    }
+    if (catalogueBed.wardStatus !== "active") {
+      throw new AppError("HMS-STATE-001", 422, "That ward is not in service", {
+        bedId: input.bedId,
+        hint: "pick a bed in an active ward",
+      });
+    }
+    if (catalogueBed.status === "blocked") {
+      throw new AppError("HMS-STATE-001", 422, "That bed is out of service", {
+        bedId: input.bedId,
+        ...(catalogueBed.blockedReason ? { reason: catalogueBed.blockedReason } : {}),
+        hint: "this bed is blocked — pick a free bed",
+      });
+    }
+    if (current.branchId && catalogueBed.branchId && current.branchId !== catalogueBed.branchId) {
+      throw new AppError("HMS-STATE-001", 422, "That bed is at another branch", {
+        bedId: input.bedId,
+        hint: "pick a bed at the patient's current site",
+      });
+    }
+    ward = catalogueBed.wardName;
+    bedCode = catalogueBed.code;
+    bedId = catalogueBed.id;
+  }
+
+  if (!ward || !bedCode) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      bedId: ["pick a bed (bedId) or give the ward and bedCode"],
+    });
+  }
+
+  if (ward === current.bed.ward && bedCode === current.bed.bedCode) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      bedId: ["the patient is already in this bed"],
+    });
+  }
+
+  const from = { ward: current.bed.ward, bedCode: current.bed.bedCode };
+
+  try {
+    const updated = await repo.setBed(id, {
+      ward,
+      bedCode,
+      tariffCode,
+      ...(bedId ? { bedId } : {}),
+    });
+    if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+    return { encounter: updated, from, to: { ward, bedCode } };
+  } catch (err) {
+    // The target bed is taken — `one_open_stay_per_bed` refused the move, the same way it refuses a
+    // double admission. Report the hospital's answer, not a 500: choose a free bed.
+    if (repo.isDuplicateKey(err) && isBedOccupiedConflict(err)) {
+      throw new AppError("HMS-STATE-001", 409, "That bed is already occupied", {
+        ward,
+        bedCode,
+        hint: "another patient is currently admitted in this bed — choose a free bed",
+      });
+    }
+    throw err;
+  }
 }
 
 /**
@@ -638,9 +1021,43 @@ export const dischargeRegister = repo.dischargeRegister;
 export const startConsultation = (id: string): Promise<repo.Encounter> =>
   transition(id, "in_progress");
 
-/** Sent for tests. THEY KEEP THIS ENCOUNTER — see the model header. */
-export const sendForInvestigations = (id: string): Promise<repo.Encounter> =>
-  transition(id, "awaiting_results");
+/**
+ * Sent for tests. THEY KEEP THIS ENCOUNTER — see the model header.
+ *
+ * ── AT LEAST ONE TEST MUST BE ORDERED FIRST ─────────────────────────────────
+ * "Send for tests" parks the patient in `awaiting_results` to wait for the lab. Doing that with
+ * nothing ordered strands the patient in a waiting state no result will ever release them from — so
+ * the guard refuses it. The count is maintained by the orders module inside the order's transaction
+ * (`activeOrderCount`), which is why a doctor who orders a test and immediately clicks send is not
+ * wrongly blocked. The doctor orders as many tests as they like (each is live the instant it is
+ * placed); this transition is the separate "I am done ordering, send them to wait" step.
+ */
+export async function sendForInvestigations(id: string): Promise<repo.Encounter> {
+  const encounter = await repo.findById(id);
+  if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+  if ((encounter.activeOrderCount ?? 0) <= 0) {
+    throw new AppError("HMS-STATE-001", 422, "Order at least one test before sending for tests", {
+      encounterId: id,
+      hint: "place the tests first — an investigations visit with nothing ordered never comes back",
+    });
+  }
+  return transition(id, "awaiting_results");
+}
+
+/**
+ * The orders module's hooks into the live order count (see `encounter.model.ts`). Called from
+ * INSIDE the order's own transaction so the count and the order commit together — never an event,
+ * which would let a doctor send for tests before an async consumer had counted the order they just
+ * placed. The direction is orders → encounters, which the module graph already allows.
+ */
+export const recordOrderPlaced = (
+  id: string,
+  session?: Parameters<typeof repo.bumpOrderCount>[2],
+) => repo.bumpOrderCount(id, 1, session);
+export const recordOrderCancelled = (
+  id: string,
+  session?: Parameters<typeof repo.bumpOrderCount>[2],
+) => repo.bumpOrderCount(id, -1, session);
 
 export const queuePatient = (id: string): Promise<repo.Encounter> => transition(id, "in_queue");
 
@@ -661,7 +1078,113 @@ export const markLeftWithoutBeingSeen = (id: string): Promise<repo.Encounter> =>
 
 export const getEncounter = (id: string): Promise<repo.Encounter | undefined> => repo.findById(id);
 
-export const listEncounters = repo.list;
+export interface VisitSummaryInput {
+  diagnosis?: string;
+  advice?: string;
+}
+
+/**
+ * Records the doctor's OP visit summary (diagnosis / advice) for the OPD slip.
+ *
+ * Only the fields the caller SENT are touched — omitting `advice` leaves it as it was. An empty
+ * string is a deliberate CLEAR (the doctor wiped the box), so it `$unset`s the field rather than
+ * storing "" and printing a blank labelled line on the slip.
+ */
+export async function recordVisitSummary(
+  id: string,
+  input: VisitSummaryInput,
+): Promise<repo.Encounter> {
+  const current = await repo.findById(id);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+  const set: { diagnosis?: string; advice?: string } = {};
+  const unset: { diagnosis?: 1; advice?: 1 } = {};
+  for (const key of ["diagnosis", "advice"] as const) {
+    const value = input[key];
+    if (value === undefined) continue;
+    const trimmed = value.trim();
+    if (trimmed) set[key] = trimmed;
+    else unset[key] = 1;
+  }
+
+  const updated = await repo.setVisitSummary(id, set, unset);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+  return updated;
+}
+
+/**
+ * The front desk's list, and — when a day is asked for — the day it is a register OF.
+ *
+ * ── THE DAY IS THE BRANCH'S, NOT THE HOSPITAL DEFAULT'S (risk register D2) ──
+ * `date` is `YYYY-MM-DD` rather than an instant because a receptionist thinks in days, so turning
+ * it into a half-open range of instants needs a zone. That zone used to be `env.DEFAULT_TIMEZONE`,
+ * which was correct while a hospital was one site and silently wrong once it was not: a clerk at a
+ * site nine hours away asked for "today" and was answered in the head office's today. Near either
+ * midnight those are different days, and the register quietly omits the visits in the gap.
+ *
+ * The MAR, the medication round, the ward worklist and the clinic's own opening hours were all
+ * moved to the branch's zone. This is the same rule, applied to the same kind of boundary, through
+ * the same helper.
+ *
+ * ── WHY THE ACTIVE BRANCH IS THE RIGHT SOURCE ───────────────────────────────
+ * It is already what scopes the rows: the register shows the site you are working at, so the day
+ * it covers should be that site's day. With no branch selected — the aggregate view — there is no
+ * single clock to answer with, and `branchZone` falls back to the hospital default, which is both
+ * the previous behaviour and the only honest answer for "all sites at once".
+ *
+ * Resolved here rather than in the controller: it is an async lookup and a domain rule, and the
+ * controller is HTTP only (Doc 09 §11).
+ */
+export async function listEncounters(
+  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & {
+    date?: string;
+    dateTo?: string;
+  },
+): Promise<{ items: repo.Encounter[]; total: number }> {
+  const { date, dateTo, ...rest } = filter;
+  if (!date && !dateTo) return repo.list(rest);
+
+  const zone = await branchZone(getContext().activeBranchId);
+  /**
+   * One helper, called at each end. `date` opens at the START of its day and `dateTo` closes at
+   * the start of the day AFTER it, so a span is inclusive at both ends and a single `date` — both
+   * bounds from the same day — is exactly the behaviour every existing caller already has.
+   */
+  return repo.list({
+    ...rest,
+    ...(date ? { arrivedFrom: dayRangeInZone(date, zone).from } : {}),
+    ...(dateTo
+      ? { arrivedBefore: dayRangeInZone(dateTo, zone).before }
+      : date
+        ? { arrivedBefore: dayRangeInZone(date, zone).before }
+        : {}),
+  });
+}
+
+/**
+ * The same page, with each visit's patient named — what `GET /encounters` returns (D18).
+ *
+ * ── WHY THE HTTP LIST NAMES ITS PATIENTS AND `listEncounters` DOES NOT ───────
+ * Every consumer of the HTTP list is a screen a person reads: the doctor's queue, the reception
+ * register, the phone's round. All three showed a `patientId`, and all three had to turn it into a
+ * name somehow — the two web screens by matching against `/patients?limit=100`, the phone by
+ * fetching each patient separately. The first is wrong past a hundred registrations and the second
+ * is N round trips for N rows.
+ *
+ * `listEncounters` stays bare for the module that reads it as DATA rather than as a screen: the ED
+ * board (`emergency.service.ts`) resolves its own names alongside the triage rows it joins, and
+ * paying for the identity twice would be the cost of a tidier call graph.
+ */
+export async function listEncountersWithIdentity(
+  filter: Omit<repo.ListEncountersFilter, "arrivedFrom" | "arrivedBefore"> & {
+    date?: string;
+    dateTo?: string;
+  },
+): Promise<{ items: EncounterRow[]; total: number }> {
+  const { items, total } = await listEncounters(filter);
+  return { items: await withIdentity(items), total };
+}
+
 export const getOpenEncounterFor = repo.findOpenForPatient;
 
 /**

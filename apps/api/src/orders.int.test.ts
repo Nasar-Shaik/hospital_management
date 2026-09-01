@@ -22,14 +22,16 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
 import {
   assertMailhogReachable,
   clearMailbox,
-  inbox,
-  waitForMail,
+  // `mailbox()` is now used to assert that NOTHING was mailed: the staff alerts moved to the
+  // in-app channel, and the point of the move is that they no longer need a transport.
+  inbox as mailbox,
   TEST_SMTP_HOST,
   TEST_SMTP_PORT,
 } from "./test/mailTestEnv.js";
@@ -54,20 +56,39 @@ const { createUser, transitionStatus } = await import("./modules/users/index.js"
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedNotificationTemplates } = await import("./seed/notificationTemplates.js");
+const { seedTariff } = await import("./seed/tariff.js");
+const { seedLabTests, STARTER_LAB_TEST_COUNT, STARTER_LAB_TEST_CODES } =
+  await import("./seed/labTests.js");
+const { setFeatureOverride, clearFeatureOverride } =
+  await import("./modules/entitlements/index.js");
+const { FEATURE_FLAGS } = await import("@medicore/permissions");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
 const { canTransition, isOutstanding } = await import("./modules/orders/index.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
+const { readHistory } = await import("./core/db/migrations/runner.js");
 
 const SLUG = "test-orders";
 const HOST = `${SLUG}.medicore.test`;
+/**
+ * A SECOND hospital, on its own database. Only the schema-safety block uses it, and only to prove
+ * the one thing a single-tenant suite cannot: that dropping an index in one hospital's database
+ * does not stop a different hospital ordering. Tenant isolation is the whole premise of
+ * database-per-tenant (ADR-0005), and a guard that broke it would be worse than no guard.
+ */
+const OTHER_SLUG = "test-orders-other";
+const OTHER_HOST = `${OTHER_SLUG}.medicore.test`;
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "orders-int-test" }));
+const app = await listening(createApp(createLogger({ service: "orders-int-test" })));
 
 let tenantId = "";
 let tenantConnection: Awaited<ReturnType<typeof getTenantConnection>>;
 /** One token per ROLE. The whole point is that they are not interchangeable. */
 const token: Record<string, string> = {};
 let doctorId = "";
+
+const otherToken: Record<string, string> = {};
+let otherDoctorId = "";
 
 /**
  * Runs a consumer the way the RELAY runs it: inside a tenant-resolved context.
@@ -88,10 +109,15 @@ function as(role: string, req: request.Test): request.Test {
   return req.set("Host", HOST).set("Authorization", `Bearer ${token[role]}`);
 }
 
-async function login(email: string): Promise<string> {
+/** The same, for the second hospital. */
+function asOther(role: string, req: request.Test): request.Test {
+  return req.set("Host", OTHER_HOST).set("Authorization", `Bearer ${otherToken[role]}`);
+}
+
+async function login(email: string, host = HOST): Promise<string> {
   const res = await request(app)
     .post("/api/v1/auth/login")
-    .set("Host", HOST)
+    .set("Host", host)
     .send({ email, password: PASSWORD })
     .expect(200);
   return res.body.data.accessToken as string;
@@ -124,11 +150,26 @@ async function encounterWithDoctor(name: string, phone: string): Promise<string>
   return encounterId;
 }
 
+/** The same, in the second hospital. */
+async function otherEncounter(name: string, phone: string): Promise<string> {
+  const p = await asOther("reception", request(app).post("/api/v1/patients"))
+    .send({ name, gender: "female", contact: { phone } })
+    .expect(201);
+
+  const enc = await asOther("reception", request(app).post("/api/v1/encounters"))
+    .send({ patientId: p.body.data.patient.id, departmentId: otherDoctorId })
+    .expect(201);
+
+  const encounterId = enc.body.data.encounter.id as string;
+  await asOther("doctor", request(app).post(`/api/v1/encounters/${encounterId}/start`)).expect(200);
+  return encounterId;
+}
+
 beforeAll(async () => {
   await assertMongoReachable();
   await assertRedisReachable();
   await assertMailhogReachable();
-  await dropDatabases(["test_ord_master", `hms_${SLUG}`]);
+  await dropDatabases(["test_ord_master", `hms_${SLUG}`, `hms_${OTHER_SLUG}`]);
   await flushTestCache("orders");
 
   const t = await provisionTenant({
@@ -151,12 +192,26 @@ beforeAll(async () => {
   // critical-result alert would have nowhere to go.
   await seedNotificationTemplates(t.tenant.id, SLUG, connection);
 
+  /**
+   * The laboratory's two masters, for the same reason the templates are here: `provisionTenant`
+   * (the module service) runs migrations but seeds nothing, so without these the catalogue block
+   * below would assert against an empty collection and pass for the wrong reason.
+   */
+  await seedTariff(t.tenant.id, SLUG, connection);
+  await seedLabTests(t.tenant.id, SLUG, connection);
+
   const ROLES: [key: string, roleCode: string, name: string][] = [
     ["reception", "RECEPTIONIST", "Front Desk"],
     ["doctor", "DOCTOR", "Dr Rao"],
     ["tech", "LAB_TECHNICIAN", "Tech Kumar"],
     ["pathologist", "PATHOLOGIST", "Dr Iyer"],
     ["radiologist", "RADIOLOGIST", "Dr Sharma"],
+    // The role D7 v1 turns on: imaging staff who can carry a study all the way to the doctor
+    // WITHOUT a consultant radiologist, because most hospitals do not employ one.
+    ["radiographer", "RADIOLOGY_TECHNICIAN", "Priya Imaging"],
+    // Observations are the nurse's, and no other role in this suite holds `vitals:record`. The
+    // schema-safety block needs them to EXERCISE the proportionality claim rather than assert it.
+    ["nurse", "NURSE", "Nurse Pillai"],
   ];
 
   await runWithContext(
@@ -175,13 +230,56 @@ beforeAll(async () => {
   );
 
   for (const [key] of ROLES) token[key] = await login(`${key}@${SLUG}.test`);
-}, 180_000);
+
+  /* The second hospital — a reception desk and a doctor, which is all an order needs. */
+  const other = await provisionTenant({
+    hospitalName: "Other General",
+    slug: OTHER_SLUG,
+    planCode: "PLAN_HOSPITAL",
+    organizationType: "government_hospital",
+  });
+
+  const otherConnection = await getTenantConnection({
+    id: other.tenant.id,
+    databaseName: other.tenant.databaseName,
+  });
+
+  await runWithContext(
+    {
+      traceId: `setup-${OTHER_SLUG}`,
+      tenantId: other.tenant.id,
+      tenantSlug: OTHER_SLUG,
+      connection: otherConnection,
+    },
+    async () => {
+      await seedRbac();
+      for (const [key, roleCode, name] of [
+        ["reception", "RECEPTIONIST", "Other Desk"],
+        ["doctor", "DOCTOR", "Dr Other"],
+      ] as [string, string, string][]) {
+        const u = await createUser({
+          email: `${key}@${OTHER_SLUG}.test`,
+          name,
+          status: "invited",
+        });
+        await setPassword(u.id, PASSWORD, { mustChangePassword: false });
+        await assignRoleByCode(u.id, roleCode, []);
+        await transitionStatus(u.id, "active");
+        if (key === "doctor") otherDoctorId = u.id;
+      }
+    },
+  );
+
+  for (const key of ["reception", "doctor"]) {
+    otherToken[key] = await login(`${key}@${OTHER_SLUG}.test`, OTHER_HOST);
+  }
+}, 240_000);
 
 afterAll(async () => {
   await closeAllTenantConnections();
   await closeMaster();
   await closeRedis();
-  await dropDatabases(["test_ord_master", `hms_${SLUG}`]);
+  await dropDatabases(["test_ord_master", `hms_${SLUG}`, `hms_${OTHER_SLUG}`]);
 }, 30_000);
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -251,12 +349,28 @@ describe("the order carries work to the lab and the result back to the doctor", 
     // ── THE RESULT REACHES THE DOCTOR WHO ASKED ──────────────────────────────
     await asRelay(() => dispatchEventInline(releasedEvent(orderId)));
 
-    const mail = await waitForMail(1);
-    expect(mail[0]?.to).toContain(`doctor@${SLUG}.test`);
-    expect(mail[0]?.subject).toContain("Complete Blood Count");
-    expect(mail[0]?.body).toContain("Dr Rao");
+    /**
+     * ── IT ARRIVES IN THE DOCTOR'S INBOX, NOT IN THEIR EMAIL ─────────────────
+     * This read `waitForMail(1)` until 2026-08-18, and that was the defect: the template rendered
+     * on `email`, `email.isEnabled()` is `NOTIFY_EMAIL_ENABLED && SMTP_HOST`, and this suite
+     * happens to run against Mailhog. So the test passed on a configuration most deployments do
+     * not have, while a hospital with no mail server had the message recorded `suppressed` and
+     * delivered to nobody.
+     *
+     * Reading the doctor's own inbox is the stronger assertion of the same claim — it needs no
+     * transport at all, so it holds everywhere the product runs. `COMMUNICATION_POLICY.md`.
+     */
+    const alerts = await as("doctor", request(app).get("/api/v1/notifications/me")).expect(200);
+    const told = (alerts.body.data as { subject?: string; body: string }[]).find((m) =>
+      m.subject?.includes("Complete Blood Count"),
+    );
+    expect(told, "the ordering doctor was never told the result was released").toBeTruthy();
+    expect(told!.body).toContain("Dr Rao");
     // Rendered, not a template. A doctor must never receive `{{patientName}}`.
-    expect(mail[0]?.body).not.toContain("{{");
+    expect(told!.body).not.toContain("{{");
+
+    // And it did NOT need a mail server: nothing was handed to SMTP for this.
+    expect(await mailbox()).toHaveLength(0);
 
     // ── AND THE PATIENT STOPS WAITING ────────────────────────────────────────
     // Nothing is outstanding, so the encounter comes back out of `awaiting_results`
@@ -438,14 +552,24 @@ describe("a critical result is alerted immediately, not eventually", () => {
      * the heart, and it does not wait for a pathologist to come back from lunch or for
      * a queue to catch up.
      */
-    const mail = await waitForMail(1);
-    expect(mail[0]?.to).toContain(`doctor@${SLUG}.test`);
-    expect(mail[0]?.subject).toContain("CRITICAL");
+    /**
+     * In the doctor's inbox, and — the part that used to be untrue — WITHOUT a mail server having
+     * been involved at all. This assertion previously read Mailhog, which meant the most urgent
+     * message in the product was only ever proven to work on a machine that happened to have SMTP
+     * configured. On a default deployment it was recorded `suppressed`.
+     */
+    const alerts = await as("doctor", request(app).get("/api/v1/notifications/me")).expect(200);
+    const alert = (alerts.body.data as { subject?: string; body: string }[]).find((m) =>
+      m.subject?.includes("CRITICAL"),
+    );
+    expect(alert, "the ordering doctor was never alerted to a critical value").toBeTruthy();
     // It carries the VALUE — unlike every other message in the product. The whole
     // purpose is to make a human act in the next few minutes, and "log in to see it"
     // wastes exactly those minutes.
-    expect(mail[0]?.body).toContain("7.2");
-    expect(mail[0]?.body).toContain("Critical Kaur");
+    expect(alert!.body).toContain("7.2");
+    expect(alert!.body).toContain("Critical Kaur");
+
+    expect(await mailbox(), "the critical alert depended on SMTP").toHaveLength(0);
 
     // The result is still UNVERIFIED. The alert did not bypass the second pair of
     // eyes; it simply refused to wait for it.
@@ -457,8 +581,13 @@ describe("a critical result is alerted immediately, not eventually", () => {
     // The ledger is keyed on the order, not on a delivery. A doctor who is told twice
     // about one critical value starts ignoring the channel — which is the failure mode
     // the alert exists to prevent.
-    const before = await inbox();
-    const critical = before.filter((m) => m.subject.includes("CRITICAL"));
+    const alerts = await as(
+      "doctor",
+      request(app).get("/api/v1/notifications/me?limit=100"),
+    ).expect(200);
+    const critical = (alerts.body.data as { subject?: string }[]).filter((m) =>
+      m.subject?.includes("CRITICAL"),
+    );
     expect(critical).toHaveLength(1);
   });
 });
@@ -555,6 +684,53 @@ describe("the department worklist", () => {
       ids.indexOf(routine.body.data.order.id as string),
     );
   });
+
+  /**
+   * ── EVERY ROW NAMES ITS PATIENT ─────────────────────────────────────────────
+   * The web worklist used to fetch "the first 100 patients in this hospital" and look each
+   * order's patient up in that array. Two silent truncations stacked: an order past row 100 was
+   * absent, and an order whose patient was not among those 100 patients rendered as "—". Both
+   * failed toward LESS work being visible, which on a lab queue is a sample nobody runs.
+   *
+   * `InpatientRow` already carries its identity for exactly this reason and says so: "a client
+   * must never reconstruct it from a patient list." These tests hold the orders list to the same
+   * rule, so no future screen can be tempted to join it client-side again.
+   */
+  it("carries the patient's name and UHID on every row", async () => {
+    const encounterId = await encounterWithDoctor("Named On The Row", "9000000060");
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+
+    const list = await as(
+      "tech",
+      request(app).get("/api/v1/orders?category=lab&outstanding=true"),
+    ).expect(200);
+
+    const rows = list.body.data as { encounterId: string; patientName: string; uhid: string }[];
+    const row = rows.find((o) => o.encounterId === encounterId);
+
+    expect(row?.patientName).toBe("Named On The Row");
+    // A UHID is what a technician matches against the label on the sample tube.
+    expect(row?.uhid).toMatch(/\S/);
+  });
+
+  it("never leaves the name BLANK — an unreadable patient is said, not omitted", async () => {
+    /**
+     * The important half. A blank name on a worklist row reads as "no patient", and the fix for
+     * the join was worthless if it merely moved the silence to the server. Every row carries a
+     * string; when the record cannot be read it says so in words.
+     */
+    const list = await as(
+      "tech",
+      request(app).get("/api/v1/orders?category=lab&outstanding=true"),
+    ).expect(200);
+
+    for (const row of list.body.data as { patientName: string }[]) {
+      expect(typeof row.patientName).toBe("string");
+      expect(row.patientName.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -649,5 +825,1239 @@ describe("an order cannot be raised against a visit that is over", () => {
       .expect(422);
 
     expect(res.body.error.code).toBe("HMS-STATE-001");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 8. RUNTIME SCHEMA SAFETY — the spine refuses to RAISE work it cannot deduplicate
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * ORDERING RUNTIME SCHEMA SAFETY.
+ *
+ * ── WHY PLACING AN ORDER IS THE MOST EXPOSED WRITE OF THE THREE ─────────────
+ * `placeOrder` performs NO read before it writes. It enters the transaction and inserts, and
+ * consults `findByRequestId` only AFTER the database has answered E11000 — so unlike dispensing
+ * there is not even a courtesy pre-check. Measured against Mongo 7 on 2026-08-17 with
+ * `one_order_per_request_id` absent: both inserts of one `requestId` are ACCEPTED, two rows exist,
+ * and recreating the index over them is then REFUSED (11000). A duplicate is a second tube of
+ * blood from a real arm, a second exposure for an X-ray, and a second bill.
+ *
+ * ── AND THE PHARMACY PATH HAS NO SECOND LOCK AT ALL ─────────────────────────
+ * `prescription.signed` reaches this same function from an EVENT — no HTTP request, therefore no
+ * `Idempotency-Key` middleware — carrying `requestId: "rx:<prescriptionId>"`. Delivery is
+ * at-least-once by design. There, the index is not merely the arbiter of a race; it is the only
+ * thing that exists.
+ *
+ * The suite drops a real index on its own throwaway tenant and puts it straight back. Readiness is
+ * cached for a minute, so every transition clears it.
+ */
+describe("ordering refuses when the database cannot enforce one-order-per-request", () => {
+  const ORDER_INDEX = "one_order_per_request_id";
+
+  async function dropOrderIndex(): Promise<void> {
+    await tenantConnection.collection("orders").dropIndex(ORDER_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreOrderIndex(): Promise<void> {
+    await tenantConnection.collection("orders").createIndex(
+      { tenantId: 1, requestId: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { requestId: { $exists: true } },
+        background: true,
+        name: ORDER_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  it("places normally while the invariant it rests on is armed", async () => {
+    const encounterId = await encounterWithDoctor("Guard Normal", "9000000200");
+
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+  });
+
+  /**
+   * ── THE REFUSAL ───────────────────────────────────────────────────────────
+   * 503 rather than 4xx: the request is correct and will work once the schema is repaired. It
+   * names the rule and the migration, because whoever is paged needs those and not a count.
+   */
+  it("answers 503 HMS-ORD-001 with Retry-After when the order index is gone", async () => {
+    const encounterId = await encounterWithDoctor("Guard Refusal", "9000000201");
+
+    await dropOrderIndex();
+    try {
+      const res = await as("doctor", request(app).post("/api/v1/orders")).send({
+        encounterId,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+        requestId: "guard-order-refusal-0001",
+      });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ORD-001");
+      expect(res.headers["retry-after"]).toBe("60");
+
+      const missing = res.body.error.details.missing as { rule: string; migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0013-orders");
+      // It must tell the doctor what to DO, not merely that something failed.
+      expect(String(res.body.error.message)).toMatch(/paper/i);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * The guard runs before the transaction opens, so a refusal cannot leave a half-raised order,
+   * an inflated `activeOrderCount`, or an `order.placed` event the lab would act on.
+   */
+  it("writes NOTHING when it refuses — no order, no visit counter, no outbox event", async () => {
+    const encounterId = await encounterWithDoctor("Guard No Write", "9000000202");
+
+    const outboxBefore = await tenantConnection.collection("outbox").countDocuments({});
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({
+          encounterId,
+          category: "lab",
+          code: "LFT",
+          name: "Liver Function Test",
+          requestId: "guard-order-nowrite-0001",
+        })
+        .expect(503);
+
+      expect(
+        await tenantConnection
+          .collection("orders")
+          .countDocuments({ requestId: "guard-order-nowrite-0001" }),
+      ).toBe(0);
+      expect(await tenantConnection.collection("outbox").countDocuments({})).toBe(outboxBefore);
+    } finally {
+      await restoreOrderIndex();
+    }
+
+    // The visit is still orderable, which is what proves the counter was never bumped: a refusal
+    // that had counted an order would let this visit be sent for tests with nothing ordered.
+    const encounter = await as(
+      "doctor",
+      request(app).get(`/api/v1/encounters/${encounterId}`),
+    ).expect(200);
+    expect(encounter.body.data.activeOrderCount).toBe(0);
+  });
+
+  it("places again the moment the index is restored", async () => {
+    const encounterId = await encounterWithDoctor("Guard Recovery", "9000000203");
+
+    await dropOrderIndex();
+    const refused = await as("doctor", request(app).post("/api/v1/orders")).send({
+      encounterId,
+      category: "lab",
+      code: "CBC",
+      name: "Complete Blood Count",
+    });
+    expect(refused.status).toBe(503);
+
+    await restoreOrderIndex();
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+  });
+
+  /**
+   * ── THE DIVERGENCE FROM MAR AND DISPENSING, TESTED ────────────────────────
+   * Both of those also require `idempotent-replay`, because each has a legitimate write carrying
+   * no module identifier — a PRN dose, a partial handover — for which the `Idempotency-Key` claim
+   * is the only lock. Ordering has no such write: both clients send `requestId` alongside the
+   * header and the pharmacy consumer sets one explicitly. So losing the claim index alone leaves
+   * ordering still arbitrated by 0013, and refusing then would block a hospital that is safe.
+   */
+  it("does NOT refuse when only the idempotency claim index is gone — 0013 still arbitrates", async () => {
+    const encounterId = await encounterWithDoctor("Guard Claim Only", "9000000204");
+
+    await tenantConnection.collection("idempotencyKeys").dropIndex("one_claim_per_idempotency_key");
+    forgetSchemaReadiness();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({
+          encounterId,
+          category: "lab",
+          code: "CBC",
+          name: "Complete Blood Count",
+          requestId: "guard-claim-only-0001",
+        })
+        .expect(201);
+
+      // And the module's own guard is demonstrably still doing the work.
+      const second = await as("doctor", request(app).post("/api/v1/orders"))
+        .send({
+          encounterId,
+          category: "lab",
+          code: "CBC",
+          name: "Complete Blood Count",
+          requestId: "guard-claim-only-0001",
+        })
+        .expect(200);
+      expect(second.body.data.duplicate).toBe(true);
+    } finally {
+      await tenantConnection.collection("idempotencyKeys").createIndex(
+        { tenantId: 1, userId: 1, key: 1 },
+        {
+          unique: true,
+          background: true,
+          name: "one_claim_per_idempotency_key",
+        },
+      );
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── WORK ALREADY ON THE BENCH MUST STILL FINISH ───────────────────────────
+   * The state machine updates a row that exists and rests on nothing this index provides. A
+   * drifted tenant that could not complete or release would strand samples mid-analysis for a
+   * rule with no bearing on them — and would keep patients in `awaiting_results` with no way out.
+   */
+  it("lets the lab accept, run, complete, verify and release while placing is refused", async () => {
+    const encounterId = await encounterWithDoctor("Guard In Flight", "9000000205");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "GLU", name: "Blood Glucose" })
+        .expect(503);
+
+      await as("tech", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+      await as("tech", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+      await as("tech", request(app).post(`/api/v1/orders/${orderId}/complete`))
+        .send({ summary: "Hb 11.9 g/dL" })
+        .expect(200);
+      await as("pathologist", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+      const released = await as(
+        "pathologist",
+        request(app).post(`/api/v1/orders/${orderId}/release`),
+      ).expect(200);
+      expect(released.body.data.status).toBe("released");
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  it("does not touch cancellation either — an order already raised can still be called off", async () => {
+    const encounterId = await encounterWithDoctor("Guard Cancel", "9000000206");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post(`/api/v1/orders/${placed.body.data.order.id}/cancel`))
+        .send({ reason: "ordered in error" })
+        .expect(200);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /** Observations are not ordering. A nurse must not lose the obs round to a lab index. */
+  it("does not block a nurse recording observations", async () => {
+    const encounterId = await encounterWithDoctor("Guard Vitals", "9000000207");
+
+    await dropOrderIndex();
+    try {
+      await as("nurse", request(app).post(`/api/v1/encounters/${encounterId}/vitals`))
+        .send({ pulse: 88, temperature: 37.1 })
+        .expect(201);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /** Reading is not writing. The worklist and the chart stay legible while placing is refused. */
+  it("does not block reads — the existing worklist is still visible", async () => {
+    const encounterId = await encounterWithDoctor("Guard Reads", "9000000208");
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+
+    await dropOrderIndex();
+    try {
+      const list = await as(
+        "tech",
+        request(app).get(`/api/v1/orders?encounterId=${encounterId}`),
+      ).expect(200);
+      expect(list.body.data).toHaveLength(1);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * Database-per-tenant (ADR-0005) means one hospital's drift is one hospital's problem. The
+   * readiness cache is keyed by tenant, and this is the test that would catch it if it were not.
+   */
+  it("does not block a DIFFERENT hospital, whose own index is intact", async () => {
+    const mine = await encounterWithDoctor("Guard Isolation", "9000000209");
+    const theirs = await otherEncounter("Other Hospital", "9000000210");
+
+    await dropOrderIndex();
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId: mine, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(503);
+
+      await asOther("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId: theirs, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(201);
+    } finally {
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * ── A PENDING MIGRATION IS NOT A REASON TO REFUSE ─────────────────────────
+   * The runtime guard asks whether THIS capability's constraint is enforceable, not whether the
+   * tenant is fully converged — that is the deployment gate's question, and it is asked before a
+   * release rather than in front of a doctor. Un-recording a migration whose index is present
+   * changes nothing here, which is the whole distinction between the two mechanisms.
+   */
+  it("is unmoved by an un-recorded migration whose index is actually present", async () => {
+    const encounterId = await encounterWithDoctor("Guard Pending", "9000000211");
+
+    const history = tenantConnection.collection("migrations");
+    const record = await history.findOne({ _id: "0049-mar" as never });
+    await history.deleteOne({ _id: "0049-mar" as never });
+    forgetSchemaReadiness();
+    try {
+      // The deployment gate sees the tenant as behind. `readHistory` returns RECORDS, not ids —
+      // asserting `toContain("0049-mar")` against them would pass whatever the history said.
+      const applied = (await readHistory(tenantConnection)).map((r) => r._id);
+      expect(applied).toContain("0013-orders");
+      expect(applied).not.toContain("0049-mar");
+
+      // … and the doctor orders anyway, because the constraint itself is armed.
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(201);
+    } finally {
+      if (record) await history.insertOne(record);
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── FAIL CLOSED ───────────────────────────────────────────────────────────
+   * An index that exists on the right fields but is NOT unique enforces nothing. The readiness
+   * inspector must read that as unsafe rather than as "an index called that is present".
+   */
+  it("fails CLOSED when the index exists but has stopped being unique", async () => {
+    const encounterId = await encounterWithDoctor("Guard Not Unique", "9000000212");
+
+    await tenantConnection.collection("orders").dropIndex(ORDER_INDEX);
+    await tenantConnection.collection("orders").createIndex(
+      { tenantId: 1, requestId: 1 },
+      {
+        // No `unique` — the shape is right and the guarantee is gone.
+        partialFilterExpression: { requestId: { $exists: true } },
+        background: true,
+        name: ORDER_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+    try {
+      const res = await as("doctor", request(app).post("/api/v1/orders")).send({
+        encounterId,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ORD-001");
+    } finally {
+      await tenantConnection.collection("orders").dropIndex(ORDER_INDEX);
+      await restoreOrderIndex();
+    }
+  });
+
+  /**
+   * The `orders` collection itself being absent is a different fault from an index being absent,
+   * and it must not read as "everything is fine because the query found nothing".
+   */
+  it("fails CLOSED when the orders collection does not exist at all", async () => {
+    const encounterId = await encounterWithDoctor("Guard No Collection", "9000000213");
+
+    const saved = await tenantConnection.collection("orders").find({}).toArray();
+    await tenantConnection.collection("orders").drop();
+    forgetSchemaReadiness();
+    try {
+      const res = await as("doctor", request(app).post("/api/v1/orders")).send({
+        encounterId,
+        category: "lab",
+        code: "CBC",
+        name: "Complete Blood Count",
+      });
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ORD-001");
+      expect(String(res.body.error.details.missing[0].found)).toMatch(/does not exist/i);
+    } finally {
+      await restoreOrderIndex();
+      await tenantConnection
+        .collection("orders")
+        .createIndex(
+          { tenantId: 1, category: 1, status: 1, priorityRank: 1, orderedAt: 1 },
+          { background: true, name: "department_worklist" },
+        );
+      if (saved.length > 0) await tenantConnection.collection("orders").insertMany(saved);
+      forgetSchemaReadiness();
+    }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE LAB TEST CATALOGUE (D6) — the master that stops a range being retyped
+ *
+ * `labTests` shipped empty on every hospital, so `getLabTest(order.code)` found nothing and result
+ * entry fell back to a blank grid — the exact re-typing the module exists to end. These prove the
+ * starter catalogue is actually there, that it JOINS the tariff on `code` (an order carries one
+ * code that billing, the lab and the result grid must all agree on), and that re-seeding a
+ * hospital never rewrites reference ranges it has curated.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the laboratory catalogue a hospital starts with", () => {
+  it("lists the starter tests to the technician who will enter results against them", async () => {
+    const res = await as("tech", request(app).get("/api/v1/lab-tests")).expect(200);
+    const codes = (res.body.data as { code: string }[]).map((t) => t.code);
+
+    expect(codes, "the catalogue is empty — the analyte grid will be blank").toHaveLength(
+      STARTER_LAB_TEST_COUNT,
+    );
+    expect(codes).toEqual(expect.arrayContaining([...STARTER_LAB_TEST_CODES]));
+  });
+
+  /**
+   * WHAT DEFECT WOULD THIS CATCH?
+   * The catalogue and the tariff drifting apart. An order carries ONE `code`: billing prices it
+   * (`serviceItems`), the lab defines it (`labTests`), and the result grid pre-fills from it. A
+   * catalogue keyed on anything else is a second master that agrees with the first only by luck —
+   * and the symptom is a test that bills correctly and pre-fills nothing, which reads as "the
+   * catalogue is broken" rather than "the two codes differ".
+   */
+  it("uses the same codes the tariff prices, so one order means one thing to both", async () => {
+    // `/services/catalogue`, not `/services`: the rate card needs `billing:read`, which a doctor
+    // deliberately lacks — the distinction PROJECT_MEMORY records as breaking the order pad once.
+    const tariff = await as(
+      "doctor",
+      request(app).get("/api/v1/services/catalogue?category=lab"),
+    ).expect(200);
+    const priced = new Set((tariff.body.data as { code: string }[]).map((s) => s.code));
+
+    for (const code of STARTER_LAB_TEST_CODES) {
+      expect(priced.has(code), `${code} is in the lab catalogue but has no tariff entry`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("carries the analytes, their units and a printable range for each", async () => {
+    const res = await as("tech", request(app).get("/api/v1/lab-tests/CBC")).expect(200);
+    const test = res.body.data as {
+      name: string;
+      specimenType?: string;
+      analytes: { code: string; label: string; unit?: string; refText?: string }[];
+    };
+
+    expect(test.name).toBe("Complete Blood Count");
+    expect(test.specimenType, "the phlebotomy desk is told which tube to draw").toBeTruthy();
+
+    const hb = test.analytes.find((a) => a.code === "HB");
+    expect(hb?.label).toBe("Haemoglobin");
+    expect(hb?.unit).toBe("g/dL");
+    // Derived from the numeric bounds — the form a clinician reads a range in.
+    expect(hb?.refText).toBe("12–17");
+  });
+
+  /**
+   * A one-sided limit is not an interval, and rendering it as one would be wrong in the direction
+   * that matters: "0–200" invites a reading of a cholesterol of 0 as normal.
+   */
+  it("renders a one-sided limit as a limit, not as an interval starting at zero", async () => {
+    const res = await as("tech", request(app).get("/api/v1/lab-tests/LIPID")).expect(200);
+    const analytes = res.body.data.analytes as { code: string; refText?: string }[];
+
+    expect(analytes.find((a) => a.code === "CHOL")?.refText).toBe("< 200");
+    expect(analytes.find((a) => a.code === "HDL")?.refText).toBe("> 40");
+  });
+
+  /**
+   * WHAT DEFECT WOULD THIS CATCH?
+   * A deploy resetting a laboratory's own reference intervals. A lab sets its ranges against its
+   * own method and analyser; a seed that overwrote them on the next migrate would silently replace
+   * clinical configuration with our defaults, and the report that came out would be wrong in a way
+   * nobody looks for. `$setOnInsert` is the whole promise, and this is what holds it.
+   */
+  it("never overwrites a range the hospital has curated, however often it is re-seeded", async () => {
+    const before = await as("pathologist", request(app).get("/api/v1/lab-tests/GLU")).expect(200);
+    const id = before.body.data.id as string;
+
+    await as("pathologist", request(app).patch(`/api/v1/lab-tests/${id}`))
+      .send({
+        analytes: [
+          { code: "FPG", label: "Fasting Plasma Glucose", unit: "mg/dL", refLow: 74, refHigh: 106 },
+        ],
+      })
+      .expect(200);
+
+    const added = await seedLabTests(tenantId, SLUG, tenantConnection);
+    expect(added, "a re-seed inserted a test that already existed").toBe(0);
+
+    const after = await as("pathologist", request(app).get("/api/v1/lab-tests/GLU")).expect(200);
+    const fpg = (after.body.data.analytes as { code: string; refLow?: number }[]).find(
+      (a) => a.code === "FPG",
+    );
+    expect(fpg?.refLow, "the re-seed reverted the hospital's own reference range").toBe(74);
+  });
+
+  /** The catalogue is clinical config, not PHI — but it is still not public. */
+  it("is closed to a role with no part in ordering or running a test", async () => {
+    await as("nurse", request(app).post("/api/v1/lab-tests"))
+      .send({ code: "SNEAK", name: "Unauthorised Test" })
+      .expect(403);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE TECHNICIAN CAN SEE THE FILE THEY JUST UPLOADED
+ *
+ * They could attach a report and were never shown that it landed: the worklist's "is anything
+ * already attached?" read was the PATIENT-wide list, gated on `emr:read`, which a lab technician
+ * deliberately does not hold. It 403'd, the page soft-failed, and the confirmation ("1 report
+ * attached — the doctor can see it now") never appeared for the one role that uploads them. Worse,
+ * a re-scan looked like the first scan, because the list that would have said otherwise was empty.
+ *
+ * The fix is a narrower read, not a wider grant. `emr:read` opens twenty-one routes across
+ * admissions, wards, prescriptions, theatres, the MAR and medico-legal records — a lab technician
+ * has no business in any of them, and these tests pin that they still do not.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a lab technician can see the reports on the orders in front of them", () => {
+  let orderId = "";
+  let reportId = "";
+
+  beforeAll(async () => {
+    const encounterId = await encounterWithDoctor("Report Reader", "9000000310");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    orderId = placed.body.data.order.id as string;
+
+    const uploaded = await as("tech", request(app).post(`/api/v1/orders/${orderId}/reports`))
+      .send({
+        filename: "cbc-scan.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 CBC RESULT").toString("base64"),
+      })
+      .expect(201);
+    reportId = uploaded.body.data.id as string;
+  });
+
+  it("reads back the report it attached, keyed on the order", async () => {
+    const res = await as("tech", request(app).get(`/api/v1/reports?orderIds=${orderId}`)).expect(
+      200,
+    );
+    const rows = res.body.data as { id: string; filename: string; orderId: string }[];
+    expect(rows.map((r) => r.id)).toContain(reportId);
+    expect(rows[0]?.filename).toBe("cbc-scan.pdf");
+  });
+
+  /**
+   * The boundary that makes the narrow read worth having. If this ever returns 200, somebody has
+   * widened `emr:read` to the laboratory and the technician now reads the whole clinical record.
+   */
+  it("is still refused the patient's chart-wide report history", async () => {
+    const patient = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+    const patientId = patient.body.data.patientId as string;
+
+    const res = await as("tech", request(app).get(`/api/v1/patients/${patientId}/reports`));
+    expect(res.status, "a lab technician was handed the whole chart's report history").toBe(403);
+    expect(res.body.error.details.required).toBe("emr:read");
+  });
+
+  /**
+   * And metadata is where it stops. Knowing a file exists is the worklist's question; reading the
+   * result printed on it is a clinical act, and that stays behind the chart's permission.
+   */
+  it("cannot open the bytes — knowing a report exists is not reading it", async () => {
+    const res = await as("tech", request(app).get(`/api/v1/reports/${reportId}/file`));
+    expect(res.status).toBe(403);
+  });
+
+  it("returns nothing rather than everything when asked about no orders", async () => {
+    const res = await as("tech", request(app).get("/api/v1/reports?orderIds=,,"));
+    // The schema requires a non-empty string; an all-separator value parses to zero ids.
+    expect([200, 400]).toContain(res.status);
+    if (res.status === 200) expect(res.body.data).toEqual([]);
+  });
+
+  /** The doctor the result comes back to keeps the chart-wide view they always had. */
+  it("leaves the doctor's cross-visit report list exactly as it was", async () => {
+    const order = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+    const patientId = order.body.data.patientId as string;
+
+    const res = await as(
+      "doctor",
+      request(app).get(`/api/v1/patients/${patientId}/reports`),
+    ).expect(200);
+    expect((res.body.data as { id: string }[]).map((r) => r.id)).toContain(reportId);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * PAYMENT IS VISIBLE TO THE LAB, AND GATES NOTHING (AI_Workflow/docs/PAYMENT_POLICY.md)
+ *
+ * The API has no payment check anywhere on the order state machine, and that is a decision rather
+ * than an omission: a hard gate refuses a stat troponin over an unfinalized bill, and a zero-tariff
+ * government hospital — a target segment, and the organization type THIS suite provisions — could
+ * never run a test at all.
+ *
+ * The web worklist does hold unpaid outpatient work, which is a web policy with its own relief
+ * valves and its own tests. These prove the layer underneath it stays open, so that policy remains
+ * a product choice rather than something baked into the state machine where nobody can change it.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("payment is visible to the lab, and gates nothing", () => {
+  let orderId = "";
+
+  beforeAll(async () => {
+    const encounterId = await encounterWithDoctor("Unpaid Bhatt", "9000000410");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    orderId = placed.body.data.order.id as string;
+  });
+
+  /**
+   * The premise. Without it the whole block proves only that a FREE test can be run, which is not
+   * the question. This hospital is `government_hospital` (zero tariff), so the honest reading is
+   * "nothing has been paid here" — and that is precisely the case a gate would strand forever.
+   */
+  it("tells the technician the payment state, without telling them the amount", async () => {
+    const res = await as(
+      "tech",
+      request(app).get(`/api/v1/billing/order-payments?orderIds=${orderId}`),
+    ).expect(200);
+
+    const state = (res.body.data as Record<string, string>)[orderId];
+    expect(["paid", "unpaid", "unbilled", "free"]).toContain(state);
+    // A status flag, not a bill. This is why a technician may read it at all.
+    expect(JSON.stringify(res.body.data)).not.toMatch(/amount|price|total/i);
+  });
+
+  /**
+   * THE ASSERTION THAT EARNS THIS BLOCK. Every rung of the machine, on a test nobody has paid for.
+   * If any of these ever returns 402 or 403, a payment gate has been introduced into the state
+   * machine and a hospital that charges nothing has lost its laboratory.
+   */
+  it("runs an unpaid test all the way from the bench to the doctor", async () => {
+    await as("tech", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Haemoglobin 13.1 g/dL." })
+      .expect(200);
+    await as("pathologist", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+    const released = await as(
+      "pathologist",
+      request(app).post(`/api/v1/orders/${orderId}/release`),
+    ).expect(200);
+
+    expect(released.body.data.status).toBe("released");
+  });
+
+  /**
+   * And knowing the payment state grants no reach. The technician can see whether a test is paid
+   * for; they still cannot see the bill, which is the counter's.
+   */
+  it("does not become a way to read the money", async () => {
+    const res = await as("tech", request(app).get("/api/v1/billing/pending"));
+    expect(res.status, "a lab technician read the billing queue").toBe(403);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 12. RADIOLOGY v1 — a study reaches the doctor with no radiologist involved
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * The one that made radiology unusable while looking complete. Every piece was already here — the
+ * category, the order pad, the worklist, the tariff, the narrative result, the film upload, the
+ * release notification — and `radiology:sign` was required to get past `completed` while only
+ * RADIOLOGIST held it. A hospital with no consultant radiologist could take the film, type the
+ * report, and never deliver either. Nothing errored; the study simply stopped.
+ *
+ * So the assertion that carries this milestone is the ROLE list: the whole journey below is walked
+ * by `radiographer` and the word `radiologist` does not appear in it. If somebody later decides
+ * imaging needs a specialist signature after all, this file goes red and the argument happens
+ * before the release rather than after a hospital cannot use the module.
+ */
+describe("radiology runs end to end without a radiologist", () => {
+  it("doctor orders, imaging performs and reports, the doctor reads it", async () => {
+    const encounterId = await encounterWithDoctor("Imaging Devi", "9000000200");
+
+    // ── the doctor asks ──────────────────────────────────────────────────────
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({
+        encounterId,
+        category: "radiology",
+        code: "XRAY_CHEST_PA",
+        name: "X-ray Chest PA View",
+        priority: "routine",
+      })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    // ── it appears on the imaging worklist, named ────────────────────────────
+    const worklist = await as(
+      "radiographer",
+      request(app).get("/api/v1/orders?category=radiology&outstanding=true&limit=100"),
+    ).expect(200);
+    const row = (worklist.body.data as { id: string; patientName: string; uhid: string }[]).find(
+      (o) => o.id === orderId,
+    );
+    expect(row, "the study never reached the imaging worklist").toBeTruthy();
+    // A row that cannot say whose film it is, is the D-1 defect class at the imaging console.
+    expect(row!.patientName).toBe("Imaging Devi");
+    expect(row!.uhid).toBeTruthy();
+
+    // ── imaging performs it ──────────────────────────────────────────────────
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    /**
+     * A NARRATIVE report, which is the whole of radiology reporting in v1. `summary` already
+     * carries 5,000 characters and the result contract already accepts it — there is no structured
+     * imaging template here and deliberately none coming.
+     */
+    const completed = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${orderId}/complete`),
+    )
+      .send({
+        summary:
+          "PA chest, adequate inspiration. Lung fields clear, no focal consolidation. " +
+          "Cardiothoracic ratio normal. Impression: no acute cardiopulmonary abnormality.",
+      })
+      .expect(200);
+    expect(completed.body.data.status).toBe("completed");
+    expect(completed.body.data.performedBy).toBeTruthy();
+
+    // ── and carries it to the doctor, alone ──────────────────────────────────
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+    const released = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${orderId}/release`),
+    ).expect(200);
+    expect(released.body.data.status).toBe("released");
+
+    // ── the doctor can read it ───────────────────────────────────────────────
+    const seen = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+    expect(seen.body.data.status).toBe("released");
+    expect(seen.body.data.result.summary).toContain("no acute cardiopulmonary abnormality");
+  });
+
+  /** The film. Same infrastructure the lab attaches a scanned report with — no imaging archive. */
+  it("attaches the film through the existing reports infrastructure", async () => {
+    const encounterId = await encounterWithDoctor("Film Kumar", "9000000201");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "USG_ABDOMEN", name: "Ultrasound Abdomen" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    const uploaded = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${orderId}/reports`),
+    )
+      .send({
+        filename: "usg-abdomen.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 imaging").toString("base64"),
+      })
+      .expect(201);
+    expect(uploaded.body.data.id).toBeTruthy();
+
+    // Readable back as METADATA on their own order — the same narrow route the lab technician got.
+    const mine = await as(
+      "radiographer",
+      request(app).get(`/api/v1/reports?orderIds=${orderId}`),
+    ).expect(200);
+    expect((mine.body.data as { id: string }[]).length).toBe(1);
+  });
+
+  /**
+   * ── THE BOUNDARY THAT MUST NOT MOVE TO MAKE THIS WORK ───────────────────────
+   * The whole point of building the role narrowly. `emr:read` would have made every one of these
+   * pass, and would have handed a radiographer the admissions register, the drug chart, the
+   * consent records and the death register along with it.
+   */
+  it("does not give imaging staff the patient's chart", async () => {
+    const encounterId = await encounterWithDoctor("Chart Guard", "9000000202");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Scan Head (Plain)" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+    const report = await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/reports`))
+      .send({
+        filename: "ct.pdf",
+        contentType: "application/pdf",
+        dataBase64: Buffer.from("%PDF-1.4 ct").toString("base64"),
+      })
+      .expect(201);
+    const reportId = report.body.data.id as string;
+
+    const patientId = (
+      await as("doctor", request(app).get(`/api/v1/encounters/${encounterId}`)).expect(200)
+    ).body.data.patientId as string;
+
+    // The chart-wide report history, and the BYTES of the film they just attached. Knowing a
+    // report exists is not reading it — the lab technician meets the identical wall.
+    await as("radiographer", request(app).get(`/api/v1/patients/${patientId}/reports`)).expect(403);
+    await as("radiographer", request(app).get(`/api/v1/reports/${reportId}/file`)).expect(403);
+    /**
+     * And the clinical record itself. The consultation note is `emr:read` — the doctor's written
+     * assessment of this very visit, which is exactly the thing a person who takes X-rays has no
+     * business reading and exactly what a blanket `emr:read` grant would have handed over.
+     */
+    await as(
+      "radiographer",
+      request(app).get(`/api/v1/encounters/${encounterId}/consultation`),
+    ).expect(403);
+  });
+
+  /**
+   * ── THE CATEGORY WALL IS STILL A WALL ───────────────────────────────────────
+   * `radiology:sign` was granted to an operational role, so the obvious worry is that the
+   * competence check has been hollowed out. It has not: the technician's authority is confined to
+   * imaging, exactly as the pathologist's is to blood.
+   */
+  it("cannot sign off a blood result, and the lab cannot sign off a scan", async () => {
+    const encounterId = await encounterWithDoctor("Cross Sign", "9000000203");
+
+    const blood = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+      .expect(201);
+    const bloodId = blood.body.data.order.id as string;
+    await as("tech", request(app).post(`/api/v1/orders/${bloodId}/accept`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${bloodId}/start`)).expect(200);
+    await as("tech", request(app).post(`/api/v1/orders/${bloodId}/complete`))
+      .send({ summary: "Hb 12.6 g/dL." })
+      .expect(200);
+
+    const refused = await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${bloodId}/verify`),
+    ).expect(403);
+    expect(refused.body.error.code).toBe("HMS-AUTH-005");
+    expect(refused.body.error.details.required).toBe("lab:approve");
+
+    const scan = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_LIMB", name: "X-ray Limb" })
+      .expect(201);
+    const scanId = scan.body.data.order.id as string;
+    await as("radiographer", request(app).post(`/api/v1/orders/${scanId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${scanId}/start`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${scanId}/complete`))
+      .send({ summary: "No fracture." })
+      .expect(200);
+
+    // The lab technician holds neither `order:verify` nor `radiology:sign` — refused on the first.
+    await as("tech", request(app).post(`/api/v1/orders/${scanId}/verify`)).expect(403);
+  });
+
+  /** A radiologist, where a hospital employs one, still does everything they did before. */
+  it("leaves the radiologist's own authority untouched", async () => {
+    const encounterId = await encounterWithDoctor("Consultant Read", "9000000204");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Scan Head (Plain)" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    // Performed by the technician, signed by the consultant: the two-person model a hospital gets
+    // by simply not granting the technician `order:verify`. No code path of its own.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "No intracranial haemorrhage." })
+      .expect(200);
+
+    await as("radiologist", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+    await as("radiologist", request(app).post(`/api/v1/orders/${orderId}/release`)).expect(200);
+  });
+
+  it("refuses a role with no part in imaging", async () => {
+    const encounterId = await encounterWithDoctor("No Part", "9000000205");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_ABDOMEN", name: "X-ray Abdomen" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    /**
+     * The front desk raises the patient and takes the money; it does not run the scanner.
+     *
+     * NOT the nurse, who was the obvious second example and is the wrong one: NURSE genuinely
+     * holds `order:perform`, because a nurse performs `procedure` orders — a dressing, a
+     * nebulisation. Asserting a refusal there would have been asserting a bug.
+     */
+    await as("reception", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(403);
+    await as("reception", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(403);
+    await as("reception", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "not mine to write" })
+      .expect(403);
+  });
+
+  it("refuses a forged order id, and one belonging to another hospital", async () => {
+    // Well-formed and absent.
+    await as(
+      "radiographer",
+      request(app).post("/api/v1/orders/64b7f00000000000000000ff/accept"),
+    ).expect(404);
+    // Not an id at all.
+    await as("radiographer", request(app).post("/api/v1/orders/not-an-id/accept")).expect(400);
+
+    // A real id, from the other hospital. The tenant database is the wall; it reads as absent.
+    const otherEnc = await otherEncounter("Other Imaging", "9000000206");
+    const theirs = await asOther("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId: otherEnc, category: "radiology", code: "XRAY_LIMB", name: "X-ray Limb" })
+      .expect(201);
+    await as(
+      "radiographer",
+      request(app).post(`/api/v1/orders/${theirs.body.data.order.id as string}/accept`),
+    ).expect(404);
+  });
+
+  /**
+   * The state machine is the shared one and this proves radiology gets no dispensation from it —
+   * the same edges, the same refusals, including the deliberately absent `in_progress → cancelled`
+   * that stops a study vanishing after the patient has taken the dose.
+   */
+  it("obeys the same state machine as everything else", async () => {
+    const encounterId = await encounterWithDoctor("State Imaging", "9000000207");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_CHEST_PA", name: "X-ray Chest" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+
+    // Cannot skip the bench.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Reported." })
+      .expect(422);
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    // Accepting twice is not a second acceptance — `accepted → accepted` is not an edge.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(422);
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    /**
+     * The dose has been delivered; there is no way back. Asserted as the DOCTOR, who holds
+     * `order:cancel` — the radiographer does not, so asking them would have proved a permission
+     * boundary while claiming to prove a state-machine one, and would have gone green even if
+     * `in_progress → cancelled` were quietly added.
+     */
+    await as("doctor", request(app).post(`/api/v1/orders/${orderId}/cancel`))
+      .send({ reason: "changed my mind" })
+      .expect(422);
+    // And imaging staff cannot call a doctor's study off in any case — same as the lab bench.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/cancel`))
+      .send({ reason: "not mine to cancel" })
+      .expect(403);
+
+    // A report with nothing in it is not a report.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({})
+      .expect(400);
+
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Normal study." })
+      .expect(200);
+    // Re-submitting the report is not an amendment path — `completed → completed` is not an edge,
+    // so a second submission is refused rather than silently overwriting a signed-off result.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+      .send({ summary: "Actually abnormal." })
+      .expect(422);
+
+    // And release still cannot jump verification.
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/release`)).expect(422);
+  });
+
+  it("keeps the existing idempotency contract — one requestId, one study", async () => {
+    const encounterId = await encounterWithDoctor("Double Scan", "9000000208");
+    const requestId = "req-radiology-once-0001";
+    const body = {
+      encounterId,
+      category: "radiology" as const,
+      code: "CT_HEAD",
+      name: "CT Scan Head (Plain)",
+      requestId,
+    };
+
+    const first = await as("doctor", request(app).post("/api/v1/orders")).send(body).expect(201);
+    const second = await as("doctor", request(app).post("/api/v1/orders")).send(body).expect(200);
+
+    // A second CT is a second dose of radiation. The replay must return the SAME study.
+    expect(second.body.data.order.id).toBe(first.body.data.order.id);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 13. THE RADIOLOGY ENTITLEMENT — a module that is sold must be a module that gates
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * `module.clinical.ris` appeared in four editions and gated no line of code, so imaging was
+ * delivered to hospitals that never bought it and withheld from nobody. That is not a leak in the
+ * usual sense — nothing escapes — but it is the same defect class as a permission granted to
+ * nobody, one layer up: a capability whose declaration and whose wiring have drifted apart, and
+ * which nothing could notice because the only symptom is on an invoice.
+ *
+ * The tests below also pin the two DELIBERATE holes in that gate, which matter more than the gate
+ * itself. Both are cases where refusing would harm a patient to enforce a contract.
+ */
+describe("radiology is gated on the module the hospital bought", () => {
+  /** Runs `fn` with this hospital's RIS entitlement switched off, and puts it back afterwards. */
+  async function withoutRis(fn: () => Promise<void>): Promise<void> {
+    await setFeatureOverride({
+      tenantId,
+      flag: FEATURE_FLAGS.CLINICAL_RIS,
+      enabled: false,
+      reason: "orders.int.test — entitlement block",
+    });
+    try {
+      await fn();
+    } finally {
+      await clearFeatureOverride(tenantId, FEATURE_FLAGS.CLINICAL_RIS);
+    }
+  }
+
+  it("an entitled hospital may order imaging", async () => {
+    const encounterId = await encounterWithDoctor("Entitled Imaging", "9000000210");
+    await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "XRAY_CHEST_PA", name: "X-ray Chest" })
+      .expect(201);
+  });
+
+  it("a hospital without the module is refused — HMS-PLAN-002, not HMS-AUTH-005", async () => {
+    const encounterId = await encounterWithDoctor("Unentitled Imaging", "9000000211");
+
+    await withoutRis(async () => {
+      const refused = await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Head" })
+        .expect(403);
+
+      /**
+       * The CODE is the assertion, not the status. HMS-AUTH-005 would send an administrator
+       * hunting through the role editor for a permission that can never help them; HMS-PLAN-002
+       * sends them to sales. Layer 1 before layer 2 (ADR-0010), and this is what proves it.
+       */
+      expect(refused.body.error.code).toBe("HMS-PLAN-002");
+      expect(refused.body.error.details.feature).toBe("module.clinical.ris");
+    });
+  });
+
+  /**
+   * ── THE OTHER MODULES ARE UNTOUCHED ─────────────────────────────────────────
+   * The Order is polymorphic: one set of routes carries seven categories. A gate written as a
+   * `{ feature }` on `POST /orders` would have taken all seven away at once, which is why this
+   * one is a per-category lookup and why the assertion is here rather than assumed.
+   */
+  it("does not take the laboratory, the pharmacy or a procedure away with it", async () => {
+    const encounterId = await encounterWithDoctor("Other Categories", "9000000212");
+
+    await withoutRis(async () => {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "CBC", name: "Complete Blood Count" })
+        .expect(201);
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "procedure", code: "DRESS", name: "Wound Dressing" })
+        .expect(201);
+    });
+  });
+
+  /**
+   * ── LAB IS DELIBERATELY NOT GATED THE SAME WAY ──────────────────────────────
+   * The symmetric-looking change would be to gate `lab` on `module.clinical.lis`, and it would be
+   * a regression: LIS is not in CLINIC_FLAGS, so PLAN_CLINIC and PLAN_CLINIC_PLUS do not hold it,
+   * and those hospitals legitimately order bloods today and send the sample to an outside
+   * laboratory. This test states that as an intention rather than leaving it to be "fixed".
+   */
+  it("still lets a hospital order a test it sends out to an external laboratory", async () => {
+    const encounterId = await encounterWithDoctor("Send Out", "9000000213");
+
+    await setFeatureOverride({
+      tenantId,
+      flag: FEATURE_FLAGS.CLINICAL_LIS,
+      enabled: false,
+      reason: "orders.int.test — send-out case",
+    });
+    try {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "lab", code: "LFT", name: "Liver Function" })
+        .expect(201);
+    } finally {
+      await clearFeatureOverride(tenantId, FEATURE_FLAGS.CLINICAL_LIS);
+    }
+  });
+
+  /**
+   * ── A LAPSED SUBSCRIPTION MUST NOT STRAND A PATIENT ─────────────────────────
+   * The most important test in this block. If a hospital's RIS entitlement lapses on the day a
+   * patient is halfway through a CT, blocking `complete` strands a scan that has already been
+   * performed: the dose is delivered, the image exists, and refusing the transition achieves
+   * nothing except that the doctor never sees it.
+   *
+   * So the gate stops NEW work starting and nothing else — the same reasoning, and the same
+   * shape, as the schema-readiness guard directly above it in `order.service.ts`.
+   */
+  it("lets imaging already in flight finish after the entitlement lapses", async () => {
+    const encounterId = await encounterWithDoctor("Mid Study", "9000000214");
+    const placed = await as("doctor", request(app).post("/api/v1/orders"))
+      .send({ encounterId, category: "radiology", code: "CT_HEAD", name: "CT Head" })
+      .expect(201);
+    const orderId = placed.body.data.order.id as string;
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/accept`)).expect(200);
+    await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/start`)).expect(200);
+
+    await withoutRis(async () => {
+      // The patient has had the scan. Every one of these must still work.
+      await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/complete`))
+        .send({ summary: "No acute intracranial abnormality." })
+        .expect(200);
+      await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/verify`)).expect(200);
+      await as("radiographer", request(app).post(`/api/v1/orders/${orderId}/release`)).expect(200);
+
+      // And the record stays readable. A hospital that stops paying does not lose last year's
+      // chest X-ray; hiding it would be destroying a medical record over an invoice.
+      const seen = await as("doctor", request(app).get(`/api/v1/orders/${orderId}`)).expect(200);
+      expect(seen.body.data.result.summary).toContain("No acute intracranial");
+      await as(
+        "radiographer",
+        request(app).get("/api/v1/orders?category=radiology&limit=10"),
+      ).expect(200);
+    });
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 14. A WORKLIST AND A CHART ARE DIFFERENT QUESTIONS
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * One that hides the newest result on a long-stay patient's chart, silently, and reports a smaller
+ * number than the truth while doing it.
+ *
+ * `GET /orders` served both the department bench and the patient chart with one order: sickest
+ * first, then oldest. That is correct for a bench — an emergency must not queue behind a routine,
+ * and the longest wait comes next — and it is exactly wrong for a history, where "what has just
+ * come back" is the whole question.
+ *
+ * It only becomes a DEFECT at the ceiling. `limit` is capped at 100 by the schema, so a patient
+ * with more than 100 orders — an ICU stay of a few weeks, easily — had their newest results fall
+ * off the end of the page and never appear on the chart at all. Found while running this
+ * milestone's browser suite repeatedly against one patient, which is how a slow real-world problem
+ * showed up in an afternoon.
+ */
+describe("the order list can be read as a queue or as a history", () => {
+  let chartPatientId = "";
+  let firstName = "";
+  let lastName = "";
+
+  beforeAll(async () => {
+    const encounterId = await encounterWithDoctor("Chart Order", "9000000300");
+    const enc = await as("doctor", request(app).get(`/api/v1/encounters/${encounterId}`)).expect(
+      200,
+    );
+    chartPatientId = enc.body.data.patientId as string;
+
+    // Three studies, in a known order, with the LAST one deliberately the lowest priority — so a
+    // list that sorts by priority cannot accidentally agree with a list that sorts by time.
+    firstName = "First Study";
+    lastName = "Last Study";
+    for (const [name, priority] of [
+      [firstName, "stat"],
+      ["Middle Study", "urgent"],
+      [lastName, "routine"],
+    ] as const) {
+      await as("doctor", request(app).post("/api/v1/orders"))
+        .send({ encounterId, category: "radiology", code: "XRAY_LIMB", name, priority })
+        .expect(201);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }, 60_000);
+
+  it("works a bench sickest-first by default — the existing behaviour, unchanged", async () => {
+    const res = await as(
+      "radiographer",
+      request(app).get(`/api/v1/orders?patientId=${chartPatientId}&category=radiology&limit=10`),
+    ).expect(200);
+
+    const names = (res.body.data as { name: string }[]).map((o) => o.name);
+    expect(names[0], "the stat study lost its place at the top of the bench").toBe(firstName);
+    expect(names[names.length - 1]).toBe(lastName);
+  });
+
+  it("reads a chart newest-first when asked to", async () => {
+    const res = await as(
+      "doctor",
+      request(app).get(
+        `/api/v1/orders?patientId=${chartPatientId}&category=radiology&limit=10&sort=recent`,
+      ),
+    ).expect(200);
+
+    const names = (res.body.data as { name: string }[]).map((o) => o.name);
+    expect(names[0], "the chart did not put the most recent study first").toBe(lastName);
+    expect(names[names.length - 1]).toBe(firstName);
+  });
+
+  /**
+   * THE ASSERTION THAT EARNS THIS BLOCK. At the page ceiling the two orders drop opposite ends,
+   * and only one of them is survivable: a chart that loses its OLDEST entry is a chart with
+   * history to page through, and a chart that loses its NEWEST is a doctor who cannot see the
+   * result that just came back.
+   */
+  it("keeps the newest on the first page when the history is longer than the page", async () => {
+    const page = await as(
+      "doctor",
+      request(app).get(
+        `/api/v1/orders?patientId=${chartPatientId}&category=radiology&limit=1&sort=recent`,
+      ),
+    ).expect(200);
+
+    expect((page.body.data as { name: string }[])[0]!.name).toBe(lastName);
+    // And it says how much more there is, so a truncated page is never mistaken for the whole.
+    expect(page.body.meta.total).toBeGreaterThan(1);
+    expect(page.body.meta.hasMore).toBe(true);
+  });
+
+  it("refuses a sort it does not implement rather than silently picking one", async () => {
+    await as("doctor", request(app).get("/api/v1/orders?sort=alphabetical")).expect(400);
   });
 });

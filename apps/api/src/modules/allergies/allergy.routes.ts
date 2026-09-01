@@ -20,7 +20,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./allergy.controller.js";
+import { allergy } from "./allergy.contract.js";
 import {
   idParamSchema,
   patientIdParamSchema,
@@ -36,6 +38,7 @@ export function allergyRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ALLERGY_READ),
     validate(patientIdParamSchema, "params"),
+    responds(allergy.array()),
     asyncHandler(controller.list),
   );
 
@@ -45,6 +48,7 @@ export function allergyRouter(): Router {
     authorize(PERMISSIONS.ALLERGY_MANAGE),
     validate(patientIdParamSchema, "params"),
     validate(recordAllergySchema),
+    responds(allergy, { status: 201 }),
     asyncHandler(controller.record),
   );
 
@@ -55,6 +59,7 @@ export function allergyRouter(): Router {
     authorize(PERMISSIONS.ALLERGY_MANAGE),
     validate(idParamSchema, "params"),
     validate(refuteAllergySchema),
+    responds(allergy),
     asyncHandler(controller.refute),
   );
 

@@ -73,6 +73,20 @@ export interface DispenseDoc {
    */
   requestId?: string;
 
+  /**
+   * Present only when this handover put an admitted patient over their advance and a
+   * clinician authorised dispensing on credit (`pharmacy:credit-override`). The audit
+   * answer to "who let this go out unpaid, and why".
+   */
+  creditOverride?: {
+    /** The authorising user (holds `pharmacy:credit-override`). */
+    by: string;
+    reason: string;
+    /** Paise the advance was short at the moment of dispensing. */
+    shortfall: number;
+    at: Date;
+  };
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -104,6 +118,13 @@ const dispenseSchema = new Schema<DispenseDoc>(
     dispensedAt: { type: Date, required: true },
 
     requestId: { type: String },
+
+    creditOverride: {
+      by: { type: String },
+      reason: { type: String, trim: true, maxlength: 300 },
+      shortfall: { type: Number },
+      at: { type: Date },
+    },
   },
   { timestamps: true, collection: "dispenses", autoIndex: false },
 );

@@ -181,7 +181,24 @@ export interface EncounterDoc {
    */
   token?: number;
 
+  /**
+   * A paid fast-track OP visit. `true` floats the patient above normal patients in the
+   * doctor's queue (still token-ordered within each group) and earns an express surcharge on
+   * top of the consultation fee. Absent/false is an ordinary visit.
+   */
+  express?: boolean;
+
   reason?: string;
+
+  /**
+   * The doctor's OP visit summary — recorded for the OPD slip the patient takes home. `diagnosis`
+   * is the clinical impression; `advice` is the free-text instructions (rest, diet, follow-up).
+   * Prescriptions and their per-line instructions live on the prescription; these two are the
+   * narrative around them. Optional: a slip prints fine from the reason, tests and prescriptions
+   * alone, and a busy OPD may never fill them.
+   */
+  diagnosis?: string;
+  advice?: string;
 
   /**
    * TRUE while the encounter is live. Derived from `status` — never set by hand.
@@ -211,23 +228,30 @@ export interface EncounterDoc {
    * version of exactly that — `admissions` hanging off `patients` as a parallel root —
    * is the structure ADR-0013 was written to kill. Admission is a CLASS of encounter.
    *
-   * ── IT PREVENTS DOUBLE-OCCUPANCY, BUT IS STILL NOT A BED INVENTORY ───────────
-   * It records which bed the patient is in so the stay can be billed and the ward round
-   * knows where to go. A unique partial index (`one_open_stay_per_bed`, migration 0020) now
-   * refuses to record two OPEN stays in the same ward + bed, so a bed can no longer hold two
-   * patients at once — the database enforcing it, the same way `one_open_encounter_per_patient`
-   * does for the patient. What this still is NOT is an inventory: there is no catalogue of beds
-   * and no free-bed board, so it can tell you a bed is TAKEN but not which beds are free.
-   * `bed:manage` exists as a permission and nothing writes it — that board is future work
-   * (PROJECT_MEMORY §5).
+   * ── IT PREVENTS DOUBLE-OCCUPANCY, AND NOW HAS AN INVENTORY BEHIND IT ─────────
+   * It records which bed the patient is in so the stay can be billed and the ward round knows
+   * where to go. A unique partial index (`one_open_stay_per_bed`, migration 0020) refuses to
+   * record two OPEN stays in the same ward + bed, so a bed can never hold two patients at once —
+   * the database enforcing it, the same way `one_open_encounter_per_patient` does for the patient.
+   * The `wards` module (B4) now supplies the CATALOGUE: `bedId` is set when the patient is admitted
+   * by picking a bed from it, and the free-bed board (admissions module) derives which beds are
+   * free by joining that catalogue to these open stays. Occupancy still lives HERE, never on the
+   * bed — the board reads it, it does not store it.
    */
   bed?: {
     /** `General Ward`, `ICU` — what a human calls it. */
     ward: string;
-    /** `A-12`. Free text: without an inventory there is nothing to validate against. */
+    /** `A-12`. Denormalized from the bed inventory (B4) when admitted from the catalogue. */
     bedCode: string;
     /** The tariff code the bed-day charge is posted against — `BED_GEN`, `BED_ICU`. */
     tariffCode: string;
+    /**
+     * The catalogue bed this stay occupies (B4), when admitted by picking a bed rather than by
+     * typing one. Present, the bed board correlates occupancy by id; absent (legacy / free-text
+     * admits), it falls back to matching `ward` + `bedCode`. Occupancy itself is NEVER stored on
+     * the bed — this reference points AT the encounter's own record of where the patient is.
+     */
+    bedId?: Types.ObjectId;
   };
 
   arrivedAt: Date;
@@ -245,6 +269,16 @@ export interface EncounterDoc {
   /** The OP encounter this admission came out of, so the story can be walked backwards. */
   admittedFrom?: Types.ObjectId;
 
+  /**
+   * How many still-live orders (tests) sit on this visit. Maintained by the ORDERS module inside the
+   * order's own transaction (`+1` on place, `−1` on cancel), so it is exact and race-free — a doctor
+   * who orders a test and immediately sends the patient for investigations sees the count already
+   * reflect it, which an async event consumer could not promise. Its one job is the guard on
+   * `sendForInvestigations`: a visit cannot be sent to the lab with nothing ordered. Absent on
+   * pre-existing visits — read it as `?? 0`.
+   */
+  activeOrderCount?: number;
+
   createdBy?: string;
   history: EncounterHistoryEntry[];
   createdAt: Date;
@@ -254,7 +288,7 @@ export interface EncounterDoc {
 const encounterSchema = new Schema<EncounterDoc>(
   {
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String },
+    branchId: { type: String, required: true },
 
     patientId: { type: Schema.Types.ObjectId, required: true },
     episodeId: { type: Schema.Types.ObjectId, required: true },
@@ -269,7 +303,13 @@ const encounterSchema = new Schema<EncounterDoc>(
     departmentId: { type: String },
 
     token: { type: Number },
+    express: { type: Boolean },
     reason: { type: String, trim: true, maxlength: 500 },
+    diagnosis: { type: String, trim: true, maxlength: 2000 },
+    advice: { type: String, trim: true, maxlength: 2000 },
+
+    // Live order count — maintained by the orders module (see the interface). Not indexed.
+    activeOrderCount: { type: Number, default: 0 },
 
     // `default: undefined`, never `false` — see the interface. A stored `false`
     // would sit in the unique index and lock the patient out of ever returning.
@@ -281,6 +321,7 @@ const encounterSchema = new Schema<EncounterDoc>(
         ward: { type: String, required: true, trim: true, maxlength: 100 },
         bedCode: { type: String, required: true, trim: true, maxlength: 32 },
         tariffCode: { type: String, required: true, trim: true, maxlength: 64 },
+        bedId: { type: Schema.Types.ObjectId },
       },
       required: false,
     },

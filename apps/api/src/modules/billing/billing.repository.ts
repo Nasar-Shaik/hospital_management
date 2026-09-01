@@ -1,6 +1,6 @@
 /**
- * Billing repository — the ONLY code that queries `serviceItems`, `charges` and
- * `invoices` (Constitution §6).
+ * Billing repository — the ONLY code that queries `serviceItems`, `charges`, `invoices`,
+ * `servicePackages` and `packageEnrollments` (Constitution §6).
  */
 import type { ClientSession } from "mongoose";
 import { Types } from "mongoose";
@@ -12,6 +12,8 @@ import {
   getChargeModel,
   getInvoiceModel,
   getServiceItemModel,
+  getPackageModel,
+  getPackageEnrollmentModel,
   type ChargeCategory,
   type ChargeDoc,
   type ChargeSource,
@@ -19,7 +21,11 @@ import {
   type InvoiceLine,
   type InvoiceStatus,
   type PaymentEntry,
+  type RefundEntry,
   type ServiceItemDoc,
+  type PackageDoc,
+  type PackageEnrollmentDoc,
+  type PackageEnrollmentStatus,
 } from "./billing.model.js";
 
 export { isDuplicateKey };
@@ -30,6 +36,8 @@ export interface ServiceItem {
   name: string;
   category: ChargeCategory;
   price: number;
+  /** Consultation only: days this fee buys free revisits to the same doctor. Absent/0 = none. */
+  followUpDays?: number;
   active: boolean;
 }
 
@@ -46,6 +54,10 @@ export interface Charge {
   amount: number;
   source: ChargeSource;
   sourceId?: string;
+  /** The branch this charge was raised in (ADR-0015) — the invoice covering it inherits it. */
+  branchId?: string;
+  /** Consultation charges: whose consultation it was. Drives the free-follow-up lookup. */
+  doctorId?: string;
   postedBy?: string;
   postedAt: Date;
   invoiceId?: string;
@@ -63,11 +75,21 @@ export interface Invoice {
   lines: InvoiceLine[];
   subtotal: number;
   discount: number;
+  discountReason?: string;
   total: number;
   paid: number;
+  /** Paise the insurer is expected to bear. */
+  coveredByInsurer: number;
+  insurerPolicyId?: string;
+  /** Derived: `total − coveredByInsurer`. What the patient's own money must cover. */
+  patientResponsibility: number;
   payments: PaymentEntry[];
+  refunds: RefundEntry[];
+  refunded: number;
   finalizedAt?: Date;
   createdAt: Date;
+  /** Optimistic-concurrency counter (Doc 03 §5.2). Guarded by `applyDiscountGuarded`. */
+  version: number;
 }
 
 function toServiceItem(d: ServiceItemDoc): ServiceItem {
@@ -77,6 +99,7 @@ function toServiceItem(d: ServiceItemDoc): ServiceItem {
     name: d.name,
     category: d.category,
     price: d.price,
+    ...(typeof d.followUpDays === "number" ? { followUpDays: d.followUpDays } : {}),
     active: d.active,
   };
 }
@@ -96,6 +119,8 @@ function toCharge(d: ChargeDoc): Charge {
     source: d.source,
     postedAt: d.postedAt,
     ...(d.sourceId ? { sourceId: d.sourceId } : {}),
+    ...(d.branchId ? { branchId: d.branchId } : {}),
+    ...(d.doctorId ? { doctorId: d.doctorId } : {}),
     ...(d.postedBy ? { postedBy: d.postedBy } : {}),
     ...(d.invoiceId ? { invoiceId: d.invoiceId.toString() } : {}),
     ...(d.voided ? { voided: true } : {}),
@@ -115,8 +140,15 @@ function toInvoice(d: InvoiceDoc): Invoice {
     discount: d.discount,
     total: d.total,
     paid: d.paid,
+    coveredByInsurer: d.coveredByInsurer ?? 0,
+    patientResponsibility: d.total - (d.coveredByInsurer ?? 0),
     payments: d.payments ?? [],
+    refunds: d.refunds ?? [],
+    refunded: d.refunded ?? 0,
+    version: d.version ?? 0,
     createdAt: d.createdAt,
+    ...(d.insurerPolicyId ? { insurerPolicyId: d.insurerPolicyId } : {}),
+    ...(d.discountReason ? { discountReason: d.discountReason } : {}),
     ...(d.number ? { number: d.number } : {}),
     ...(d.finalizedAt ? { finalizedAt: d.finalizedAt } : {}),
   };
@@ -166,6 +198,8 @@ export interface CreateServiceInput {
   category: ChargeCategory;
   /** Paise. */
   price: number;
+  /** Consultation only: days of free revisits this fee buys. */
+  followUpDays?: number;
 }
 
 export async function createService(input: CreateServiceInput): Promise<ServiceItem> {
@@ -176,6 +210,7 @@ export async function createService(input: CreateServiceInput): Promise<ServiceI
     name: input.name,
     category: input.category,
     price: input.price,
+    ...(input.followUpDays !== undefined ? { followUpDays: input.followUpDays } : {}),
     active: true,
   });
   return toServiceItem(doc.toObject() as ServiceItemDoc);
@@ -185,6 +220,7 @@ export async function createService(input: CreateServiceInput): Promise<ServiceI
 export interface UpdateServiceInput {
   name?: string;
   price?: number;
+  followUpDays?: number;
   active?: boolean;
 }
 
@@ -202,12 +238,32 @@ export async function updateService(
 /* ── Reporting: the collections register (period on payment date, half-open) ── */
 
 export interface CollectionsReport {
-  /** Total money RECEIVED in the period, in paise. */
+  /** Total money RECEIVED at the counter in the period, in paise. Excludes wallet settlements. */
   total: number;
-  /** Number of individual payments taken. */
+  /** Number of individual payments taken (direct, non-wallet). */
   count: number;
   byMonth: { month: string; amount: number; count: number }[];
   byMethod: { method: string; amount: number; count: number }[];
+  /**
+   * Who took the money, heaviest first — one row per cashier who collected in the period.
+   *
+   * ── THE DRAWER IS RECONCILED PER PERSON, NOT PER DESK ───────────────────────
+   * A hospital running several front-desk staff across a shift needs "how much did each of them
+   * take?" to count a drawer, answer a dispute, or notice that a receipt was voided by the person
+   * who wrote it. Every payment has recorded its collector's id since the beginning; nothing ever
+   * grouped by it, so the question could only be answered by reading invoices one at a time.
+   *
+   * `collectedBy` is a user id — the reporting module resolves it to a name, exactly as it does
+   * for the diagnostics register's performers. Payments taken before a collector was recorded (or
+   * by the system, on an automated posting) group under an empty id and are named there.
+   */
+  byCollector: { collectedBy: string; amount: number; count: number }[];
+  /**
+   * Paise. Bills SETTLED FROM ADVANCE in the period (`method: "wallet"`). Reported apart from
+   * `total` on purpose — this money already crossed the counter when it was deposited, so counting
+   * it here as well would inflate the day's takings. See the wallet register for the advance story.
+   */
+  settledFromAdvance: number;
 }
 
 /**
@@ -226,15 +282,23 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
     total: { amount: number; count: number }[];
     byMonth: { _id: string; amount: number; count: number }[];
     byMethod: { _id: string; amount: number; count: number }[];
+    byCollector: { _id: string | null; amount: number; count: number }[];
+    fromAdvance: { amount: number }[];
   }>([
     { $unwind: "$payments" },
     { $match: { "payments.at": { $gte: from, $lt: to } } },
     {
       $facet: {
+        // Every figure below is DIRECT collection only — money that crossed the counter here. A
+        // `method: "wallet"` payment is a bill settled from an advance already banked at deposit
+        // time; folding it in would double-count it, so the drawer views exclude it and it is
+        // surfaced apart in `fromAdvance`.
         total: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
           { $group: { _id: null, amount: { $sum: "$payments.amount" }, count: { $sum: 1 } } },
         ],
         byMonth: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
           {
             $group: {
               _id: { $dateToString: { format: "%Y-%m", date: "$payments.at" } },
@@ -245,6 +309,7 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
           { $sort: { _id: 1 } },
         ],
         byMethod: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
           {
             $group: {
               _id: "$payments.method",
@@ -253,6 +318,24 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
             },
           },
           { $sort: { amount: -1 } },
+        ],
+        // Direct collection only, like every figure above it: a wallet settlement was taken by
+        // whoever banked the ADVANCE, not by whoever happened to apply it, so crediting it to
+        // this cashier's drawer would make their count wrong in both directions.
+        byCollector: [
+          { $match: { "payments.method": { $ne: "wallet" } } },
+          {
+            $group: {
+              _id: "$payments.by",
+              amount: { $sum: "$payments.amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+        ],
+        fromAdvance: [
+          { $match: { "payments.method": "wallet" } },
+          { $group: { _id: null, amount: { $sum: "$payments.amount" } } },
         ],
       },
     },
@@ -263,6 +346,214 @@ export async function collectionsReport(from: Date, to: Date): Promise<Collectio
     count: f?.total[0]?.count ?? 0,
     byMonth: (f?.byMonth ?? []).map((r) => ({ month: r._id, amount: r.amount, count: r.count })),
     byMethod: (f?.byMethod ?? []).map((r) => ({ method: r._id, amount: r.amount, count: r.count })),
+    byCollector: (f?.byCollector ?? []).map((r) => ({
+      // `_id: null` is a payment recorded with no user — an automated posting, or a row from
+      // before collectors were stamped. It is kept, not dropped: money that came in with no name
+      // on it is exactly the row a reconciliation needs to see.
+      collectedBy: r._id ?? "",
+      amount: r.amount,
+      count: r.count,
+    })),
+    settledFromAdvance: f?.fromAdvance[0]?.amount ?? 0,
+  };
+}
+
+/* ── Reporting: revenue leakage (charges posted but never billed) ── */
+
+export interface RevenueLeakageReport {
+  /** Paise posted as a charge in the period but never put on a bill. The money at risk. */
+  total: number;
+  /** Number of unbilled charges. */
+  count: number;
+  byCategory: { category: string; amount: number; count: number }[];
+  bySource: { source: string; amount: number; count: number }[];
+  /** The visits carrying unbilled charges, heaviest first — where to go and bill. */
+  byEncounter: { encounterId: string; patientId: string; amount: number; count: number }[];
+}
+
+/**
+ * Money EARNED BUT NOT BILLED — the leak.
+ *
+ * A charge posts the moment care is given (a test ordered, a bed-day, a manual item); it becomes
+ * money the hospital can collect only when it is FINALIZED onto a bill, which stamps its
+ * `invoiceId`. A charge posted in the period, worth more than ₹0, not voided, and still carrying no
+ * `invoiceId` is care the hospital gave and never charged for — revenue walking out of the door.
+ * This finds it, sums it by category and by source, and lists the visits that hold it so someone
+ * can raise the bills. Paise; tenant-scoped by the aggregate hook. The window is half-open on
+ * `postedAt`, matching every other register.
+ */
+export async function revenueLeakage(from: Date, to: Date): Promise<RevenueLeakageReport> {
+  const model = getChargeModel(getTenantDb());
+  const facet = await model.aggregate<{
+    total: { amount: number; count: number }[];
+    byCategory: { _id: string; amount: number; count: number }[];
+    bySource: { _id: string; amount: number; count: number }[];
+    byEncounter: { _id: { e: Types.ObjectId; p: Types.ObjectId }; amount: number; count: number }[];
+  }>([
+    {
+      $match: {
+        postedAt: { $gte: from, $lt: to },
+        amount: { $gt: 0 },
+        voided: { $ne: true },
+        invoiceId: { $exists: false },
+      },
+    },
+    {
+      $facet: {
+        total: [{ $group: { _id: null, amount: { $sum: "$amount" }, count: { $sum: 1 } } }],
+        byCategory: [
+          { $group: { _id: "$category", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+        ],
+        bySource: [
+          { $group: { _id: "$source", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
+          { $sort: { amount: -1 } },
+        ],
+        byEncounter: [
+          {
+            $group: {
+              _id: { e: "$encounterId", p: "$patientId" },
+              amount: { $sum: "$amount" },
+              count: { $sum: 1 },
+            },
+          },
+          { $sort: { amount: -1 } },
+          { $limit: 50 },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  return {
+    total: f?.total[0]?.amount ?? 0,
+    count: f?.total[0]?.count ?? 0,
+    byCategory: (f?.byCategory ?? []).map((r) => ({
+      category: r._id,
+      amount: r.amount,
+      count: r.count,
+    })),
+    bySource: (f?.bySource ?? []).map((r) => ({ source: r._id, amount: r.amount, count: r.count })),
+    byEncounter: (f?.byEncounter ?? []).map((r) => ({
+      encounterId: r._id.e.toString(),
+      patientId: r._id.p.toString(),
+      amount: r.amount,
+      count: r.count,
+    })),
+  };
+}
+
+/* ── Reporting: dues ageing (billed but unpaid, by how old the debt is) ── */
+
+export const DUES_BUCKETS = ["0-30", "31-60", "61-90", "90+"] as const;
+export type DuesBucket = (typeof DUES_BUCKETS)[number];
+
+export interface DuesAgeingReport {
+  /** Paise still owed on finalized-but-unpaid bills, as of the report date. */
+  totalOutstanding: number;
+  /** Number of bills carrying a balance. */
+  invoiceCount: number;
+  /** Outstanding split by how old the debt is — the ageing the collections desk chases down. */
+  buckets: { bucket: DuesBucket; amount: number; count: number }[];
+  /** The heaviest debts, oldest money first — who to call. */
+  topDebtors: {
+    invoiceId: string;
+    number?: string;
+    patientId: string;
+    outstanding: number;
+    ageDays: number;
+  }[];
+}
+
+/**
+ * Money BILLED BUT NOT YET COLLECTED, aged.
+ *
+ * A `finalized` invoice is one handed to the patient but not fully paid (payment flips it to
+ * `paid`), so `total − paid` on every finalized bill is the hospital's outstanding receivable. This
+ * ages each balance by how long ago the bill was raised (`finalizedAt`, falling back to
+ * `createdAt`) into the 0-30 / 31-60 / 61-90 / 90+ day buckets a collections desk works, and lists
+ * the heaviest debts so someone can chase them. `asOf` is the snapshot date — the report's `to`, so
+ * "dues as of the 31st" is answerable. Paise; tenant-scoped by the aggregate hook.
+ */
+export async function duesAgeing(asOf: Date): Promise<DuesAgeingReport> {
+  const day = 86_400_000;
+  const d30 = new Date(asOf.getTime() - 30 * day);
+  const d60 = new Date(asOf.getTime() - 60 * day);
+  const d90 = new Date(asOf.getTime() - 90 * day);
+
+  const model = getInvoiceModel(getTenantDb());
+  const facet = await model.aggregate<{
+    total: { amount: number; count: number }[];
+    buckets: { _id: DuesBucket; amount: number; count: number }[];
+    top: {
+      _id: Types.ObjectId;
+      number?: string;
+      patientId: Types.ObjectId;
+      outstanding: number;
+      ageDays: number;
+    }[];
+  }>([
+    { $match: { status: "finalized", finalizedAt: { $lte: asOf } } },
+    {
+      $addFields: {
+        outstanding: { $subtract: ["$total", "$paid"] },
+        refDate: { $ifNull: ["$finalizedAt", "$createdAt"] },
+      },
+    },
+    { $match: { outstanding: { $gt: 0 } } },
+    {
+      $addFields: {
+        ageDays: { $floor: { $divide: [{ $subtract: [asOf, "$refDate"] }, day] } },
+        bucket: {
+          $switch: {
+            branches: [
+              { case: { $gte: ["$refDate", d30] }, then: "0-30" },
+              { case: { $gte: ["$refDate", d60] }, then: "31-60" },
+              { case: { $gte: ["$refDate", d90] }, then: "61-90" },
+            ],
+            default: "90+",
+          },
+        },
+      },
+    },
+    {
+      $facet: {
+        total: [{ $group: { _id: null, amount: { $sum: "$outstanding" }, count: { $sum: 1 } } }],
+        buckets: [
+          { $group: { _id: "$bucket", amount: { $sum: "$outstanding" }, count: { $sum: 1 } } },
+        ],
+        top: [
+          { $sort: { outstanding: -1 } },
+          { $limit: 50 },
+          {
+            $project: {
+              number: 1,
+              patientId: 1,
+              outstanding: 1,
+              ageDays: 1,
+            },
+          },
+        ],
+      },
+    },
+  ]);
+  const f = facet[0];
+  const found = new Map((f?.buckets ?? []).map((b) => [b._id, b]));
+  return {
+    totalOutstanding: f?.total[0]?.amount ?? 0,
+    invoiceCount: f?.total[0]?.count ?? 0,
+    // Emit every bucket in a fixed order, zero-filled — a report with a missing row reads as a
+    // gap in the data, not the "nothing is 61-90 days overdue" it actually means.
+    buckets: DUES_BUCKETS.map((bucket) => {
+      const b = found.get(bucket);
+      return { bucket, amount: b?.amount ?? 0, count: b?.count ?? 0 };
+    }),
+    topDebtors: (f?.top ?? []).map((r) => ({
+      invoiceId: r._id.toString(),
+      patientId: r.patientId.toString(),
+      outstanding: r.outstanding,
+      ageDays: r.ageDays,
+      ...(r.number ? { number: r.number } : {}),
+    })),
   };
 }
 
@@ -281,6 +572,7 @@ export interface PostChargeInput {
   source: ChargeSource;
   sourceId?: string;
   branchId?: string;
+  doctorId?: string;
 }
 
 /**
@@ -311,6 +603,7 @@ export async function postCharge(input: PostChargeInput, session?: ClientSession
         postedAt: new Date(),
         ...(input.sourceId ? { sourceId: input.sourceId } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
+        ...(input.doctorId ? { doctorId: input.doctorId } : {}),
         ...(ctx.userId ? { postedBy: ctx.userId } : {}),
       },
     ],
@@ -327,6 +620,175 @@ export async function chargesForEncounter(encounterId: string): Promise<Charge[]
     .sort({ postedAt: 1 })
     .lean<ChargeDoc[]>();
   return docs.map(toCharge);
+}
+
+/**
+ * The charges on this visit NOT yet on any invoice — the "pending" bill.
+ *
+ * Per-batch billing is built on this: a charge with no `invoiceId` has not been billed, so it is
+ * what the next bill covers. Finalizing moves this set onto a fresh invoice; anything ordered after
+ * that is a new pending set for the next bill. Voided charges are excluded — a reversed charge is
+ * not owed.
+ */
+/** One visit that owes a bill nobody has raised yet. Amounts are paise. */
+export interface PendingBatch {
+  encounterId: string;
+  patientId: string;
+  amount: number;
+  /** How many charges are waiting — "3 items", so the cashier knows what they are about to raise. */
+  count: number;
+  /** When the OLDEST waiting charge posted: how long this has been unbilled. */
+  since: Date;
+}
+
+/**
+ * Every visit carrying charges that are on no invoice — the cash counter's queue.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ * `unbilledChargesForEncounter` answers the question for a visit you already know about, which is
+ * fine for Reception (it is looking at its own day's register). The cashier has no register: their
+ * screen lists INVOICES, and an ordered lab test has no invoice until somebody finalizes one. So a
+ * doctor's order posted a charge, the lab waited for payment, and the cashier — holding
+ * `billing:finalize` and `payment:collect` — had no screen on which either permission could be
+ * used. This is the missing read: not "what does this visit owe" but "who owes anything at all".
+ *
+ * ── DELIBERATELY NOT BRANCH-FILTERED ────────────────────────────────────────
+ * Two reasons, and they point the same way. A charge posted by an event consumer may carry NO
+ * `branchId` at all (`onOrderPlaced` stamps it only when the event envelope has one), so a
+ * `scopeFilter()` here would silently drop real money from the only list that goes looking for it
+ * — the same shape of bug as filtering vitals on their own optional branch stamp. And the invoice
+ * list this sits beside (`listInvoices`) is tenant-wide too; scoping one half of the billing
+ * screen and not the other would show a cashier a pending charge whose resulting bill then
+ * vanishes. Branch-scoping the cash counter is a real question for a multi-branch hospital, but it
+ * has to be answered for the whole screen at once.
+ *
+ * `tenantScopePlugin` prepends the `tenantId` $match to every aggregation, so the hospital wall
+ * still holds — see `core/db/plugins/tenantScope.ts`.
+ */
+export async function pendingBatches(filter: {
+  /** Restrict to these patients — how the counter's name/UHID search is applied. */
+  patientIds?: string[];
+  limit: number;
+  skip: number;
+}): Promise<{ items: PendingBatch[]; total: number }> {
+  const model = getChargeModel(getTenantDb());
+
+  const match: Record<string, unknown> = {
+    voided: { $ne: true },
+    invoiceId: { $exists: false },
+    ...(filter.patientIds
+      ? { patientId: { $in: filter.patientIds.map((id) => new Types.ObjectId(id)) } }
+      : {}),
+  };
+
+  const group = {
+    $group: {
+      _id: "$encounterId",
+      patientId: { $first: "$patientId" },
+      amount: { $sum: "$amount" },
+      count: { $sum: 1 },
+      since: { $min: "$postedAt" },
+    },
+  };
+
+  interface Row {
+    _id: Types.ObjectId;
+    patientId: Types.ObjectId;
+    amount: number;
+    count: number;
+    since: Date;
+  }
+
+  const [rows, counted] = await Promise.all([
+    model.aggregate<Row>([
+      { $match: match },
+      group,
+      // Oldest first: the visit that has been waiting longest is the one most likely to walk out
+      // of the building unbilled.
+      { $sort: { since: 1 } },
+      { $skip: filter.skip },
+      { $limit: filter.limit },
+    ]),
+    model.aggregate<{ total: number }>([{ $match: match }, group, { $count: "total" }]),
+  ]);
+
+  return {
+    items: rows.map((r) => ({
+      encounterId: r._id.toString(),
+      patientId: r.patientId.toString(),
+      amount: r.amount,
+      count: r.count,
+      since: r.since,
+    })),
+    total: counted[0]?.total ?? 0,
+  };
+}
+
+export async function unbilledChargesForEncounter(encounterId: string): Promise<Charge[]> {
+  const docs = await getChargeModel(getTenantDb())
+    .find({
+      encounterId: new Types.ObjectId(encounterId),
+      voided: { $ne: true },
+      invoiceId: { $exists: false },
+    })
+    .sort({ postedAt: 1 })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+/**
+ * The consultation charges across a SET of encounters — for reception's "has the OP fee been
+ * paid?" gate. Filtered to `category: "consultation"` so a later test or pharmacy charge on the
+ * same visit never counts toward whether the patient may join the doctor's queue.
+ */
+export async function consultationChargesForEncounters(encounterIds: string[]): Promise<Charge[]> {
+  if (encounterIds.length === 0) return [];
+  const objectIds = encounterIds.map((id) => new Types.ObjectId(id));
+  const docs = await getChargeModel(getTenantDb())
+    .find({
+      encounterId: { $in: objectIds },
+      category: "consultation",
+      voided: { $ne: true },
+    })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+/**
+ * Consultations this patient has already been CHARGED for with one doctor since `since` —
+ * newest first. The raw material of the free-follow-up rule (`consultationFollowUp`).
+ *
+ * Only charges with an `amount > 0` qualify: a ₹0 line is either a government zero-tariff visit or
+ * a follow-up that was itself waived, and neither can father a further free visit. Letting a waived
+ * visit extend the window would make the entitlement roll forward for ever off a single payment.
+ */
+export async function paidConsultationsForDoctor(input: {
+  patientId: string;
+  doctorId: string;
+  since: Date;
+}): Promise<Charge[]> {
+  if (!Types.ObjectId.isValid(input.patientId)) return [];
+  const docs = await getChargeModel(getTenantDb())
+    .find({
+      patientId: new Types.ObjectId(input.patientId),
+      doctorId: input.doctorId,
+      category: "consultation",
+      voided: { $ne: true },
+      amount: { $gt: 0 },
+      postedAt: { $gte: input.since },
+    })
+    .sort({ postedAt: -1 })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+/** Every invoice raised on this visit (a visit can have several — consultation, tests, pharmacy). */
+export async function invoicesForEncounter(encounterId: string): Promise<Invoice[]> {
+  const docs = await getInvoiceModel(getTenantDb())
+    .find({ encounterId: new Types.ObjectId(encounterId), status: { $ne: "cancelled" } })
+    .sort({ createdAt: 1 })
+    .lean<InvoiceDoc[]>();
+  return docs.map(toInvoice);
 }
 
 /**
@@ -411,29 +873,55 @@ export async function createInvoice(
   return toInvoice(doc);
 }
 
+/** Who this invoice is FOR — decides which series numbers it (ADR-0015). */
+export interface InvoiceBranch {
+  branchId?: string;
+  branchCode?: string;
+  isMain?: boolean;
+}
+
 /**
  * The invoice number.
  *
- * Atomic `$inc` on a per-year counter — the same mechanism as the UHID and the queue
- * token, and for the same reason: two cashiers finalizing at the same instant must not
- * both be handed `INV-2026-0042`. A duplicate invoice number is a tax problem, not a
- * display bug.
+ * Atomic `$inc` on a counter — the same mechanism as the UHID and the queue token, and
+ * for the same reason: two cashiers finalizing at the same instant must not both be
+ * handed `INV-2026-0042`. A duplicate invoice number is a tax problem, not a display bug.
+ *
+ * ── PER-BRANCH SERIES (ADR-0015) ─────────────────────────────────────────────
+ * A branch is usually a separate place of supply, so it wants its OWN running series,
+ * not a slice of a tenant-wide one. So each NON-MAIN branch gets its own counter
+ * (`invoice:{branchId}:{year}`) and its code in the number (`INV-CHN-2026-00042`).
+ *
+ * The MAIN branch — and any hospital that predates branches (no `branchId`) — stays on
+ * the original tenant-wide counter (`invoice:{year}`) and the original format
+ * (`INV-2026-00042`). That is deliberate, not laziness: a single-site hospital sees NO
+ * change, and a hospital that opens a second branch does not restart or reformat the
+ * numbers its first site has already issued. The two namespaces (coded vs not) can never
+ * collide, so the tenant-wide uniqueness index still holds.
  */
-export async function nextInvoiceNumber(session?: ClientSession): Promise<string> {
+export async function nextInvoiceNumber(
+  branch: InvoiceBranch = {},
+  session?: ClientSession,
+): Promise<string> {
   const ctx = getContext();
   const year = new Date().getFullYear();
+
+  // Only a NON-MAIN branch gets its own series; Main and branchless share the original one.
+  const ownSeries = Boolean(branch.branchId && branch.branchCode && !branch.isMain);
+  const counterId = ownSeries ? `invoice:${branch.branchId}:${year}` : `invoice:${year}`;
 
   const result = await ctx.connection
     .collection<{ _id: string; tenantId: string; seq: number }>("counters")
     .findOneAndUpdate(
-      { _id: `invoice:${year}` },
+      { _id: counterId },
       { $inc: { seq: 1 }, $setOnInsert: { tenantId: ctx.tenantId } },
       { upsert: true, returnDocument: "after", ...(session ? { session } : {}) },
     );
 
   const seq = result?.seq;
   if (typeof seq !== "number") throw new Error("invoice number allocation failed");
-  return `INV-${String(year)}-${String(seq).padStart(5, "0")}`;
+  const prefix = ownSeries ? `INV-${branch.branchCode}-` : "INV-";
+  return `${prefix}${String(year)}-${String(seq).padStart(5, "0")}`;
 }
 
 export async function updateInvoice(
@@ -447,20 +935,150 @@ export async function updateInvoice(
   return doc ? toInvoice(doc) : undefined;
 }
 
+/**
+ * ── MONEY IS ADDED BY THE DATABASE, NEVER BY THE CALLER ─────────────────────────────────────
+ *
+ * These two used to take the new ABSOLUTE total (`paid`, `refunded`) that the service had computed
+ * from a document it read moments earlier, and `$set` it. That is a lost update with money in it:
+ *
+ *   two ₹500 payments land on a ₹1,000 bill at the same instant
+ *   → both read `paid: 0`, both compute `500`, both write `$set: { paid: 500 }`
+ *   → the `payments` array correctly holds BOTH entries, and the scalar says ₹500.
+ *
+ * ₹1,000 crossed the counter, the system recorded ₹500, and every collections and dues report
+ * reads the scalar. The patient is asked to pay again, and the drawer does not reconcile.
+ *
+ * So the caller now passes the DELTA and the database does the arithmetic (`$add` in a pipeline
+ * update, which is atomic), while the invariant that used to be an `if` in the service becomes a
+ * CONDITION ON THE WRITE:
+ *
+ *   - overpayment       `$expr: paid + amount <= total`      — refused by the filter, not a check
+ *   - duplicate submit  `payments.requestId != requestId`    — the idempotency guard
+ *   - wrong state       `status` in the filter
+ *
+ * No match means one of those held, and the service re-reads to say WHICH (a bare "not found" on a
+ * payment is the least helpful thing a counter can be told). This is the same move the project
+ * already made for double-booking and double-billing: when correctness needs an atomic decision,
+ * make the DATABASE make it (ADR-0013 §3, `one_charge_per_cause`, `one_doctor_one_slot`).
+ *
+ * `$literal` wraps the entry deliberately. Inside an aggregation pipeline a string beginning with
+ * `$` is a FIELD PATH, so a cashier typing `$total` into the payment reference would otherwise
+ * have it silently replaced by the invoice total. `$literal` stops the value being parsed at all.
+ */
 export async function addPayment(
   id: string,
   payment: PaymentEntry,
-  status: InvoiceStatus,
-  paid: number,
+  session?: ClientSession,
 ): Promise<Invoice | undefined> {
   const doc = await getInvoiceModel(getTenantDb())
     .findOneAndUpdate(
-      { _id: id },
-      { $push: { payments: payment }, $set: { paid, status } },
-      { new: true },
+      {
+        _id: id,
+        // Payment is refused on a draft and on a cancelled bill (STATE_MACHINE_CATALOG §4). A
+        // fully-paid bill is excluded by the overpayment guard below, not by status.
+        status: "finalized",
+        ...(payment.requestId ? { "payments.requestId": { $ne: payment.requestId } } : {}),
+        $expr: { $lte: [{ $add: ["$paid", payment.amount] }, "$total"] },
+      },
+      [
+        {
+          $set: {
+            payments: { $concatArrays: ["$payments", { $literal: [payment] }] },
+            paid: { $add: ["$paid", payment.amount] },
+            version: { $add: [{ $ifNull: ["$version", 0] }, 1] },
+          },
+        },
+        {
+          // A second stage, because it must read the paid total the FIRST stage just wrote.
+          // `partially_paid` is not a state (SMC §4): a part payment stays `finalized`.
+          $set: { status: { $cond: [{ $gte: ["$paid", "$total"] }, "paid", "$status"] } },
+        },
+      ],
+      { new: true, ...(session ? { session } : {}) },
     )
     .lean<InvoiceDoc>();
   return doc ? toInvoice(doc) : undefined;
+}
+
+/**
+ * Records money handed back. `amount` is the DELTA; the running total is the database's job.
+ * The invariant — a refund never exceeds what was actually collected (BUSINESS_WORKFLOWS §5) —
+ * is enforced in the filter as `refunded + amount <= paid`, so two concurrent refunds cannot
+ * together hand back more than the hospital ever took.
+ */
+export async function addRefund(
+  id: string,
+  refund: RefundEntry,
+  session?: ClientSession,
+): Promise<Invoice | undefined> {
+  const doc = await getInvoiceModel(getTenantDb())
+    .findOneAndUpdate(
+      {
+        _id: id,
+        ...(refund.requestId ? { "refunds.requestId": { $ne: refund.requestId } } : {}),
+        $expr: { $lte: [{ $add: ["$refunded", refund.amount] }, "$paid"] },
+      },
+      [
+        {
+          $set: {
+            refunds: { $concatArrays: ["$refunds", { $literal: [refund] }] },
+            refunded: { $add: ["$refunded", refund.amount] },
+            version: { $add: [{ $ifNull: ["$version", 0] }, 1] },
+          },
+        },
+      ],
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<InvoiceDoc>();
+  return doc ? toInvoice(doc) : undefined;
+}
+
+/**
+ * A discount is a user-edited AGGREGATE, not a ledger append — a supervisor read a bill and
+ * decided a concession against THAT bill. So this one takes the optimistic lock Doc 03 §5.2
+ * names (`version` guard + `findOneAndUpdate`), rather than the additive treatment payments get:
+ * if the bill moved underneath the decision — a payment landed, another discount was applied —
+ * the write must lose and the supervisor must look again at what they are discounting.
+ *
+ * Returns undefined when the version no longer matches, which the service reports as
+ * HMS-REQ-003 ("record was modified by someone else; reload and reapply").
+ */
+export async function applyDiscountGuarded(
+  id: string,
+  expectedVersion: number,
+  set: Record<string, unknown>,
+  session?: ClientSession,
+): Promise<Invoice | undefined> {
+  const doc = await getInvoiceModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: id, version: expectedVersion },
+      { $set: set, $inc: { version: 1 } },
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<InvoiceDoc>();
+  return doc ? toInvoice(doc) : undefined;
+}
+
+/**
+ * Attaches a SPECIFIC set of charges (by id) to the invoice they were frozen into. Used by
+ * per-batch finalize: only the charges whose lines went on this invoice are marked billed, so a
+ * charge that arrives between reading the pending set and this write is NOT swept onto a bill it is
+ * not on. The `invoiceId: { $exists: false }` guard keeps it idempotent.
+ */
+export async function attachChargesToInvoiceByIds(
+  chargeIds: string[],
+  invoiceId: string,
+  session?: ClientSession,
+): Promise<void> {
+  if (chargeIds.length === 0) return;
+  await getChargeModel(getTenantDb()).updateMany(
+    {
+      _id: { $in: chargeIds.map((id) => new Types.ObjectId(id)) },
+      invoiceId: { $exists: false },
+    },
+    { $set: { invoiceId: new Types.ObjectId(invoiceId) } },
+    session ? { session } : {},
+  );
 }
 
 /** Attaches charges to the invoice they were frozen into. */
@@ -518,5 +1136,347 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
   const invoices = await repointPatientId(getInvoiceModel(conn), "patientId", ref, {
     objectId: true,
   });
-  return charges + invoices;
+  /**
+   * Package enrolments were MISSED when this consumer was written, and they are money: an
+   * enrolment is what zeroes the covered codes on a bill. Left on the duplicate, the survivor is
+   * charged full price for care the hospital has already been paid for under a package.
+   */
+  const enrollments = await repointPatientId(getPackageEnrollmentModel(conn), "patientId", ref, {
+    objectId: true,
+  });
+  return charges + invoices + enrollments;
+}
+
+/**
+ * The charges caused by a set of orders (or other sources), for a payment-status lookup.
+ *
+ * Projected to the three fields the check needs — what it is worth, and which invoice (if any) it
+ * has been rolled into — never the whole charge. Voided charges are excluded: a reversed charge is
+ * not something the patient owes. Tenant-isolated by the query hook.
+ */
+export async function chargesForSources(
+  sourceIds: string[],
+): Promise<{ sourceId: string; amount: number; invoiceId?: string; encounterId: string }[]> {
+  if (sourceIds.length === 0) return [];
+  const docs = await getChargeModel(getTenantDb())
+    .find(
+      { sourceId: { $in: sourceIds }, voided: { $ne: true } },
+      { sourceId: 1, amount: 1, invoiceId: 1, encounterId: 1 },
+    )
+    .lean<
+      {
+        sourceId?: string;
+        amount: number;
+        invoiceId?: Types.ObjectId;
+        encounterId: Types.ObjectId;
+      }[]
+    >();
+
+  return docs
+    .filter(
+      (
+        d,
+      ): d is {
+        sourceId: string;
+        amount: number;
+        invoiceId?: Types.ObjectId;
+        encounterId: Types.ObjectId;
+      } => Boolean(d.sourceId),
+    )
+    .map((d) => ({
+      sourceId: d.sourceId,
+      amount: d.amount,
+      encounterId: d.encounterId.toString(),
+      ...(d.invoiceId ? { invoiceId: d.invoiceId.toString() } : {}),
+    }));
+}
+
+/** Every live (non-voided) charge caused by one source (an order), in FULL — for settling it. */
+export async function fullChargesForSource(sourceId: string): Promise<Charge[]> {
+  const docs = await getChargeModel(getTenantDb())
+    .find({ sourceId, voided: { $ne: true } })
+    .sort({ postedAt: 1 })
+    .lean<ChargeDoc[]>();
+  return docs.map(toCharge);
+}
+
+export interface BillReceipt {
+  invoiceId: string;
+  number?: string;
+  patientId: string;
+  paid: number;
+  total: number;
+  at: Date;
+}
+
+/**
+ * Issued bills with money on them in a period `[from, to)` — the bill half of the receipts register.
+ * Only invoices that have been finalized (so they carry a number) and have taken at least one payment
+ * count as a receipt. Dated by `finalizedAt` — when the bill was raised at the counter.
+ */
+export async function receiptsBetween(from: Date, to: Date): Promise<BillReceipt[]> {
+  const docs = await getInvoiceModel(getTenantDb())
+    .find(
+      {
+        status: { $in: ["finalized", "paid"] },
+        paid: { $gt: 0 },
+        finalizedAt: { $gte: from, $lt: to },
+      },
+      { number: 1, patientId: 1, paid: 1, total: 1, finalizedAt: 1 },
+    )
+    .sort({ finalizedAt: -1 })
+    .limit(500)
+    .lean<
+      {
+        _id: Types.ObjectId;
+        number?: string;
+        patientId: Types.ObjectId;
+        paid: number;
+        total: number;
+        finalizedAt?: Date;
+      }[]
+    >();
+
+  return docs.map((d) => ({
+    invoiceId: d._id.toString(),
+    patientId: d.patientId.toString(),
+    paid: d.paid,
+    total: d.total,
+    at: d.finalizedAt ?? new Date(),
+    ...(d.number ? { number: d.number } : {}),
+  }));
+}
+
+/** The status of a set of invoices by id — for tracing whether a charge has been paid. */
+export async function invoiceStatusByIds(ids: string[]): Promise<Map<string, string>> {
+  const objectIds = ids.filter((i) => Types.ObjectId.isValid(i)).map((i) => new Types.ObjectId(i));
+  if (objectIds.length === 0) return new Map();
+  const docs = await getInvoiceModel(getTenantDb())
+    .find({ _id: { $in: objectIds } }, { status: 1 })
+    .lean<{ _id: Types.ObjectId; status: string }[]>();
+  return new Map(docs.map((d) => [d._id.toString(), d.status]));
+}
+
+/* ── Care packages: catalogue + enrollment ─────────────────────────────────── */
+
+export interface Package {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+  price: number;
+  includedCodes: string[];
+  active: boolean;
+}
+
+function toPackage(d: PackageDoc): Package {
+  return {
+    id: d._id.toString(),
+    code: d.code,
+    name: d.name,
+    price: d.price,
+    includedCodes: d.includedCodes ?? [],
+    active: d.active,
+    ...(d.description ? { description: d.description } : {}),
+  };
+}
+
+export interface CreatePackageInput {
+  code: string;
+  name: string;
+  description?: string;
+  price: number;
+  includedCodes: string[];
+}
+
+export async function createPackage(input: CreatePackageInput): Promise<Package> {
+  const ctx = getContext();
+  // A tenant-wide catalogue, like the tariff (`serviceItems`) — not branch-stamped.
+  const doc = await getPackageModel(getTenantDb()).create({
+    tenantId: ctx.tenantId,
+    code: input.code.toUpperCase(),
+    name: input.name,
+    price: input.price,
+    ...(input.description ? { description: input.description } : {}),
+    ...(input.includedCodes.length
+      ? { includedCodes: input.includedCodes.map((c) => c.toUpperCase()) }
+      : {}),
+    active: true,
+    ...(ctx.userId ? { createdBy: ctx.userId } : {}),
+  });
+  return toPackage(doc.toObject() as PackageDoc);
+}
+
+/**
+ * ── THE CATALOGUE IS TENANT-WIDE, SO ITS READS MUST NOT BE BRANCH-FILTERED ───────────────────
+ * `createPackage` deliberately writes NO `branchId` — a package is priced config for the whole
+ * hospital, exactly like the tariff (`serviceItems`), whose reads above carry no `scopeFilter`
+ * either. These three reads used to apply one anyway, and the two halves only disagree when a
+ * caller has a branch selected: `scopeFilter()` then returns `{ branchId: <active> }`, no stored
+ * package carries that key, and every package in the hospital vanishes.
+ *
+ * The failure was silent and total in the direction that looks like data loss: the POST returned
+ * 201 with the saved package, and the list that came back a moment later was empty — so a hospital
+ * defining a maternity bundle was told it saved and then shown nothing. Enrolment (`findPackageByCode`)
+ * and editing (`updatePackage`) were dark the same way.
+ *
+ * Physical tenant isolation is unaffected: `getTenantDb()` is the wall, and it is a different
+ * database per hospital. Branch was never the wall here, and pretending it was hid the catalogue.
+ */
+export async function listPackages(includeInactive: boolean): Promise<Package[]> {
+  const q: Record<string, unknown> = {};
+  if (!includeInactive) q.active = true;
+  const docs = await getPackageModel(getTenantDb()).find(q).sort({ name: 1 }).lean<PackageDoc[]>();
+  return docs.map(toPackage);
+}
+
+export async function findPackageByCode(code: string): Promise<Package | undefined> {
+  const doc = await getPackageModel(getTenantDb())
+    .findOne({ code: code.toUpperCase() })
+    .lean<PackageDoc>();
+  return doc ? toPackage(doc) : undefined;
+}
+
+export interface UpdatePackageInput {
+  name?: string;
+  description?: string;
+  price?: number;
+  includedCodes?: string[];
+  active?: boolean;
+}
+
+export async function updatePackage(
+  id: string,
+  patch: UpdatePackageInput,
+): Promise<Package | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const set: UpdatePackageInput = patch.includedCodes
+    ? { ...patch, includedCodes: patch.includedCodes.map((c) => c.toUpperCase()) }
+    : patch;
+  const doc = await getPackageModel(getTenantDb())
+    .findOneAndUpdate({ _id: new Types.ObjectId(id) }, { $set: set }, { new: true })
+    .lean<PackageDoc>();
+  return doc ? toPackage(doc) : undefined;
+}
+
+export interface PackageEnrollment {
+  id: string;
+  packageId: string;
+  packageCode: string;
+  packageName: string;
+  price: number;
+  includedCodes: string[];
+  encounterId: string;
+  patientId: string;
+  status: PackageEnrollmentStatus;
+  chargeId?: string;
+  enrolledAt: string;
+}
+
+function toEnrollment(d: PackageEnrollmentDoc): PackageEnrollment {
+  return {
+    id: d._id.toString(),
+    packageId: d.packageId.toString(),
+    packageCode: d.packageCode,
+    packageName: d.packageName,
+    price: d.price,
+    includedCodes: d.includedCodes ?? [],
+    encounterId: d.encounterId.toString(),
+    patientId: d.patientId.toString(),
+    status: d.status,
+    enrolledAt: d.enrolledAt.toISOString(),
+    ...(d.chargeId ? { chargeId: d.chargeId.toString() } : {}),
+  };
+}
+
+export interface CreateEnrollmentInput {
+  packageId: string;
+  packageCode: string;
+  packageName: string;
+  price: number;
+  includedCodes: string[];
+  encounterId: string;
+  patientId: string;
+  episodeId: string;
+  chargeId?: string;
+  branchId?: string;
+}
+
+export async function createEnrollment(
+  input: CreateEnrollmentInput,
+  session?: ClientSession,
+): Promise<PackageEnrollment> {
+  const ctx = getContext();
+  const [doc] = await getPackageEnrollmentModel(getTenantDb()).create(
+    [
+      {
+        tenantId: ctx.tenantId,
+        packageId: new Types.ObjectId(input.packageId),
+        packageCode: input.packageCode,
+        packageName: input.packageName,
+        price: input.price,
+        ...(input.includedCodes.length
+          ? { includedCodes: input.includedCodes.map((c) => c.toUpperCase()) }
+          : {}),
+        encounterId: new Types.ObjectId(input.encounterId),
+        patientId: new Types.ObjectId(input.patientId),
+        episodeId: new Types.ObjectId(input.episodeId),
+        status: "active",
+        enrolledAt: new Date(),
+        ...(input.chargeId ? { chargeId: new Types.ObjectId(input.chargeId) } : {}),
+        ...(ctx.userId ? { enrolledBy: ctx.userId } : {}),
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+      },
+    ],
+    session ? { session } : {},
+  );
+  if (!doc) throw new Error("enrollment insert returned nothing");
+  return toEnrollment(doc.toObject() as PackageEnrollmentDoc);
+}
+
+/**
+ * The active enrollment on a visit, if any — the one the coverage check reads on the hot path of
+ * every charge. Keyed on the globally-unique `encounterId`, so it deliberately does NOT apply the
+ * branch `scopeFilter`: an event-driven charge (a lab result, a dispense) may post without a branch
+ * in context, and coverage must still find the enrollment or the bundle would double-bill.
+ */
+export async function activeEnrollmentForEncounter(
+  encounterId: string,
+): Promise<PackageEnrollment | undefined> {
+  if (!Types.ObjectId.isValid(encounterId)) return undefined;
+  const doc = await getPackageEnrollmentModel(getTenantDb())
+    .findOne({ encounterId: new Types.ObjectId(encounterId), status: "active" })
+    .lean<PackageEnrollmentDoc>();
+  return doc ? toEnrollment(doc) : undefined;
+}
+
+export async function listEnrollmentsForEncounter(
+  encounterId: string,
+): Promise<PackageEnrollment[]> {
+  if (!Types.ObjectId.isValid(encounterId)) return [];
+  const docs = await getPackageEnrollmentModel(getTenantDb())
+    .find({ encounterId: new Types.ObjectId(encounterId), ...scopeFilter() })
+    .sort({ enrolledAt: -1 })
+    .lean<PackageEnrollmentDoc[]>();
+  return docs.map(toEnrollment);
+}
+
+export async function findEnrollmentById(id: string): Promise<PackageEnrollment | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getPackageEnrollmentModel(getTenantDb())
+    .findOne({ _id: new Types.ObjectId(id), ...scopeFilter() })
+    .lean<PackageEnrollmentDoc>();
+  return doc ? toEnrollment(doc) : undefined;
+}
+
+export async function cancelEnrollment(id: string): Promise<PackageEnrollment | undefined> {
+  if (!Types.ObjectId.isValid(id)) return undefined;
+  const doc = await getPackageEnrollmentModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: new Types.ObjectId(id), status: "active", ...scopeFilter() },
+      { $set: { status: "cancelled", cancelledAt: new Date() } },
+      { new: true },
+    )
+    .lean<PackageEnrollmentDoc>();
+  return doc ? toEnrollment(doc) : undefined;
 }

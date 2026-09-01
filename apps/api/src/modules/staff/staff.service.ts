@@ -19,7 +19,7 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { checkPasswordPolicy, generatePassword } from "../../core/crypto/password.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, tryGetContext } from "../../core/context/requestContext.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import * as auth from "../auth/index.js";
@@ -125,13 +125,44 @@ export async function createStaff(input: CreateStaffInput): Promise<CreateStaffR
   };
 }
 
+/**
+ * The staff directory, narrowed to the branch the caller is working in.
+ *
+ * ── WHY THIS IS NOT `scopeFilter()` LIKE EVERY OTHER LIST ───────────────────
+ * Because a member of staff has no `branchId` to filter on. ADR-0015 is explicit that a tenant has
+ * "one staff directory" — a person belongs to the HOSPITAL — and where they work is a property of
+ * their role binding (`branchScope` + `branchIds[]`), which lives in `rbac`. So the branch scope of
+ * this list has to be assembled from the bindings rather than read off the document.
+ *
+ * The rule, and it is the one a reader would expect:
+ *
+ *   ALL BRANCHES selected  → everyone, exactly as before
+ *   ONE branch selected    → staff bound to that branch, PLUS staff bound to the whole hospital
+ *
+ * The second half is the part worth stating: an admin or a director whose binding is `all` really
+ * does work at that site, so hiding them would be wrong — and in a hospital where most staff are
+ * hospital-wide it would empty the screen. Anyone still visible at two named sites is genuinely
+ * shared between them, which the list now shows rather than leaving to be discovered one profile
+ * at a time.
+ *
+ * `tryGetContext` rather than `getContext`: this is also reachable from seeding, which has no
+ * request and therefore no active branch — there, "no branch selected" is the honest answer.
+ */
 export async function listStaff(filter: {
   page: number;
   limit: number;
   q?: string;
   status?: UserStatus;
 }): Promise<{ users: StaffMember[]; total: number }> {
-  const page = await users.listUsers(filter);
+  const activeBranchId = tryGetContext()?.activeBranchId;
+  const excludeIds = activeBranchId
+    ? await rbac.listUserIdsOutsideBranch(activeBranchId)
+    : undefined;
+
+  const page = await users.listUsers({
+    ...filter,
+    ...(excludeIds && excludeIds.length > 0 ? { excludeIds } : {}),
+  });
 
   // Roles are resolved per user. Fine at directory scale (a page of 20); if a
   // hospital ever pages through thousands, this becomes one batched lookup.
@@ -183,6 +214,71 @@ export async function listDoctors(): Promise<DoctorRef[]> {
 
   return doctors
     .filter((d): d is DoctorRef => d !== undefined)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * One doctor as a DOCUMENT needs them — the name and (for the OPD slip) their signature and
+ * qualification. Kept off `listDoctors`, whose whole point is two fields for a dropdown; the slip
+ * fetches exactly one doctor and pays for the signature only then. Gated on `encounter:read`, the
+ * same small authority as the directory.
+ */
+export interface DoctorCard {
+  id: string;
+  name: string;
+  qualification?: string;
+  designation?: string;
+  signature?: string;
+}
+
+export async function getDoctorCard(id: string): Promise<DoctorCard | undefined> {
+  const user = await users.getById(id);
+  if (!user) return undefined;
+  return {
+    id: user.id,
+    name: user.name,
+    ...(user.profile?.qualification ? { qualification: user.profile.qualification } : {}),
+    ...(user.profile?.designation ? { designation: user.profile.designation } : {}),
+    ...(user.profile?.signature ? { signature: user.profile.signature } : {}),
+  };
+}
+
+/** A doctor as the PUBLIC website shows them — name, and what they do. Never contact/HR detail. */
+export interface PublicDoctor {
+  id: string;
+  name: string;
+  specialty?: string;
+  designation?: string;
+}
+
+/**
+ * The doctors a hospital has chosen to feature on its public website.
+ *
+ * Opt-in and DOCTOR-only: a person appears only if they carry the DOCTOR role AND their record
+ * is flagged `profile.showOnPublicSite`. So the public page never leaks the staff directory —
+ * publishing is a deliberate act per person, and un-flagging (or leaving) removes them with no
+ * edit to the site itself. `active` only, for the same reason `listDoctors` is: someone who has
+ * left must not still be advertised.
+ */
+export async function listPublicDoctors(): Promise<PublicDoctor[]> {
+  const page = await users.listUsers({ page: 1, limit: 500, status: "active" });
+
+  const doctors = await Promise.all(
+    page.users.map(async (user) => {
+      if (!user.profile?.showOnPublicSite) return undefined;
+      const claims = await rbac.getRoleClaims(user.id);
+      if (!claims.roles.includes("DOCTOR")) return undefined;
+      return {
+        id: user.id,
+        name: user.name,
+        ...(user.profile.specialty ? { specialty: user.profile.specialty } : {}),
+        ...(user.profile.designation ? { designation: user.profile.designation } : {}),
+      } satisfies PublicDoctor;
+    }),
+  );
+
+  return doctors
+    .filter((d): d is PublicDoctor => d !== undefined)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

@@ -26,12 +26,29 @@
  * multi-collection writes, audit becomes atomic with the mutation with no change
  * here — that is why the session is threaded through now, before it is needed.
  *
+ * WHAT COUNTS AS A FIRST WRITE
+ * ---------------------------
+ * **An audited first write performed by an upsert is recorded as a CREATE; every later mutation of
+ * that document is recorded as an UPDATE.** This is stated because it was not true until
+ * 2026-08-19: the query-path post hook returned early whenever there was no pre-image, so a
+ * document whose first write happened through `findOneAndUpdate(..., { upsert: true })` never
+ * appeared in the trail at all, while its second write did (risk register D17). The vocabulary did
+ * not need extending to fix it — `verbFor` has always answered "created" for an absent pre-image;
+ * the query path simply never reached it.
+ *
+ * The corollary is a rule on CALLERS, enforced by
+ * `auditedUpsertsReturnTheNewDocument.test.ts`: an upsert on an audited collection must ask for
+ * the new document (`new: true`), because that is the only way the driver reports an insert
+ * without a second query that could see somebody else's row. See the comment on `createdIdFrom`.
+ *
  * COST, HONESTLY
  * --------------
  * Update paths read the document before and after the write, so an audited update
- * costs three round trips instead of one. That is the price of knowing what
- * changed, and it is only paid by collections that opt in. Do not put this plugin
- * on high-churn operational collections (sessions, counters, queue rows) — audit
+ * costs three round trips instead of one. A create through an upsert now costs
+ * two — the pre-image read that finds nothing, and one read of the new document
+ * by the id the driver reported. That is the price of knowing what changed, and
+ * it is only paid by collections that opt in. Do not put this plugin on
+ * high-churn operational collections (sessions, counters, queue rows) — audit
  * every mutation that a court could ask about, and nothing else.
  */
 import type { ClientSession, Query, Schema, Types } from "mongoose";
@@ -146,14 +163,29 @@ export function auditPlugin(schema: Schema, options: AuditPluginOptions): void {
 
     const verb = verbFor(before, after);
 
+    /**
+     * An EMPTY side is not written. `diff` records a previous value only where one existed, so an
+     * update that merely ADDS fields — `transferredTo` appearing on a triage row that never had
+     * one — produces `before: {}`. Storing that says "the previous version had no fields", which
+     * is false and is not what the delta means; absence says "none of the changed fields had a
+     * previous value", which is exactly what happened, and it matches how a CREATE already reads.
+     *
+     * It also used to break the chain. The hash covers the entry as BUILT, and Mongoose's default
+     * `minimize` stripped the empty object on the way to the database, so the stored entry could
+     * never recompute to its own hash. `audit.model.ts` now sets `minimize: false` so storage
+     * cannot alter what was hashed; this makes sure the value was worth storing in the first place.
+     */
+    const sideOf = (delta: Doc): Doc | undefined =>
+      Object.keys(delta).length > 0 ? delta : undefined;
+
     await recordAudit(
       {
         action: `${resource}.${verb}`,
         category,
         resource,
         resourceId: idOf(after ?? before),
-        ...(before ? { before: delta.before } : {}),
-        ...(after ? { after: delta.after } : {}),
+        ...(before && sideOf(delta.before) ? { before: delta.before } : {}),
+        ...(after && sideOf(delta.after) ? { after: delta.after } : {}),
         meta: { fields: delta.changed },
         ...(typeof (after ?? before)?.branchId === "string"
           ? { branchId: (after ?? before)?.branchId as string }
@@ -203,6 +235,39 @@ export function auditPlugin(schema: Schema, options: AuditPluginOptions): void {
 
   const singleUpdateOps = ["findOneAndUpdate", "updateOne"] as const;
 
+  /**
+   * The id of a document this write CREATED, or undefined if it created none.
+   *
+   * ── WHY THE DRIVER'S OWN ANSWER, AND NOT A SECOND QUERY (D17) ─────────────
+   * When the pre-hook found no document, two very different things may have happened: an upsert
+   * INSERTED one, or the filter matched nothing and the write was a no-op. Auditing both would
+   * invent events for writes that never occurred; auditing neither is the bug this replaces — the
+   * post hook used to `return` on a missing pre-image, so **the first write of any document
+   * created by an upsert was never recorded at all.** The first ED triage of a patient produced
+   * no audit row; only a later re-triage did.
+   *
+   * The two cases are told apart by what the driver reports, not by re-reading the collection and
+   * guessing. Measured against Mongoose 8.13 / Mongo 7:
+   *
+   *   findOneAndUpdate + `new: true`  → the document, on both insert and update
+   *   findOneAndUpdate, no `new`      → **null on insert**, indistinguishable from a no-op
+   *   updateOne + upsert              → UpdateResult carrying `upsertedId` on insert only
+   *   nothing matched, no upsert      → null / an all-zero UpdateResult
+   *
+   * A re-read keyed on the FILTER would have covered the third case too, and it is exactly what
+   * this must not do: under a concurrent insert it would attribute another caller's document to
+   * this one, which is the single thing an audit trail may never get wrong. So the blind case is
+   * closed at the call sites instead — an audited upsert must ask for the new document, and
+   * `auditedUpsertsReturnTheNewDocument.test.ts` fails the build if one stops.
+   */
+  const createdIdFrom = (result: unknown): unknown => {
+    if (result === null || typeof result !== "object") return undefined;
+    const asUpdate = result as { upsertedId?: unknown };
+    if (asUpdate.upsertedId != null) return asUpdate.upsertedId;
+    const asDoc = result as { _id?: unknown };
+    return asDoc._id ?? undefined;
+  };
+
   for (const op of singleUpdateOps) {
     schema.pre(op, async function (next) {
       const query = this as AuditQuery;
@@ -216,20 +281,39 @@ export function auditPlugin(schema: Schema, options: AuditPluginOptions): void {
       next();
     });
 
-    schema.post(op, async function () {
+    schema.post(op, async function (result: unknown) {
       const query = this as AuditQuery;
-      const before = query._auditBefore;
-      if (!before) return; // upsert of a brand-new doc, or nothing matched
 
-      // Re-read rather than trust the hook's argument: `findOneAndUpdate` without
-      // `{ new: true }` hands back the PRE-image, and an audit trail that records
-      // the old values as the new ones is worse than no trail.
-      const after = await query.model.findById(before._id).lean();
-      await write(
-        before,
-        (after as Doc | null) ?? undefined,
-        sessionOf(query.getOptions().session),
-      );
+      // Seeding, migrations, CLI bootstrap. `write` would return anyway; checking here keeps the
+      // extra read below off the provisioning path, which upserts a whole catalogue per tenant.
+      if (!tryGetContext()) return;
+
+      const session = sessionOf(query.getOptions().session);
+      const before = query._auditBefore;
+
+      if (before) {
+        // Re-read rather than trust the hook's argument: `findOneAndUpdate` without
+        // `{ new: true }` hands back the PRE-image, and an audit trail that records
+        // the old values as the new ones is worse than no trail.
+        const after = await query.model.findById(before._id).lean();
+        await write(before, (after as Doc | null) ?? undefined, session);
+        return;
+      }
+
+      const created = createdIdFrom(result);
+      if (created == null) return; // nothing matched and nothing was inserted — no event
+
+      /**
+       * Read the document back rather than using the returned one, for the same reason the update
+       * path does: the shape the driver hands back varies with the caller's options, and the trail
+       * must not vary with them. Keyed on `_id`, so this cannot pick up somebody else's row.
+       *
+       * If it has already been deleted by the time we look, record nothing. Inventing a create for
+       * a document we cannot describe would put a row in the trail that no investigator can follow.
+       */
+      const after = await query.model.findById(created).lean();
+      if (!after) return;
+      await write(undefined, after as Doc, session);
     });
   }
 

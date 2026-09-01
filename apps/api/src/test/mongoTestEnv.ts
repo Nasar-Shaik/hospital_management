@@ -134,6 +134,57 @@ export async function dropDatabases(names: string[]): Promise<void> {
       .useDb(name)
       .dropDatabase()
       .catch(() => undefined);
+    await writable(conn, name);
   }
   await conn.close();
+}
+
+/**
+ * Blocks until a just-dropped database can be WRITTEN to again.
+ *
+ * ── THE DEFECT THIS CLOSES ──────────────────────────────────────────────────
+ * `dropDatabase()` resolving does not mean the server has finished. Under load — the full
+ * integration run keeps twenty-odd test databases alive and MongoDB busy — the namespace stays in
+ * a dropping state for a while afterwards, and the very next thing every suite does is provision a
+ * tenant into it. That fails with:
+ *
+ *   MongoServerError: Cannot create collection hms_test-…-rival.wardNotes
+ *                     - database is in the process of being dropped.
+ *
+ * thrown from a migration inside `provisionTenant` inside `beforeAll` — so the whole FILE is
+ * reported as a failed suite and every test in it is skipped, with a message that reads like a
+ * migration bug. Seen once in three full runs on 2026-08-19; the shape (a `beforeAll` that dies on
+ * a database operation, in a different suite each time) also matches the hook timeouts recorded
+ * during the T3 investigation.
+ *
+ * ── WHY THE PROBE IS A WRITE ────────────────────────────────────────────────
+ * Reads succeed against a database that is still being dropped, so `listCollections` or
+ * `listDatabases` would answer "fine" and prove nothing. The precondition every caller actually
+ * needs is "I can create a collection here", so that is what is tested. The probe is removed
+ * again, leaving the database as empty as the drop intended.
+ */
+async function writable(conn: mongoose.Connection, name: string): Promise<void> {
+  const PROBE = "__drop_settled_probe";
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try {
+      await conn.useDb(name).createCollection(PROBE);
+      await conn
+        .useDb(name)
+        .dropCollection(PROBE)
+        .catch(() => undefined);
+      return;
+    } catch (err) {
+      // Anything other than the drop still running is a real problem and must not be swallowed —
+      // an unreachable server would otherwise spin here for thirty seconds and then lie about why.
+      if (!/being dropped/i.test(String(err))) throw err;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `${name} was still being dropped after 30s. Mongo is either wedged or far slower than ` +
+            `this host has ever been; do not raise this timeout without finding out which.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 }

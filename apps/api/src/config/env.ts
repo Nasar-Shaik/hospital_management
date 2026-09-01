@@ -4,6 +4,7 @@
  */
 import { z } from "@medicore/validation";
 import { activeProfile, applyProductionInvariants, PROFILE_DEFAULTS } from "./profiles.js";
+import { isValidTimeZone } from "../core/time/zone.js";
 
 /**
  * A boolean from an environment variable. Never use `z.coerce.boolean()` for this.
@@ -118,6 +119,19 @@ const envSchema = z.object({
    */
   TENANT_MISS_CACHE_TTL_SECONDS: z.coerce.number().int().default(30),
 
+  /**
+   * Per-tenant licence (tenure) defaults — ADR-0016. A licence is a validity window
+   * (`validFrom → expiresAt`) plus a grace window (`graceDays` after expiry). It is
+   * INDEPENDENT of the tenant status (operator suspend) and of the edition/plan:
+   * the edition says what a hospital may use, the licence says until when.
+   */
+  /** A freshly provisioned hospital gets this many trial days when no expiry is set. */
+  LICENSE_DEFAULT_TRIAL_DAYS: z.coerce.number().int().min(1).default(14),
+  /** Days after `expiresAt` a hospital still runs (banner shown, access not yet cut). */
+  LICENSE_DEFAULT_GRACE_DAYS: z.coerce.number().int().min(0).default(7),
+  /** Within this many days of expiry, the tenant UI shows the "expires in N days" banner. */
+  LICENSE_WARN_DAYS: z.coerce.number().int().min(1).default(10),
+
   /** Connection Manager guardrails (Doc 04 §2.2.1; PROJECT_MEMORY assumption A3). */
   TENANT_MAX_CONNECTIONS: z.coerce.number().int().default(200),
   TENANT_CONNECTION_IDLE_MS: z.coerce.number().int().default(600_000),
@@ -212,6 +226,24 @@ const envSchema = z.object({
   NOTIFY_EMAIL_ENABLED: envBool(true),
 
   /**
+   * The push kill switch (M4). Same shape and same purpose as `NOTIFY_EMAIL_ENABLED`: the thing
+   * you reach for when a template starts buzzing every phone in the building at 3am.
+   *
+   * Switching it off changes NOTHING about what staff see. The in-app row is written and delivered
+   * either way — push is a knock on the door, never the message (`channels/expoPush.ts`) — so an
+   * operator can silence it without hiding a single alert.
+   */
+  PUSH_ENABLED: envBool(true),
+  /**
+   * Expo's push endpoint. Overridable so an integration test can point it at a loopback server and
+   * exercise the REAL request shape, ticket parsing and `DeviceNotRegistered` handling — the same
+   * reason the mail suite talks to a real Mailhog rather than a mock (`test/mailTestEnv.ts`).
+   */
+  EXPO_PUSH_URL: z.string().default("https://exp.host/--/api/v2/push/send"),
+  /** Only needed if the Expo project has enhanced security enabled. Absent is the normal case. */
+  EXPO_ACCESS_TOKEN: z.string().optional(),
+
+  /**
    * SMTP. Unset host = no email transport: the service records every message as
    * `unreachable` rather than crashing, so a dev machine with no mail server is a
    * degraded pipeline, never a broken one.
@@ -238,7 +270,17 @@ const envSchema = z.object({
    * hospital group spans Kochi and Dubai, this is the line that becomes a lookup —
    * not a search through every template.
    */
-  DEFAULT_TIMEZONE: z.string().default("Asia/Kolkata"),
+  DEFAULT_TIMEZONE: z
+    .string()
+    .default("Asia/Kolkata")
+    /**
+     * Validated at BOOT, not at first use. This zone is the fallback every bed-day falls back
+     * TO, so a typo here does not fail one branch — it fails the substitute the others rely on.
+     * The env loader is already fail-fast by design (Doc 04 §2.3); this belongs with it.
+     */
+    .refine(isValidTimeZone, {
+      message: "DEFAULT_TIMEZONE must be an IANA zone such as Asia/Kolkata",
+    }),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -24,7 +24,8 @@
  * That is the difference between testing authorization and testing the
  * authorization we *remembered to test*. It is why the suite is release-gating.
  */
-import type { Express, RequestHandler } from "express";
+import type { Application, RequestHandler } from "express";
+import type { ZodTypeAny } from "@medicore/validation";
 
 /** The tag the auth middleware factories stamp onto themselves. */
 export interface AuthTag {
@@ -49,6 +50,10 @@ export interface AuthTag {
 }
 
 const TAG = Symbol.for("medicore.authTag");
+const VALIDATION_TAG = Symbol.for("medicore.validationTag");
+const RESPONSE_TAG = Symbol.for("medicore.responseTag");
+const IDEMPOTENCY_TAG = Symbol.for("medicore.idempotencyTag");
+const DEPRECATION_TAG = Symbol.for("medicore.deprecationTag");
 
 /** Stamps a middleware with what it enforces. Called by the middleware factories. */
 export function tagMiddleware<T extends RequestHandler>(handler: T, tag: AuthTag): T {
@@ -60,6 +65,114 @@ function readTag(handler: unknown): AuthTag | undefined {
   return (handler as Record<symbol, AuthTag> | undefined)?.[TAG];
 }
 
+/**
+ * The request shape a route actually validates (`validate()` stamps this).
+ *
+ * Deliberately a SEPARATE symbol from the auth tag: they answer different questions and are
+ * merged differently. A route carries at most one auth tag, but up to three validations (body,
+ * params, query), so merging them into one bag would silently drop two of the three.
+ */
+export interface ValidationTag {
+  schema: ZodTypeAny;
+  target: "body" | "query" | "params";
+}
+
+export function tagValidation<T extends RequestHandler>(handler: T, tag: ValidationTag): T {
+  (handler as unknown as Record<symbol, ValidationTag>)[VALIDATION_TAG] = tag;
+  return handler;
+}
+
+function readValidation(handler: unknown): ValidationTag | undefined {
+  return (handler as Record<symbol, ValidationTag> | undefined)?.[VALIDATION_TAG];
+}
+
+/**
+ * The success payload a route actually sends (`responds()` stamps this).
+ *
+ * A third symbol for the same reason as the second: this answers "what comes back", which is a
+ * different question from "what may go in" and from "who may ask". Merging the three bags would
+ * mean a route could only ever declare one of them.
+ */
+export interface ResponseTag {
+  /**
+   * The shape of `data` inside the envelope — NOT the envelope itself.
+   *
+   * Absent on the handful of routes that do not answer with the envelope at all: a file download
+   * and the spec document. Those carry `media` instead.
+   */
+  schema?: ZodTypeAny;
+  /** Every success status this route can send. Two entries where a create can also resume. */
+  statuses: number[];
+  /** True when the route also sends `meta` (a paginated list). */
+  meta: boolean;
+  /** Media types, for a response that is bytes rather than the JSON envelope. */
+  media?: string[];
+  /** The body schema for those media types. Defaults to opaque bytes. */
+  mediaSchema?: Record<string, unknown>;
+  /** Other statuses this route answers with — a download that can legitimately 404. */
+  also?: { status: number; description: string }[];
+  description?: string;
+}
+
+export function tagResponse<T extends RequestHandler>(handler: T, tag: ResponseTag): T {
+  (handler as unknown as Record<symbol, ResponseTag>)[RESPONSE_TAG] = tag;
+  return handler;
+}
+
+function readResponse(handler: unknown): ResponseTag | undefined {
+  return (handler as Record<symbol, ResponseTag> | undefined)?.[RESPONSE_TAG];
+}
+
+/**
+ * The idempotency guarantee a route offers (`idempotent()` stamps this).
+ *
+ * A fourth symbol, for the fourth question a reviewer asks of a money route: "what happens if
+ * this arrives twice?" Kept out of the auth tag for the same reason as the other two — a route
+ * can need all four, and a shared bag would let it declare only one.
+ */
+export interface IdempotencyTag {
+  /** The header the key travels in. One constant, so the spec and the server cannot disagree. */
+  header: string;
+  /** What a replay of this operation means, in the spec's words. */
+  description: string;
+}
+
+export function tagIdempotency<T extends RequestHandler>(handler: T, tag: IdempotencyTag): T {
+  (handler as unknown as Record<symbol, IdempotencyTag>)[IDEMPOTENCY_TAG] = tag;
+  return handler;
+}
+
+function readIdempotency(handler: unknown): IdempotencyTag | undefined {
+  return (handler as Record<symbol, IdempotencyTag> | undefined)?.[IDEMPOTENCY_TAG];
+}
+
+/**
+ * The retirement notice an operation carries (`deprecate()` stamps this).
+ *
+ * A fifth symbol, for the question a client asks that none of the other four answer: "will this
+ * still be here next year?" Read back by the OpenAPI builder so `deprecated: true` in the document
+ * and the `Sunset` header on the wire come from the SAME declaration — a spec that says an
+ * endpoint is fine while the response says it is going away is worse than either alone.
+ */
+export interface DeprecationTag {
+  /** `YYYY-MM-DD` — deprecated from. */
+  since: string;
+  /** `YYYY-MM-DD` — stops answering on. */
+  sunset: string;
+  /** What to call instead. */
+  replacedBy?: string;
+  note?: string;
+}
+
+export function tagDeprecation<T extends RequestHandler>(handler: T, tag: DeprecationTag): T {
+  (handler as unknown as Record<symbol, DeprecationTag>)[DEPRECATION_TAG] = tag;
+  return handler;
+}
+
+function readDeprecation(handler: unknown): DeprecationTag | undefined {
+  return (handler as Record<symbol, DeprecationTag> | undefined)?.[DEPRECATION_TAG];
+}
+
 export interface RouteInfo {
   method: string;
   /** The full mounted path, e.g. `/api/v1/patients/:id`. */
@@ -69,6 +182,14 @@ export interface RouteInfo {
   feature?: string;
   platformAuth?: boolean;
   platformRoles?: string[];
+  /** The Zod schemas this route validates against, by target. Feeds the OpenAPI request shapes. */
+  validation?: Partial<Record<ValidationTag["target"], ZodTypeAny>>;
+  /** The success payload this route declares. Feeds the OpenAPI response schemas. */
+  response?: ResponseTag;
+  /** Set when this route honours `Idempotency-Key`. Feeds the OpenAPI header parameter. */
+  idempotency?: IdempotencyTag;
+  /** Set when this route is on its way out. Feeds `deprecated: true` and `x-sunset`. */
+  deprecation?: DeprecationTag;
 }
 
 /**
@@ -78,7 +199,7 @@ export interface RouteInfo {
  * so it cannot drift from reality the way a hand-maintained list would. If a route
  * is reachable in production, it is in here.
  */
-export function routeInventory(app: Express): RouteInfo[] {
+export function routeInventory(app: Application): RouteInfo[] {
   const routes: RouteInfo[] = [];
 
   interface Layer {
@@ -113,9 +234,21 @@ export function routeInventory(app: Express): RouteInfo[] {
     for (const layer of stack) {
       if (layer.route) {
         const tag: AuthTag = {};
+        const validation: Partial<Record<ValidationTag["target"], ZodTypeAny>> = {};
+        let response: ResponseTag | undefined;
+        let idempotency: IdempotencyTag | undefined;
+        let deprecation: DeprecationTag | undefined;
         for (const entry of layer.route.stack) {
           Object.assign(tag, readTag(entry.handle) ?? {});
+          const v = readValidation(entry.handle);
+          // Last one wins per target, matching Express: the final middleware to parse a
+          // target is the one whose shape the handler actually receives.
+          if (v) validation[v.target] = v.schema;
+          response ??= readResponse(entry.handle);
+          idempotency ??= readIdempotency(entry.handle);
+          deprecation ??= readDeprecation(entry.handle);
         }
+        const hasValidation = Object.keys(validation).length > 0;
 
         for (const method of Object.keys(layer.route.methods)) {
           routes.push({
@@ -126,6 +259,10 @@ export function routeInventory(app: Express): RouteInfo[] {
             ...(tag.feature ? { feature: tag.feature } : {}),
             ...(tag.platformAuth ? { platformAuth: true } : {}),
             ...(tag.platformRoles ? { platformRoles: tag.platformRoles } : {}),
+            ...(hasValidation ? { validation } : {}),
+            ...(response ? { response } : {}),
+            ...(idempotency ? { idempotency } : {}),
+            ...(deprecation ? { deprecation } : {}),
           });
         }
       } else if (layer.handle?.stack) {

@@ -9,7 +9,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiClientError, type Session } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Button, Card } from "../../components/ui";
 
 function describeDevice(session: Session): string {
@@ -94,9 +93,5 @@ function Sessions() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <Sessions />
-    </Protected>
-  );
+  return <Sessions />;
 }

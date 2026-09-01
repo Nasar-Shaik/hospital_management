@@ -18,15 +18,25 @@ export {
   admitPatient,
   dischargePatient,
   transferDoctor,
+  transferBed,
+  type TransferBedInput,
+  type TransferBedResult,
   listInpatients,
+  listInpatientsWithIdentity,
+  type InpatientRow,
+  type EncounterRow,
   startEncounter,
   getEncounter,
   listEncounters,
+  listEncountersWithIdentity,
   getOpenEncounterFor,
   getEpisodeTimeline,
   queuePatient,
   startConsultation,
   sendForInvestigations,
+  recordOrderPlaced,
+  recordOrderCancelled,
+  recordVisitSummary,
   closeEncounter,
   cancelEncounter,
   markLeftWithoutBeingSeen,
@@ -39,6 +49,7 @@ export {
   type StartEncounterResult,
 } from "./encounter.service.js";
 export type { VisitReport, DoctorLoadRow, DischargeRegister } from "./encounter.repository.js";
+export { encountersByDoctor } from "./encounter.repository.js";
 
 export {
   ENCOUNTER_STATUSES,
@@ -55,3 +66,12 @@ export {
 
 /** Re-points encounters + episodes onto the survivor on merge. Registered by eventConsumer.ts. */
 export { encounterConsumers } from "./encounter.consumers.js";
+
+/** For the reporting response contract. */
+export type { DischargeRegister as DischargeRegisterReport } from "./encounter.repository.js";
+
+/**
+ * The module's one objection to a patient merge: two open visits cannot become one patient.
+ * Registered at the composition root (`app.ts`), never by import side effect.
+ */
+export { openVisitMergeGuard } from "./encounter.mergeGuard.js";

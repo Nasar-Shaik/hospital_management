@@ -6,21 +6,17 @@
  * medicine master is tenant-wide — one shelf per hospital, like the tariff — so no branch id
  * is threaded through these writes.
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import * as medicines from "./medicine.service.js";
 import type {
+  AvailabilityQuery,
   CreateMedicineBody,
   UpdateMedicineBody,
   ReceiveStockBody,
   AdjustStockBody,
   ListQuery,
 } from "./medicine.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const list: RequestHandler = async (req, res) => {
   const q = req.query as unknown as ListQuery;
@@ -91,3 +87,27 @@ function filterOf(q: ListQuery): {
     ...(q.includeInactive === "true" ? { includeInactive: true } : {}),
   };
 }
+
+/** Every lot of one drug — the shelf, expired stock included so somebody can pull it. */
+export const shelf: RequestHandler = async (req, res) => {
+  const { code } = req.params as { code: string };
+  ok(res, await medicines.shelfFor(code));
+};
+
+/**
+ * What the pharmacy could hand over today, for the drugs on a prescribing pad.
+ *
+ * Gated on `prescription:create`, not on a pharmacy permission — see the route.
+ */
+export const availability: RequestHandler = async (req, res) => {
+  const { codes } = req.query as unknown as AvailabilityQuery;
+  ok(
+    res,
+    await medicines.availability(
+      codes
+        .split(",")
+        .map((c: string) => c.trim())
+        .filter(Boolean),
+    ),
+  );
+};

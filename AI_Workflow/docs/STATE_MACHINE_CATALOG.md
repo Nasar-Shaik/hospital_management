@@ -38,18 +38,27 @@ Guards: `checked_in` only on appointment day; `cancelled` after `checked_in` req
 - **`discharge_initiated` is not built.** It exists in real hospitals to hold the patient while the bill is settled — "discharge requires bill finalized or approved credit". We discharge and bill the stay in one act instead. A private hospital that needs to stop a patient leaving before payment needs this state; **do not add it by putting a payment check inside `dischargePatient`** — that would make billing upstream of a clinical act, which is the one thing `billing.consumers` exists to prevent.
 - **`lama` (left against medical advice), `absconded` and `deceased` are not built, and this is the most consequential gap in this section.** All three currently have to be recorded as an ordinary discharge, which is a lie in the record: a patient who walked out against advice, one who vanished, and one who died are three different clinical, legal and statutory events, and the summary that says "discharged" for any of them is wrong in a way that matters at an inquest. `deceased` additionally has a mortuary flow behind it. **Anyone building IPD properly must land these before the module is called finished.**
 
-## 3. Bed (NOT built — and the ward screen says so)
+## 3. Bed — inventory BUILT, housekeeping lifecycle deliberately not
 
-**Nothing implements this.** `bed:manage` is a permission with nothing behind it: there are no wards, no rooms, no occupancy and no reservation. `encounters.bed` RECORDS which bed a patient was put in (`{ward, bedCode, tariffCode}`) so the stay can be billed and the round knows where to go — it does not reserve one, and **nothing stops two patients being recorded in bed A-12**.
+> **Corrected 2026-08-17.** This section previously read _"NOT built… nothing stops two patients
+> being recorded in bed A-12"_ and cited PROJECT_MEMORY §5. **Both halves have been false since
+> 2026-07-28** (B4, progress tracker line 90): the ward/room/bed inventory shipped, and
+> double-occupancy has been refused by a unique index since migration 0020. The cited source was
+> corrected and this document was not. Anyone testing bed assignment against the old text would have
+> read a correct `409` refusal as a defect — or, worse, not tested it at all.
 
-That gap is deliberate and written down (PROJECT_MEMORY §5) rather than half-closed. The guard below — "concurrent allocation prevented by optimistic lock (double-allocation is the classic HIS bug)" — is exactly right, and it is precisely why a HALF-built bed board is worse than none: an occupancy map that is only sometimes true is one people stop checking, and then the wall chart stops being maintained too.
+**What exists.** A three-level inventory — ward → room → bed (`wards` 0027, `rooms` 0034, `beds`) — with a free-bed **board** derived from open IP encounters rather than stored, so it cannot drift from the truth. `bed:manage` configures the estate (TENANT_ADMIN); `emr:read` sees the board, because the admit screen (a doctor) and the ward (a nurse) both need to see free beds; `bed:allocate` moves a patient between beds. `encounters.bed` still RECORDS the stay's bed (`{ward, bedCode, tariffCode}`) — that is what the bill and the round read.
+
+**Double-occupancy is prevented by the database**, not by a service check: `one_open_stay_per_bed_per_branch` (migration 0046, widening 0020's key to be branch-aware) is unique and partial on `{open: true, bed.bedCode: {$exists: true}}`. Both `admitPatient` and `transferBed` turn its `E11000` into **`409 HMS-STATE-001` "That bed is already occupied"**. It is one of the eight `CLINICAL_SAFETY_INVARIANTS`, so if the index is ever absent the two writes that depend on it refuse with **`503 HMS-ADM-003`** rather than silently double-booking — the classic HIS double-allocation bug cannot happen, and cannot silently stop being prevented.
+
+**What is still not built** — and remains deliberate: the housekeeping lifecycle below. There are no `vacated_dirty` / `cleaning` states and no reservation step; a bed is free when nobody open is in it. Occupancy is therefore always derivable and never stale, which is the property a half-built board would lose.
 
 ```
 (target) available → reserved → occupied → vacated_dirty → cleaning → available
 available|reserved → blocked → available          (maintenance; reason required)
 ```
 
-Guards (for whoever builds it): `occupied` only via admission/transfer transaction; concurrent allocation prevented by optimistic lock (double-allocation is the classic HIS bug). No terminal state (decommission = soft delete).
+Guards (for whoever builds the housekeeping states): `occupied` only via admission/transfer transaction — **already true**, and arbitrated by the unique index above rather than by an optimistic lock. No terminal state (decommission = soft delete).
 
 ## 4. Invoice (Bill)
 

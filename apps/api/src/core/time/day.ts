@@ -14,6 +14,8 @@
  * list. It is a bug that hides for years and then loses exactly one record — usually
  * the one somebody is looking for.
  */
+import { env } from "../../config/env.js";
+import { zoneOrDefault } from "./zone.js";
 
 /**
  * Which calendar day an instant falls on, in the hospital's zone. `2026-07-16`.
@@ -23,7 +25,11 @@
  */
 export function dayKeyInZone(at: Date, timeZone: string): string {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
+    // Validation at the edge stops new bad data; it cannot fix a branch row written before the
+    // rule existed, and `Intl` throws on an unknown zone. A stay costed in the platform default
+    // is wrong by at most a day boundary and shows in the bill; a RangeError here is a ward that
+    // cannot discharge anybody. See `core/time/zone.ts`.
+    timeZone: zoneOrDefault(timeZone, env.DEFAULT_TIMEZONE),
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -123,19 +129,51 @@ export function dayRangeInZone(date: string, timeZone: string): { from: Date; be
   const [, y, m, d] = match;
   const naiveUtc = Date.UTC(Number(y), Number(m) - 1, Number(d));
 
-  /**
-   * Two passes. The offset depends on the instant, and the instant is what we are
-   * solving for — so guess with the offset at naive-UTC-midnight, then re-read the
-   * offset AT that guess and correct. One iteration converges everywhere except the
-   * ambiguous hour of a DST transition, where either answer is defensible and the
-   * difference is an hour of a day boundary.
-   */
+  return {
+    from: solveWallClock(naiveUtc, timeZone),
+    before: solveWallClock(naiveUtc + 24 * 60 * 60 * 1000, timeZone),
+  };
+}
+
+/**
+ * The UTC instant at which a given WALL CLOCK time occurs in a zone.
+ * `("2026-03-08", 8, 0, "America/New_York")` → 13:00Z; the day after that DST spring
+ * forward, the same 08:00 is 12:00Z. **Both are 08:00 to the nurse**, which is the entire
+ * point: a drug round is a wall-clock event, so a course that crosses a DST boundary must
+ * keep landing at 08:00 rather than sliding by an hour halfway through.
+ *
+ * This is what `slots.ts` deliberately does NOT do — an appointment session is four hours
+ * long and cannot straddle a transition, so adding minutes to a known midnight is honest
+ * there. A five-day course of antibiotics straddles one routinely, so it is not honest here.
+ *
+ * Throws on a malformed date, like its sibling: a silent `Invalid Date` becomes a schedule
+ * with no doses in it, which reads as "nothing is due" — the most dangerous possible failure
+ * for this particular function.
+ */
+export function wallClockInZone(
+  date: string,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) throw new Error(`expected YYYY-MM-DD, got "${date}"`);
+
+  const [, y, m, d] = match;
+  return solveWallClock(Date.UTC(Number(y), Number(m) - 1, Number(d), hour, minute), timeZone);
+}
+
+/**
+ * Turns "this wall clock reading, in this zone" into the instant it happens at.
+ *
+ * Two passes. The offset depends on the instant, and the instant is what we are solving
+ * for — so guess with the offset AT the naive reading, then re-read the offset at that
+ * guess and correct. One iteration converges everywhere except the ambiguous hour of a
+ * DST transition, where either answer is defensible and the difference is one hour.
+ *
+ * @param naiveUtc the wall clock reading, interpreted as if it were UTC.
+ */
+function solveWallClock(naiveUtc: number, timeZone: string): Date {
   const guess = new Date(naiveUtc - zoneOffsetMs(new Date(naiveUtc), timeZone));
-  const from = new Date(naiveUtc - zoneOffsetMs(guess, timeZone));
-
-  const nextNaive = naiveUtc + 24 * 60 * 60 * 1000;
-  const nextGuess = new Date(nextNaive - zoneOffsetMs(new Date(nextNaive), timeZone));
-  const before = new Date(nextNaive - zoneOffsetMs(nextGuess, timeZone));
-
-  return { from, before };
+  return new Date(naiveUtc - zoneOffsetMs(guess, timeZone));
 }

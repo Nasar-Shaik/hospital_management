@@ -1,0 +1,28 @@
+# Prettier 3 already honours .gitignore, so build output and .env files need no
+# entry here. This file is for things that ARE committed but must not be
+# reformatted.
+
+# ── pnpm-lock.yaml ──────────────────────────────────────────────────────────
+# The lockfile is written by pnpm, not by a person, and pnpm rewrites it WHOLE
+# from its own model every time a dependency changes — in pnpm's quoting style,
+# which is not Prettier's.
+#
+# The committed lockfile is currently Prettier-formatted (double-quoted keys),
+# so the two are already in conflict and the CI consequence is arithmetic: the
+# next `pnpm install` that touches a dependency renormalises ~4000 lines to
+# single quotes, and `pnpm format:check` fails the pull request on a diff nobody
+# wrote and nobody can meaningfully review. Running `pnpm format` to fix it puts
+# the file back in Prettier's style, where the following install undoes it again.
+#
+# A generated file should not be in the argument. Prettier stops policing it;
+# pnpm owns its own format.
+pnpm-lock.yaml
+
+# ── Expo's generated typings ────────────────────────────────────────────────
+# Both are rewritten by `expo start`, neither is committed, and neither is
+# written in Prettier's style — `expo-env.d.ts` ships without a trailing
+# newline. Prettier 3 honours only the ROOT .gitignore, so being ignored by
+# `apps/mobile/.gitignore` is not enough to keep them out of `format:check`;
+# without these two lines the gate fails for anyone who has run the dev server.
+apps/mobile/.expo/
+apps/mobile/expo-env.d.ts

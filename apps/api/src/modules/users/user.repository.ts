@@ -5,9 +5,11 @@
  * Every query runs on the request-scoped tenant connection, so a user lookup is
  * physically incapable of crossing hospitals.
  */
+import { Types } from "mongoose";
 import type { StaffProfile, UserDoc, UserStatus } from "./user.model.js";
 import { getUserModel } from "./user.model.js";
 import { getTenantDb } from "../../core/context/requestContext.js";
+import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 
 /** What the rest of the system is allowed to see. Never the raw Mongoose document (Doc 09 §5). */
 export interface User {
@@ -118,10 +120,25 @@ export async function update(userId: string, input: UpdateUserInput): Promise<Us
  * seat limit (Doc 07). Counted, never cached: a drifted counter that over-reports
  * would lock a hospital out of hiring.
  */
-export async function count(options: { excludeStatuses?: UserStatus[] } = {}): Promise<number> {
+export async function count(
+  options: { excludeStatuses?: UserStatus[]; ids?: string[] } = {},
+): Promise<number> {
   const query: Record<string, unknown> = {};
   if (options.excludeStatuses?.length) {
     query.status = { $nin: options.excludeStatuses };
+  }
+  /**
+   * Narrows the count to a named set — how "how many DOCTORS?" is answered without this module
+   * learning what a doctor is. RBAC supplies the ids that hold the role; this counts the ones
+   * that are still real accounts. An empty set counts zero rather than everything: `$in: []`
+   * matches nothing, which is the honest reading of "none of them hold that role".
+   */
+  if (options.ids) {
+    query._id = {
+      $in: options.ids
+        .filter((id) => Types.ObjectId.isValid(id))
+        .map((id) => new Types.ObjectId(id)),
+    };
   }
   return getUserModel(getTenantDb()).countDocuments(query);
 }
@@ -131,6 +148,12 @@ export interface ListUsersFilter {
   limit: number;
   q?: string;
   status?: UserStatus;
+  /**
+   * Ids to leave out, applied BEFORE paging so the page numbers and the total agree with what is
+   * shown. The caller decides who these are — `users` deliberately knows nothing about branches
+   * (the binding lives in `rbac`), so this stays a plain id list rather than a scope concept.
+   */
+  excludeIds?: string[];
 }
 
 export interface UserPage {
@@ -143,6 +166,7 @@ export async function list(filter: ListUsersFilter): Promise<UserPage> {
 
   const query: Record<string, unknown> = {};
   if (filter.status) query.status = filter.status;
+  if (filter.excludeIds && filter.excludeIds.length > 0) query._id = { $nin: filter.excludeIds };
   if (filter.q) {
     // Anchored, escaped: an unescaped user string in a regex is both a
     // correctness bug and a ReDoS vector.
@@ -163,4 +187,22 @@ export async function list(filter: ListUsersFilter): Promise<UserPage> {
   ]);
 
   return { users: docs.map(toUser), total };
+}
+
+/**
+ * A patient-portal login follows the chart it can read.
+ *
+ * Nothing writes `patientId` today — the portal is declared and not built — so this re-points zero
+ * rows and will keep doing so until it ships. It is here rather than on an exemption list because
+ * of what the alternative costs: the day the portal lands, a merged patient keeps a login pointing
+ * at a chart marked `merged`, and the symptom is a patient who signs in to an empty record. An
+ * exemption written today would still be sitting there on that day.
+ *
+ * If BOTH records had a login, both now reach the survivor. Two accounts for one human is untidy
+ * and correct; one account reaching a retired chart is neither.
+ *
+ * `patientId` is a STRING.
+ */
+export async function repointPatient(ref: PatientMergeRef): Promise<number> {
+  return repointPatientId(getUserModel(getTenantDb()), "patientId", ref, { objectId: false });
 }

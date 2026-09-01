@@ -33,6 +33,7 @@ Registry of **every** scheduled/recurring background job. A cron/repeatable job 
 | `cache.warmer`               | post-deploy + 06:00                   | maintenance   | platform            | warm tenant registry/flags/tariffs (CACHE_STRATEGY)                                                                                                   | log                                                                                                                             |
 | `health.dlq-monitor`         | every 5 min                           | ops           | platform            | DLQ depth check across queues → alert                                                                                                                 | page at threshold                                                                                                               |
 | `health.dr-drill-reminder`   | quarterly                             | ops           | platform            | open a DR-drill task per runbook                                                                                                                      | log                                                                                                                             |
+| `push.deliver` ✅            | on delivery of a staff in-app message | notifications | per tenant          | fan one delivered `inapp` notification out to its recipient's registered handsets via Expo Push (M4)                                                  | retries with backoff when the whole batch failed; a handset Expo reports `DeviceNotRegistered` is retired, never retried        |
 
 ## `reminder.appointments` is implemented as a DELAYED JOB, not a 5-minute sweep (A6, 2026-07-14)
 
@@ -45,6 +46,34 @@ The row above describes a cron that wakes every 5 minutes and asks each tenant's
 **Cancellation is not handled, on purpose.** Nothing cancels or reschedules the job when the appointment changes. The job carries an appointment id, and the handler RE-READS the appointment when it fires: if it no longer `occupiesSlot()` (cancelled, rescheduled, completed, no-showed), it sends nothing. The delayed job is a trigger; the database is the truth. Keeping the decision in two places — a durable database and a volatile queue — and requiring them to agree is how a patient gets reminded to attend an appointment they cancelled last week.
 
 T-2h reminders are not built. When they are, they are a second `delayMs` on the same mechanism.
+
+**Correction, 2026-08-20 — the job id above was wrong, and no reminder was ever scheduled.** BullMQ
+builds its Redis keys as `bull:<queue>:<jobId>` and REJECTS a custom id containing a colon
+(`Custom Id cannot contain :`). `reminder:{tenantId}:{appointmentId}` therefore made `add()` reject
+every time — inside an awaited call in a consumer, so it surfaced as an ordinary job retry and
+nothing ever said so. It is `reminder-{tenantId}-{appointmentId}` now, and `scheduleTask` refuses a
+colon up front rather than leaving it to the queue. Found by an M4 test that asserted on the QUEUED
+JOB rather than on `scheduleTask` having been called (`taskQueue.test.ts`).
+
+## `push.deliver` — the knock on the door after the message is already safe (M4, 2026-08-20)
+
+Not a cron and not a sweep: the task is scheduled by `notification.service.ts` the moment a staff
+`inapp` message is marked `sent`, with `jobId: push-{notificationId}`.
+
+**The ledger row is the message; this is a delivery optimisation.** It runs on the queue rather than
+inline because `order.critical` is sent SYNCHRONOUSLY inside the request that recorded the result,
+and an HTTP call to Expo inside that request would put a third party's latency between a technician
+and a saved critical value. A push that never arrives changes nothing about what the doctor sees
+when they next open the app.
+
+**Push is not a `Channel`.** `dedupeKey` is unique per tenant, so a template delivered on two
+channels collides on `one_message_per_cause` and the second is dropped as a duplicate — the problem
+`COMMUNICATION_POLICY.md` records for email-plus-inapp. Hanging the fan-out off the in-app delivery
+avoids it entirely and keeps one row per message.
+
+**What it does NOT retry:** a handset Expo reports as `DeviceNotRegistered` is deactivated on the
+spot, and a partial failure does not re-push to the handsets that already buzzed. Only a batch that
+failed entirely, for a reason other than a dead token, throws for the queue to retry.
 
 ## Implementation status (A5)
 

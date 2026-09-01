@@ -28,7 +28,15 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./patient.controller.js";
+import {
+  duplicateCandidate,
+  mergeResult,
+  patient,
+  registerPatientResult,
+} from "./patient.contract.js";
 import {
   duplicateCheckSchema,
   idParamSchema,
@@ -47,6 +55,7 @@ export function patientRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PATIENT_READ),
     validate(listPatientsQuerySchema, "query"),
+    responds(patient.array(), { meta: true }),
     asyncHandler(controller.listPatients),
   );
 
@@ -59,6 +68,7 @@ export function patientRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PATIENT_READ),
     validate(uhidParamSchema, "params"),
+    responds(patient),
     asyncHandler(controller.getPatientByUhid),
   );
 
@@ -67,6 +77,7 @@ export function patientRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PATIENT_READ),
     validate(idParamSchema, "params"),
+    responds(patient),
     asyncHandler(controller.getPatient),
   );
 
@@ -75,6 +86,8 @@ export function patientRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PATIENT_REGISTER),
     validate(registerPatientSchema),
+    responds(registerPatientResult, { status: 201 }),
+    idempotent("Replays the patient this key already registered."),
     asyncHandler(controller.registerPatient),
   );
 
@@ -91,6 +104,7 @@ export function patientRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PATIENT_READ),
     validate(duplicateCheckSchema),
+    responds(duplicateCandidate.array()),
     asyncHandler(controller.checkDuplicates),
   );
 
@@ -100,6 +114,7 @@ export function patientRouter(): Router {
     authorize(PERMISSIONS.PATIENT_UPDATE),
     validate(idParamSchema, "params"),
     validate(updatePatientSchema),
+    responds(patient),
     asyncHandler(controller.updatePatient),
   );
 
@@ -110,6 +125,7 @@ export function patientRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.PATIENT_MERGE),
     validate(mergePatientsSchema),
+    responds(mergeResult),
     asyncHandler(controller.mergePatients),
   );
 

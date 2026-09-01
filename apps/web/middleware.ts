@@ -14,19 +14,62 @@ import { NextResponse, type NextRequest } from "next/server";
  */
 const REFRESH_COOKIE = "hms_refresh";
 
-/** Reachable without a session. Everything else requires one. */
-const PUBLIC_PATHS = ["/login", "/mfa"];
+/**
+ * Reachable without a session. Everything else requires one.
+ *
+ * `/` is the hospital's PUBLIC website (see app/page.tsx) — the first thing a visitor sees, so it
+ * must never bounce to sign-in. The password-reset pages are public too: they are the way BACK in
+ * for someone who has no session by definition, so guarding them behind one is a locked door with
+ * the key on the inside.
+ *
+ * `/` was missing from this list for a while, and the effect was total: the public site could not
+ * be reached by ANY logged-out visitor, on any hospital's host, and a crawler indexing the
+ * hospital's front page got a redirect to a login form. The comment above was right and the array
+ * was wrong, which is the argument for `decide` being tested rather than described.
+ */
+const PUBLIC_PATHS = ["/", "/login", "/mfa", "/forgot-password", "/reset-password"];
 
-export function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
-  const hasSession = req.cookies.has(REFRESH_COOKIE);
-  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+/** Where a request should go, as a value. No framework, so it can be tested directly. */
+export type Decision = { to: "continue" } | { to: "login"; next?: string } | { to: "dashboard" };
+
+export function decide(input: {
+  pathname: string;
+  hasSession: boolean;
+  /** The client sets `?reason=` when it has just been told the cookie is dead. */
+  hasReason: boolean;
+}): Decision {
+  const { pathname, hasSession, hasReason } = input;
+
+  /**
+   * `p !== "/"` is not redundant. Without it the prefix arm builds `"//"`, and while no real path
+   * starts with that today, a rule whose correctness rests on that coincidence is one bad edit
+   * from making every route public. The root is an exact match and nothing else.
+   */
+  const isPublic = PUBLIC_PATHS.some(
+    (p) => pathname === p || (p !== "/" && pathname.startsWith(`${p}/`)),
+  );
 
   if (!hasSession && !isPublic) {
+    // Send them back where they were trying to go, once they are in.
+    return pathname === "/" ? { to: "login" } : { to: "login", next: pathname };
+  }
+
+  if (hasSession && pathname === "/login" && !hasReason) return { to: "dashboard" };
+
+  return { to: "continue" };
+}
+
+export function middleware(req: NextRequest) {
+  const decision = decide({
+    pathname: req.nextUrl.pathname,
+    hasSession: req.cookies.has(REFRESH_COOKIE),
+    hasReason: req.nextUrl.searchParams.has("reason"),
+  });
+
+  if (decision.to === "login") {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
-    // Send them back where they were trying to go, once they are in.
-    if (pathname !== "/") url.searchParams.set("next", pathname);
+    if (decision.next) url.searchParams.set("next", decision.next);
     return NextResponse.redirect(url);
   }
 
@@ -48,7 +91,7 @@ export function middleware(req: NextRequest) {
    * stays anyway: it costs one condition, and it means no future cookie bug can
    * ever cost a user their way back in.
    */
-  if (hasSession && pathname === "/login" && !req.nextUrl.searchParams.has("reason")) {
+  if (decision.to === "dashboard") {
     const url = req.nextUrl.clone();
     url.pathname = "/dashboard";
     url.search = "";

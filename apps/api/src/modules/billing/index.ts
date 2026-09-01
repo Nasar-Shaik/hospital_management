@@ -21,21 +21,51 @@ export { billingConsumers } from "./billing.consumers.js";
 export {
   postCharge,
   reverseChargesFor,
+  assessDrugCredit,
+  type DrugCreditAssessment,
   voidCharge,
   getCharges,
   getRunningBill,
   finalizeInvoice,
   recordPayment,
   listInvoices,
+  listPendingBills,
+  type PendingBill,
   listServices,
   getInvoice,
+  invoiceSignatories,
+  type InvoiceSignatory,
+  applyDiscount,
+  recordRefund,
+  setPayerSplit,
+  listPackages,
+  getPackageByCode,
+  createPackage,
+  updatePackage,
+  enrollInPackage,
+  listPackageEnrollments,
+  activePackageEnrollment,
+  cancelPackageEnrollment,
+  type Package,
+  type PackageEnrollment,
   collectionsReport,
+  revenueLeakage,
+  duesAgeing,
+  orderPaymentStatus,
+  listReceipts,
   type Charge,
   type Invoice,
   type ServiceItem,
+  type BillReceipt,
   type PostChargeInput,
+  type OrderPaymentState,
 } from "./billing.service.js";
-export type { CollectionsReport } from "./billing.repository.js";
+export type {
+  CollectionsReport,
+  RevenueLeakageReport,
+  DuesAgeingReport,
+  DuesBucket,
+} from "./billing.repository.js";
 
 export {
   CHARGE_CATEGORIES,
@@ -43,4 +73,8 @@ export {
   type ChargeCategory,
   type InvoiceStatus,
   type InvoiceLine,
+  type RefundEntry,
 } from "./billing.model.js";
+
+/** For the reporting response contract — the ageing buckets it publishes. */
+export { DUES_BUCKETS } from "./billing.repository.js";

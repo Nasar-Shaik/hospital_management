@@ -55,6 +55,18 @@ export const createHospitalSchema = z
     /** Omit and a strong one is generated and shown ONCE. */
     adminPassword: z.string().min(env.PASSWORD_MIN_LENGTH).max(512).optional(),
     trial: z.boolean().optional(),
+    /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+    maxBranches: z.coerce.number().int().min(1).max(1000).optional(),
+    /** Custom domain (ADR-0005) — a bare hostname; DNS/TLS is provisioned separately. */
+    customDomain: z.string().max(253).optional(),
+    /**
+     * Licence (ADR-0016). Give an explicit `expiresAt` OR `trialDays`; omit both and the
+     * hospital gets the default trial window. `graceDays` extends the post-expiry runway.
+     */
+    licensePlan: z.string().max(40).optional(),
+    licenseExpiresAt: z.string().datetime().optional(),
+    trialDays: z.coerce.number().int().min(1).max(3650).optional(),
+    graceDays: z.coerce.number().int().min(0).max(365).optional(),
   })
   .strict();
 
@@ -67,6 +79,37 @@ export const hospitalStatusSchema = z
 export const hospitalPlanSchema = z
   .object({
     planCode: z.string().regex(/^PLAN_[A-Z_]+$/),
+  })
+  .strict();
+
+/** Raise/lower the branch cap (ADR-0015). */
+export const hospitalLimitsSchema = z
+  .object({
+    maxBranches: z.coerce.number().int().min(1).max(1000),
+  })
+  .strict();
+
+/**
+ * Set / renew / extend a hospital's licence (ADR-0016). `extendDays` bumps the expiry
+ * from the later of now / current expiry; the explicit fields set it outright. At least
+ * one field must be present — an empty licence patch is a no-op the API rejects.
+ */
+export const hospitalLicenseSchema = z
+  .object({
+    plan: z.string().max(40).optional(),
+    status: z.enum(["TRIAL", "ACTIVE", "EXPIRED", "CANCELLED"]).optional(),
+    expiresAt: z.string().datetime().optional(),
+    graceDays: z.coerce.number().int().min(0).max(365).optional(),
+    extendDays: z.coerce.number().int().min(1).max(3650).optional(),
+    notes: z.string().max(500).optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: "provide at least one licence field" });
+
+/** Attach/replace/clear a custom domain (ADR-0005). Empty string / null detaches. */
+export const hospitalDomainSchema = z
+  .object({
+    customDomain: z.string().max(253).nullable(),
   })
   .strict();
 

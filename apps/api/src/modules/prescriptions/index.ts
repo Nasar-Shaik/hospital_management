@@ -38,7 +38,10 @@ export {
 
 export {
   findByOrderId,
+  /** Batch read for the ward worklist — current versions only. */
+  listForEncounters,
   addDispensedQty,
+  prescriptionsByUser,
   setStatus as setPrescriptionStatus,
 } from "./prescription.repository.js";
 
@@ -53,3 +56,6 @@ export {
   type DrugRoute,
   type DrugFrequency,
 } from "./prescription.model.js";
+
+/** For the pharmacy response contract — a dispense result carries the prescription. */
+export { prescription } from "./prescription.contract.js";

@@ -21,10 +21,48 @@
  * a permission with no route grants nothing, while a route with no permission is
  * a hole. Defining them up front means a future module wires authorization by
  * referencing a constant instead of redesigning RBAC.
+ *
+ * ── AND WHY THAT NEEDED A LEDGER (see `lifecycle` below) ─────────────────────
+ * "Safe" was doing a lot of work in that paragraph. A permission with no route
+ * grants nothing — but it is also INDISTINGUISHABLE from a shipped feature whose
+ * route nobody wired, and the roles page shows both to an administrator as a
+ * capability their staff have. That is not hypothetical: `nursing:manage` was
+ * granted to NURSE, had a complete backend route, and had no client caller for
+ * two milestones; a nurse could not write a note and the permission said she
+ * could. `lab:collect` looks identical from here and is genuinely M6 work.
+ *
+ * The two cases cannot be told apart by counting routes, so they are DECLARED.
+ * Anything without a `lifecycle` is asserted to be live now, and the gate in
+ * `apps/api/src/permissionLifecycle.test.ts` proves it against the shipped app.
  */
 
 export const PERMISSION_SCOPES = ["own", "branch", "tenant", "global"] as const;
 export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
+
+/**
+ * Why a permission is not enforced by a route.
+ *
+ * `future`     — reserved for a module that is not built. Grants nothing today, and MUST NOT
+ *                have a route: if it acquires one, the declaration is stale and the gate says so.
+ * `superseded` — the capability shipped under a DIFFERENT permission. The code stays because
+ *                codes are permanent (renaming un-grants it from every hospital's database), but
+ *                nothing should wire it. `reason` names the permission that replaced it.
+ * `service`    — enforced, but NOT by `authorize()` on a router: a service-layer check against
+ *                `ctx.permissions`, or a lookup table. Real authorization that a route census
+ *                cannot see. The gate verifies the claim rather than believing it.
+ */
+export type PermissionStatus = "future" | "superseded" | "service";
+
+export interface PermissionLifecycle {
+  status: PermissionStatus;
+  /** The owning module or milestone — "D6 LIS (M6)", "C4 Referral & Transfer". Never blank. */
+  module: string;
+  /**
+   * Why, in a sentence another engineer can act on. For `superseded`, name the replacing
+   * permission code; for `service`, name where the check lives.
+   */
+  reason: string;
+}
 
 export interface PermissionDefinition {
   /** `resource:action` — the stable identifier stored in the database. */
@@ -34,23 +72,59 @@ export interface PermissionDefinition {
   /** Widest scope this permission may be granted at. */
   scope?: PermissionScope;
   description: string;
+  /**
+   * Absent means ACTIVE: this permission is enforced by a route on the shipped app, and the gate
+   * fails if it is not. Present means it is deliberately not, for the declared reason.
+   */
+  lifecycle?: PermissionLifecycle;
 }
 
 function p(
   code: string,
   description: string,
   scope: PermissionScope = "tenant",
+  lifecycle?: PermissionLifecycle,
 ): PermissionDefinition {
   const [resource = "", action = ""] = code.split(":");
-  return { code, resource, action, scope, description };
+  return { code, resource, action, scope, description, ...(lifecycle ? { lifecycle } : {}) };
 }
+
+/** Reserved for a module that has not been built. */
+const future = (module: string, reason: string): PermissionLifecycle => ({
+  status: "future",
+  module,
+  reason,
+});
+
+/** The capability shipped under `replacedBy`. The code stays; nothing should wire it. */
+const supersededBy = (module: string, replacedBy: string, reason: string): PermissionLifecycle => ({
+  status: "superseded",
+  module,
+  reason: `superseded by \`${replacedBy}\` — ${reason}`,
+});
+
+/** Enforced somewhere other than a router. `where` must name the file that checks it. */
+const enforcedIn = (module: string, where: string, reason: string): PermissionLifecycle => ({
+  status: "service",
+  module,
+  reason: `checked in ${where} — ${reason}`,
+});
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Platform & administration (Doc 02 A1–A9)
  * ──────────────────────────────────────────────────────────────────────────── */
 
 const PLATFORM = {
-  TENANT_MANAGE: p("tenant:manage", "Configure this organization"),
+  TENANT_MANAGE: p(
+    "tenant:manage",
+    "Configure this organization",
+    "tenant",
+    supersededBy(
+      "A1 Organization",
+      "hospital:manage",
+      "the hospital profile is what a tenant admin actually configures",
+    ),
+  ),
   /**
    * VIEW the subscription and usage. Named `manage` for historical reasons
    * (Doc 02 A2) — it does NOT let a hospital change what it pays for.
@@ -65,7 +139,15 @@ const PLATFORM = {
 
   ROLE_MANAGE: p("role:manage", "Create and edit roles"),
   PERMISSION_VIEW: p("permission:view", "View the permission catalog"),
-  SESSION_REVOKE: p("session:revoke", "Sign another user out"),
+  SESSION_REVOKE: p(
+    "session:revoke",
+    "Sign another user out",
+    "tenant",
+    future(
+      "A3 Users & Sessions",
+      "signing another user out of their sessions is not implemented; today a role change invalidates their permission cache instead",
+    ),
+  ),
 
   AUDIT_VIEW: p("audit:view", "Read the audit trail"),
   AUDIT_EXPORT: p("audit:export", "Export the audit trail"),
@@ -79,16 +161,35 @@ const PLATFORM = {
   REPORT_VIEW: p("report:view", "View operational and financial reports"),
 
   NOTIFICATION_MANAGE: p("notification:manage", "Manage templates and channels"),
-  NOTIFICATION_SEND: p("notification:send", "Send notifications"),
+  NOTIFICATION_SEND: p(
+    "notification:send",
+    "Send notifications",
+    "tenant",
+    supersededBy(
+      "A6 Notifications",
+      "notification:manage",
+      "one permission covers templates and dispatch",
+    ),
+  ),
 
   FILE_UPLOAD: p("file:upload", "Upload documents"),
   FILE_READ: p("file:read", "Read documents"),
   FILE_DELETE: p("file:delete", "Delete documents"),
 
   BRANDING_MANAGE: p("branding:manage", "Edit branding and theme"),
-  DOMAIN_MANAGE: p("domain:manage", "Manage custom domains"),
+  DOMAIN_MANAGE: p(
+    "domain:manage",
+    "Manage custom domains",
+    "tenant",
+    future("A1 Organization", "custom domains are DNS/TLS provisioning work that has not started"),
+  ),
   APIKEY_MANAGE: p("apikey:manage", "Manage API keys"),
-  WEBHOOK_MANAGE: p("webhook:manage", "Manage webhooks"),
+  WEBHOOK_MANAGE: p(
+    "webhook:manage",
+    "Manage webhooks",
+    "tenant",
+    future("A9 Integrations", "outbound webhooks have no delivery, retry or signing machinery yet"),
+  ),
 } as const;
 
 /**
@@ -108,9 +209,30 @@ const PLATFORM = {
  * demo hospital cheerfully upgraded itself to Enterprise.)
  */
 const SUPERADMIN = {
-  SUPERADMIN_TENANT_MANAGE: p("superadmin:tenant:manage", "Provision and manage tenants", "global"),
-  TENANT_IMPERSONATE: p("tenant:impersonate", "Impersonate a tenant user (audited)", "global"),
-  TENANT_EXPORT: p("tenant:export", "Export a tenant's data", "global"),
+  SUPERADMIN_TENANT_MANAGE: p(
+    "superadmin:tenant:manage",
+    "Provision and manage tenants",
+    "global",
+    future(
+      "A0 Platform",
+      "the operator console provisions tenants through its own surface; no tenant-facing route exists",
+    ),
+  ),
+  TENANT_IMPERSONATE: p(
+    "tenant:impersonate",
+    "Impersonate a tenant user (audited)",
+    "global",
+    future(
+      "A0 Platform",
+      "support impersonation needs an audited session-mint flow that is not built",
+    ),
+  ),
+  TENANT_EXPORT: p(
+    "tenant:export",
+    "Export a tenant's data",
+    "global",
+    future("A0 Platform", "whole-tenant export is a data-portability feature that has not started"),
+  ),
   PLAN_MANAGE: p("plan:manage", "Change which edition a hospital is on", "global"),
   FEATUREFLAG_MANAGE: p("featureflag:manage", "Override a hospital's feature flags", "global"),
 } as const;
@@ -121,6 +243,7 @@ const SUPERADMIN = {
 
 const ORGANIZATION = {
   HOSPITAL_MANAGE: p("hospital:manage", "Edit the hospital profile"),
+  APIKEY_MANAGE: p("apikey:manage", "Issue and revoke API keys"),
   BRANCH_MANAGE: p("branch:manage", "Manage branches"),
   DEPARTMENT_MANAGE: p("department:manage", "Manage departments"),
   FACILITY_MANAGE: p("facility:manage", "Manage buildings, floors, theatres, ICUs"),
@@ -132,20 +255,58 @@ const ORGANIZATION = {
   AMBULANCE_MANAGE: p("ambulance:manage", "Manage the ambulance fleet"),
   AMBULANCE_DISPATCH: p("ambulance:dispatch", "Dispatch an ambulance", "branch"),
   ASSET_MANAGE: p("asset:manage", "Manage assets and maintenance"),
-  VENDOR_MANAGE: p("vendor:manage", "Manage vendors and insurers"),
+  /**
+   * The supplier master — who the hospital buys from. Live since General Stores v1; it gates
+   * `/suppliers`.
+   *
+   * Named `vendor:` rather than `supplier:` because the code is permanent and this is the code the
+   * catalogue has always carried. It reads the SUPPLIER list, which is the only master it has: the
+   * insurer master the old description promised is `insurance:link`'s territory and was never
+   * built here.
+   */
+  VENDOR_MANAGE: p("vendor:manage", "Manage suppliers", "tenant"),
 
   FACILITYOPS_MANAGE: p(
     "facilityops:manage",
     "Housekeeping, laundry, cafeteria, parking",
     "branch",
+    future("G5 Facility Operations", "housekeeping, laundry, cafeteria and parking are not built"),
   ),
-  VISITOR_MANAGE: p("visitor:manage", "Visitor check-in and passes", "branch"),
-  HELPDESK_MANAGE: p("helpdesk:manage", "The hospital's own help desk", "branch"),
+  VISITOR_MANAGE: p(
+    "visitor:manage",
+    "Visitor check-in and passes",
+    "branch",
+    future("G6 Front Office", "visitor check-in and passes are not built"),
+  ),
+  HELPDESK_MANAGE: p(
+    "helpdesk:manage",
+    "The hospital's own help desk",
+    "branch",
+    future(
+      "G6 Front Office",
+      "the internal help desk is separate from patient feedback (complaint:manage) and is not built",
+    ),
+  ),
   FEEDBACK_MANAGE: p("feedback:manage", "Feedback and surveys"),
   COMPLAINT_MANAGE: p("complaint:manage", "Complaints and resolution"),
-  WASTE_MANAGE: p("waste:manage", "Biomedical waste"),
-  CSSD_MANAGE: p("cssd:manage", "Sterile supply"),
-  CSSD_RELEASE: p("cssd:release", "Release a sterilized batch"),
+  WASTE_MANAGE: p(
+    "waste:manage",
+    "Biomedical waste",
+    "tenant",
+    future("G7 Biomedical Waste", "waste tracking is not built"),
+  ),
+  CSSD_MANAGE: p(
+    "cssd:manage",
+    "Sterile supply",
+    "tenant",
+    future("G8 CSSD", "sterile supply is not built"),
+  ),
+  CSSD_RELEASE: p(
+    "cssd:release",
+    "Release a sterilized batch",
+    "tenant",
+    future("G8 CSSD", "sterile supply is not built"),
+  ),
   MORTUARY_MANAGE: p("mortuary:manage", "Mortuary register"),
   MORTUARY_RELEASE: p("mortuary:release", "Release a body"),
 } as const;
@@ -163,12 +324,56 @@ const PATIENT = {
   ADMISSION_CREATE: p("admission:create", "Admit a patient", "branch"),
   ADMISSION_DISCHARGE: p("admission:discharge", "Discharge a patient", "branch"),
 
-  RECORD_READ: p("record:read", "Read medical records", "branch"),
-  RECORD_WRITE: p("record:write", "Write medical records", "branch"),
+  RECORD_READ: p(
+    "record:read",
+    "Read medical records",
+    "branch",
+    supersededBy(
+      "C3 Medical Records",
+      "emr:read",
+      "clinical notes are emr:read; uploaded documents are file:read",
+    ),
+  ),
+  RECORD_WRITE: p(
+    "record:write",
+    "Write medical records",
+    "branch",
+    supersededBy(
+      "C3 Medical Records",
+      "emr:write",
+      "clinical notes are emr:write; uploaded documents are file:upload",
+    ),
+  ),
   CONSENT_MANAGE: p("consent:manage", "Capture consent", "branch"),
-  DISCHARGE_CREATE: p("discharge:create", "Write a discharge summary", "branch"),
-  REFERRAL_MANAGE: p("referral:manage", "Referrals in and out", "branch"),
-  TRANSFER_MANAGE: p("transfer:manage", "Patient transfers", "branch"),
+  DEATH_CERTIFY: p("death:certify", "Certify a death (licensed)", "branch"),
+  DISCHARGE_CREATE: p(
+    "discharge:create",
+    "Write a discharge summary",
+    "branch",
+    supersededBy(
+      "C3 Medical Records",
+      "admission:discharge",
+      "the summary is written by the act that ends the stay, as a ward note",
+    ),
+  ),
+  REFERRAL_MANAGE: p(
+    "referral:manage",
+    "Referrals in and out",
+    "branch",
+    future(
+      "C4 Referral & Transfer",
+      "the referral register is not built; a referral is only an Order category today",
+    ),
+  ),
+  TRANSFER_MANAGE: p(
+    "transfer:manage",
+    "Patient transfers",
+    "branch",
+    future(
+      "C4 Referral & Transfer",
+      "inter-department and inter-branch transfers are not built; only bed transfer within a stay exists (bed:allocate)",
+    ),
+  ),
 
   WALLET_MANAGE: p("wallet:manage", "Patient wallet", "branch"),
   PACKAGE_ENROLL: p("package:enroll", "Enrol a patient in a package", "branch"),
@@ -182,10 +387,34 @@ const PATIENT = {
 const CLINICAL = {
   EMR_READ: p("emr:read", "Read the clinical chart", "branch"),
   EMR_WRITE: p("emr:write", "Write clinical notes", "branch"),
-  EMR_SIGN: p("emr:sign", "Sign a clinical record (licensed)", "branch"),
-  TEMPLATE_MANAGE: p("template:manage", "Clinical templates"),
+  EMR_SIGN: p(
+    "emr:sign",
+    "Sign a clinical record (licensed)",
+    "branch",
+    future(
+      "D1 EMR",
+      "countersigning a clinical note is not implemented; only prescriptions are signed (prescription:sign)",
+    ),
+  ),
+  TEMPLATE_MANAGE: p(
+    "template:manage",
+    "Clinical templates",
+    "tenant",
+    future("D1 EMR", "clinical note templates are not built"),
+  ),
 
   VITALS_RECORD: p("vitals:record", "Record vitals", "branch"),
+  /**
+   * Read the observations charted ON A VISIT — split out of `emr:read`.
+   *
+   * `emr:read` means "read the clinical chart", and it still gates the patient's vitals TREND
+   * across visits, which is clinical history. This is the narrower thing: the readings taken on
+   * the visit in front of you. It exists because the front desk now takes height, weight, BP and
+   * temperature at registration, and a desk that may WRITE a measurement but not read it back
+   * cannot print it on the OP slip it hands the patient — while granting the desk `emr:read` to
+   * fix that would open every consultation note in the hospital.
+   */
+  VITALS_READ: p("vitals:read", "Read charted observations", "branch"),
   /**
    * Reading a patient's allergies is TENANT-wide, not branch-scoped — and the difference
    * is a safety property, not a preference. An allergy recorded when the patient was seen
@@ -198,10 +427,55 @@ const CLINICAL = {
   ALLERGY_MANAGE: p("allergy:manage", "Maintain the allergy list", "branch"),
 
   DOCTOR_MANAGE: p("doctor:manage", "Manage doctors"),
-  SCHEDULE_MANAGE: p("schedule:manage", "Manage doctor schedules", "branch"),
-  DOCTOR_PERFORMANCE_VIEW: p("doctor:performance:view", "Doctor performance and revenue"),
+  /**
+   * A doctor's own roster: which sessions they sit, and when they are away.
+   *
+   * ── WHY THIS IS A SECOND PERMISSION AND NOT A WIDER GRANT OF `doctor:manage` ─
+   * `doctor:manage` is roster ADMINISTRATION over everybody — it also sets clinic HOURS, which
+   * are a contractual matter and stay with an administrator. But "I am off sick tomorrow" is not
+   * an administrative act, and routing it through one at 07:00 means it does not happen: the
+   * doctor simply does not turn up, reception books into slots nobody will sit, and patients
+   * travel to an empty clinic. That failure is the reason this exists.
+   *
+   * ── AND WHY THE SCOPE IS `branch`, NOT `own` ────────────────────────────────
+   * `own` looks like the obvious fit and is a trap this codebase has already been bitten by (see
+   * the prescription note below): row scope is published ONCE per request and every repository
+   * read in that request obeys it, so `own` would rewrite unrelated lookups to `createdBy = me` —
+   * including the upsert that finds an existing availability row, which would then miss and write
+   * a duplicate.
+   *
+   * Ownership here is not a filter, it is an INPUT: the routes take the doctor id from the token
+   * and never from the body, so there is no id to tamper with. `branch` then means the same thing
+   * it means for every appointment permission — the roster is per site.
+   */
+  DOCTOR_SELF_MANAGE: p("doctor:self-manage", "Manage own availability and leave", "branch"),
+  SCHEDULE_MANAGE: p(
+    "schedule:manage",
+    "Manage doctor schedules",
+    "branch",
+    supersededBy(
+      "D2 Doctor Management",
+      "doctor:manage",
+      "clinic hours and sessions are managed on the doctor, with doctor:self-manage for their own",
+    ),
+  ),
+  DOCTOR_PERFORMANCE_VIEW: p(
+    "doctor:performance:view",
+    "Doctor performance and revenue",
+    "tenant",
+    future("D2 Doctor Management", "per-doctor revenue and performance reporting is not built"),
+  ),
 
-  CONSULTATION_MANAGE: p("consultation:manage", "Conduct consultations", "own"),
+  CONSULTATION_MANAGE: p(
+    "consultation:manage",
+    "Conduct consultations",
+    "own",
+    supersededBy(
+      "D3 Consultation Workspace",
+      "emr:write",
+      "the consultation note is an EMR write; the queue is encounter:update",
+    ),
+  ),
   /**
    * ── `branch`, NOT `own` — AND THE DIFFERENCE IS NOT COSMETIC ────────────────
    * These were `own`, matching the intuition "a doctor sees the prescriptions they
@@ -249,43 +523,236 @@ const CLINICAL = {
   ORDER_RELEASE: p("order:release", "Release a verified result to the ordering doctor", "branch"),
   ORDER_CANCEL: p("order:cancel", "Cancel an order", "branch"),
 
-  TELECONSULT_HOST: p("teleconsult:host", "Host a video consultation", "own"),
-  TELECONSULT_JOIN: p("teleconsult:join", "Join a video consultation", "own"),
+  TELECONSULT_HOST: p(
+    "teleconsult:host",
+    "Host a video consultation",
+    "own",
+    future("D4 Tele-consultation", "video consultation is not built"),
+  ),
+  TELECONSULT_JOIN: p(
+    "teleconsult:join",
+    "Join a video consultation",
+    "own",
+    future("D4 Tele-consultation", "video consultation is not built"),
+  ),
 
   NURSING_MANAGE: p("nursing:manage", "Nursing care plans and notes", "branch"),
   MAR_ADMINISTER: p("mar:administer", "Administer medication (MAR)", "branch"),
 
-  LAB_ORDER: p("lab:order", "Order a lab test", "branch"),
-  LAB_COLLECT: p("lab:collect", "Collect a sample", "branch"),
-  LAB_RESULT: p("lab:result", "Enter a lab result", "branch"),
+  LAB_ORDER: p(
+    "lab:order",
+    "Order a lab test",
+    "branch",
+    supersededBy(
+      "D6 LIS",
+      "order:create",
+      "ADR-0013 makes the Order polymorphic — ordering is one permission across every category",
+    ),
+  ),
+  LAB_COLLECT: p(
+    "lab:collect",
+    "Collect a sample",
+    "branch",
+    future(
+      "D6 LIS (M6)",
+      "specimen collection — STATE_MACHINE_CATALOG §7 is written and explicitly not implemented; there is no specimen entity",
+    ),
+  ),
+  LAB_RESULT: p(
+    "lab:result",
+    "Enter a lab result",
+    "branch",
+    future(
+      "D6 LIS (M6)",
+      "structured lab result entry arrives with the LIS; today a technician enters results through the order worklist under order:perform",
+    ),
+  ),
   LAB_APPROVE: p("lab:approve", "Approve a lab result (pathologist)", "branch"),
 
-  RADIOLOGY_ORDER: p("radiology:order", "Order imaging", "branch"),
-  RADIOLOGY_REPORT: p("radiology:report", "Report on imaging", "branch"),
-  RADIOLOGY_SIGN: p("radiology:sign", "Sign a radiology report", "branch"),
+  RADIOLOGY_ORDER: p(
+    "radiology:order",
+    "Order imaging",
+    "branch",
+    supersededBy(
+      "D7 Radiology",
+      "order:create",
+      "ADR-0013 makes the Order polymorphic — ordering is one permission across every category",
+    ),
+  ),
+  RADIOLOGY_REPORT: p(
+    "radiology:report",
+    "Report on imaging",
+    "branch",
+    future(
+      "D7 Radiology (M6)",
+      "the radiology report arrives with the module; today results ride on the order worklist under order:perform",
+    ),
+  ),
+  /**
+   * ── THIS IS COMPETENCE IN A CATEGORY, NOT SENIORITY ───────────────────────
+   * Read `order.authority.ts`: the extra permission required to verify an order is "the one that
+   * says they are competent in THIS category". That is what this code means, and it is why a
+   * RADIOLOGY_TECHNICIAN holds it in a hospital with no radiologist on staff — a radiographer is
+   * competent in imaging and is not competent in haematology, which is precisely the distinction
+   * the check exists to make.
+   *
+   * It was described as "sign a radiology report" while only RADIOLOGIST held it, and that reading
+   * had a consequence nobody intended: a hospital without a consultant radiologist could not get a
+   * chest X-ray past `completed`, so the film was taken, the report was typed, and the ordering
+   * doctor never saw either. Requiring a specialist the hospital does not employ is not a safety
+   * control; it is an outage.
+   *
+   * A hospital that DOES employ radiologists gets the two-person model by granting this and
+   * `order:verify` to the radiologist and withholding them from the technician. That is a role
+   * edit, not a code change — see `AI_Workflow/docs/RADIOLOGY.md`.
+   */
+  RADIOLOGY_SIGN: p(
+    "radiology:sign",
+    "Authority over imaging results — verify and release a radiology study",
+    "branch",
+    enforcedIn(
+      "D7 Radiology",
+      "orders/order.authority.ts",
+      "verifying a radiology order needs order:verify AND this, so whoever signs off a scan is competent in imaging rather than merely holding the generic verb",
+    ),
+  ),
 
+  /**
+   * Writes the operation record onto a completed booking — what was done, by whom, what was found.
+   * Live since Theatre v1; it gates `POST /ot-bookings/:id/operative-note`.
+   *
+   * Deliberately NOT `ot:schedule`. Running the surgical list and stating what was found inside a
+   * patient are different acts by different people, and one permission covering both would let the
+   * OT coordinator author a clinical record.
+   */
   OT_RECORD: p("ot:record", "Record a surgery", "branch"),
-  BLOODBANK_MANAGE: p("bloodbank:manage", "Blood bank stock"),
-  BLOODBANK_ISSUE: p("bloodbank:issue", "Issue blood", "branch"),
+  BLOODBANK_MANAGE: p(
+    "bloodbank:manage",
+    "Blood bank stock",
+    "tenant",
+    future("D9 Blood Bank", "blood bank is not built"),
+  ),
+  BLOODBANK_ISSUE: p(
+    "bloodbank:issue",
+    "Issue blood",
+    "branch",
+    future("D9 Blood Bank", "blood bank is not built"),
+  ),
 
+  /**
+   * Assess how sick an emergency patient is. Live since Emergency v1 — it gates
+   * `POST /emergency/triage`.
+   *
+   * Its own permission rather than `encounter:update` because triage is a clinical judgement, not
+   * queue management: the registration desk moves patients along and must not be able to declare
+   * one `non_urgent`.
+   */
   TRIAGE_PERFORM: p("triage:perform", "Triage an emergency patient", "branch"),
-  ED_BOARD_MANAGE: p("ed:board:manage", "Emergency board", "branch"),
-  MLC_MANAGE: p("mlc:manage", "Medico-legal cases", "branch"),
+  ED_BOARD_MANAGE: p(
+    "ed:board:manage",
+    "Manage the emergency board",
+    "branch",
+    /**
+     * Still unbuilt, and the reason had to be REWRITTEN when the board shipped — the ledger test
+     * can see that a `future` permission has acquired a route, but it cannot see a reason that has
+     * quietly become untrue.
+     *
+     * READING the board needs no permission of its own: it is the queue, filtered and ranked, and
+     * everyone who reads it already holds `encounter:read` for the same patients. What this code
+     * is reserved for is MANAGING it — assigning a patient to a bay, pinning a row, overriding the
+     * triage order by hand — none of which exists, because v1's board is a ranked list a person
+     * reads rather than a thing a person arranges.
+     */
+    future(
+      "D10 Emergency",
+      "the board is read-only in v1 (`encounter:read`); bay assignment and manual re-ordering are not built",
+    ),
+  ),
+  MLC_MANAGE: p(
+    "mlc:manage",
+    "Medico-legal cases",
+    "branch",
+    future(
+      "D10 Emergency",
+      "the medico-legal CASE register is not built; the medicolegal module today covers consent and death certification",
+    ),
+  ),
 
-  ICU_CHART: p("icu:chart", "Critical-care charting", "branch"),
-  ICU_SCORE: p("icu:score", "Critical-care scoring", "branch"),
-  ICU_BOARD_VIEW: p("icu:board:view", "ICU board", "branch"),
+  ICU_CHART: p(
+    "icu:chart",
+    "Critical-care charting",
+    "branch",
+    future("D11 Critical Care", "critical care is not built"),
+  ),
+  ICU_SCORE: p(
+    "icu:score",
+    "Critical-care scoring",
+    "branch",
+    future("D11 Critical Care", "critical care is not built"),
+  ),
+  ICU_BOARD_VIEW: p(
+    "icu:board:view",
+    "ICU board",
+    "branch",
+    future("D11 Critical Care", "critical care is not built"),
+  ),
 
-  DIALYSIS_MANAGE: p("dialysis:manage", "Dialysis unit"),
-  DIALYSIS_SCHEDULE: p("dialysis:schedule", "Schedule dialysis", "branch"),
-  DIALYSIS_RECORD: p("dialysis:record", "Record a dialysis session", "branch"),
+  DIALYSIS_MANAGE: p(
+    "dialysis:manage",
+    "Dialysis unit",
+    "tenant",
+    future("D12 Dialysis", "dialysis is not built"),
+  ),
+  DIALYSIS_SCHEDULE: p(
+    "dialysis:schedule",
+    "Schedule dialysis",
+    "branch",
+    future("D12 Dialysis", "dialysis is not built"),
+  ),
+  DIALYSIS_RECORD: p(
+    "dialysis:record",
+    "Record a dialysis session",
+    "branch",
+    future("D12 Dialysis", "dialysis is not built"),
+  ),
 
-  PHYSIO_MANAGE: p("physio:manage", "Physiotherapy unit"),
-  PHYSIO_ASSESS: p("physio:assess", "Physiotherapy assessment", "branch"),
-  PHYSIO_TREAT: p("physio:treat", "Physiotherapy treatment", "branch"),
+  PHYSIO_MANAGE: p(
+    "physio:manage",
+    "Physiotherapy unit",
+    "tenant",
+    future("D13 Physiotherapy", "physiotherapy is not built"),
+  ),
+  PHYSIO_ASSESS: p(
+    "physio:assess",
+    "Physiotherapy assessment",
+    "branch",
+    future("D13 Physiotherapy", "physiotherapy is not built"),
+  ),
+  PHYSIO_TREAT: p(
+    "physio:treat",
+    "Physiotherapy treatment",
+    "branch",
+    future("D13 Physiotherapy", "physiotherapy is not built"),
+  ),
 
-  DIET_ASSESS: p("diet:assess", "Nutrition assessment", "branch"),
-  DIET_PRESCRIBE: p("diet:prescribe", "Prescribe a therapeutic diet", "branch"),
+  DIET_ASSESS: p(
+    "diet:assess",
+    "Nutrition assessment",
+    "branch",
+    future(
+      "D14 Dietetics",
+      "nutrition assessment is not built; a diet Order carries the instruction today",
+    ),
+  ),
+  DIET_PRESCRIBE: p(
+    "diet:prescribe",
+    "Prescribe a therapeutic diet",
+    "branch",
+    future(
+      "D14 Dietetics",
+      "therapeutic diet prescribing is not built; a diet Order carries the instruction today",
+    ),
+  ),
 } as const;
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -309,7 +776,16 @@ const OPERATIONS = {
   APPOINTMENT_READ: p("appointment:read", "View appointments", "branch"),
   APPOINTMENT_UPDATE: p("appointment:update", "Reschedule an appointment", "branch"),
   APPOINTMENT_CANCEL: p("appointment:cancel", "Cancel an appointment", "branch"),
-  QUEUE_MANAGE: p("queue:manage", "Manage the queue and tokens", "branch"),
+  QUEUE_MANAGE: p(
+    "queue:manage",
+    "Manage the queue and tokens",
+    "branch",
+    supersededBy(
+      "E1 Appointments & Queue",
+      "encounter:update",
+      "the token queue is a state of the encounter, not a separate object",
+    ),
+  ),
 } as const;
 
 const FINANCE = {
@@ -326,41 +802,191 @@ const FINANCE = {
    */
   TARIFF_MANAGE: p("tariff:manage", "Manage the service tariff"),
 
-  INSURANCE_PREAUTH: p("insurance:preauth", "Request pre-authorization"),
+  INSURANCE_PREAUTH: p(
+    "insurance:preauth",
+    "Request pre-authorization",
+    "tenant",
+    future(
+      "F3 Insurance",
+      "a dedicated pre-authorization request flow is not split out — insurance.routes.ts says so; preauth is a claim TYPE today",
+    ),
+  ),
   INSURANCE_CLAIM: p("insurance:claim", "File a claim"),
   INSURANCE_RECONCILE: p("insurance:reconcile", "Reconcile a settlement"),
-  CORPORATE_BILL: p("corporate:bill", "Bill a corporate client"),
-  PACKAGE_MANAGE: p("package:manage", "Manage care packages"),
+  CORPORATE_BILL: p(
+    "corporate:bill",
+    "Bill a corporate client",
+    "tenant",
+    future("F3 Insurance", "corporate/TPA billing is not built"),
+  ),
+  PACKAGE_MANAGE: p(
+    "package:manage",
+    "Manage care packages",
+    "tenant",
+    supersededBy(
+      "F2 Billing",
+      "tariff:manage",
+      "a care package is priced from the tariff and administered with it",
+    ),
+  ),
 
-  PHARMACY_SELL: p("pharmacy:sell", "Sell at the pharmacy counter", "branch"),
+  PHARMACY_SELL: p(
+    "pharmacy:sell",
+    "Sell at the pharmacy counter",
+    "branch",
+    future(
+      "F4 Pharmacy",
+      "over-the-counter retail sale is not built; dispensing against a prescription is pharmacy:dispense",
+    ),
+  ),
   PHARMACY_DISPENSE: p("pharmacy:dispense", "Dispense against a prescription", "branch"),
+  /**
+   * Authorise dispensing on credit when an admitted patient's advance is exhausted — the
+   * "doctor sign-off" on an over-budget dispense. Held by clinicians and admins, NOT by a
+   * counter pharmacist: the point is that someone with the authority to commit the hospital
+   * to the credit says yes, and it is recorded against them.
+   */
+  PHARMACY_CREDIT_OVERRIDE: p(
+    "pharmacy:credit-override",
+    "Authorise an over-budget dispense (dispense on credit)",
+    "branch",
+    enforcedIn(
+      "F4 Pharmacy",
+      "pharmacy/pharmacy.service.ts",
+      "an over-budget dispense is refused (HMS-PHM-003) unless the acknowledgement comes from a holder — it cannot gate the ROUTE, because the pharmacist who calls it is not the one authorising",
+    ),
+  ),
   PHARMACY_STOCK: p("pharmacy:stock", "Pharmacy stock"),
-  PHARMACY_PURCHASE: p("pharmacy:purchase", "Pharmacy purchasing"),
+  PHARMACY_PURCHASE: p(
+    "pharmacy:purchase",
+    "Pharmacy purchasing",
+    "tenant",
+    future(
+      "F4 Pharmacy",
+      "the pharmacy has stock (migration 0052) but buys it from nowhere: a receipt names no supplier, cost or invoice. The supplier master now exists under `vendor:manage` — wiring the drug shelf to it is a pharmacy change and the pharmacy is frozen",
+    ),
+  ),
 
-  INVENTORY_MANAGE: p("inventory:manage", "Manage inventory"),
-  INVENTORY_ISSUE: p("inventory:issue", "Issue stock", "branch"),
-  INVENTORY_AUDIT: p("inventory:audit", "Stock audit"),
-  INVENTORY_PURCHASE: p("inventory:purchase", "Purchasing"),
+  /**
+   * ── THE FOUR ACTS OF A STORE, AND WHY THEY ARE FOUR ─────────────────────────
+   * All live since General Stores v1. They are not seniority tiers — they are different jobs, and
+   * a hospital that wants one person doing all of them grants all four (STORE_KEEPER does).
+   *
+   *   manage   — the item master AND the shelf as a whole. It is the BASELINE: every store route
+   *              that only READS is gated on it, because a person who may not see what is on the
+   *              shelf cannot do any of the other three either.
+   *   purchase — book a delivery IN, against a supplier. The money-facing act.
+   *   issue    — hand stock OUT to a department. The one that runs all day.
+   *   audit    — correct the count against a physical stock-take. Deliberately separate from
+   *              `issue`: a clerk who can both take stock out AND rewrite the number to match has
+   *              no shortfall anyone can see.
+   *
+   * There is no `inventory:read`. It would be a fifth code whose only holder is everybody who
+   * already holds `manage`, and the catalogue has enough permissions nobody holds.
+   */
+  /**
+   * ── AND ALL FOUR ARE `branch`, WHICH IS NOT COSMETIC ────────────────────────
+   * The scope declared here IS the row-scoping level: `authorize` publishes it as
+   * `scope.level`, and `scopeFilter()` only narrows to the caller's branches when it reads
+   * `"branch"`. Three of these were `"tenant"` when this module was written — copied from the
+   * catalogue entries that predated it — and the store's own integration suite caught it
+   * immediately: a keeper bound to the annexe, sending no branch header, was answered with the
+   * SUM of both sites' shelves. The permission looked confining and confined nothing.
+   *
+   * `vendor:manage` stays `"tenant"` on purpose: `suppliers` carries no `branchId` at all, so
+   * there is nothing for a branch filter to narrow and declaring one would be a lie in the other
+   * direction.
+   */
+  INVENTORY_MANAGE: p("inventory:manage", "The store's item master and its shelf", "branch"),
+  INVENTORY_ISSUE: p("inventory:issue", "Issue stock to a department", "branch"),
+  INVENTORY_AUDIT: p("inventory:audit", "Correct the count after a stock-take", "branch"),
+  INVENTORY_PURCHASE: p("inventory:purchase", "Receive a delivery from a supplier", "branch"),
 
-  FINANCE_LEDGER: p("finance:ledger", "General ledger"),
-  FINANCE_EXPENSE: p("finance:expense", "Expenses"),
-  FINANCE_INCOME: p("finance:income", "Income"),
-  FINANCE_REPORT: p("finance:report", "Financial reports"),
-  FINANCE_CLOSE: p("finance:close", "Close a financial period"),
+  FINANCE_LEDGER: p(
+    "finance:ledger",
+    "General ledger",
+    "tenant",
+    future(
+      "G2 Finance",
+      "the general ledger is not built; billing is charges, invoices and payments only",
+    ),
+  ),
+  FINANCE_EXPENSE: p(
+    "finance:expense",
+    "Expenses",
+    "tenant",
+    future("G2 Finance", "expense management is not built"),
+  ),
+  FINANCE_INCOME: p(
+    "finance:income",
+    "Income",
+    "tenant",
+    future("G2 Finance", "income accounting is not built"),
+  ),
+  FINANCE_REPORT: p(
+    "finance:report",
+    "Financial reports",
+    "tenant",
+    future("G2 Finance", "financial reporting beyond the daily collection report is not built"),
+  ),
+  FINANCE_CLOSE: p(
+    "finance:close",
+    "Close a financial period",
+    "tenant",
+    future("G2 Finance", "period close is not built"),
+  ),
 
-  HR_EMPLOYEE: p("hr:employee", "Employee records"),
-  HR_ATTENDANCE: p("hr:attendance", "Attendance"),
-  HR_LEAVE: p("hr:leave", "Leave"),
-  HR_PAYROLL: p("hr:payroll", "Run payroll"),
-  PAYROLL_APPROVE: p("payroll:approve", "Approve payroll"),
-  HR_RECRUIT: p("hr:recruit", "Recruitment"),
+  HR_EMPLOYEE: p(
+    "hr:employee",
+    "Employee records",
+    "tenant",
+    future("G4 HR", "HR is not built; clinical staff are users, not employees"),
+  ),
+  HR_ATTENDANCE: p(
+    "hr:attendance",
+    "Attendance",
+    "tenant",
+    future("G4 HR", "staff attendance and rostering are not built; HR is a later milestone"),
+  ),
+  HR_LEAVE: p(
+    "hr:leave",
+    "Leave",
+    "tenant",
+    future("G4 HR", "HR is not built; a doctor's own leave is doctor:self-manage"),
+  ),
+  HR_PAYROLL: p("hr:payroll", "Run payroll", "tenant", future("G4 HR", "payroll is not built")),
+  PAYROLL_APPROVE: p(
+    "payroll:approve",
+    "Approve payroll",
+    "tenant",
+    future("G4 HR", "payroll is not built"),
+  ),
+  HR_RECRUIT: p("hr:recruit", "Recruitment", "tenant", future("G4 HR", "recruitment is not built")),
 } as const;
 
 /** Patient-portal identity. `own` scope only — a patient sees exactly their own record. */
 const SELF = {
-  SELF_MANAGE: p("self:manage", "Manage my own profile and bookings", "own"),
-  BOOKING_PUBLIC: p("booking:public", "Book an appointment online", "own"),
-  FORM_DESIGN: p("form:design", "Design digital forms"),
+  SELF_MANAGE: p(
+    "self:manage",
+    "Manage my own profile and bookings",
+    "own",
+    future(
+      "H1 Patient Portal",
+      "the patient portal is not built; PATIENT is a seeded role with no surface yet",
+    ),
+  ),
+  BOOKING_PUBLIC: p(
+    "booking:public",
+    "Book an appointment online",
+    "own",
+    future("H1 Patient Portal", "public online booking is not built; the public site is read-only"),
+  ),
+  FORM_DESIGN: p(
+    "form:design",
+    "Design digital forms",
+    "tenant",
+    future("A8 Forms", "the digital form designer is not built"),
+  ),
 } as const;
 
 export const PERMISSIONS = {
@@ -428,8 +1054,20 @@ export const FEATURE_FLAGS = {
 
   // Support
   SUPPORT_CSSD: "module.support.cssd",
+  /**
+   * The general store — non-drug consumables, their shelf and who they were issued to.
+   *
+   * DELIBERATELY SEPARATE from `module.pharmacy.full`, which is the drug shelf. They are two
+   * rooms with two keepers: a clinic that bought dispensing has no store keeper, and a hospital
+   * that runs a store still buys its drugs through the pharmacy. Folding them together would
+   * either sell a clinic a store room it does not have or hand every dispensing hospital a
+   * general store for free.
+   */
+  SUPPORT_INVENTORY: "module.support.inventory",
   SUPPORT_MORTUARY: "module.support.mortuary",
   SUPPORT_MRD: "module.support.mrd",
+  SUPPORT_AMBULANCE: "module.support.ambulance",
+  SUPPORT_ASSETS: "module.support.assets",
 
   // Pharmacy & finance
   PHARMACY_DISPENSING: "module.pharmacy.dispensing",
@@ -441,6 +1079,19 @@ export const FEATURE_FLAGS = {
   FINANCE_INSURANCE: "module.finance.insurance",
 
   // Platform
+  /**
+   * The PATIENT-facing portal — book, view a report, pay, from outside the building.
+   *
+   * Declared, deliberately unbuilt, and — since 2026-08-20 — sold by NO edition. It was in
+   * `CLINIC_FLAGS`, which every edition extends, so every hospital on the platform was shown
+   * "Patient portal" among the modules included in its plan (`/subscription`, "Included in this
+   * plan") and there was no portal, in any edition, at all. An entitlement that grants nothing is
+   * a promise on an invoice with no software behind it; this one was on every invoice.
+   *
+   * The flag STAYS defined. The portal is a real future milestone with a real audience, and
+   * deleting the constant would only mean re-inventing its name later. `FEATURE_LIFECYCLE` records
+   * that it is not built, and the ledger test refuses to let it gate a route while it says so.
+   */
   PORTAL_PATIENT: "portal.patient",
   PLATFORM_MULTI_ENTITY: "module.platform.multiEntity",
   PLATFORM_DEDICATED_DB: "platform.dedicatedDb",
@@ -478,7 +1129,6 @@ const CLINIC_FLAGS: FeatureFlag[] = [
   F.OPS_APPOINTMENTS,
   F.CLINICAL_EMR_BASIC,
   F.FINANCE_OP_BILLING,
-  F.PORTAL_PATIENT,
 ];
 
 const HOSPITAL_FLAGS: FeatureFlag[] = [
@@ -507,6 +1157,12 @@ const HOSPITAL_FLAGS: FeatureFlag[] = [
   F.FINANCE_IP_BILLING,
   F.FINANCE_INSURANCE,
   F.SUPPORT_MRD,
+  // A full hospital runs a fleet: emergency pickups, inter-facility transfers, discharge drops.
+  F.SUPPORT_AMBULANCE,
+  // A hospital owns equipment that must be serviced on a cycle — the asset register + maintenance log.
+  F.SUPPORT_ASSETS,
+  // Gloves, syringes, IV sets, sutures. A hospital consumes them by the crate and a clinic does not.
+  F.SUPPORT_INVENTORY,
 ];
 
 export const EDITIONS = {
@@ -594,6 +1250,156 @@ export function getEdition(code: string | undefined): EditionDefinition | undefi
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
+ * THE FLAG LEDGER — every flag gates something, or says why not.
+ *
+ * ── THE DEFECT CLASS ────────────────────────────────────────────────────────
+ * This is `permissionLifecycle.test.ts`'s rule, one layer up. A permission that gates nothing is
+ * a feature nobody has; a FLAG that gates nothing is a feature everybody has — the opposite
+ * failure, and the more expensive one, because the thing it fails to withhold has a price.
+ *
+ * Two live examples, both found by audit rather than by a gate:
+ *
+ *   `module.finance.packages` appeared in three editions and gated no line of code. Care
+ *   packages are sold as a Day Care / Hospital Plus differentiator, and every hospital on
+ *   PLAN_HOSPITAL had them, because the package routes gate on `module.ops.opd` like the rest of
+ *   billing. Fixed 2026-08-20 by gating the six package routes on this flag.
+ *
+ *   `portal.patient` was in CLINIC_FLAGS — every edition — with no portal in the product. Fixed
+ *   the same day by removing it from the editions, not by building a portal.
+ *
+ * Neither is visible in a diff, neither breaks a test, and both are on the customer's screen:
+ * `/subscription` lists an edition's flags under "Included in this plan".
+ *
+ * ── WHAT A DECLARATION MEANS ────────────────────────────────────────────────
+ * Absent means LIVE: some code reads this flag, and `featureLifecycle.test.ts` fails if none
+ * does. Present means it deliberately gates nothing, for one of two reasons:
+ *
+ *   `unbuilt`  — the module does not exist yet. It may still be listed in an edition (a contract
+ *                signed for a department we are building), but that number is PINNED, so selling
+ *                one more thing that does not exist is a decision somebody makes on purpose.
+ *   `bundled`  — the capability EXISTS and ships to EVERY edition, so it has no gate of its own.
+ *                `module.finance.opBilling` is the case: there is no edition in which a hospital
+ *                takes patients and issues no bill, so the flag is a line on a price list rather
+ *                than a switch (billing.routes.ts says the same thing from the other side).
+ *   `gated`    — the capability exists and IS withheld, by a different flag that has to be named.
+ *                `module.finance.ipBilling` is the case: an inpatient bill can only be raised
+ *                against an admission, and admission is gated by `module.ops.ipd`.
+ *
+ * The last two are the statuses worth distrusting, because they are what a missing gate would
+ * claim about itself — `module.finance.packages` could have been written as either. So neither is
+ * taken on its word: `bundled` is checked against every edition actually carrying the flag, and
+ * `gated` must name a flag that is itself live and that every edition selling this one also has.
+ * A capability some editions are meant to be without, with nothing withholding it, is the bug.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type FeatureStatus = "unbuilt" | "bundled" | "gated";
+
+export interface FeatureLifecycle {
+  status: FeatureStatus;
+  /** The owning module or milestone — "D12 Dialysis", "G2 Patient portal". Never blank. */
+  module: string;
+  /** Why this flag gates nothing, in a sentence another engineer can act on. */
+  reason: string;
+  /** For `gated`: the flag that actually withholds the capability. Verified, not believed. */
+  gatedBy?: FeatureFlag;
+}
+
+const unbuilt = (module: string, reason: string): FeatureLifecycle => ({
+  status: "unbuilt",
+  module,
+  reason,
+});
+
+const bundled = (module: string, reason: string): FeatureLifecycle => ({
+  status: "bundled",
+  module,
+  reason,
+});
+
+const gatedBy = (module: string, flag: FeatureFlag, reason: string): FeatureLifecycle => ({
+  status: "gated",
+  module,
+  gatedBy: flag,
+  reason,
+});
+
+/**
+ * Flags that deliberately gate nothing. Everything NOT in here must gate something on the shipped
+ * app — see `apps/api/src/featureLifecycle.test.ts`, which reads both and checks the claim.
+ */
+export const FEATURE_LIFECYCLE: Partial<Record<FeatureFlag, FeatureLifecycle>> = {
+  [F.PORTAL_PATIENT]: unbuilt(
+    "G2 Patient portal",
+    "the patient-facing product — book, view a report, pay — is a separate milestone with a " +
+      "different audience. Sold by no edition as of 2026-08-20.",
+  ),
+  [F.OPS_INTER_BRANCH]: unbuilt(
+    "B11 Inter-branch transfer",
+    "moving a patient or stock between sites is not built; branches today are a scoping " +
+      "boundary (ADR-0015), not a transfer network.",
+  ),
+  [F.CLINICAL_BLOODBANK]: unbuilt("D9 Blood bank", "donors, units, cross-match — not built."),
+  [F.CLINICAL_CRITICAL_CARE]: unbuilt(
+    "D11 Critical care",
+    "ICU flowsheets and scoring — not built. Admissions cover the bed, not the chart.",
+  ),
+  [F.CLINICAL_DIALYSIS]: unbuilt(
+    "D12 Dialysis",
+    "session scheduling and the machine register — not built.",
+  ),
+  [F.CLINICAL_PHYSIOTHERAPY]: unbuilt(
+    "D13 Physiotherapy",
+    "therapy plans and session notes — not built.",
+  ),
+  [F.CLINICAL_TELECONSULT]: unbuilt(
+    "D4 Teleconsult",
+    "the video visit and its consent trail — not built.",
+  ),
+  [F.CLINICAL_HOME_HEALTHCARE]: unbuilt(
+    "D15 Home healthcare",
+    "visit scheduling outside the building — not built, and sold by no edition.",
+  ),
+  [F.CLINICAL_OCCUPATIONAL_HEALTH]: unbuilt(
+    "D16 Occupational health",
+    "corporate health checks and fitness certificates — not built, and sold by no edition.",
+  ),
+  [F.SUPPORT_CSSD]: unbuilt(
+    "B12 CSSD",
+    "sterile supply cycles and instrument sets — not built. The general store is a different " +
+      "room and has its own flag.",
+  ),
+  [F.FINANCE_PREAUTH]: unbuilt(
+    "F2 Insurance pre-authorization",
+    "the pre-auth request flow is not split out; `insurance:preauth` is declared future beside " +
+      "it. Claims exist and gate on `module.finance.insurance`.",
+  ),
+  [F.PLATFORM_MULTI_ENTITY]: unbuilt(
+    "A10 Multi-entity",
+    "legal-entity consolidation across tenants — not built.",
+  ),
+  [F.PLATFORM_DEDICATED_DB]: unbuilt(
+    "Platform · dedicated database",
+    "an infrastructure commitment, not a code path: every tenant already gets its own database " +
+      "(ADR-0005), so there is nothing for this flag to switch on.",
+  ),
+  [F.ANALYTICS_GROUP_DASHBOARDS]: unbuilt(
+    "I2 Group dashboards",
+    "cross-branch consolidated reporting — not built. Reports today are per-tenant.",
+  ),
+  [F.FINANCE_OP_BILLING]: bundled(
+    "F1 Billing",
+    "every edition bills, including the government hospital that bills zero and needs the " +
+      "invoice for its own reporting. The billing routes gate on `module.ops.opd` and say so.",
+  ),
+  [F.FINANCE_IP_BILLING]: gatedBy(
+    "F1 Billing",
+    F.OPS_IPD,
+    "the same bill, raised against an admission instead of a visit. There is no separate IP " +
+      "billing surface to gate: a hospital that cannot admit never has an inpatient to bill.",
+  ),
+};
+
+/* ────────────────────────────────────────────────────────────────────────────
  * Default role grants — the roles seeded into every new hospital.
  *
  * These are DEFAULTS, not law: a hospital may edit them, and many will. What we
@@ -655,8 +1461,18 @@ export const DEFAULT_ROLES = [
       PATIENT.RECORD_READ,
       PATIENT.RECORD_WRITE,
       PATIENT.DISCHARGE_CREATE,
+      // Explaining the risks and taking the consent is the treating doctor's act; certifying a
+      // death is a licensed one only they can make. These sat in the catalog held by NOBODY (the
+      // "a permission nobody holds is a feature nobody has" trap the admit permissions fell into) —
+      // consent is captured by the nurse too, death is certified by the doctor alone.
+      PATIENT.CONSENT_MANAGE,
+      PATIENT.DEATH_CERTIFY,
+      // Assigning the ICD-10 code to the visit's diagnosis. In practice the treating doctor codes
+      // their own case; a dedicated records coder (a role a hospital can add) would also hold this.
+      PATIENT.MRD_CODE,
       PATIENT.REFERRAL_MANAGE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       CLINICAL.EMR_WRITE,
       CLINICAL.EMR_SIGN,
       CLINICAL.ALLERGY_READ,
@@ -664,6 +1480,10 @@ export const DEFAULT_ROLES = [
       CLINICAL.CONSULTATION_MANAGE,
       CLINICAL.PRESCRIPTION_CREATE,
       CLINICAL.PRESCRIPTION_SIGN,
+      // Authorises dispensing on credit when an admitted patient's advance is spent — a
+      // clinical/commercial call the counter pharmacist cannot make alone. The pharmacist
+      // holds `pharmacy:dispense`; the sign-off to overrun the advance sits with the doctor.
+      FINANCE.PHARMACY_CREDIT_OVERRIDE,
       // Places the order and follows it. NOT `order:perform` and NOT `order:verify`
       // — a doctor who could sign off their own lab result would be the only pair of
       // eyes on it, which is precisely the check the second signature exists to be.
@@ -673,8 +1493,33 @@ export const DEFAULT_ROLES = [
       CLINICAL.TELECONSULT_HOST,
       CLINICAL.LAB_ORDER,
       CLINICAL.RADIOLOGY_ORDER,
+      // An ED doctor re-assesses the patient in front of them. A hospital with no triage nurse on
+      // the night shift still has to be able to sort its waiting room.
+      CLINICAL.TRIAGE_PERFORM,
       CLINICAL.OT_RECORD,
+      /**
+       * ── THE SURGEON BOOKS THE THEATRE ──────────────────────────────────────
+       * `ot:schedule` was held by TENANT_ADMIN and nobody else, so the only person in the
+       * building who could put a patient on the surgical list was the hospital administrator.
+       * That is the "a permission nobody holds is a feature nobody has" trap again — this time
+       * on an entire module: theatres, bookings, the collision rule and the OT screen all
+       * shipped, and no clinician could reach any of it.
+       *
+       * The surgeon decides the patient needs an operation and when; the theatre is the resource
+       * that decision consumes. It is `branch`-scoped, so it reaches only their own site's list.
+       */
+      ORGANIZATION.OT_SCHEDULE,
       OPERATIONS.APPOINTMENT_READ,
+      /**
+       * Their OWN sessions and leave — never anybody else's, and never the clinic HOURS that
+       * generate bookable slots. The routes it opens live under `/doctors/me/…` and take the
+       * doctor id from the token, so this grants no reach over a colleague's roster.
+       *
+       * Without it, a doctor could see the appointment book and had no way to say they were not
+       * going to be there — the roster was administrable only by someone holding `doctor:manage`,
+       * which is TENANT_ADMIN alone.
+       */
+      CLINICAL.DOCTOR_SELF_MANAGE,
       PLATFORM.FILE_READ,
       PLATFORM.FILE_UPLOAD,
     ),
@@ -690,17 +1535,45 @@ export const DEFAULT_ROLES = [
       OPERATIONS.ENCOUNTER_READ,
       OPERATIONS.ENCOUNTER_UPDATE,
       PATIENT.RECORD_READ,
+      // The nurse at the bedside witnesses and records the consent the doctor explained.
+      PATIENT.CONSENT_MANAGE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       CLINICAL.VITALS_RECORD,
       CLINICAL.ALLERGY_READ,
       CLINICAL.ALLERGY_MANAGE,
       CLINICAL.NURSING_MANAGE,
       CLINICAL.MAR_ADMINISTER,
+      /**
+       * ── THE TRIAGE NURSE ────────────────────────────────────────────────────
+       * The person at the emergency door deciding who is seen next. It is a clinical judgement,
+       * which is why it is not `encounter:update` (the desk holds that one and moves patients
+       * along a queue without assessing them).
+       */
+      CLINICAL.TRIAGE_PERFORM,
       CLINICAL.LAB_COLLECT,
       // Nurses work the ward's worklist: they carry out procedures and diet orders.
       CLINICAL.ORDER_READ,
       CLINICAL.ORDER_PERFORM,
       ORGANIZATION.BED_ALLOCATE,
+      /**
+       * The OT nurse runs the board. In every hospital this product is sold to, the person who
+       * marks a procedure started and completed is the circulating nurse, not the surgeon — who
+       * is scrubbed in and nowhere near a keyboard for the hours in between. Without this the
+       * schedule would sit on `scheduled` all day and the record would be written from memory.
+       *
+       * It grants the OT LIST and nothing else: booking a theatre window and moving it along its
+       * own state machine. It emphatically does not grant `ot:record` — the operation record is
+       * the surgeon's statement, and it stays theirs.
+       */
+      ORGANIZATION.OT_SCHEDULE,
+      // The mortuary. Receiving a body into custody and handing it over is ward/mortuary work — the
+      // nurse does it. These sat in the catalog held by NOBODY (the "a permission nobody holds is a
+      // feature nobody has" trap); a hospital that adds a dedicated mortuary attendant role would
+      // give it these too. Release still refuses a medico-legal body without a police clearance,
+      // whoever holds the permission.
+      ORGANIZATION.MORTUARY_MANAGE,
+      ORGANIZATION.MORTUARY_RELEASE,
       OPERATIONS.APPOINTMENT_READ,
       PLATFORM.FILE_READ,
     ),
@@ -723,6 +1596,24 @@ export const DEFAULT_ROLES = [
       OPERATIONS.APPOINTMENT_UPDATE,
       OPERATIONS.APPOINTMENT_CANCEL,
       OPERATIONS.QUEUE_MANAGE,
+      /**
+       * ── THE DESK MEASURES THE PATIENT ───────────────────────────────────────
+       * Height, weight, BP and temperature are taken at registration, so the doctor meets a
+       * patient they already know something about and the OP slip carries a BMI.
+       *
+       * This is a policy decision, and it was made deliberately: the previous comment on
+       * `vitals.routes.ts` said "the desk books and takes money, it does not measure patients"
+       * and left the grant alone. In an Indian OPD the desk does measure patients — the weighing
+       * scale is next to the counter — and the alternative was that nothing was measured at all,
+       * because the NURSE role was the only holder and there is no nurse at the front door.
+       *
+       * `vitals:read` and NOT `emr:read`: the desk sees the observations it took on today's
+       * visit, never the consultation note or the patient's history. The flags those readings
+       * carry are adult reference ranges and advisory only (see the vitals service) — nothing
+       * here makes the desk a clinical decision-maker.
+       */
+      CLINICAL.VITALS_RECORD,
+      CLINICAL.VITALS_READ,
       ORGANIZATION.VISITOR_MANAGE,
       ORGANIZATION.HELPDESK_MANAGE,
       FINANCE.BILLING_READ,
@@ -740,7 +1631,48 @@ export const DEFAULT_ROLES = [
       FINANCE.BILLING_FINALIZE,
       FINANCE.PAYMENT_COLLECT,
       PATIENT.WALLET_MANAGE,
+      // Enrolling a visit in a care package posts its fixed price — a billing act.
+      PATIENT.PACKAGE_ENROLL,
       OPERATIONS.APPOINTMENT_READ,
+    ),
+  },
+  {
+    /**
+     * The small-hospital reality: ONE person at the front desk both registers the patient AND
+     * takes the OP fee. Rather than make an admin staple two roles together, this is that job as a
+     * single named role — the union of RECEPTIONIST and CASHIER. It is not a new privilege level;
+     * every permission here already belongs to one of those two roles, so nothing is invented, and
+     * a hospital that separates the desk from the cash counter simply grants the two roles instead.
+     */
+    code: "FRONT_OFFICE",
+    name: "Front Office (Reception + Cash)",
+    description: "Registers patients, manages the queue, AND bills and collects payment.",
+    permissions: codes(
+      // Reception
+      PATIENT.PATIENT_REGISTER,
+      PATIENT.PATIENT_READ,
+      PATIENT.PATIENT_UPDATE,
+      OPERATIONS.ENCOUNTER_CREATE,
+      OPERATIONS.ENCOUNTER_READ,
+      OPERATIONS.ENCOUNTER_UPDATE,
+      OPERATIONS.APPOINTMENT_CREATE,
+      OPERATIONS.APPOINTMENT_READ,
+      OPERATIONS.APPOINTMENT_UPDATE,
+      OPERATIONS.APPOINTMENT_CANCEL,
+      OPERATIONS.QUEUE_MANAGE,
+      // The desk measures the patient — see RECEPTIONIST, whose grant this role is the union of.
+      CLINICAL.VITALS_RECORD,
+      CLINICAL.VITALS_READ,
+      ORGANIZATION.VISITOR_MANAGE,
+      ORGANIZATION.HELPDESK_MANAGE,
+      PLATFORM.FILE_UPLOAD,
+      // Cash
+      FINANCE.BILLING_CREATE,
+      FINANCE.BILLING_READ,
+      FINANCE.BILLING_FINALIZE,
+      FINANCE.PAYMENT_COLLECT,
+      PATIENT.WALLET_MANAGE,
+      PATIENT.PACKAGE_ENROLL,
     ),
   },
   {
@@ -763,9 +1695,40 @@ export const DEFAULT_ROLES = [
       FINANCE.BILLING_READ,
       FINANCE.PAYMENT_COLLECT,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       // A pharmacist about to hand over a drug is the LAST person who can catch an
       // allergy the prescriber missed. They read the list; they do not edit it.
       CLINICAL.ALLERGY_READ,
+    ),
+  },
+  /**
+   * ── THE PERSON THIS MODULE IS FOR ───────────────────────────────────────────
+   * A store keeper is not a pharmacist and not an administrator. Before this role the four
+   * `inventory:*` codes and `vendor:manage` were held by TENANT_ADMIN alone — which is the
+   * "a permission nobody holds is a feature nobody has" trap this codebase has fallen into five
+   * times now (`user:read` for the receptionist, the admit pair, `nursing:manage`, `ot:schedule`).
+   * Shipping a store room whose only key is the hospital administrator's would have been the
+   * sixth.
+   *
+   * ── AND IT TOUCHES NO PATIENT ───────────────────────────────────────────────
+   * No `patient:read`, no `emr:read`, nothing clinical. Every other operational role in this list
+   * carries `patient:read` because their work is ABOUT a person; a store keeper's work is about a
+   * box of gloves. Granting them the patient list "so the screen works" is exactly the broad-grant
+   * mistake the catalogue exists to avoid — and nothing in the store screens asks for it.
+   */
+  {
+    code: "STORE_KEEPER",
+    name: "Store Keeper",
+    description: "The general store: item master, deliveries in, issues out, stock corrections.",
+    permissions: codes(
+      // The baseline — the master and the shelf. Every read in the module is gated on this.
+      FINANCE.INVENTORY_MANAGE,
+      FINANCE.INVENTORY_PURCHASE,
+      FINANCE.INVENTORY_ISSUE,
+      FINANCE.INVENTORY_AUDIT,
+      // Who the deliveries come from. A receipt that cannot name a supplier is a receipt that
+      // cannot answer "what did we buy and from whom", which is half the reason to record it.
+      ORGANIZATION.VENDOR_MANAGE,
     ),
   },
   {
@@ -800,12 +1763,52 @@ export const DEFAULT_ROLES = [
       CLINICAL.ORDER_VERIFY,
       CLINICAL.ORDER_RELEASE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
+    ),
+  },
+  /**
+   * ── THE ROLE THAT MAKES RADIOLOGY WORK WITHOUT A RADIOLOGIST ──────────────
+   * Modelled on LAB_TECHNICIAN, with ONE deliberate difference: it also holds `order:verify`,
+   * `order:release` and `radiology:sign`, so it can carry a study all the way to the doctor.
+   *
+   * That difference is not an oversight and it is not a weakening of the lab's rule. The lab's
+   * two-person split is a real safety property: the person who ran the assay must not be the one
+   * who certifies the number, because the check is on the MEASUREMENT. Imaging is not that. In a
+   * hospital with no radiologist — which is most hospitals this product is sold to — the person
+   * who takes the film writes "AP chest, no focal consolidation, film attached" and the treating
+   * doctor reads the image. There is no second reader to be had, and inventing a requirement for
+   * one means the report never reaches anybody.
+   *
+   * What it deliberately does NOT hold is `emr:read`. It can see its own worklist (`order:read`),
+   * attach a film (`file:upload` + `order:perform`) and read the metadata of reports on orders it
+   * is working (`GET /reports?orderIds=`, `order:read`) — but the report BYTES and the patient's
+   * chart stay behind `emr:read`, exactly as they do for the lab technician. Granting the chart to
+   * make a worklist work is the mistake this product has made before.
+   */
+  {
+    code: "RADIOLOGY_TECHNICIAN",
+    name: "Radiology Technician",
+    description: "Performs imaging studies and reports them. No radiologist required.",
+    permissions: codes(
+      PATIENT.PATIENT_READ,
+      // Works the imaging worklist: accepts the study, performs it, records the report.
+      CLINICAL.ORDER_READ,
+      CLINICAL.ORDER_PERFORM,
+      /**
+       * And carries it to the doctor. `radiology:sign` confines that authority to IMAGING — this
+       * role still cannot certify a blood result, which is the property `order.authority.ts`
+       * exists to hold and which a plain `order:verify` grant would have thrown away.
+       */
+      CLINICAL.ORDER_VERIFY,
+      CLINICAL.ORDER_RELEASE,
+      CLINICAL.RADIOLOGY_SIGN,
+      PLATFORM.FILE_UPLOAD,
     ),
   },
   {
     code: "RADIOLOGIST",
     name: "Radiologist",
-    description: "Reports and signs imaging studies.",
+    description: "Reports and signs imaging studies. Optional — see RADIOLOGY_TECHNICIAN.",
     permissions: codes(
       PATIENT.PATIENT_READ,
       CLINICAL.RADIOLOGY_REPORT,
@@ -816,6 +1819,7 @@ export const DEFAULT_ROLES = [
       CLINICAL.ORDER_VERIFY,
       CLINICAL.ORDER_RELEASE,
       CLINICAL.EMR_READ,
+      CLINICAL.VITALS_READ,
       PLATFORM.FILE_UPLOAD,
     ),
   },

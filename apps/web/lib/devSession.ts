@@ -63,15 +63,33 @@ export function listRememberedAccounts(): RememberedAccount[] {
   }
 }
 
+/**
+ * Writes the quick-switch list, or gives up quietly.
+ *
+ * `localStorage` is not always there to be written to: it is absent or throws with storage
+ * disabled, under some private-browsing modes, and when the origin's quota is zero. This is a
+ * convenience for a developer's laptop, and it is called from the middle of `adopt()` — the
+ * function that decides whether this tab is signed in. An exception here would propagate into the
+ * session bootstrap's catch and log the user OUT, which is a spectacular price to pay for failing
+ * to remember an email address. `listRememberedAccounts` already reads defensively; these two
+ * write the same way.
+ */
+function writeAccounts(accounts: RememberedAccount[]): void {
+  try {
+    window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch {
+    /* the list is a nicety — never worth an error */
+  }
+}
+
 /** Remembers an account for quick sign-in, newest first, de-duplicated by email, capped. */
 export function rememberAccount(account: RememberedAccount): void {
   if (!DEV_MULTI_ACCOUNT || !hasWindow()) return;
   const next = [account, ...listRememberedAccounts().filter((a) => a.email !== account.email)];
-  window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(next.slice(0, 12)));
+  writeAccounts(next.slice(0, 12));
 }
 
 export function forgetAccount(email: string): void {
   if (!DEV_MULTI_ACCOUNT || !hasWindow()) return;
-  const next = listRememberedAccounts().filter((a) => a.email !== email);
-  window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(next));
+  writeAccounts(listRememberedAccounts().filter((a) => a.email !== email));
 }

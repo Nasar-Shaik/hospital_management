@@ -3,29 +3,72 @@
 /**
  * The application shell (Doc 04 §3.2 `(app)` route group, Doc 08).
  *
- * The navigation is permission-gated: a receptionist never sees "Roles &
- * Permissions" because she cannot use it, and showing a door that is locked is
- * just a worse way of saying no. But the hiding is COSMETIC — the server refuses
- * the route independently, so a user who un-hides the link gets a 403 and no data
- * (Constitution §3.6).
+ * The navigation is permission-gated: a receptionist never sees "Roles & Permissions" because she
+ * cannot use it, and showing a door that is locked is just a worse way of saying no. But the hiding
+ * is COSMETIC — the server refuses the route independently, so a user who un-hides the link gets a
+ * 403 and no data (Constitution §3.6).
  *
- * Items whose modules do not exist yet are listed as `soon`, greyed out. That is a
- * deliberate honesty: the alternative is a menu that lies, and a hospital
- * evaluating us deserves to see the shape of the product without being tricked by
- * links that 404.
+ * Items whose modules do not exist yet are listed as `soon`, greyed out — a deliberate honesty: the
+ * alternative is a menu that lies, and a hospital evaluating us deserves to see the shape of the
+ * product without being tricked by links that 404.
+ *
+ * ── THE SHELL'S JOB IS TO DISAPPEAR ─────────────────────────────────────────
+ * A person here to run a hospital should feel the WORK, not the chrome. So the shell is quiet: a
+ * collapsible icon rail, a frosted top bar that stays out of the way, an active state you can find
+ * without reading. On a phone the rail becomes a drawer — the same navigation, not a lesser one.
  */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ThemeToggle } from "@medicore/ui";
+import { FEATURE_FLAGS, type FeatureFlag } from "@medicore/permissions";
+import { AlertBell } from "./AlertBell";
+import { BranchSwitcher } from "./BranchSwitcher";
+import { LicenseBanner } from "./LicenseBanner";
 import { useAuth } from "./AuthProvider";
+import { useBranch } from "./BranchProvider";
+import { useBranding } from "./BrandingProvider";
 import { Badge, Button } from "./ui";
+import { Icon, type IconName } from "./icons";
 
 interface NavItem {
   label: string;
   href: string;
+  icon: IconName;
   /** Permission required to see it. Omit for items everyone may use. */
   permission?: string;
+  /**
+   * Edition flag the MODULE behind this entry needs (ADR-0010 layer 1). Omit for entries in every
+   * edition.
+   *
+   * ── WHY THIS IS A SECOND GATE AND NOT A BIGGER FIRST ONE (D20) ────────────
+   * The nav gated on permission alone, and a permission answers a different question. A
+   * `PLAN_CLINIC` administrator holds every code in the catalogue, so the sidebar offered
+   * Theatres, Emergency, Ward, Bed board, Medication round, Ambulance, Mortuary and Pharmacy — and
+   * each opened onto `HMS-PLAN-002 Feature not in your edition` printed above an empty module
+   * state ("Nobody in the emergency department", "No theatres yet"). Editing a role could never
+   * fix any of it, which is exactly the confusion the two error codes exist to prevent.
+   *
+   * Typed as `FeatureFlag`, so a flag that does not exist does not compile — the same rule
+   * `authorize()` follows by taking `PERMISSIONS.X` rather than a string (Guidelines Never-rule 7).
+   *
+   * The value must be the flag the ROUTE behind the page is gated on. That correspondence cannot
+   * be a shared constant — the web app may not import the API (ADR-0012) — so it is checked from
+   * both ends against each side's own shipped artefact: `navigationEntitlement.test.tsx` proves
+   * each entry appears exactly when its flag is present, and the module suites
+   * (`theatres.int.test.ts`, `emergency.int.test.ts`, `rbac.int.test.ts` §entitlement) prove the
+   * route refuses without it.
+   */
+  feature?: FeatureFlag;
+  /**
+   * Hide this entry from anyone who ALSO holds this permission.
+   *
+   * For the one case where a route has two audiences and the more privileged one has its own
+   * entry: an administrator and a doctor both reach `/doctors`, but they reach different screens
+   * and want different words on the link. Without this, a TENANT_ADMIN — who holds every
+   * permission — would see both entries pointing at the same page.
+   */
+  unless?: string;
   /** Not built yet — shown disabled rather than pretended into existence. */
   soon?: boolean;
 }
@@ -38,64 +81,248 @@ interface NavSection {
 const NAVIGATION: NavSection[] = [
   {
     title: "Overview",
-    items: [{ label: "Dashboard", href: "/dashboard" }],
+    items: [
+      { label: "Dashboard", href: "/dashboard", icon: "dashboard" },
+      /**
+       * No `permission`, and that is the decision rather than an omission: every signed-in person
+       * receives messages, and the route scopes to the caller's own. Gating it would mean a
+       * hospital that built its own role could have staff unable to reach their own alerts — and
+       * the symptom would be a missing menu entry, which nobody reports as a bug.
+       */
+      { label: "Alerts", href: "/alerts", icon: "bell" },
+    ],
   },
   {
     title: "Administration",
     items: [
-      { label: "Staff", href: "/staff", permission: "user:read" },
-      { label: "Roles & permissions", href: "/roles", permission: "role:manage" },
-      { label: "Subscription & usage", href: "/subscription", permission: "subscription:manage" },
-      { label: "Service tariff", href: "/tariff", permission: "tariff:manage" },
-      { label: "Reports", href: "/reports", permission: "report:view" },
-      { label: "Activity trail", href: "/audit", permission: "audit:view" },
-      { label: "Hospital profile", href: "/settings", permission: "hospital:manage", soon: true },
-      { label: "Branches", href: "/branches", permission: "branch:manage", soon: true },
+      { label: "Staff", href: "/staff", icon: "staff", permission: "user:read" },
+      { label: "Roles & permissions", href: "/roles", icon: "roles", permission: "role:manage" },
+      {
+        label: "Subscription & usage",
+        href: "/subscription",
+        icon: "subscription",
+        permission: "subscription:manage",
+      },
+      { label: "Service tariff", href: "/tariff", icon: "tariff", permission: "tariff:manage" },
+      /**
+       * Care packages are a module a hospital BUYS (Day Care, Hospital Plus, Enterprise) — the
+       * only part of billing that is. The API gate landed 2026-08-20; without the flag here the
+       * menu would keep offering a page that answers "not in your edition".
+       */
+      {
+        label: "Care packages",
+        href: "/packages",
+        icon: "tariff",
+        permission: "tariff:manage",
+        feature: FEATURE_FLAGS.FINANCE_PACKAGES,
+      },
+      {
+        label: "Medical records",
+        href: "/mrd",
+        icon: "reports",
+        permission: "mrd:register:view",
+        feature: FEATURE_FLAGS.SUPPORT_MRD,
+      },
+      {
+        label: "Public website",
+        href: "/settings/site",
+        icon: "website",
+        permission: "branding:manage",
+      },
+      { label: "Reports", href: "/reports", icon: "reports", permission: "report:view" },
+      { label: "Activity trail", href: "/audit", icon: "audit", permission: "audit:view" },
+      {
+        label: "Hospital profile",
+        href: "/settings/profile",
+        icon: "hospital",
+        permission: "hospital:manage",
+      },
+      { label: "Branches", href: "/branches", icon: "branches", permission: "branch:manage" },
+      {
+        label: "Departments",
+        href: "/departments",
+        icon: "departments",
+        permission: "department:manage",
+      },
+      // The estate register — equipment + its service history (B7). Facilities/biomedical work.
+      {
+        label: "Assets",
+        href: "/assets",
+        icon: "assets",
+        permission: "asset:manage",
+        feature: FEATURE_FLAGS.SUPPORT_ASSETS,
+      },
+      /**
+       * The general store (G1) — consumables, linen and spares. `inventory:manage` is the store's
+       * baseline permission (see `inventory.routes.ts`): the three acts on top of it each have
+       * their own, but a person who cannot read the shelf has no use for this screen.
+       */
+      {
+        label: "General store",
+        href: "/inventory",
+        icon: "store",
+        permission: "inventory:manage",
+        feature: FEATURE_FLAGS.SUPPORT_INVENTORY,
+      },
+      // The feedback & complaint register (B10) — the quality desk. `feedback:manage` logs + reads.
+      { label: "Feedback", href: "/feedback", icon: "feedback", permission: "feedback:manage" },
+      {
+        label: "API keys",
+        href: "/settings/api-keys",
+        icon: "apikeys",
+        permission: "apikey:manage",
+      },
     ],
   },
   /**
-   * The clinical day, in the order it happens: the desk, the doctor, the lab.
-   *
-   * Each is gated on the permission that role actually holds, so the nav IS the job
-   * description — a receptionist sees "Reception", a pathologist sees "Worklist", and
-   * neither is offered a screen that would 403 on arrival.
+   * The clinical day, in the order it happens: the desk, the doctor, the lab. Each is gated on the
+   * permission that role actually holds, so the nav IS the job description — a receptionist sees
+   * "Reception", a pathologist sees "Worklist", and neither is offered a screen that would 403.
    */
   {
     title: "Clinical",
     items: [
-      { label: "Reception", href: "/reception", permission: "encounter:create" },
-      { label: "My patients", href: "/my-patients", permission: "order:create" },
-      { label: "Worklist", href: "/worklist", permission: "order:read" },
+      { label: "Reception", href: "/reception", icon: "reception", permission: "encounter:create" },
+      {
+        label: "My patients",
+        href: "/my-patients",
+        icon: "myPatients",
+        permission: "order:create",
+      },
+      { label: "Worklist", href: "/worklist", icon: "worklist", permission: "order:read" },
+      // The lab's test master — analytes + reference ranges (D6). The pathologist owns it.
+      {
+        label: "Lab catalogue",
+        href: "/lab-catalogue",
+        icon: "lab",
+        permission: "lab:approve",
+        feature: FEATURE_FLAGS.CLINICAL_LIS,
+      },
+      // `pharmacy:dispense`, not `order:read` — this screen is for the person who HANDS THE DRUGS
+      // OVER; the read permission would show a dispensing counter to every nurse and pathologist.
+      {
+        label: "Pharmacy",
+        href: "/pharmacy",
+        icon: "pharmacy",
+        permission: "pharmacy:dispense",
+        feature: FEATURE_FLAGS.PHARMACY_DISPENSING,
+      },
+      // `pharmacy:stock`: the MASTER is inventory — the person who keeps the shelf, not the one
+      // handing a drug over.
+      {
+        label: "Medicine master",
+        href: "/medicines",
+        icon: "medicines",
+        permission: "pharmacy:stock",
+        feature: FEATURE_FLAGS.PHARMACY_FULL,
+      },
+      // `emr:read`: the ward round is a doctor's list of PATIENTS, not a bed-allocation tool.
+      {
+        label: "Ward",
+        href: "/ward",
+        icon: "ward",
+        permission: "emr:read",
+        feature: FEATURE_FLAGS.OPS_IPD,
+      },
       /**
-       * `pharmacy:dispense`, not `order:read` — the pharmacist holds both, but this screen
-       * is for the person who HANDS THE DRUGS OVER. Gating it on the read permission would
-       * show a dispensing counter to every nurse and pathologist in the building.
+       * The NURSE's round — who needs a drug next, across the whole ward (W4).
+       *
+       * `emr:read`, matching `GET /medication-round` exactly. Not `mar:administer`: a doctor
+       * reviewing what their patient has actually received is a legitimate reader of this list, and
+       * the round grants no reach they do not already have through the worklist and one schedule
+       * call per patient. The boundary that matters is on the WRITE, and that stays
+       * `mar:administer` — a viewer sees the round with its dose actions inert.
        */
-      { label: "Pharmacy", href: "/pharmacy", permission: "pharmacy:dispense" },
+      {
+        label: "Medication round",
+        href: "/medication-round",
+        icon: "medicines",
+        permission: "emr:read",
+        feature: FEATURE_FLAGS.CLINICAL_NURSING,
+      },
+      { label: "Patients", href: "/patients", icon: "patients", permission: "patient:read" },
+      {
+        label: "Appointments",
+        href: "/appointments",
+        icon: "appointments",
+        permission: "appointment:read",
+        feature: FEATURE_FLAGS.OPS_APPOINTMENTS,
+      },
+      // The doctor ROSTER — weekly sessions + leave (D2). `doctor:manage`: roster administration,
+      // not front-desk work; the same permission that guards setting a doctor's hours.
+      { label: "Doctors", href: "/doctors", icon: "staff", permission: "doctor:manage" },
       /**
-       * `pharmacy:stock`, not `pharmacy:dispense`: the MASTER is inventory — what the pharmacy
-       * stocks and its stock ledger — which is the person who keeps the shelf, not the one
-       * handing a drug over. A clinic that bought only dispensing never sees it.
+       * The same route, seen by the doctor whose roster it is (`doctor:self-manage`).
+       *
+       * Named for what they can actually do there. Calling it "Doctors" would promise a directory
+       * and deliver a single locked record; "My availability" is the thing they came to change —
+       * and until this existed, a doctor had no way in the product to say they were away.
        */
-      { label: "Medicine master", href: "/medicines", permission: "pharmacy:stock" },
+      {
+        label: "My availability",
+        href: "/doctors",
+        icon: "staff",
+        permission: "doctor:self-manage",
+        unless: "doctor:manage",
+      },
+      // The BED BOARD (which beds are free) and the inventory behind it (B4). `/ward` shows who is
+      // admitted; this shows where there is space.
+      {
+        label: "Bed board",
+        href: "/beds",
+        icon: "beds",
+        permission: "bed:allocate",
+        feature: FEATURE_FLAGS.OPS_IPD,
+      },
+      {
+        label: "Theatres",
+        href: "/theatres",
+        icon: "theatres",
+        permission: "ot:schedule",
+        feature: FEATURE_FLAGS.CLINICAL_OT,
+      },
       /**
-       * `emr:read`, not `bed:allocate`: the ward round is a doctor's list of PATIENTS,
-       * not a bed-allocation tool. Gating it on the bed permission would hide the chart
-       * from the doctor who writes it and show it to whoever moves people between beds.
+       * The ED board. Gated on `triage:perform` — the emergency department's OWN permission, held
+       * by the nurse and the doctor who stand in front of the board, and not by every receptionist
+       * in every clinic that never bought the module. The route itself needs only `encounter:read`
+       * (it is the queue, ranked), so the desk can still reach it when they need to answer "where
+       * is my father"; this decides whose sidebar carries a link.
        */
-      { label: "Ward", href: "/ward", permission: "emr:read" },
-      { label: "Patients", href: "/patients", permission: "patient:read" },
-      { label: "Appointments", href: "/appointments", permission: "appointment:read" },
-      // The BED BOARD (which beds are free) is still `soon` — there is no bed inventory.
-      // `/ward` shows who is admitted; it cannot tell you where there is space.
-      { label: "Bed board", href: "/beds", permission: "bed:allocate", soon: true },
+      {
+        label: "Emergency",
+        href: "/emergency",
+        icon: "emergency",
+        permission: "triage:perform",
+        feature: FEATURE_FLAGS.CLINICAL_EMERGENCY,
+      },
+      {
+        label: "Ambulance",
+        href: "/ambulance",
+        icon: "ambulance",
+        permission: "ambulance:dispatch",
+        feature: FEATURE_FLAGS.SUPPORT_AMBULANCE,
+      },
+      // The body custody register (support.mortuary) — receive and release. `mortuary:manage` is the
+      // ward/mortuary staff who run it; release refuses a medico-legal body without clearance.
+      {
+        label: "Mortuary",
+        href: "/mortuary",
+        icon: "ward",
+        permission: "mortuary:manage",
+        feature: FEATURE_FLAGS.SUPPORT_MORTUARY,
+      },
     ],
   },
   {
     title: "Finance",
-    items: [{ label: "Billing", href: "/billing", permission: "billing:read" }],
+    items: [
+      { label: "Billing", href: "/billing", icon: "billing", permission: "billing:read" },
+      { label: "Receipts", href: "/receipts", icon: "receipts", permission: "billing:read" },
+    ],
   },
 ];
+
+const COLLAPSE_KEY = "medicore.sidebar.collapsed";
 
 function initials(name: string): string {
   return name
@@ -105,91 +332,382 @@ function initials(name: string): string {
     .join("");
 }
 
+function isActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** The breadcrumb for the current route, derived from the navigation (single source of truth). */
+function crumbFor(pathname: string): { section?: string; label: string; leaf: boolean } {
+  let best: { section: string; item: NavItem } | undefined;
+  for (const section of NAVIGATION) {
+    for (const item of section.items) {
+      if (isActive(pathname, item.href)) {
+        if (!best || item.href.length > best.item.href.length)
+          best = { section: section.title, item };
+      }
+    }
+  }
+  if (!best) {
+    const seg = pathname.split("/").filter(Boolean)[0] ?? "";
+    return { label: seg ? seg.charAt(0).toUpperCase() + seg.slice(1) : "MediCore", leaf: false };
+  }
+  return {
+    section: best.section,
+    label: best.item.label,
+    // A path deeper than the nav item's own href is a detail view of it (e.g. /patients/123).
+    leaf: pathname !== best.item.href,
+  };
+}
+
+/* ── the nav list, shared by the desktop rail and the mobile drawer ──────────── */
+
+function SidebarNav({
+  sections,
+  pathname,
+  collapsed,
+  onNavigate,
+}: {
+  sections: NavSection[];
+  pathname: string;
+  collapsed: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <nav className="space-y-6 p-3">
+      {sections.map((section) => (
+        <div key={section.title}>
+          {collapsed ? (
+            <div className="mx-3 mb-2 h-px bg-[var(--color-border)]" aria-hidden />
+          ) : (
+            <p className="mb-1.5 px-3 text-[11px] font-semibold tracking-wider text-[var(--color-fg-subtle)] uppercase">
+              {section.title}
+            </p>
+          )}
+          <ul className="space-y-0.5">
+            {section.items.map((item) => {
+              const active = isActive(pathname, item.href);
+
+              if (item.soon) {
+                return (
+                  <li key={item.href}>
+                    <span
+                      className={`flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2 text-sm text-[var(--color-fg-subtle)] ${
+                        collapsed ? "justify-center" : ""
+                      }`}
+                      title={collapsed ? `${item.label} — not built yet` : "Not built yet"}
+                    >
+                      <Icon name={item.icon} className="h-[18px] w-[18px] shrink-0" />
+                      {!collapsed && (
+                        <>
+                          <span className="flex-1 truncate">{item.label}</span>
+                          <span className="text-[10px] tracking-wide uppercase">soon</span>
+                        </>
+                      )}
+                    </span>
+                  </li>
+                );
+              }
+
+              return (
+                <li key={item.href}>
+                  <Link
+                    href={item.href}
+                    onClick={onNavigate}
+                    aria-current={active ? "page" : undefined}
+                    title={collapsed ? item.label : undefined}
+                    className={`group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-[var(--dur-fast)] ${
+                      collapsed ? "justify-center" : ""
+                    } ${
+                      active
+                        ? "bg-[var(--color-brand-50)] font-medium text-[var(--color-brand-700)]"
+                        : "text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-fg)]"
+                    }`}
+                  >
+                    {/* the active accent bar */}
+                    <span
+                      aria-hidden
+                      className={`absolute top-1/2 left-0 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-[var(--color-brand-600)] transition-opacity ${
+                        active ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+                    <Icon
+                      name={item.icon}
+                      className={`h-[18px] w-[18px] shrink-0 transition-transform duration-[var(--dur-fast)] ${
+                        active ? "" : "group-hover:scale-110"
+                      }`}
+                    />
+                    {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
+function Brandmark({ collapsed }: { collapsed: boolean }) {
+  const branding = useBranding();
+  if (branding.logoUrl && !collapsed) {
+    return (
+      <img
+        src={branding.logoUrl}
+        alt={branding.displayName || "Hospital"}
+        className="h-8 w-auto max-w-[150px] object-contain"
+      />
+    );
+  }
+  return (
+    <div className="flex items-center gap-2.5">
+      <div
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm font-bold text-[var(--color-on-accent)] shadow-[var(--shadow-xs)]"
+        style={{ background: "var(--gradient-brand)" }}
+      >
+        {(branding.displayName || "M").charAt(0).toUpperCase()}
+      </div>
+      {!collapsed && (
+        <span className="truncate font-semibold text-[var(--color-fg)]">
+          {branding.displayName || "MediCore"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function BranchFooter({ collapsed }: { collapsed: boolean }) {
+  const { active, hasChoice } = useBranch();
+  if (!hasChoice || collapsed || !active) return null;
+  return (
+    <div className="border-t border-[var(--color-border)] px-4 py-3">
+      <p className="text-[11px] tracking-wide text-[var(--color-fg-subtle)] uppercase">
+        Working in
+      </p>
+      <p className="mt-0.5 flex items-center gap-1.5 truncate text-sm font-medium text-[var(--color-fg)]">
+        <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-brand-600)]" aria-hidden />
+        {active.name}
+      </p>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { user, can, logout } = useAuth();
+  const { user, can, hasFeature, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // The shell is mounted once by the root layout (see components/AppFrame.tsx) and never remounts on
+  // navigation, so plain state holds: the rail keeps its collapse and scroll without any cache.
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Read the persisted collapse preference once, on the session's first mount.
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "1");
+    } catch {
+      /* storage disabled — default expanded */
+    }
+  }, []);
+
+  // Close the mobile drawer whenever the route changes.
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
 
   if (!user) return null;
 
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
+  /**
+   * Both gates, in the order ADR-0010 asks them (D20).
+   *
+   *   entitlement — did this HOSPITAL buy the module?   `hasFeature`
+   *   permission  — does this USER hold the code?       `can`
+   *
+   * An entry needs both. Failing either hides the link; hiding a link grants nothing and refuses
+   * nothing, because the server independently answers `HMS-PLAN-002` or `HMS-AUTH-005` on the
+   * route (Constitution §3.6) — which is what a person typing the URL still gets.
+   */
   const sections = NAVIGATION.map((section) => ({
     ...section,
-    items: section.items.filter((item) => !item.permission || can(item.permission)),
+    items: section.items.filter(
+      (item) =>
+        (!item.feature || hasFeature(item.feature)) &&
+        (!item.permission || can(item.permission)) &&
+        !(item.unless && can(item.unless)),
+    ),
   })).filter((section) => section.items.length > 0);
 
+  const crumb = crumbFor(pathname);
+
   return (
-    <div className="flex min-h-screen bg-[var(--color-bg-subtle)]">
-      <aside className="hidden w-64 shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] lg:block">
-        <div className="flex h-16 items-center gap-2.5 border-b border-[var(--color-border)] px-6">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-brand-600)] text-sm font-bold text-[var(--color-on-accent)]">
-            M
-          </div>
-          <span className="font-semibold text-[var(--color-fg)]">MediCore</span>
+    // The shell OWNS the viewport height and never scrolls; only <main> does. This keeps the rail
+    // and top bar fixed, so a long page can never scroll the sidebar (and the item you just picked)
+    // out of view — the whole shell used to move with the window on `min-h-screen`.
+    <div className="flex h-screen overflow-hidden bg-[var(--color-bg-subtle)]">
+      {/* ── Desktop rail ─────────────────────────────────────────────────────── */}
+      <aside
+        className={`relative hidden shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] transition-[width] duration-[var(--dur)] ease-[var(--ease-standard)] lg:flex ${
+          collapsed ? "w-16" : "w-64"
+        }`}
+      >
+        <div
+          className={`flex h-16 items-center border-b border-[var(--color-border)] ${
+            collapsed ? "justify-center px-2" : "px-6"
+          }`}
+        >
+          <Brandmark collapsed={collapsed} />
         </div>
 
-        <nav className="space-y-6 p-4">
-          {sections.map((section) => (
-            <div key={section.title}>
-              <p className="mb-2 px-3 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
-                {section.title}
-              </p>
-              <ul className="space-y-0.5">
-                {section.items.map((item) => {
-                  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+        {/*
+         * `min-h-0` IS THE FIX, NOT A TIDY-UP.
+         *
+         * A flex child defaults to `min-height: auto`, which means it refuses to shrink below its
+         * own content however much `overflow-y-auto` you put on it. With enough nav sections — a
+         * tenant admin sees every one — this pane grew taller than the rail, pushed the branch
+         * footer and the collapse control past the bottom of a `h-screen overflow-hidden` shell,
+         * and they were clipped away. The rail could then be collapsed and never expanded again,
+         * because the only control that expands it had been pushed off the screen.
+         */}
+        <div id="app-sidebar-nav" className="min-h-0 flex-1 overflow-y-auto">
+          <SidebarNav sections={sections} pathname={pathname} collapsed={collapsed} />
+        </div>
 
-                  if (item.soon) {
-                    return (
-                      <li key={item.href}>
-                        <span
-                          className="flex cursor-not-allowed items-center justify-between rounded-lg px-3 py-2 text-sm text-[var(--color-fg-subtle)]"
-                          title="Not built yet"
-                        >
-                          {item.label}
-                          <span className="text-[10px] tracking-wide uppercase">soon</span>
-                        </span>
-                      </li>
-                    );
-                  }
+        <BranchFooter collapsed={collapsed} />
 
-                  return (
-                    <li key={item.href}>
-                      <Link
-                        href={item.href}
-                        aria-current={active ? "page" : undefined}
-                        className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
-                          active
-                            ? "bg-[var(--color-brand-50)] font-medium text-[var(--color-brand-700)]"
-                            : "text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-                        }`}
-                      >
-                        {item.label}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-        </nav>
+        {/*
+         * ── THE RAIL'S HANDLE, ON THE SEAM ──────────────────────────────────
+         * Deliberately floated on the border between the rail and the page rather than docked as
+         * the last row of the nav. A control that expands the sidebar must not live inside the
+         * thing it expands: at `w-16` that row was an unlabelled chevron at the foot of a
+         * scrolling column, and when the column overflowed it was not on the screen at all.
+         *
+         * Anchored to the aside (`relative` above), so it tracks the rail's width as it animates
+         * and needs no second source of truth about how wide the rail currently is. It overhangs
+         * into the main column by half its width — twelve pixels, comfortably inside that
+         * column's padding, so it never sits on top of a page's content.
+         */}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          className="absolute top-1/2 -right-3 z-40 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg-elevated)] text-[var(--color-fg-muted)] shadow-[var(--shadow-sm)] transition-[background-color,color,box-shadow] duration-[var(--dur)] ease-[var(--ease-standard)] hover:bg-[var(--color-brand-600)] hover:text-[var(--color-on-accent)] hover:shadow-[var(--shadow-md)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-600)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-bg-elevated)] focus-visible:outline-none"
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          aria-controls="app-sidebar-nav"
+        >
+          <Icon
+            name="chevron"
+            className={`h-3.5 w-3.5 transition-transform duration-[var(--dur)] ease-[var(--ease-standard)] ${
+              collapsed ? "" : "rotate-180"
+            }`}
+          />
+        </button>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-6">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-[var(--color-fg)]">
-              {typeof window !== "undefined" ? window.location.hostname : ""}
-            </p>
+      {/* ── Mobile drawer ────────────────────────────────────────────────────── */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div
+            className="mc-fade-in absolute inset-0 bg-black/40"
+            onClick={() => setDrawerOpen(false)}
+            aria-hidden
+          />
+          <div className="mc-drawer-in absolute inset-y-0 left-0 flex w-72 flex-col border-r border-[var(--color-border)] bg-[var(--color-bg-elevated)] shadow-[var(--shadow-xl)]">
+            <div className="flex h-16 items-center justify-between border-b border-[var(--color-border)] px-5">
+              <Brandmark collapsed={false} />
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(false)}
+                className="rounded-lg p-1.5 text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
+                aria-label="Close menu"
+              >
+                <Icon name="close" className="h-5 w-5" />
+              </button>
+            </div>
+            {/* `min-h-0` for the same reason as the rail above — the drawer's footer is pinned. */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <SidebarNav
+                sections={sections}
+                pathname={pathname}
+                collapsed={false}
+                onNavigate={() => setDrawerOpen(false)}
+              />
+            </div>
+            <BranchFooter collapsed={false} />
+          </div>
+        </div>
+      )}
+
+      {/* ── Main column ──────────────────────────────────────────────────────── */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header
+          className="z-30 flex h-16 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 lg:px-6"
+          style={{ background: "var(--surface-glass)", backdropFilter: "blur(12px)" }}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              className="rounded-lg p-1.5 text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)] lg:hidden"
+              aria-label="Open menu"
+            >
+              <Icon name="menu" className="h-5 w-5" />
+            </button>
+
+            {/* Breadcrumb — where you are, derived from the nav. */}
+            <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+              {crumb.section && (
+                <>
+                  <span className="hidden truncate text-[var(--color-fg-muted)] sm:inline">
+                    {crumb.section}
+                  </span>
+                  <Icon
+                    name="chevron"
+                    className="hidden h-3.5 w-3.5 text-[var(--color-fg-subtle)] sm:inline"
+                  />
+                </>
+              )}
+              <span className="truncate font-medium text-[var(--color-fg)]">{crumb.label}</span>
+              {crumb.leaf && (
+                <>
+                  <Icon name="chevron" className="h-3.5 w-3.5 text-[var(--color-fg-subtle)]" />
+                  <span className="truncate text-[var(--color-fg-muted)]">Details</span>
+                </>
+              )}
+            </nav>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/*
+             * Left of the branch switcher on purpose. The inbox is NOT branch-scoped — a message
+             * is addressed to a person, not a site — so putting the bell to the switcher's right
+             * would read as belonging to it, and imply that switching sites changes what is in it.
+             * See `AI_Workflow/docs/COMMUNICATION_POLICY.md`.
+             */}
+            <AlertBell />
+            <BranchSwitcher />
             <ThemeToggle />
 
             <div className="relative">
               <button
                 onClick={() => setMenuOpen((o) => !o)}
-                className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-[var(--color-bg-subtle)]"
+                className="flex items-center gap-2.5 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-[var(--color-bg-subtle)] sm:px-2"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
               >
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-brand-100)] text-xs font-semibold text-[var(--color-brand-700)]">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-100)] text-xs font-semibold text-[var(--color-brand-700)]">
                   {initials(user.name)}
                 </span>
                 <span className="hidden text-left sm:block">
@@ -200,46 +718,67 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {user.roles[0] ?? "No role"}
                   </span>
                 </span>
+                <Icon
+                  name="chevron"
+                  className="hidden h-4 w-4 rotate-90 text-[var(--color-fg-subtle)] sm:block"
+                />
               </button>
 
               {menuOpen && (
-                <div className="absolute right-0 z-10 mt-2 w-56 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1.5 shadow-lg">
-                  <div className="border-b border-[var(--color-border)] px-3 py-2.5">
-                    <p className="truncate text-sm font-medium">{user.email}</p>
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {user.roles.map((role) => (
-                        <Badge key={role} tone="brand">
-                          {role}
-                        </Badge>
-                      ))}
+                <>
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setMenuOpen(false)}
+                    aria-hidden
+                  />
+                  <div className="mc-scale-in absolute right-0 z-20 mt-2 w-60 origin-top-right rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-1.5 shadow-[var(--shadow-lg)]">
+                    <div className="border-b border-[var(--color-border)] px-3 py-2.5">
+                      <p className="truncate text-sm font-medium">{user.email}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {user.roles.map((role) => (
+                          <Badge key={role} tone="brand">
+                            {role}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    <Link
+                      href="/change-password"
+                      onClick={() => setMenuOpen(false)}
+                      className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-fg)]"
+                    >
+                      <Icon name="lock" className="h-4 w-4" />
+                      Change password
+                    </Link>
+                    <Link
+                      href="/sessions"
+                      onClick={() => setMenuOpen(false)}
+                      className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] transition-colors hover:bg-[var(--color-bg-subtle)] hover:text-[var(--color-fg)]"
+                    >
+                      <Icon name="monitor" className="h-4 w-4" />
+                      Active sessions
+                    </Link>
+                    <div className="mt-1 border-t border-[var(--color-border)] pt-1">
+                      <Button
+                        variant="ghost"
+                        onClick={() => void logout()}
+                        className="w-full justify-start"
+                      >
+                        <Icon name="logout" className="h-4 w-4" />
+                        Sign out
+                      </Button>
                     </div>
                   </div>
-                  <Link
-                    href="/change-password"
-                    onClick={() => setMenuOpen(false)}
-                    className="block rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-                  >
-                    Change password
-                  </Link>
-                  <Link
-                    href="/sessions"
-                    onClick={() => setMenuOpen(false)}
-                    className="block rounded-lg px-3 py-2 text-sm text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-                  >
-                    Active sessions
-                  </Link>
-                  <div className="mt-1 border-t border-[var(--color-border)] pt-1">
-                    <Button variant="ghost" onClick={() => void logout()} className="w-full">
-                      Sign out
-                    </Button>
-                  </div>
-                </div>
+                </>
               )}
             </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-x-auto p-6 lg:p-8">{children}</main>
+        <LicenseBanner />
+
+        {/* The ONLY scroll container. `overflow-x-auto` keeps wide tables from bleeding the page. */}
+        <main className="flex-1 overflow-y-auto overflow-x-auto p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

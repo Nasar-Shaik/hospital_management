@@ -15,6 +15,7 @@ export { platformRouter } from "./platform.routes.js";
 
 export {
   bootstrapFirstOperator,
+  upsertDevOperator,
   listHospitals,
   createHospital,
   type CreateHospitalInput,

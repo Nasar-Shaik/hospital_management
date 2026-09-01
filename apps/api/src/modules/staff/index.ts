@@ -13,6 +13,10 @@ export { staffRouter } from "./staff.routes.js";
 export {
   listDoctors,
   type DoctorRef,
+  getDoctorCard,
+  type DoctorCard,
+  listPublicDoctors,
+  type PublicDoctor,
   createStaff,
   listStaff,
   getStaff,

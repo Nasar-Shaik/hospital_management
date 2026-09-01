@@ -20,6 +20,15 @@
  * PLAIN TEXT, deliberately. HTML mail means inlined CSS, a text fallback, and a
  * rendering matrix; a hospital appointment reminder needs none of that, and every
  * mail client on earth renders text correctly.
+ *
+ * ── WHO THE MESSAGE IS FOR DECIDES THE CHANNEL ──────────────────────────────
+ * STAFF messages go `inapp`: the recipient has a MediCore login, the ledger row IS the delivery,
+ * and nothing needs configuring for it to arrive. PATIENT messages go `email`, because a patient
+ * has no login and no app — that is the whole reason `channels/email.ts` exists.
+ *
+ * `password.reset` is the exception that proves it: the recipient IS staff, and it stays on email
+ * because a person who cannot sign in cannot read an in-app inbox. A reset link delivered to the
+ * inbox you need the password to open is a locked door with the key inside.
  */
 import type { Connection } from "mongoose";
 import { createLogger } from "@medicore/logger";
@@ -144,7 +153,13 @@ export const DEFAULT_TEMPLATES: TemplateSeed[] = [
 
   {
     key: "order.result.released",
-    channel: "email",
+    /**
+     * `inapp`, not `email` — see `order.critical` below for the whole argument. In short: the
+     * doctor this is addressed to is a person with a MediCore login, and the ledger row is the
+     * delivery. Email needs an SMTP host the hospital may not have configured, and the message is
+     * "your report is ready", which is only actionable in the chart anyway.
+     */
+    channel: "inapp",
     /**
      * "Reports become available automatically to the requesting doctor" — this is
      * the message that makes that sentence true. Placeholders: {{doctorName}}
@@ -173,7 +188,7 @@ export const DEFAULT_TEMPLATES: TemplateSeed[] = [
   },
   {
     key: "order.critical",
-    channel: "email",
+    channel: "inapp",
     /**
      * ── THE ONLY MESSAGE IN THIS FILE THAT CANNOT WAIT ──────────────────────
      * A potassium of 7.2 stops the heart. This one is sent SYNCHRONOUSLY, inside the
@@ -185,9 +200,27 @@ export const DEFAULT_TEMPLATES: TemplateSeed[] = [
      * to make a human act in the next few minutes, and "a critical result is ready,
      * please log in" wastes the minutes that are the point.
      *
-     * Email is the floor, not the ceiling. A hospital that means this seriously
-     * points the template at SMS or a push channel — which is a template edit, not a
-     * code change, and that is exactly why the channel lives on the template.
+     * ── WHY `inapp` AND NOT `email` ─────────────────────────────────────────
+     * This template shipped on `email`, and `email.isEnabled()` is
+     * `NOTIFY_EMAIL_ENABLED && SMTP_HOST`. On a deployment with no SMTP host — the default — the
+     * most urgent message in the product was recorded `suppressed` and reached nobody. Every bit
+     * of care around it (sent inline to beat the outbox, deduped per order, its outcome read
+     * rather than assumed) was spent delivering to a channel that was switched off.
+     *
+     * `inapp` cannot be unreachable and needs nothing configured: the ledger row IS the message,
+     * and writing it is the delivery (`channels/inapp.ts`). The doctor sees it on the bell the
+     * next time they touch a screen, which is the floor this alert never had.
+     *
+     * ── WHAT THIS COSTS, AND THE DECISION THAT IS STILL OPEN ────────────────
+     * A hospital that HAS working SMTP no longer gets this by email, and an email reaches a
+     * consultant who is not logged in. The right answer is almost certainly BOTH — and both is
+     * not free: `dedupeKey` is unique per tenant, so two channels for one cause collide on
+     * `one_message_per_cause` and the second is silently dropped as a duplicate. Doing it
+     * properly means the key gains the channel. Written up, with the argument on each side, in
+     * `AI_Workflow/docs/COMMUNICATION_POLICY.md` rather than guessed at here.
+     *
+     * The channel is NOT editable through the API today (`updateTemplate` takes subject, body and
+     * enabled). Changing it is a seed value plus a migration, which is how this one moved.
      */
     description: "CRITICAL result. Sent immediately to the ordering doctor, before verification.",
     subject: "CRITICAL RESULT — {{patientName}} — {{testName}}",

@@ -14,9 +14,17 @@ import { migrateTenantDb } from "../../core/db/migrations/runner.js";
 import { tenantMigrations } from "../../core/db/migrations/tenantMigrations.js";
 import { AppError } from "../../core/errors/appError.js";
 import { tenantDatabaseName } from "../../config/env.js";
+import { seedIcdCodes } from "../../seed/icdCodes.js";
+import { seedMainBranch } from "../../seed/mainBranch.js";
 import * as repo from "./tenant.repository.js";
 import type { TenantRegistryEntry } from "./tenant.repository.js";
-import type { TenantStatus } from "./tenant.model.js";
+import type { TenantLicense, TenantStatus } from "./tenant.model.js";
+import {
+  applyLicensePatch,
+  buildProvisionLicense,
+  type LicensePatch,
+  type LicenseProvisionInput,
+} from "./license.js";
 
 /** Legal transitions — STATE_MACHINE_CATALOG §11. Anything absent here is rejected. */
 const ALLOWED_TRANSITIONS: Record<TenantStatus, readonly TenantStatus[]> = {
@@ -96,6 +104,13 @@ export interface ProvisionTenantInput {
   organizationType?: OrganizationType;
   /** Start in trial rather than active (Doc 07 §5.4). */
   trial?: boolean;
+  /** Platform cap on branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /**
+   * Tenure to create the hospital with (ADR-0016). Absent ⇒ a default trial licence
+   * (LICENSE_DEFAULT_TRIAL_DAYS) so a new hospital is never accidentally perpetual.
+   */
+  license?: LicenseProvisionInput;
 }
 
 export interface ProvisionResult {
@@ -132,6 +147,10 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
     ...(input.region ? { region: input.region } : {}),
     ...(input.planCode ? { planCode: input.planCode } : {}),
     ...(input.organizationType ? { organizationType: input.organizationType } : {}),
+    ...(typeof input.maxBranches === "number" ? { maxBranches: input.maxBranches } : {}),
+    // Always seed a licence: a hospital with no expiry is perpetual, which must be a
+    // deliberate operator choice, never the accident of a forgotten field.
+    license: buildProvisionLicense(input.license),
   });
 
   // Creating the DB = connecting to it and writing; Mongo materializes it lazily.
@@ -141,6 +160,38 @@ export async function provisionTenant(input: ProvisionTenantInput): Promise<Prov
     ...(tenant.dbUri ? { dbUri: tenant.dbUri } : {}),
   });
   const migrationsApplied = await migrateTenantDb(db, tenantMigrations);
+
+  /**
+   * ── A HOSPITAL IS NOT PROVISIONED UNTIL IT HAS A SITE (ADR-0015) ────────────
+   * The Main Branch is seeded HERE rather than by each caller, because "provision now, seed the
+   * rest later" is the trap this codebase has fallen into three times already — notification
+   * templates, tariff, and branches — and each time the second step was forgotten on one path
+   * while the other kept working. The CLI seeded a Main Branch; the operator console did not;
+   * nothing seeded one for a test tenant. There is now one place, and it is the place that
+   * cannot be skipped.
+   *
+   * It matters more than the other two because nothing FAILS without it: `writeBranchId()` finds
+   * no branch, returns `undefined`, and every record the hospital writes is branchless — correct
+   * looking, and invisible to a branch-confined user the day a second site opens.
+   *
+   * Idempotent (upsert on `{tenantId, isMain: true}`), and the seed reaches the collection
+   * directly so this import does not close a cycle back through the branches module.
+   */
+  await seedMainBranch(tenant.id, tenant.slug, db);
+
+  /**
+   * ── AND IT IS NOT PROVISIONED WITHOUT A CODE MASTER EITHER ──────────────────
+   * `icdCodes` shipped empty, and that turned a whole module into a blank page: Medical Records
+   * opened on an empty list beside an "Add code" button, the doctor's Coding tab had nothing to
+   * pick, and the disease register — the morbidity return a hospital files, and the codes an
+   * insurer wants on a claim — could only ever report zero. Nobody hand-types ICD-10; a feature
+   * that must be populated before it does anything is a feature nobody turns on.
+   *
+   * Seeded HERE for the reason the comment above gives: the CLI already seeds the tariff and the
+   * templates and the operator console does not, which is the exact split that trap describes.
+   * `$setOnInsert`, so what a hospital curates is never overwritten.
+   */
+  await seedIcdCodes(tenant.id, tenant.slug, db);
 
   const activated = await transitionStatus(tenant.id, input.trial ? "trial" : "active");
 
@@ -181,5 +232,89 @@ export async function migrateTenant(tenantId: string): Promise<string[]> {
   return migrateTenantDb(db, tenantMigrations);
 }
 
+/**
+ * Raise/lower the platform branch cap (ADR-0015). Lowering below the number of
+ * branches a tenant already has does NOT delete anything — the create-time cap
+ * (`branches` module, HMS-PLAN-001) simply refuses further branches until it is
+ * raised again. `maxBranches` must be at least 1: every hospital has a Main branch.
+ */
+export async function setLimits(
+  tenantId: string,
+  limits: { maxBranches?: number },
+): Promise<TenantRegistryEntry> {
+  if (typeof limits.maxBranches === "number" && limits.maxBranches < 1) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      maxBranches: "must be at least 1 — every hospital has a Main branch",
+    });
+  }
+  const updated = await repo.updateLimits(tenantId, limits);
+  if (!updated) throw new AppError("HMS-TEN-001", 404, "Organization not found", { tenantId });
+  return updated;
+}
+
+/**
+ * Set / renew / extend a hospital's licence (ADR-0016) and propagate to the registry
+ * cache so the new expiry gates on the very next request. `extendDays` bumps the
+ * expiry from the LATER of now / the current expiry, so a renewal never shortens an
+ * already-future licence.
+ */
+export async function setLicense(
+  tenantId: string,
+  patch: LicensePatch,
+): Promise<{ tenant: TenantRegistryEntry; license: TenantLicense }> {
+  const current = await repo.findLicense(tenantId);
+  const license = applyLicensePatch(current, patch);
+  const updated = await repo.updateLicense(tenantId, license);
+  if (!updated) throw new AppError("HMS-TEN-001", 404, "Organization not found", { tenantId });
+  return { tenant: updated, license };
+}
+
+/**
+ * Attach, replace, or clear a hospital's custom domain (ADR-0005: the hostname IS the
+ * tenant, so a custom domain is just a second host that resolves to it). Refuses a
+ * host already owned by another hospital — two tenants cannot share one hostname.
+ * Pass `null` to detach. DNS/TLS for the host is an operational step outside this call.
+ */
+export async function setCustomDomain(
+  tenantId: string,
+  customDomain: string | null,
+): Promise<TenantRegistryEntry> {
+  const host = customDomain?.trim().toLowerCase() || null;
+  if (host) {
+    if (host.includes("/") || host.includes(":") || !host.includes(".")) {
+      throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+        customDomain: "must be a bare hostname such as care.hospital.com",
+      });
+    }
+    const owner = await repo.customDomainOwner(host);
+    if (owner && owner !== tenantId) {
+      throw new AppError("HMS-VAL-001", 409, "Domain already in use", {
+        customDomain: `"${host}" already routes to another hospital`,
+      });
+    }
+  }
+  const updated = await repo.updateCustomDomain(tenantId, host);
+  if (!updated) throw new AppError("HMS-TEN-001", 404, "Organization not found", { tenantId });
+  return updated;
+}
+
 export const getBySlug = repo.findBySlug;
 export const getById = repo.findById;
+
+/** A tenant with no explicit cap is single-site — the safe default for every existing hospital. */
+export const DEFAULT_MAX_BRANCHES = 1;
+
+/**
+ * How many sites this hospital may have. THE ONE ANSWER — the wall and the meter read it together.
+ *
+ * ── WHY IT IS A FUNCTION AND NOT TWO READS OF THE SAME FIELD ────────────────
+ * The cap is a PLATFORM control on the master record (`limits.maxBranches`, ADR-0015), set by an
+ * operator. An edition's `limits.maxBranches` is a catalogue figure that is never applied to a
+ * tenant — so a Subscription screen rendering the edition's number would print "2 branches" over
+ * a hospital the API will refuse at 1, or the reverse. The branch service enforces it and the
+ * subscription view displays it, and they now cannot disagree, because there is one function.
+ */
+export async function branchLimit(tenantId: string): Promise<number> {
+  const tenant = await repo.findById(tenantId);
+  return tenant?.maxBranches ?? DEFAULT_MAX_BRANCHES;
+}

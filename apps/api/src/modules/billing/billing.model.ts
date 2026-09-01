@@ -35,6 +35,9 @@ export const CHARGE_CATEGORIES = [
   "pharmacy",
   "procedure",
   "bed",
+  // The fixed price of a care PACKAGE (a maternity bundle, a health check). The one line the
+  // patient pays; the services it covers post at ₹0 against it. See servicePackages below.
+  "package",
   "other",
 ] as const;
 export type ChargeCategory = (typeof CHARGE_CATEGORIES)[number];
@@ -50,6 +53,16 @@ export interface ServiceItemDoc {
   category: ChargeCategory;
   /** Paise. The list price of this service at THIS hospital. */
   price: number;
+  /**
+   * Consultation only: how many days this fee keeps the patient entitled to see the SAME doctor
+   * again for free (the "OP validity" every hospital advertises — pay once, revisit within N days).
+   *
+   * It lives on the tariff entry because it is a property of what the fee BUYS, and the price list
+   * is the one page where a hospital already decides what a consultation is worth. Absent or 0
+   * means no free follow-up: every visit is charged, which is the safe default for an existing
+   * hospital that never configured one.
+   */
+  followUpDays?: number;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -62,6 +75,7 @@ const serviceItemSchema = new Schema<ServiceItemDoc>(
     name: { type: String, required: true, trim: true, maxlength: 200 },
     category: { type: String, enum: CHARGE_CATEGORIES, required: true },
     price: { type: Number, required: true, min: 0 },
+    followUpDays: { type: Number, min: 0, max: 365 },
     active: { type: Boolean, required: true, default: true },
   },
   { timestamps: true, collection: "serviceItems", autoIndex: false },
@@ -75,7 +89,14 @@ serviceItemSchema.plugin(auditPlugin, { resource: "serviceItem", category: "fina
 /* ── The charge ledger ─────────────────────────────────────────────────────── */
 
 /** Where the charge came from. `sourceId` is the order/prescription/encounter it names. */
-export const CHARGE_SOURCES = ["encounter", "order", "pharmacy", "bed", "manual"] as const;
+export const CHARGE_SOURCES = [
+  "encounter",
+  "order",
+  "pharmacy",
+  "bed",
+  "manual",
+  "package",
+] as const;
 export type ChargeSource = (typeof CHARGE_SOURCES)[number];
 
 export interface ChargeDoc {
@@ -106,6 +127,17 @@ export interface ChargeDoc {
    * without the index the patient is billed twice for one blood test.
    */
   sourceId?: string;
+
+  /**
+   * Consultation charges only: WHOSE consultation this was.
+   *
+   * Denormalised onto the charge because the free-follow-up rule asks a money question — "has this
+   * patient already paid to see THIS doctor recently?" — and it must be answerable inside billing,
+   * from billing's own collection. Joining out to encounters to discover the doctor would put a
+   * clinical read on the hot path of every registration and blur a module boundary for a fact the
+   * charge can simply carry.
+   */
+  doctorId?: string;
 
   postedBy?: string;
   postedAt: Date;
@@ -140,6 +172,8 @@ const chargeSchema = new Schema<ChargeDoc>(
 
     source: { type: String, enum: CHARGE_SOURCES, required: true },
     sourceId: { type: String },
+
+    doctorId: { type: String },
 
     postedBy: { type: String },
     postedAt: { type: Date, required: true },
@@ -193,6 +227,35 @@ export interface PaymentEntry {
   reference?: string;
   at: Date;
   by?: string;
+  /**
+   * Client-supplied idempotency key (STATE_MACHINE_CATALOG §5: "idempotency key mandatory at
+   * `initiated`; `captured` posts to journal exactly once"; Doc 03 §5.2: "idempotency keys on all
+   * money-moving POSTs"). Same shape as `orders.requestId` and `dispenses.requestId` — the UI
+   * always sends one; a double-clicked "Collect" must take the money once.
+   *
+   * NOT enforced by a unique index, and that is deliberate: a unique MULTIKEY index de-duplicates
+   * entries WITHIN a document, so it would happily allow the same key to be pushed twice onto the
+   * SAME invoice — which is exactly the double-click case. The guard is a condition on the write
+   * (`payments.requestId: {$ne: key}` in the filter), which is atomic and does hold.
+   */
+  requestId?: string;
+}
+
+/**
+ * Money handed BACK — an overpayment returned, a cancelled service refunded. Kept as its own
+ * list rather than a negative payment: a refund has a REASON a payment does not, and the net
+ * collected (`paid − refunded`) must stay separable from what was ever taken, for the drawer to
+ * reconcile and the audit to read. A refund is never a delete of a payment — the money came in
+ * and went out, and both legs are on the record.
+ */
+export interface RefundEntry {
+  amount: number;
+  method: string;
+  reason: string;
+  at: Date;
+  by?: string;
+  /** Idempotency key — see `PaymentEntry.requestId`. Handing money back twice is the worse leg. */
+  requestId?: string;
 }
 
 export interface InvoiceDoc {
@@ -211,14 +274,38 @@ export interface InvoiceDoc {
   lines: InvoiceLine[];
   /** Paise. */
   subtotal: number;
+  /** Paise off the subtotal — an approved adjustment, NOT a line edit. `total = subtotal − discount`. */
   discount: number;
+  discountReason?: string;
+  discountBy?: string;
   total: number;
   paid: number;
 
+  /**
+   * Paise of `total` an insurer is expected to bear (the payer split). The patient's share is
+   * `total − coveredByInsurer` — that, not the whole bill, is what the counter collects. The
+   * insurer's portion arrives later as an `insurance`-method payment (usually on claim settlement).
+   * Zero on an ordinary self-pay bill.
+   */
+  coveredByInsurer: number;
+  /** The policy the insurer share is billed to. Set with `coveredByInsurer`, by the payer split. */
+  insurerPolicyId?: string;
+
   payments: PaymentEntry[];
+  refunds: RefundEntry[];
+  /** Paise handed back so far. Net collected is `paid − refunded`. */
+  refunded: number;
 
   finalizedAt?: Date;
   finalizedBy?: string;
+
+  /**
+   * Optimistic-concurrency counter (Doc 03 §1.4, §5.2 — "optimistic concurrency via `version`
+   * field + `findOneAndUpdate` with version guard"). `tenantScopePlugin` has stamped this on every
+   * collection since Phase 1A; billing is the first module to actually GUARD on it, which is why
+   * it is declared here rather than left implicit.
+   */
+  version: number;
 
   createdAt: Date;
   updatedAt: Date;
@@ -249,8 +336,13 @@ const invoiceSchema = new Schema<InvoiceDoc>(
     ],
     subtotal: { type: Number, required: true, default: 0 },
     discount: { type: Number, required: true, default: 0 },
+    discountReason: { type: String },
+    discountBy: { type: String },
     total: { type: Number, required: true, default: 0 },
     paid: { type: Number, required: true, default: 0 },
+
+    coveredByInsurer: { type: Number, required: true, default: 0 },
+    insurerPolicyId: { type: String },
 
     payments: [
       {
@@ -260,8 +352,21 @@ const invoiceSchema = new Schema<InvoiceDoc>(
         reference: { type: String },
         at: { type: Date, required: true },
         by: { type: String },
+        requestId: { type: String },
       },
     ],
+    refunds: [
+      {
+        _id: false,
+        amount: { type: Number, required: true },
+        method: { type: String, required: true },
+        reason: { type: String, required: true },
+        at: { type: Date, required: true },
+        by: { type: String },
+        requestId: { type: String },
+      },
+    ],
+    refunded: { type: Number, required: true, default: 0 },
 
     finalizedAt: { type: Date },
     finalizedBy: { type: String },
@@ -286,5 +391,142 @@ export function getChargeModel(conn: Connection): Model<ChargeDoc> {
 export function getInvoiceModel(conn: Connection): Model<InvoiceDoc> {
   return (
     (conn.models.Invoice as Model<InvoiceDoc>) ?? conn.model<InvoiceDoc>("Invoice", invoiceSchema)
+  );
+}
+
+/* ── Care packages ─────────────────────────────────────────────────────────── */
+
+/**
+ * A care PACKAGE — a fixed-price bundle (a maternity package, a health check) that bills as ONE
+ * line regardless of the services inside it.
+ *
+ * ── HOW IT BILLS ────────────────────────────────────────────────────────────
+ * Enrolling a visit posts one `package` charge for `price`. Every service in `includedCodes`, when
+ * it is later ordered or dispensed, posts at ₹0 against the package instead of its tariff price —
+ * so the bundle is charged once and its contents are not double-billed. The `includedCodes` and
+ * `price` are SNAPSHOT onto the enrollment at enrol time, so editing the package here never changes
+ * what a patient already enrolled is owed. This is the definition; the enrollment is the instance.
+ */
+export interface PackageDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+
+  /** The package's own code — `MATERNITY_NORMAL`, `HEALTH_CHECK_BASIC`. Unique per tenant. */
+  code: string;
+  name: string;
+  description?: string;
+  /** Paise. The one price the patient pays for the whole bundle. */
+  price: number;
+  /** The tariff codes this package covers — each posts at ₹0 while the enrollment is active. */
+  includedCodes: string[];
+  active: boolean;
+
+  createdBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const packageSchema = new Schema<PackageDoc>(
+  {
+    tenantId: { type: String, required: true, index: true },
+    branchId: { type: String },
+
+    code: { type: String, required: true, trim: true, uppercase: true, maxlength: 64 },
+    name: { type: String, required: true, trim: true, maxlength: 200 },
+    description: { type: String, trim: true, maxlength: 1000 },
+    price: { type: Number, required: true, min: 0 },
+    includedCodes: { type: [String], default: undefined },
+    active: { type: Boolean, required: true, default: true },
+
+    createdBy: { type: String },
+  },
+  // Indexes owned by migration 0043, never autoIndex.
+  { timestamps: true, collection: "servicePackages", autoIndex: false },
+);
+
+packageSchema.plugin(tenantScopePlugin);
+packageSchema.plugin(auditPlugin, { resource: "servicePackage", category: "financial" });
+
+export const PACKAGE_ENROLLMENT_STATUSES = ["active", "cancelled"] as const;
+export type PackageEnrollmentStatus = (typeof PACKAGE_ENROLLMENT_STATUSES)[number];
+
+/**
+ * A patient's enrollment in a package for one visit — the INSTANCE of a package on an encounter.
+ * Carries a SNAPSHOT of the package's price and covered codes at enrol time, so it is immune to
+ * later edits of the catalogue, and points at the `package` charge it raised so cancelling can
+ * reverse it.
+ */
+export interface PackageEnrollmentDoc {
+  _id: Types.ObjectId;
+  tenantId: string;
+  branchId?: string;
+
+  packageId: Types.ObjectId;
+  packageCode: string;
+  packageName: string;
+  /** Paise. Snapshot of the package price at enrol time. */
+  price: number;
+  /** Snapshot of the covered codes — what this enrollment zeroes, frozen at enrol time. */
+  includedCodes: string[];
+
+  encounterId: Types.ObjectId;
+  patientId: Types.ObjectId;
+  episodeId: Types.ObjectId;
+
+  status: PackageEnrollmentStatus;
+  /** The `package` charge this enrollment raised — voided when the enrollment is cancelled. */
+  chargeId?: Types.ObjectId;
+
+  enrolledBy?: string;
+  enrolledAt: Date;
+  cancelledAt?: Date;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const packageEnrollmentSchema = new Schema<PackageEnrollmentDoc>(
+  {
+    tenantId: { type: String, required: true, index: true },
+    branchId: { type: String },
+
+    packageId: { type: Schema.Types.ObjectId, required: true },
+    packageCode: { type: String, required: true },
+    packageName: { type: String, required: true },
+    price: { type: Number, required: true, min: 0 },
+    includedCodes: { type: [String], default: undefined },
+
+    encounterId: { type: Schema.Types.ObjectId, required: true },
+    patientId: { type: Schema.Types.ObjectId, required: true },
+    episodeId: { type: Schema.Types.ObjectId, required: true },
+
+    status: { type: String, enum: PACKAGE_ENROLLMENT_STATUSES, required: true, default: "active" },
+    chargeId: { type: Schema.Types.ObjectId },
+
+    enrolledBy: { type: String },
+    enrolledAt: { type: Date, required: true },
+    cancelledAt: { type: Date },
+  },
+  { timestamps: true, collection: "packageEnrollments", autoIndex: false },
+);
+
+packageEnrollmentSchema.plugin(tenantScopePlugin);
+packageEnrollmentSchema.plugin(auditPlugin, {
+  resource: "packageEnrollment",
+  category: "financial",
+});
+
+export function getPackageModel(conn: Connection): Model<PackageDoc> {
+  return (
+    (conn.models.ServicePackage as Model<PackageDoc>) ??
+    conn.model<PackageDoc>("ServicePackage", packageSchema)
+  );
+}
+
+export function getPackageEnrollmentModel(conn: Connection): Model<PackageEnrollmentDoc> {
+  return (
+    (conn.models.PackageEnrollment as Model<PackageEnrollmentDoc>) ??
+    conn.model<PackageEnrollmentDoc>("PackageEnrollment", packageEnrollmentSchema)
   );
 }

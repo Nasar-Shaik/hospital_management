@@ -177,6 +177,30 @@ export async function invalidateUser(userId: string): Promise<void> {
   await cacheDel(cacheKeys.userPermissions(userId));
 }
 
+/**
+ * The users bound to a role, by its CODE — an empty list when no such role exists.
+ *
+ * Exposed so a caller can count "how many DOCTORS does this hospital have?" without teaching
+ * the users module what a doctor is: RBAC answers who holds the role, `users` answers which of
+ * those are still real accounts. It returns everyone bound, including archived accounts, because
+ * whether an ex-employee still occupies a seat is the CALLER's question, not this one's.
+ */
+export async function listUserIdsWithRoleCode(roleCode: string): Promise<string[]> {
+  const role = await repo.findRoleByCode(roleCode);
+  if (!role) return [];
+  return repo.findUserIdsWithRole(role.id);
+}
+
+/**
+ * Staff who work somewhere other than this branch — the directory's branch scope.
+ *
+ * Thin on purpose: the rule lives in the repository, next to the binding shape it depends on. See
+ * `repo.userIdsOutsideBranch` for why this answers with who to HIDE rather than who to show.
+ */
+export async function listUserIdsOutsideBranch(branchId: string): Promise<string[]> {
+  return repo.userIdsOutsideBranch(branchId);
+}
+
 /** Drops the cached permissions of everyone holding a role — used when the ROLE changes. */
 export async function invalidateRole(roleId: string): Promise<void> {
   const userIds = await repo.findUserIdsWithRole(roleId);

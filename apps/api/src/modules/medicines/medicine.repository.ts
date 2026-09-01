@@ -218,6 +218,15 @@ export interface MoveStockInput {
  * stamped onto the ledger row, in the same transaction, so the movement always carries the
  * true running total. Returns the medicine's new balance, or undefined if the id is unknown.
  */
+/** Several medicines by code, for the availability lookup the prescribing screen makes. */
+export async function listByCodes(codes: string[]): Promise<Medicine[]> {
+  if (codes.length === 0) return [];
+  const docs = await getMedicineModel(getTenantDb())
+    .find({ code: { $in: codes } })
+    .lean<MedicineDoc[]>();
+  return docs.map(toMedicine);
+}
+
 export async function move(
   medicineId: string,
   input: MoveStockInput,

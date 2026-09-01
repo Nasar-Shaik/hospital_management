@@ -1,16 +1,11 @@
 /**
  * Report controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as reports from "./report.service.js";
 import type { UploadReportBody } from "./report.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const uploadReport: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
@@ -25,6 +20,19 @@ export const uploadReport: RequestHandler = async (req, res) => {
     }),
     201,
   );
+};
+
+/**
+ * The reports attached to a set of orders — `?orderIds=a,b,c`, the lab worklist's read. Same
+ * comma-separated shape as `/billing/order-payments`, which the same screen already calls.
+ */
+export const reportsForOrders: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.orderIds === "string" ? req.query.orderIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  ok(res, await reports.reportsForOrders(ids));
 };
 
 export const listPatientReports: RequestHandler = async (req, res) => {

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { createApp } from "./app.js";
 
-const app = createApp(createLogger({ service: "api-test", level: "silent" }));
+const app = await listening(createApp(createLogger({ service: "api-test", level: "silent" })));
 
 describe("GET /health (liveness)", () => {
   it("returns ok envelope with service metadata", async () => {

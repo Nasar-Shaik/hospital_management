@@ -4,7 +4,7 @@
  * P1 inserts: resolveTenant → authenticate → authorize → validate → idempotency.
  * Business modules mount under src/modules/<name>/ per Doc 09 §1 — none yet.
  */
-import express, { type Express, Router } from "express";
+import express, { type Express, type Request, type Response, Router } from "express";
 import helmet from "helmet";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -14,6 +14,10 @@ import { requestLog } from "./core/http/requestLog.js";
 import { errorHandler, notFoundHandler } from "./core/http/errorHandler.js";
 import { healthRouter } from "./core/health/health.router.js";
 import { resolveTenant } from "./middleware/resolveTenant.js";
+import { authenticate } from "./middleware/authenticate.js";
+import { respondsFile } from "./middleware/responds.js";
+import { asyncHandler } from "./core/http/asyncHandler.js";
+import { specFromApp } from "./core/http/openapi.js";
 import { auditRouter } from "./modules/audit/index.js";
 import { platformRouter } from "./modules/platform/index.js";
 import { authRouter } from "./modules/auth/index.js";
@@ -21,18 +25,45 @@ import { rbacRouter } from "./modules/rbac/rbac.routes.js";
 import { staffRouter } from "./modules/staff/index.js";
 import { subscriptionRouter } from "./modules/subscriptions/index.js";
 import { patientRouter } from "./modules/patients/index.js";
-import { encounterRouter } from "./modules/encounters/index.js";
+import { encounterRouter, openVisitMergeGuard } from "./modules/encounters/index.js";
+import { registerMergeGuard } from "./core/policy/mergeGuards.js";
 import { orderRouter } from "./modules/orders/index.js";
 import { billingRouter } from "./modules/billing/index.js";
 import { prescriptionRouter } from "./modules/prescriptions/index.js";
 import { pharmacyRouter } from "./modules/pharmacy/index.js";
 import { medicineRouter } from "./modules/medicines/index.js";
+import { inventoryRouter } from "./modules/inventory/index.js";
 import { admissionRouter } from "./modules/admissions/index.js";
 import { allergyRouter } from "./modules/allergies/index.js";
+import { branchRouter } from "./modules/branches/index.js";
+import { departmentRouter } from "./modules/departments/index.js";
+import { wardRouter } from "./modules/wards/index.js";
+import { theatreRouter } from "./modules/theatres/index.js";
+import { emergencyRouter } from "./modules/emergency/index.js";
+import { ambulanceRouter } from "./modules/ambulance/index.js";
+import { assetRouter } from "./modules/assets/index.js";
+import { feedbackRouter } from "./modules/feedback/index.js";
+import { insuranceRouter } from "./modules/insurance/index.js";
+import { consultationRouter } from "./modules/consultations/index.js";
+import { problemRouter } from "./modules/problems/index.js";
+import { marRouter } from "./modules/mar/index.js";
+import { labCatalogueRouter } from "./modules/labCatalogue/index.js";
+import { medicolegalRouter } from "./modules/medicolegal/index.js";
+import { mrdRouter } from "./modules/mrd/index.js";
+import { mortuaryRouter } from "./modules/mortuary/index.js";
+import { hospitalProfileRouter } from "./modules/hospitalProfile/index.js";
+import { vitalsRouter } from "./modules/vitals/index.js";
 import { reportRouter } from "./modules/reports/index.js";
+import { documentRouter } from "./modules/documents/index.js";
+// Imported from the routes file directly (not the module index): the router imports `authenticate`,
+// which imports the apiKeys index, so routing that through the index would be a cycle. Same reason
+// `rbacRouter` is imported from its routes file.
+import { apiKeyRouter } from "./modules/apiKeys/apiKey.routes.js";
 import { appointmentRouter } from "./modules/appointments/index.js";
 import { notificationRouter } from "./modules/notifications/index.js";
 import { reportingRouter } from "./modules/reporting/index.js";
+import { siteRouter } from "./modules/site/index.js";
+import { walletRouter } from "./modules/wallet/index.js";
 import { env } from "./config/env.js";
 
 export function createApp(logger: Logger): Express {
@@ -122,7 +153,10 @@ export function createApp(logger: Logger): Express {
    * /auth/login and /auth/refresh must stay reachable without a token. Business
    * routers (Phase 2) mount the same way the RBAC router already does:
    *     authenticate() → authorize(PERMISSIONS.X, { feature }) → validate() → handler
-   * Remaining chain slot: idempotency (P2, for money-moving POSTs).
+   *
+   * The chain's last slot, `idempotent()`, is mounted PER ROUTE rather than globally — a key on a
+   * state transition costs a write and buys nothing, so the 24 operations that carry one are the
+   * ones where a repeat would create a second real thing (docs/IDEMPOTENCY.md).
    */
   /**
    * The CONTROL PLANE (Doc 02 A1) — mounted BEFORE the tenant router and outside
@@ -152,12 +186,72 @@ export function createApp(logger: Logger): Express {
   v1Router.use(prescriptionRouter());
   v1Router.use(pharmacyRouter());
   v1Router.use(medicineRouter());
+  v1Router.use(inventoryRouter());
   v1Router.use(admissionRouter());
   v1Router.use(allergyRouter());
+  v1Router.use(vitalsRouter());
+  v1Router.use(branchRouter());
+  v1Router.use(departmentRouter());
+  v1Router.use(wardRouter());
+  v1Router.use(theatreRouter());
+  v1Router.use(emergencyRouter());
+  v1Router.use(ambulanceRouter());
+  v1Router.use(assetRouter());
+  v1Router.use(feedbackRouter());
+  v1Router.use(insuranceRouter());
+  v1Router.use(consultationRouter());
+  v1Router.use(problemRouter());
+  v1Router.use(marRouter());
+  v1Router.use(labCatalogueRouter());
+  v1Router.use(medicolegalRouter());
+  v1Router.use(mrdRouter());
+  v1Router.use(mortuaryRouter());
+  v1Router.use(hospitalProfileRouter());
   v1Router.use(reportRouter());
+  v1Router.use(documentRouter());
+  v1Router.use(apiKeyRouter());
   v1Router.use(appointmentRouter());
   v1Router.use(notificationRouter());
   v1Router.use(reportingRouter());
+  v1Router.use(siteRouter());
+  v1Router.use(walletRouter());
+
+  /**
+   * The API's own machine-readable contract (OpenAPI 3.1), generated from the shipped routes so it
+   * can never drift. Authenticated but unpermissioned (self-service, like `/auth/me`): any user or
+   * integration may read the route map, and the spec reveals no data. Built once and cached — the
+   * route table does not change between deploys. Not enveloped: tools expect the spec at the root.
+   */
+  let openApiCache: object | undefined;
+  v1Router.get(
+    "/openapi.json",
+    authenticate(),
+    respondsFile({
+      media: ["application/json"],
+      // An OpenAPI document, not a byte stream — `format: binary` would have told a generator to
+      // hand callers a Blob. Left as a free-form object rather than inlining the 3.1 meta-schema.
+      schema: { type: "object", additionalProperties: true },
+      description:
+        "This document — the OpenAPI 3.1 description of the API. Deliberately NOT enveloped: " +
+        "tooling expects a spec at the root of the response, not inside `data`.",
+    }),
+    asyncHandler((req: Request, res: Response) => {
+      openApiCache ??= specFromApp(req.app);
+      res.json(openApiCache);
+      return Promise.resolve();
+    }),
+  );
+
+  /**
+   * ── PRECONDITIONS ON A PATIENT MERGE ──────────────────────────────────────
+   * Registered HERE, in the composition root, for the same reason the event consumers are: a
+   * module that self-registered by import side effect would be a rule nobody can find, and a rule
+   * nobody registered would be a guard silently wired to nothing — a bug class this repository has
+   * already met more than once. `mergeGuards.registeredMergeGuards()` is asserted in the merge
+   * suite so an unregistered guard fails loudly rather than passing quietly.
+   */
+  registerMergeGuard("open-visit", openVisitMergeGuard);
+
   app.use("/api/v1", resolveTenant(), v1Router);
 
   app.use(notFoundHandler);

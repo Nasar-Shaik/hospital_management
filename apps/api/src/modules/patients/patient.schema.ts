@@ -69,6 +69,24 @@ export const listPatientsQuerySchema = z
     /** Matches a UHID prefix, a name fragment, or a phone prefix. */
     q: z.string().max(160).optional(),
     status: z.enum(PATIENT_STATUSES).optional(),
+    /**
+     * When they were REGISTERED — `YYYY-MM-DD`, inclusive at both ends, in the HOSPITAL's
+     * timezone. Same shape and the same reason as the reception register's `date`
+     * (encounter.schema.ts): a clerk asks "who did we register this week", which is a span of
+     * DAYS, not a pair of instants.
+     *
+     * A date, not a timestamp, so the caller never has to know the hospital's offset — and the
+     * conversion happens in the service, because doing timezone arithmetic in a validator is how
+     * a browser's clock ends up deciding which day a hospital had.
+     */
+    from: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
+    to: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
   })
   .strict();
 

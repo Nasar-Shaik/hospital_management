@@ -12,6 +12,7 @@
  * `http://localhost:4000` would work on the login page of exactly zero hospitals.
  */
 import { createApiClient, type ApiClient } from "@medicore/api-client";
+import { setLicenseStatus } from "./licenseStatus";
 
 /** Empty string in production: same origin, and the gateway routes /api/*. */
 export function apiBaseUrl(): string {
@@ -42,10 +43,18 @@ export function apiTarget(): string {
   return apiBaseUrl();
 }
 
-export function browserApi(getAccessToken?: () => string | undefined): ApiClient {
+export function browserApi(
+  getAccessToken?: () => string | undefined,
+  onUnauthorized?: () => Promise<boolean>,
+  getActiveBranch?: () => string | undefined,
+): ApiClient {
   return createApiClient({
     baseUrl: apiBaseUrl(),
     ...(getAccessToken ? { getAccessToken } : {}),
+    ...(onUnauthorized ? { onUnauthorized } : {}),
+    ...(getActiveBranch ? { getActiveBranch } : {}),
+    // Licence state rides on every response (ADR-0016); push it to the banner store.
+    onLicenseState: setLicenseStatus,
     credentials: "include", // the refresh cookie must ride along
   });
 }

@@ -19,6 +19,10 @@ import {
   PatientNotFoundError,
 } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { dayRangeInZone } from "../../core/time/day.js";
+import { branchZone } from "../branches/index.js";
+import { assertMergeAllowed } from "../../core/policy/mergeGuards.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { recordAudit } from "../../core/audit/auditWriter.js";
 import { publish } from "../../core/events/outbox.js";
@@ -124,6 +128,14 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
 
   const overridden = blocking && input.force === true;
 
+  /**
+   * The REGISTERING branch (ADR-0015). A patient's IDENTITY is tenant-level — one UHID across every
+   * branch, treatable anywhere — so this is provenance and the default list scope, never an
+   * ownership wall. Resolved once, before the transaction: a caller who can reach several branches
+   * and has selected none is asked to pick one (HMS-BRANCH-001).
+   */
+  const branchId = await writeBranchId(input.branchId);
+
   return withTransaction(async (session) => {
     const uhid = await repo.nextUhid(session);
 
@@ -134,7 +146,7 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
         gender: input.gender,
         ...(input.dob ? { dob: input.dob } : {}),
         ...(input.bloodGroup ? { bloodGroup: input.bloodGroup } : {}),
-        ...(input.branchId ? { branchId: input.branchId } : {}),
+        branchId,
         ...(input.contact ? { contact: input.contact } : {}),
         ...(input.address ? { address: input.address } : {}),
         ...(ctx.userId ? { registeredBy: ctx.userId } : {}),
@@ -196,7 +208,7 @@ export async function registerPatient(input: RegisterPatientInput): Promise<Regi
           name: patient.name,
           channel: "front-desk",
         },
-        ...(input.branchId ? { branchId: input.branchId } : {}),
+        branchId,
       },
       session,
     );
@@ -243,10 +255,10 @@ export async function mergePatients(input: {
   }
 
   return withTransaction(async (session) => {
-    const survivor = await repo.findByIdUnscoped(input.survivorId, session);
+    const survivor = await repo.findByIdentity(input.survivorId, session);
     if (!survivor) throw new PatientNotFoundError({ patientId: input.survivorId });
 
-    const duplicate = await repo.findByIdUnscoped(input.duplicateId, session);
+    const duplicate = await repo.findByIdentity(input.duplicateId, session);
     if (!duplicate) throw new PatientNotFoundError({ patientId: input.duplicateId });
 
     /**
@@ -271,6 +283,19 @@ export async function mergePatients(input: {
         reason: "this record has already been merged",
       });
     }
+
+    /**
+     * ── REFUSED BEFORE ANYTHING MOVES ───────────────────────────────────────
+     * The preconditions a merge must clear, asked before the first write. Today there is exactly
+     * one — two open visits collide on the `one_open_encounter_per_patient` index and would leave
+     * the merge half-applied — and this module deliberately does not know that. `encounters`
+     * already imports `patients` for identity, so the reverse edge would close a cycle;
+     * `core/policy/mergeGuards.ts` explains the inversion and why a guard may only refuse.
+     *
+     * Placed here, above `markMerged`, so a refusal costs nothing: no row has changed, the
+     * transaction has written nothing, and no event is published.
+     */
+    await assertMergeAllowed(survivor.id, duplicate.id);
 
     const merged = await repo.markMerged(duplicate.id, survivor.id, session);
     if (!merged) throw new PatientNotFoundError({ patientId: input.duplicateId });
@@ -310,8 +335,16 @@ export async function mergePatients(input: {
   });
 }
 
+/**
+ * Who this patient IS — tenant-wide, per ADR-0015 §5. See `findByIdentity` for the evidence.
+ *
+ * Resolving identity grants nothing operational: every encounter, order, admission, MAR row and
+ * ward note is filtered on its own read path by the TREATING branch, so a clerk who can now name
+ * a patient from another site still cannot open that site's visits. `listPatients` stays
+ * branch-defaulted — a register is a site's own list, which is what `branchId` is FOR.
+ */
 export async function getPatient(id: string): Promise<Patient> {
-  const patient = await repo.findByIdScoped(id);
+  const patient = await repo.findByIdentity(id);
   if (!patient) throw new PatientNotFoundError({ patientId: id });
   return patient;
 }
@@ -322,11 +355,39 @@ export async function getPatientByUhid(uhid: string): Promise<Patient> {
   return patient;
 }
 
-export async function listPatients(filter: repo.ListPatientsFilter): Promise<{
+/**
+ * The register, optionally narrowed to a span of days.
+ *
+ * ── THE DAYS ARE THE SITE'S, NOT UTC's AND NOT THE BROWSER's (D2) ───────────
+ * `from`/`to` arrive as `YYYY-MM-DD` and mean whole days at the hospital. Resolving them here —
+ * against the ACTIVE BRANCH's timezone, the same rule `listEncounters` follows — is what stops a
+ * clerk in a far-flung site asking for "today" and being shown a window that starts at 05:30 the
+ * previous morning. With no branch selected there is no single clock, and `branchZone` falls back
+ * to the hospital default, which is the only honest answer for "all sites at once".
+ *
+ * Async and in the service rather than the controller because it is a lookup and a domain rule,
+ * and the controller is HTTP only (Doc 09 §11).
+ */
+export async function listPatients(
+  filter: Omit<repo.ListPatientsFilter, "createdFrom" | "createdBefore"> & {
+    from?: string;
+    to?: string;
+  },
+): Promise<{
   patients: Patient[];
   total: number;
 }> {
-  return repo.list(filter);
+  const { from, to, ...rest } = filter;
+  if (!from && !to) return repo.list(rest);
+
+  const zone = await branchZone(getContext().activeBranchId);
+  return repo.list({
+    ...rest,
+    // `from` opens at the START of its day; `to` closes at the start of the day AFTER it, so the
+    // closing day is included whole. Both come from the same helper the reception register uses.
+    ...(from ? { createdFrom: dayRangeInZone(from, zone).from } : {}),
+    ...(to ? { createdBefore: dayRangeInZone(to, zone).before } : {}),
+  });
 }
 
 /**

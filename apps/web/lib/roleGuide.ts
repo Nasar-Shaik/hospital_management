@@ -97,14 +97,28 @@ export const ROLE_GUIDE: Record<string, RoleGuideEntry> = {
     ],
     access: ["Worklist (lab approval)"],
   },
+  RADIOLOGY_TECHNICIAN: {
+    summary: "Takes X-rays, ultrasounds and scans, and reports them.",
+    createFor:
+      "Create this login for whoever operates the imaging room. It is the only radiology login most hospitals need — a radiologist is optional.",
+    duties: [
+      "See imaging asked for by the doctors, on this site's worklist",
+      "Perform the study, type the findings, attach the film",
+      "Release the report to the doctor who asked",
+      "Cannot open the patient's chart — only the studies on their own worklist",
+    ],
+    access: ["Worklist (radiology)"],
+  },
   RADIOLOGIST: {
-    summary: "Reports and signs imaging studies (X-ray, ultrasound, CT).",
-    createFor: "Create a radiologist login for whoever reads and signs imaging.",
+    summary: "Reads and signs imaging studies. Optional — most hospitals do not need one.",
+    createFor:
+      "Only if a consultant radiologist reads your imaging. Give the technician the study and the radiologist the sign-off; otherwise the technician does both.",
     duties: [
       "Report on imaging studies and sign them",
       "Verify and release imaging reports to the doctor",
+      "Read the patient's chart alongside the study",
     ],
-    access: ["Worklist (radiology)"],
+    access: ["Worklist (radiology)", "Patient charts"],
   },
   PHARMACIST: {
     summary: "Dispenses medicines and runs the pharmacy stock.",

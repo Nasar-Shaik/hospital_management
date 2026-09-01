@@ -26,7 +26,18 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./appointment.controller.js";
+import {
+  appointment,
+  doctorAvailability,
+  doctorLeave,
+  doctorSchedule,
+  removedAck,
+  rescheduleResult,
+  slot,
+} from "./appointment.contract.js";
 import {
   availabilityQuerySchema,
   bookAppointmentSchema,
@@ -37,6 +48,10 @@ import {
   noShowSchema,
   rescheduleAppointmentSchema,
   setScheduleSchema,
+  setAvailabilitySchema,
+  addLeaveSchema,
+  setOwnAvailabilitySchema,
+  addOwnLeaveSchema,
 } from "./appointment.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_APPOINTMENTS } as const;
@@ -54,6 +69,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(availabilityQuerySchema, "query"),
+    responds(slot.array()),
     asyncHandler(controller.getAvailability),
   );
 
@@ -62,6 +78,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(listAppointmentsQuerySchema, "query"),
+    responds(appointment.array(), { meta: true }),
     asyncHandler(controller.listAppointments),
   );
 
@@ -70,6 +87,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.getAppointment),
   );
 
@@ -78,6 +96,8 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_CREATE, FEATURE),
     validate(bookAppointmentSchema),
+    responds(appointment, { status: 201 }),
+    idempotent("Replays the appointment this key already booked."),
     asyncHandler(controller.bookAppointment),
   );
 
@@ -88,6 +108,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.confirmAppointment),
   );
 
@@ -96,6 +117,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.checkIn),
   );
 
@@ -104,6 +126,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.startConsultation),
   );
 
@@ -112,6 +135,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(appointment),
     asyncHandler(controller.completeAppointment),
   );
 
@@ -121,6 +145,8 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(rescheduleAppointmentSchema),
+    responds(rescheduleResult, { status: 201 }),
+    idempotent("Replays the rebooking this key already made."),
     asyncHandler(controller.rescheduleAppointment),
   );
 
@@ -130,6 +156,7 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(noShowSchema),
+    responds(appointment),
     asyncHandler(controller.markNoShow),
   );
 
@@ -140,6 +167,7 @@ export function appointmentRouter(): Router {
     authorize(PERMISSIONS.APPOINTMENT_CANCEL, FEATURE),
     validate(idParamSchema, "params"),
     validate(cancelAppointmentSchema),
+    responds(appointment),
     asyncHandler(controller.cancelAppointment),
   );
 
@@ -150,6 +178,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
     validate(doctorIdParamSchema, "params"),
+    responds(doctorSchedule.array()),
     asyncHandler(controller.getDoctorSchedules),
   );
 
@@ -158,6 +187,7 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(setScheduleSchema),
+    responds(doctorSchedule, { status: 201 }),
     asyncHandler(controller.setDoctorSchedule),
   );
 
@@ -166,7 +196,99 @@ export function appointmentRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(removedAck),
     asyncHandler(controller.removeDoctorSchedule),
+  );
+
+  /* ── a doctor's OWN roster (Doc 02 D2) — `doctor:self-manage` ── */
+
+  /**
+   * Declared BEFORE `/doctors/:doctorId/…` so `me` is not captured as an id — the same ordering
+   * rule as `/appointments/availability` above, and the same consequence if it is broken: the
+   * self route would silently become a lookup for a doctor whose id is the string "me", which
+   * fails validation rather than doing anything dangerous, but fails confusingly.
+   *
+   * ── SEPARATE ROUTES RATHER THAN A SECOND PERMISSION ON THE ADMIN ONES ─────
+   * `authorize()` takes ONE permission by design — the RBAC matrix reads those tags back off the
+   * shipped app and fails CI on any route it cannot account for, which only works while the
+   * mapping is one-to-one. Overloading the administrator's routes with "either permission" would
+   * also mean the handler had to decide, per request, whether the `doctorId` in the body was
+   * allowed — precisely the check that is easy to write once and forget to keep.
+   *
+   * A separate path with no `doctorId` in it removes the question instead of answering it.
+   */
+  router.put(
+    "/doctors/me/availability",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_SELF_MANAGE, FEATURE),
+    validate(setOwnAvailabilitySchema),
+    responds(doctorAvailability.optional()),
+    asyncHandler(controller.setOwnAvailability),
+  );
+
+  router.post(
+    "/doctors/me/leave",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_SELF_MANAGE, FEATURE),
+    validate(addOwnLeaveSchema),
+    responds(doctorLeave, { status: 201 }),
+    asyncHandler(controller.addOwnLeave),
+  );
+
+  router.delete(
+    "/doctors/me/leave/:id",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_SELF_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    responds(removedAck),
+    asyncHandler(controller.removeOwnLeave),
+  );
+
+  /* ── doctor availability (session roster) & leave (Doc 02 D2) ── */
+
+  router.get(
+    "/doctors/:doctorId/availability",
+    authenticate(),
+    authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
+    validate(doctorIdParamSchema, "params"),
+    responds(doctorAvailability.array()),
+    asyncHandler(controller.getDoctorAvailability),
+  );
+
+  router.put(
+    "/doctors/availability",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
+    validate(setAvailabilitySchema),
+    responds(doctorAvailability.optional()),
+    asyncHandler(controller.setDoctorAvailability),
+  );
+
+  router.get(
+    "/doctors/:doctorId/leave",
+    authenticate(),
+    authorize(PERMISSIONS.APPOINTMENT_READ, FEATURE),
+    validate(doctorIdParamSchema, "params"),
+    responds(doctorLeave.array()),
+    asyncHandler(controller.getDoctorLeave),
+  );
+
+  router.post(
+    "/doctors/leave",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
+    validate(addLeaveSchema),
+    responds(doctorLeave, { status: 201 }),
+    asyncHandler(controller.addDoctorLeave),
+  );
+
+  router.delete(
+    "/doctors/leave/:id",
+    authenticate(),
+    authorize(PERMISSIONS.DOCTOR_MANAGE, FEATURE),
+    validate(idParamSchema, "params"),
+    responds(removedAck),
+    asyncHandler(controller.removeDoctorLeave),
   );
 
   return router;

@@ -12,8 +12,10 @@
  *   4. A TRANSFER IS A HANDOVER — it requires a reason and it lands in the history.
  *   5. THE SAME CODE ADMITS A GOVERNMENT PATIENT FOR ₹0, with listPrice intact.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
+import { Types } from "mongoose";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -35,12 +37,13 @@ const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedTariff } = await import("./seed/tariff.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
 
 const PVT = "test-adm-pvt";
 const GOV = "test-adm-gov";
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "adm-int-test" }));
+const app = await listening(createApp(createLogger({ service: "adm-int-test" })));
 
 interface Hospital {
   id: string;
@@ -259,6 +262,24 @@ beforeAll(async () => {
   Object.assign(gov, await setup(GOV, "government_hospital"));
 }, 180_000);
 
+/**
+ * Free every bed between tests.
+ *
+ * The suite deliberately reuses one bed (`A-12`) across most tests — each test is a fresh patient
+ * admitted to the same ward — and the product correctly refuses a second open stay in an occupied
+ * bed (`one_open_stay_per_bed`, migration 0020). Without this reset only the FIRST admit to A-12
+ * would ever succeed and every later test would fail with "that bed is already occupied". That is a
+ * test-isolation gap, not a product bug: a real ward does not re-use an occupied bed, and the
+ * database is right to say so. So we release the beds — by removing the open IP stays each test
+ * created — before the next test runs. Raw deletes on purpose: this is fixture teardown, not a
+ * clinical discharge, and it must not fire audit hooks or emit events.
+ */
+beforeEach(async () => {
+  for (const h of [pvt, gov]) {
+    if (h.connection) await h.connection.collection("encounters").deleteMany({ class: "IP" });
+  }
+});
+
 afterAll(async () => {
   await closeAllTenantConnections();
   await closeMaster();
@@ -317,6 +338,33 @@ describe("admission opens a second encounter in the same care story", () => {
     expect(ids).toContain(res.body.data.inpatient.id);
   });
 
+  /**
+   * ── THE WARD LIST NAMES ITS PATIENTS (D-1) ──────────────────────────────────
+   * It did not, and a client was left to reconstruct identity by matching `patientId` against a
+   * separately fetched patient page. The web ward page did exactly that against the hundred most
+   * recently REGISTERED patients, so anyone admitted longer ago reached the medication
+   * confirmation with a blank name and a blank UHID — the check that catches the right drug given
+   * to the wrong person.
+   *
+   * Resolved server-side now, by the same `namesByIds` the bed board and medication round use.
+   */
+  it("names the patient in every bed, so no client has to look them up", async () => {
+    const opId = await inConsultation(pvt, "Named Patient", "9200100009");
+    const res = await admit(pvt, opId);
+    const ipId = res.body.data.inpatient.id as string;
+
+    const ward = await auth(request(app).get("/api/v1/inpatients"), pvt, pvt.doctorToken).expect(
+      200,
+    );
+
+    const row = (ward.body.data as { id: string; patientName?: string; uhid?: string }[]).find(
+      (e) => e.id === ipId,
+    );
+    expect(row?.patientName).toBe("Named Patient");
+    // A real UHID, not an empty string standing in for one.
+    expect(row?.uhid).toMatch(/\S/);
+  });
+
   it("a patient already in a bed cannot be admitted again", async () => {
     const opId = await inConsultation(pvt, "Twice Patient", "9200100004");
     const res = await admit(pvt, opId);
@@ -344,6 +392,98 @@ describe("admission opens a second encounter in the same care story", () => {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("the bed is billed by the day, and every day is its own charge", () => {
+  /**
+   * ── THE NIGHT IS THE SITE'S NIGHT (risk register D3 / runbook GAP-2) ──────
+   * `calendarDaysStarted` has always been right — it counts day KEYS, so a 23-hour DST day
+   * cannot round a stay down, and its unit tests cover that. What was wrong is the calendar it
+   * was handed: `env.DEFAULT_TIMEZONE`, on a function that already receives `branchId` and uses
+   * it for the charge itself.
+   *
+   * So a hospital whose second site sits in another zone bills that site's beds against the head
+   * office's midnight. This stay is twelve hours long and straddles a midnight in New York but
+   * not in Kolkata, which is the whole of the difference: two nights or one, on every evening
+   * admission, forever, in the direction of undercharging.
+   *
+   * Nothing changes for a site whose zone IS the hospital default, which is every single-site
+   * hospital — `branchZone` returns the same string and the arithmetic is identical.
+   */
+  it("counts the nights in the BRANCH's zone, not the hospital default's", async () => {
+    const opId = await inConsultation(pvt, "Zone Bill Patient", "9200200009");
+    const res = await admit(pvt, opId);
+    const ip = res.body.data.inpatient;
+
+    /**
+     * The second site, inserted directly and only NOW.
+     *
+     * Directly, because the plan caps how many branches may be CREATED and the other groups here
+     * depend on the main one staying put — the same shortcut `fillWard` takes. And only now,
+     * because a hospital with two active sites and no branch selected can no longer have one
+     * guessed for it: `writeBranchId()` correctly refuses rather than picking, so admitting after
+     * this insert fails with a 400 that has nothing to do with what is under test.
+     */
+    const annexeId = new Types.ObjectId();
+    await pvt.connection.collection("branches").insertOne({
+      _id: annexeId,
+      tenantId: pvt.id,
+      name: "Annexe",
+      code: "ANX",
+      status: "active",
+      isMain: false,
+      timezone: "America/New_York",
+      // `tenantScopePlugin` appends `isDeleted: false` to every query, and a field that is
+      // ABSENT does not match `false`. A raw insert that omits it is invisible to the model.
+      isDeleted: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    try {
+      /**
+       * Twelve hours, deliberately placed across New York's midnight and inside Kolkata's day:
+       *
+       *   admitted   2026-06-01T02:00Z → 31 May 22:00 in New York · 1 June 07:30 in Kolkata
+       *   discharged 2026-06-01T14:00Z →  1 June 10:00 in New York · 1 June 19:30 in Kolkata
+       *
+       * New York touches two calendar days, Kolkata one. The bed was unsellable on both of the
+       * ward's own days, so two is the correct answer AT THAT SITE.
+       */
+      const admittedAt = new Date("2026-06-01T02:00:00.000Z");
+      const dischargedAt = new Date("2026-06-01T14:00:00.000Z");
+
+      await asRelay(pvt, () =>
+        dispatchEventInline({
+          eventId: `evt-dis-zone-${ip.id as string}`,
+          name: "encounter.patient.discharged",
+          version: 1,
+          tenantId: pvt.id,
+          occurredAt: new Date().toISOString(),
+          // The site rides on the ENVELOPE, not in the payload — `bedContextOf` reads
+          // `event.branchId`, which is how every consumer learns where something happened.
+          branchId: annexeId.toHexString(),
+          payload: {
+            encounterId: ip.id,
+            episodeId: ip.episodeId,
+            patientId: ip.patientId,
+            admittedAt: admittedAt.toISOString(),
+            dischargedAt: dischargedAt.toISOString(),
+            tariffCode: "BED_GEN",
+          },
+        }),
+      );
+    } finally {
+      // Removed as soon as it has done its job: a second active site makes `writeBranchId()`
+      // refuse to guess, so leaving it behind fails every admission in the groups after this one.
+      await pvt.connection.collection("branches").deleteOne({ _id: annexeId });
+    }
+
+    const bill = await billOf(pvt, ip.id as string);
+    const beds = bill.lines.filter((l: { category: string }) => l.category === "bed");
+    expect(
+      beds,
+      "the annexe's stay was billed against the head office's midnight — one night short",
+    ).toHaveLength(2);
+  });
+
   it("admitting charges the FIRST night immediately", async () => {
     const opId = await inConsultation(pvt, "Bed Bill Patient", "9200200001");
     const res = await admit(pvt, opId);
@@ -649,5 +789,880 @@ describe("handing the patient to another doctor", () => {
     );
     expect(orders.body.data).toHaveLength(1);
     expect(orders.body.data[0].encounterId).toBe(opId);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 6. THE WARD ROUND LIST IS PAGED
+ *
+ * The regression: `GET /inpatients` hard-coded `{ limit: 100, skip: 0 }` and threw away the
+ * `total` the repository had already computed. A hospital with more than a hundred open stays
+ * saw a hundred, with nothing in the response to say the rest existed — admitted patients
+ * silently absent from the ward round, which is the worst shape a list bug can take.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("the ward round list pages, and says how many there are", () => {
+  /**
+   * Puts `count` open IP encounters in the ward, written straight to the collection.
+   *
+   * ── WHY NOT DRIVE 100 ADMISSIONS THROUGH HTTP ───────────────────────────────
+   * The claim under test is that the ENDPOINT pages — that `?page=2` reaches the 101st row and
+   * that `meta.total` counts them all. Admitting works and is proven by its own tests above;
+   * repeating it a hundred times here would add a hundred patients, a hundred OP encounters and a
+   * hundred billing events to a shared test database, which is slow enough to destabilise every
+   * suite that runs after it. Seeding the exact rows the query reads is the honest short cut:
+   * `listInpatients` selects on `class: "IP"` and `open: true` and nothing else.
+   *
+   * `beforeEach` deletes every IP encounter, so these never leak into another test.
+   */
+  async function fillWard(count: number, from: number): Promise<string[]> {
+    // Stamped the way `writeBranchId()` stamps a real admission — the main site. Without it the
+    // rows would be invisible to `scopeFilter()`, and the test would prove nothing.
+    const main = await pvt.connection.collection("branches").findOne({ isMain: true });
+    const branchId = (main?._id as Types.ObjectId | undefined)?.toHexString();
+    const now = new Date();
+    const docs = Array.from({ length: count }, (_, i) => {
+      const n = from + i;
+      return {
+        _id: new Types.ObjectId(),
+        tenantId: pvt.id,
+        ...(branchId ? { branchId } : {}),
+        patientId: new Types.ObjectId(),
+        episodeId: new Types.ObjectId(),
+        origin: "transfer",
+        class: "IP",
+        status: "in_progress",
+        open: true,
+        doctorId: pvt.doctorId,
+        activeOrderCount: 0,
+        history: [],
+        bed: {
+          ward: "Paged Ward",
+          bedCode: `P-${String(n).padStart(4, "0")}`,
+          tariffCode: "BED_GEN",
+        },
+        arrivedAt: now,
+        admittedAt: now,
+        createdBy: pvt.doctorId,
+        /**
+         * `isDeleted` is not optional here. `tenantScopePlugin` adds `{ isDeleted: false }` to
+         * every read, and a raw insert bypasses the Mongoose default — so a document without the
+         * field is invisible to the very endpoint under test, and the suite would report an empty
+         * ward as though pagination had failed.
+         */
+        isDeleted: false,
+        version: 0,
+        schemaVersion: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
+
+    await pvt.connection.collection("encounters").insertMany(docs);
+    return docs.map((d) => d._id.toHexString());
+  }
+
+  async function ward(query = ""): Promise<request.Response> {
+    return auth(request(app).get(`/api/v1/inpatients${query}`), pvt, pvt.doctorToken).expect(200);
+  }
+
+  it("sends `meta` with the hospital's real total", async () => {
+    await fillWard(3, 10);
+
+    const res = await ward("?page=1&limit=2");
+
+    expect(res.body.data).toHaveLength(2);
+    // The count is of every open stay, not of the page. This is the field that used to not exist.
+    expect(res.body.meta.total).toBeGreaterThanOrEqual(3);
+    expect(res.body.meta.page).toBe(1);
+    expect(res.body.meta.limit).toBe(2);
+    expect(res.body.meta.hasMore).toBe(true);
+  });
+
+  it("page 2 is different patients from page 1, and none is repeated", async () => {
+    await fillWard(5, 20);
+
+    const first = await ward("?page=1&limit=3");
+    const second = await ward("?page=2&limit=3");
+
+    const ids1 = first.body.data.map((e: { id: string }) => e.id) as string[];
+    const ids2 = second.body.data.map((e: { id: string }) => e.id) as string[];
+
+    expect(ids1).toHaveLength(3);
+    expect(ids2.length).toBeGreaterThan(0);
+    // The `_id` tie-break in the repository's sort is what makes this reliable: ward and bed code
+    // do not identify a row, and without a total order a patient can land on both pages.
+    expect(ids1.filter((id) => ids2.includes(id))).toEqual([]);
+  });
+
+  it("walks the WHOLE ward across pages without losing or repeating anyone", async () => {
+    const admitted = await fillWard(7, 30);
+
+    const seen: string[] = [];
+    for (let page = 1; page <= 5; page += 1) {
+      const res = await ward(`?page=${String(page)}&limit=2`);
+      seen.push(...(res.body.data.map((e: { id: string }) => e.id) as string[]));
+      if (!res.body.meta.hasMore) break;
+    }
+
+    expect(new Set(seen).size).toBe(seen.length);
+    for (const id of admitted) expect(seen).toContain(id);
+  });
+
+  it("pages stays that TIE on the sort key — the ones with no bed recorded", async () => {
+    /**
+     * ── WHY THE SORT CARRIES `_id` ──────────────────────────────────────────────
+     * `one_open_stay_per_bed_per_branch` already stops two open stays sharing a bed at one site, so
+     * placed patients cannot tie. Stays with NO bed can: the index's partial filter requires
+     * `bed.bedCode` to exist, so any number of them may be open at once and every one sorts with
+     * both fields missing. Paging over an order that is not total can then return the same patient
+     * on two pages and another on none.
+     *
+     * What this test does NOT do, stated plainly: removing the `_id` tie-break does not make it
+     * fail. Forcing MongoDB to return two different orders for two executions of one query is not
+     * something a test can do on demand. The tie-break is kept because the total ordering is what
+     * makes `skip` paging correct — not because this test would catch its absence.
+     */
+    const now = new Date();
+    const main = await pvt.connection.collection("branches").findOne({ isMain: true });
+    const tied = Array.from({ length: 6 }, () => ({
+      _id: new Types.ObjectId(),
+      tenantId: pvt.id,
+      ...(main ? { branchId: (main._id as Types.ObjectId).toHexString() } : {}),
+      patientId: new Types.ObjectId(),
+      episodeId: new Types.ObjectId(),
+      origin: "transfer",
+      class: "IP",
+      status: "in_progress",
+      open: true,
+      activeOrderCount: 0,
+      history: [],
+      // No bed — so every one of these sorts with both sort fields missing, and they all tie.
+      arrivedAt: now,
+      admittedAt: now,
+      isDeleted: false,
+      version: 0,
+      schemaVersion: 1,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await pvt.connection.collection("encounters").insertMany(tied);
+
+    const seen: string[] = [];
+    for (let page = 1; page <= 4; page += 1) {
+      const res = await ward(`?page=${String(page)}&limit=2`);
+      seen.push(...(res.body.data.map((e: { id: string }) => e.id) as string[]));
+      if (!res.body.meta.hasMore) break;
+    }
+
+    expect(new Set(seen).size).toBe(seen.length);
+    for (const doc of tied) expect(seen).toContain(doc._id.toHexString());
+  });
+
+  it("more than 100 open stays are NOT silently truncated", async () => {
+    /**
+     * ── THE ORIGINAL BUG, DIRECTLY ─────────────────────────────────────────────
+     * The old controller could not express this at all: 105 admitted patients came back as 100
+     * with no `meta`, and the client had no way to know. Kept to a single extra page rather than
+     * a hundred more admissions, because the assertion is about the CAP, not about volume.
+     */
+    const admitted = await fillWard(105, 100);
+
+    const capped = await ward("?limit=100");
+    const rest = await ward("?page=2&limit=100");
+
+    expect(capped.body.data).toHaveLength(100);
+    expect(capped.body.meta.total).toBe(105);
+    expect(capped.body.meta.hasMore).toBe(true);
+
+    // The five past the cap. Unreachable before this change, by any request that could be made.
+    expect(rest.body.data).toHaveLength(5);
+    const seen = [...capped.body.data, ...rest.body.data].map((e: { id: string }) => e.id);
+    for (const id of admitted) expect(seen).toContain(id);
+  });
+
+  it("a caller that sends no parameters still gets up to 100 — the compatibility promise", async () => {
+    const res = await ward();
+
+    expect(res.body.meta.limit).toBe(100);
+    expect(res.body.meta.page).toBe(1);
+  });
+
+  it("refuses a limit above the house cap rather than quietly honouring it", async () => {
+    const res = await auth(request(app).get("/api/v1/inpatients?limit=5000"), pvt, pvt.doctorToken);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+  });
+
+  it("stays branch-scoped and feature-gated exactly as before", async () => {
+    // The nurse holds `encounter:read` too; what neither role can do is escape `scopeFilter()`.
+    const nurse = await auth(
+      request(app).get("/api/v1/inpatients?page=1&limit=5"),
+      pvt,
+      pvt.nurseToken,
+    ).expect(200);
+    expect(nurse.body.meta).toBeDefined();
+
+    // A hospital without `module.ops.ipd` is refused on the plan, not on the page.
+    const clinic = await auth(request(app).get("/api/v1/inpatients"), gov, gov.doctorToken);
+    expect([200, 403]).toContain(clinic.status);
+    if (clinic.status === 403) expect(clinic.body.error.code).toBe("HMS-PLAN-002");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 7. A WARD NOTE CANNOT BE WRITTEN TWICE BY A RETRY
+ *
+ * Notes are append-only: no update path, no delete path, and the repository does not
+ * de-duplicate. Before `idempotent()` was mounted here, a client whose response was lost and
+ * pressed save again left TWO identical contemporaneous entries on a medico-legal record,
+ * permanently. The mobile app reconciles on top of this; the server is what makes it impossible.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("a ward note honours Idempotency-Key", () => {
+  const NOTE = { text: "Reviewed on the round. Afebrile overnight, chest clear." };
+
+  async function admittedPatient(seed: number): Promise<string> {
+    const opId = await inConsultation(
+      pvt,
+      `Note Patient ${String(seed)}`,
+      `94${String(seed).padStart(8, "0")}`,
+    );
+    const res = await admit(pvt, opId, {
+      ward: "Note Ward",
+      bedCode: `N-${String(seed)}`,
+      tariffCode: "BED_GEN",
+    });
+    return res.body.data.inpatient.id as string;
+  }
+
+  const notesOf = async (ipId: string): Promise<unknown[]> => {
+    const res = await auth(
+      request(app).get(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    ).expect(200);
+    return res.body.data as unknown[];
+  };
+
+  it("writes the note normally when a key is sent", async () => {
+    const ipId = await admittedPatient(1);
+
+    const res = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", "ward-note-key-0001")
+      .send(NOTE)
+      .expect(201);
+
+    expect(res.body.data.type).toBe("progress");
+    expect(res.body.data.text).toBe(NOTE.text);
+    // Written from the ENCOUNTER, never the body — the same rule as orders and prescriptions.
+    expect(res.body.data.encounterId).toBe(ipId);
+    expect(res.body.data.branchId ?? null).toBe(res.body.data.branchId ?? null);
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("replays the original note for the same key, and writes nothing", async () => {
+    const ipId = await admittedPatient(2);
+    const key = "ward-note-key-0002";
+
+    const first = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", key)
+      .send(NOTE)
+      .expect(201);
+
+    const replay = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", key)
+      .send(NOTE)
+      .expect(201);
+
+    // Byte-identical, including the id — the retry reports what the FIRST attempt did.
+    expect(replay.body.data.id).toBe(first.body.data.id);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    // The assertion that matters: the chart has ONE note, not two.
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("refuses the same key with a DIFFERENT note rather than replaying it", async () => {
+    const ipId = await admittedPatient(3);
+    const key = "ward-note-key-0003";
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .set("Idempotency-Key", key)
+      .send(NOTE)
+      .expect(201);
+
+    const different = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", key)
+      .send({ text: "A completely different observation about a different problem." });
+
+    /**
+     * A silent replay here would be the dangerous outcome: the doctor's SECOND note would vanish
+     * and they would be shown the first one as though it had just been written.
+     */
+    expect(different.status).toBe(409);
+    expect(different.body.error.code).toBe("HMS-REQ-002");
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("writes exactly one note when the same key arrives concurrently", async () => {
+    const ipId = await admittedPatient(4);
+    const key = "ward-note-key-0004";
+
+    const send = () =>
+      auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+        .set("Idempotency-Key", key)
+        .send(NOTE);
+
+    const results = await Promise.all([send(), send(), send()]);
+
+    // One executes; the others replay it or are told it is still running (HMS-REQ-004). None of
+    // those three outcomes may create a second note, and that is the only claim being made.
+    for (const res of results) {
+      expect([201, 409]).toContain(res.status);
+      if (res.status === 409) expect(res.body.error.code).toBe("HMS-REQ-004");
+    }
+    expect(results.some((r) => r.status === 201)).toBe(true);
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("a different key on the same encounter writes a SECOND note — two real observations", async () => {
+    const ipId = await admittedPatient(5);
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .set("Idempotency-Key", "ward-note-key-0005a")
+      .send({ text: "Morning round: stable." })
+      .expect(201);
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .set("Idempotency-Key", "ward-note-key-0005b")
+      .send({ text: "Evening round: still stable." })
+      .expect(201);
+
+    // The key must not suppress genuine entries — a ward round writes one every day.
+    expect(await notesOf(ipId)).toHaveLength(2);
+  });
+
+  it("an old client that sends NO key still works, exactly as before", async () => {
+    const ipId = await admittedPatient(6);
+
+    await auth(request(app).post(`/api/v1/encounters/${ipId}/notes`), pvt, pvt.doctorToken)
+      .send(NOTE)
+      .expect(201);
+
+    // Honoured, not demanded. Making the header mandatory would be a breaking change in v1.
+    expect(await notesOf(ipId)).toHaveLength(1);
+  });
+
+  it("refuses a malformed key rather than silently ignoring it", async () => {
+    const ipId = await admittedPatient(7);
+
+    const res = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.doctorToken,
+    )
+      .set("Idempotency-Key", "no")
+      .send(NOTE);
+
+    // Dropping a bad key would leave a client believing it is protected when it is not — worse
+    // than refusing, and worse than never having sent one.
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("HMS-VAL-001");
+    expect(await notesOf(ipId)).toHaveLength(0);
+  });
+
+  it("still enforces authorization — a key does not buy permission", async () => {
+    const ipId = await admittedPatient(8);
+
+    // The NURSE holds `emr:read` but not `emr:write`. The key is consumed by nobody.
+    const res = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/notes`),
+      pvt,
+      pvt.nurseToken,
+    )
+      .set("Idempotency-Key", "ward-note-key-0008")
+      .send(NOTE);
+
+    expect(res.status).toBe(403);
+    expect(await notesOf(ipId)).toHaveLength(0);
+  });
+});
+
+/**
+ * BED-OCCUPANCY RUNTIME SCHEMA SAFETY.
+ *
+ * ── WHY THE INDEX IS THE ONLY THING THAT KNOWS WHO IS IN A BED ──────────────
+ * Neither `admitPatient` nor `transferBed` reads occupancy before writing it. Both write and then
+ * read E11000 as "somebody is already there"; the catalogue check they DO perform reads
+ * `bed.status === "blocked"`, which is a maintenance flag and says nothing about the person lying
+ * in it. `one_open_stay_per_bed_per_branch` (migration 0046, which widened 0020's key so two
+ * sites may each own an "ICU") is the sole arbiter.
+ *
+ * Measured against Mongo 7 on 2026-08-17 with the index absent: two patients admitted into
+ * ICU/A-12 at one branch, both ACCEPTED, two open stays in one bed. Recreating the index over that
+ * pair is then REFUSED (11000), so the drift entrenches exactly as MAR's and dispensing's do.
+ *
+ * ── AND WHY DISCHARGE IS DELIBERATELY NOT GUARDED ───────────────────────────
+ * Closing a stay REMOVES the row from the partial filter, so it can never violate the key —
+ * measured: after `open: false` the bed accepts the next patient immediately. A drifted hospital
+ * must still be able to send people home; refusing that would fill the ward the refusal is
+ * protecting.
+ */
+describe("bed assignment refuses when the database cannot enforce one stay per bed", () => {
+  const BED_INDEX = "one_open_stay_per_bed_per_branch";
+
+  async function dropBedIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("encounters").dropIndex(BED_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreBedIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("encounters").createIndex(
+      { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+      {
+        unique: true,
+        partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+        background: true,
+        name: BED_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  let phone = 9300400000;
+  async function waiting(name: string): Promise<string> {
+    phone += 1;
+    return inConsultation(pvt, name, String(phone));
+  }
+
+  it("admits normally while the invariant it rests on is armed", async () => {
+    const opId = await waiting("Guard Normal");
+
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-01", tariffCode: "BED_GEN" });
+
+    expect(res.status).toBe(201);
+    await discharge(pvt, res.body.data.inpatient.id as string);
+  });
+
+  it("answers 503 HMS-ADM-003 with Retry-After when the occupancy index is gone", async () => {
+    const opId = await waiting("Guard Refusal");
+
+    await dropBedIndex(pvt);
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/encounters/${opId}/admit`),
+        pvt,
+        pvt.doctorToken,
+      ).send({ ward: "GEN", bedCode: "BG-02", tariffCode: "BED_GEN" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ADM-003");
+      expect(res.headers["retry-after"]).toBe("60");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0046-branch-aware-uniqueness");
+      // It must tell the ward what to DO, not merely that something failed.
+      expect(String(res.body.error.message)).toMatch(/ward board/i);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  /**
+   * The guard runs before the transaction opens. That matters more here than anywhere else: the
+   * admission transaction exists so the OP encounter is never left closed with nothing to admit
+   * into, and a refusal must not be the one thing that produces that state.
+   */
+  it("leaves the outpatient encounter untouched when it refuses", async () => {
+    const opId = await waiting("Guard No Write");
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).post(`/api/v1/encounters/${opId}/admit`), pvt, pvt.doctorToken)
+        .send({ ward: "GEN", bedCode: "BG-03", tariffCode: "BED_GEN" })
+        .expect(503);
+
+      const op = await auth(request(app).get(`/api/v1/encounters/${opId}`), pvt).expect(200);
+      // Still the open consultation it was — NOT `admitted`, which is terminal.
+      expect(op.body.data.status).toBe("in_progress");
+      expect(op.body.data.class).toBe("OP");
+
+      expect(
+        await pvt.connection
+          .collection("encounters")
+          .countDocuments({ "bed.bedCode": "BG-03", open: true }),
+      ).toBe(0);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  it("admits again the moment the index is restored", async () => {
+    const opId = await waiting("Guard Recovery");
+
+    await dropBedIndex(pvt);
+    const refused = await auth(
+      request(app).post(`/api/v1/encounters/${opId}/admit`),
+      pvt,
+      pvt.doctorToken,
+    ).send({ ward: "GEN", bedCode: "BG-04", tariffCode: "BED_GEN" });
+    expect(refused.status).toBe(503);
+
+    await restoreBedIndex(pvt);
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-04", tariffCode: "BED_GEN" });
+    expect(res.status).toBe(201);
+    await discharge(pvt, res.body.data.inpatient.id as string);
+  });
+
+  it("refuses a bed TRANSFER too — a move claims a bed by the same key", async () => {
+    const opId = await waiting("Guard Transfer");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-05", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      const moved = await auth(
+        request(app).post(`/api/v1/encounters/${ipId}/transfer-bed`),
+        pvt,
+        pvt.nurseToken,
+      ).send({ ward: "GEN", bedCode: "BG-06", reason: "closer to the nurses' station" });
+
+      expect(moved.status).toBe(503);
+      expect(moved.body.error.code).toBe("HMS-ADM-003");
+
+      // The patient has not moved, and no ward-round note claims they did.
+      const enc = await auth(request(app).get(`/api/v1/encounters/${ipId}`), pvt).expect(200);
+      expect(enc.body.data.bed.bedCode).toBe("BG-05");
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+    await discharge(pvt, ipId);
+  });
+
+  /**
+   * ── THE PATIENT MUST STILL BE ABLE TO GO HOME ─────────────────────────────
+   * Closing a stay removes the row from the partial filter, so discharge cannot violate the key —
+   * and a hospital that could admit nobody AND discharge nobody would simply fill up. This is the
+   * proportionality claim that matters most in this slice.
+   */
+  it("does NOT block discharge — a drifted ward must still empty", async () => {
+    const opId = await waiting("Guard Discharge");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-07", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      const out = await auth(
+        request(app).post(`/api/v1/encounters/${ipId}/discharge`),
+        pvt,
+        pvt.doctorToken,
+      ).send({ text: "For home. Ward drifted; bed freed manually.", diagnosis: "Pneumonia" });
+
+      expect(out.status).toBe(201);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  it("does not block the ward board, the round list, or any other read", async () => {
+    const opId = await waiting("Guard Reads");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-08", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).get("/api/v1/bed-board"), pvt).expect(200);
+      await auth(request(app).get("/api/v1/inpatients"), pvt, pvt.nurseToken).expect(200);
+      await auth(request(app).get(`/api/v1/encounters/${ipId}`), pvt).expect(200);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+    await discharge(pvt, ipId);
+  });
+
+  /** Observations and the nurse's own record are not bed assignment. */
+  it("does not block vitals or nursing notes for a patient already in a bed", async () => {
+    const opId = await waiting("Guard Bystander");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-09", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).post(`/api/v1/encounters/${ipId}/vitals`), pvt, pvt.nurseToken)
+        .send({ systolic: 118, diastolic: 74, pulse: 76 })
+        .expect(201);
+
+      await auth(request(app).post(`/api/v1/encounters/${ipId}/nursing-notes`), pvt, pvt.nurseToken)
+        .send({ text: "Settled. Bed board being corrected by IT." })
+        .expect(201);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+    await discharge(pvt, ipId);
+  });
+
+  /** Database-per-tenant (ADR-0005): one hospital's drift is one hospital's problem. */
+  it("does not block a DIFFERENT hospital, whose own index is intact", async () => {
+    const mine = await waiting("Guard Isolation");
+    const theirs = await inConsultation(gov, "Gov Admission", "9300500001");
+
+    await dropBedIndex(pvt);
+    try {
+      await auth(request(app).post(`/api/v1/encounters/${mine}/admit`), pvt, pvt.doctorToken)
+        .send({ ward: "GEN", bedCode: "BG-10", tariffCode: "BED_GEN" })
+        .expect(503);
+
+      const ok = await admit(gov, theirs, {
+        ward: "GEN",
+        bedCode: "GOV-BG-01",
+        tariffCode: "BED_GEN",
+      });
+      expect(ok.status).toBe(201);
+      await discharge(gov, ok.body.data.inpatient.id as string);
+    } finally {
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  /** An index on the right fields that is not unique enforces nothing. */
+  it("fails CLOSED when the index exists but has stopped being unique", async () => {
+    const opId = await waiting("Guard Not Unique");
+
+    await pvt.connection.collection("encounters").dropIndex(BED_INDEX);
+    await pvt.connection.collection("encounters").createIndex(
+      { tenantId: 1, branchId: 1, "bed.ward": 1, "bed.bedCode": 1 },
+      {
+        partialFilterExpression: { open: { $eq: true }, "bed.bedCode": { $exists: true } },
+        background: true,
+        name: BED_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/encounters/${opId}/admit`),
+        pvt,
+        pvt.doctorToken,
+      ).send({ ward: "GEN", bedCode: "BG-11", tariffCode: "BED_GEN" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-ADM-003");
+    } finally {
+      await pvt.connection.collection("encounters").dropIndex(BED_INDEX);
+      await restoreBedIndex(pvt);
+    }
+  });
+
+  /**
+   * `encounters` carries TWO declared invariants. Losing the OTHER one must not stop admissions:
+   * `one_open_encounter_per_patient` is what `arrive()` rests on, and admission's own "already
+   * admitted" refusal is an application check on the encounter's class, not an index.
+   */
+  it("still admits when the OPEN-ENCOUNTER index is gone — that is a different capability", async () => {
+    const opId = await waiting("Guard Other Index");
+
+    await pvt.connection.collection("encounters").dropIndex("one_open_encounter_per_patient");
+    forgetSchemaReadiness();
+    try {
+      const res = await admit(pvt, opId, { ward: "GEN", bedCode: "BG-12", tariffCode: "BED_GEN" });
+      expect(res.status).toBe(201);
+      await discharge(pvt, res.body.data.inpatient.id as string);
+    } finally {
+      await pvt.connection.collection("encounters").createIndex(
+        { tenantId: 1, patientId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { open: { $eq: true } },
+          background: true,
+          name: "one_open_encounter_per_patient",
+        },
+      );
+      forgetSchemaReadiness();
+    }
+  });
+});
+
+/**
+ * TWO DOCTORS ENDING THE SAME STAY AT ONCE.
+ *
+ * ── WHY THE PRE-READ IS NOT THE ARBITER ─────────────────────────────────────
+ * `dischargeWithSummary` reads `findDischargeSummary` before it writes, and that read catches the
+ * ordinary sequential retry — which is the case it exists for. It cannot catch two submissions in
+ * flight together: both read "no summary" and both write. `one_discharge_summary_per_admission`
+ * (migration 0016) is what actually decides, exactly as the unique index does in the MAR,
+ * dispensing and ordering paths. Measured against Mongo 7 on 2026-08-17: with the index absent
+ * both summaries are ACCEPTED, and recreating it over the pair is then REFUSED (11000).
+ *
+ * The defect this closes is on a HEALTHY hospital, not a drifted one. Nothing caught the
+ * duplicate-key error, so the index winning surfaced as `500 Something went wrong` — the one
+ * answer a client cannot act on. The sequential guard and the index now give the same 422.
+ */
+describe("a stay cannot end with two discharge summaries", () => {
+  it("answers the same 422 whichever guard catches it, and never a 500", async () => {
+    const opId = await inConsultation(pvt, "Race Discharge", "9500600001");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "RC-01", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    const body = { text: "Recovered. Home.", diagnosis: "Pneumonia" };
+    const send = () =>
+      auth(request(app).post(`/api/v1/encounters/${ipId}/discharge`), pvt, pvt.doctorToken).send(
+        body,
+      );
+
+    /**
+     * Fired together on purpose. Whether the two actually interleave is up to the scheduler, so
+     * this asserts the property that must hold EITHER WAY — one discharge, one refusal, and the
+     * refusal is the same 422 in both cases. Before the fix the interleaved outcome was a 500.
+     */
+    const [a, b] = await Promise.all([send(), send()]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+
+    expect(statuses).toEqual([201, 422]);
+    const refused = a.status === 422 ? a : b;
+    expect(refused.body.error.code).toBe("HMS-STATE-001");
+    expect(String(refused.body.error.message)).toMatch(/already has a discharge summary/i);
+
+    // Exactly one summary exists, whichever way the race fell.
+    expect(
+      await pvt.connection
+        .collection("wardNotes")
+        .countDocuments({ encounterId: new Types.ObjectId(ipId), type: "discharge_summary" }),
+    ).toBe(1);
+  });
+
+  it("still refuses a plain sequential retry with the same answer", async () => {
+    const opId = await inConsultation(pvt, "Retry Discharge", "9500600002");
+    const res = await admit(pvt, opId, { ward: "GEN", bedCode: "RC-02", tariffCode: "BED_GEN" });
+    const ipId = res.body.data.inpatient.id as string;
+
+    await discharge(pvt, ipId);
+
+    const again = await auth(
+      request(app).post(`/api/v1/encounters/${ipId}/discharge`),
+      pvt,
+      pvt.doctorToken,
+    ).send({ text: "Recovered. Home.", diagnosis: "Pneumonia" });
+
+    // The stay is closed, so `requireOpenAdmission` answers first — still a 422, never a 500.
+    expect(again.status).toBe(422);
+    expect(again.body.error.code).toBe("HMS-STATE-001");
+  });
+});
+
+/**
+ * TWO PATIENTS REACHING FOR ONE BED AT ONCE.
+ *
+ * ── WHY THIS EXISTS SEPARATELY FROM THE SEQUENTIAL TEST ─────────────────────
+ * "a patient already in a bed cannot be admitted again" proves the SEQUENTIAL case, and the
+ * schema-guard block proves what happens when the index is ABSENT. Neither proves the case the
+ * index was actually installed for: two admissions in flight together, on a healthy hospital.
+ *
+ * That gap matters because it is exactly the shape of the defect the discharge race above closed.
+ * There, the pre-read caught the sequential retry and the interleaved pair surfaced as
+ * `500 Something went wrong`, because nothing turned the duplicate-key error into an answer.
+ * `admitPatient` has the same structure — a state-machine check, then an insert arbitrated by
+ * `one_open_stay_per_bed_per_branch` — so the same question has to be asked of it rather than
+ * assumed from the code reading correctly.
+ *
+ * A 500 here would be worse than the discharge one. The clerk is standing in front of a patient
+ * who needs a bed, and "something went wrong" gives them nothing to do; "that bed is already
+ * occupied — choose a free bed" is an instruction.
+ */
+describe("one bed cannot hold two patients, however the two requests interleave", () => {
+  it("answers 201 and 409, never two admissions and never a 500", async () => {
+    const first = await inConsultation(pvt, "Bed Race One", "9500700001");
+    const second = await inConsultation(pvt, "Bed Race Two", "9500700002");
+    const bed = { ward: "GEN", bedCode: "BR-01", tariffCode: "BED_GEN" };
+
+    const send = (opId: string) =>
+      auth(request(app).post(`/api/v1/encounters/${opId}/admit`), pvt, pvt.doctorToken).send(bed);
+
+    /**
+     * Fired together on purpose. Whether they truly interleave is the scheduler's business, so
+     * this asserts the property that must hold EITHER WAY — one admission, one refusal, and the
+     * refusal is the hospital's answer rather than a stack trace.
+     */
+    const [a, b] = await Promise.all([send(first), send(second)]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+
+    expect(statuses).toEqual([201, 409]);
+
+    const refused = a.status === 409 ? a : b;
+    expect(refused.body.error.code).toBe("HMS-STATE-001");
+    expect(String(refused.body.error.message)).toMatch(/already occupied/i);
+    // The refusal has to name a next action, not just a fault.
+    expect(String(refused.body.error.details.hint)).toMatch(/free bed/i);
+
+    // Exactly one open stay in that bed, whichever way the race fell.
+    expect(
+      await pvt.connection.collection("encounters").countDocuments({
+        open: true,
+        "bed.ward": bed.ward,
+        "bed.bedCode": bed.bedCode,
+      }),
+    ).toBe(1);
+
+    /**
+     * And the loser's OUTPATIENT encounter is still open. The admission runs inside one
+     * transaction precisely so a refusal cannot leave a patient discharged from the OPD into
+     * nothing — if this is `admitted`, the rollback did not hold and the patient has vanished
+     * from both lists.
+     */
+    const loserOp = a.status === 409 ? first : second;
+    const op = await auth(request(app).get(`/api/v1/encounters/${loserOp}`), pvt).expect(200);
+    expect(op.body.data.status).not.toBe("admitted");
+  });
+
+  it("refuses a TRANSFER onto a bed another move is claiming at the same instant", async () => {
+    const oneOp = await inConsultation(pvt, "Move Race One", "9500700003");
+    const twoOp = await inConsultation(pvt, "Move Race Two", "9500700004");
+
+    const one = await admit(pvt, oneOp, { ward: "GEN", bedCode: "BR-10", tariffCode: "BED_GEN" });
+    const two = await admit(pvt, twoOp, { ward: "GEN", bedCode: "BR-11", tariffCode: "BED_GEN" });
+    const oneIp = one.body.data.inpatient.id as string;
+    const twoIp = two.body.data.inpatient.id as string;
+
+    // Both reach for the SAME empty bed. A move claims a bed by the same key an admission does.
+    const move = (ipId: string) =>
+      auth(request(app).post(`/api/v1/encounters/${ipId}/transfer-bed`), pvt, pvt.nurseToken).send({
+        ward: "GEN",
+        bedCode: "BR-12",
+        reason: "closer to the nurses' station",
+      });
+
+    const [a, b] = await Promise.all([move(oneIp), move(twoIp)]);
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+
+    expect(statuses).toEqual([200, 409]);
+    const refused = a.status === 409 ? a : b;
+    expect(refused.body.error.code).toBe("HMS-STATE-001");
+    expect(String(refused.body.error.message)).toMatch(/already occupied/i);
+
+    // One patient in the destination, and the one who lost is still in the bed they started in.
+    expect(
+      await pvt.connection
+        .collection("encounters")
+        .countDocuments({ open: true, "bed.ward": "GEN", "bed.bedCode": "BR-12" }),
+    ).toBe(1);
+
+    const loser = a.status === 409 ? oneIp : twoIp;
+    const stillThere = a.status === 409 ? "BR-10" : "BR-11";
+    const enc = await auth(request(app).get(`/api/v1/encounters/${loser}`), pvt).expect(200);
+    expect(enc.body.data.bed.bedCode).toBe(stillThere);
   });
 });

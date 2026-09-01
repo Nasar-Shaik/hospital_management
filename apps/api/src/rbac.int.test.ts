@@ -44,6 +44,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { DEFAULT_ROLES, PERMISSIONS, ALL_PERMISSION_CODES } from "@medicore/permissions";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
@@ -76,7 +77,8 @@ const HOST_B = `${SLUG_B}.medicore.test`;
 
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "rbac-int-test" }));
+const expressApp = createApp(createLogger({ service: "rbac-int-test" }));
+const app = await listening(expressApp);
 
 interface Tenant {
   id: string;
@@ -97,6 +99,13 @@ const PUBLIC_ROUTES = new Set([
   "POST /api/v1/auth/login",
   "POST /api/v1/auth/refresh",
   "POST /api/v1/auth/mfa/verify",
+  // Password reset is reached with no session, by definition — the user cannot log in.
+  "POST /api/v1/auth/forgot-password",
+  "POST /api/v1/auth/reset-password",
+  // The hospital's public website content — served to a logged-out visitor (resolved by host).
+  "GET /api/v1/site",
+  // The hospital's logo (A8) — shown on the logged-out login page and the public site.
+  "GET /api/v1/site/logo",
 ]);
 
 /**
@@ -114,6 +123,30 @@ const SELF_SERVICE_ROUTES = new Set([
   "POST /api/v1/auth/mfa/setup",
   "POST /api/v1/auth/mfa/activate",
   "POST /api/v1/auth/mfa/disable",
+  // A clinician's OWN activity for the day — self-scoped to the caller, so no permission (you can
+  // always see what you did). Authenticated, deliberately unpermissioned. See reporting.routes.ts.
+  "GET /api/v1/reports/my-activity",
+  // The branch switcher — the caller's OWN allowed branches, like `/auth/me`. Self-service,
+  // authenticated, deliberately unpermissioned (ADR-0015). See branch.routes.ts.
+  "GET /api/v1/me/branches",
+  // The API's own OpenAPI contract — authenticated, unpermissioned; the route map is not data
+  // and any integration may read it (A9). See app.ts.
+  "GET /api/v1/openapi.json",
+  // The caller's OWN inbox, and opening one of their own messages. The recipient is the session
+  // and cannot be named in the request, so there is nothing to over-reach for. A permission here
+  // would mean a hospital could build a role whose staff cannot read their own alerts — see
+  // notification.routes.ts.
+  "GET /api/v1/notifications/me",
+  "POST /api/v1/notifications/:id/read",
+  /**
+   * The caller's OWN handsets (M4). Same rule as the inbox they deliver: the owner is the session
+   * and cannot be named in the request. A permission would mean a hospital could build a role
+   * whose staff are silently unreachable on a phone, and the symptom is an absence nobody
+   * reports — see notification.routes.ts.
+   */
+  "POST /api/v1/me/devices",
+  "GET /api/v1/me/devices",
+  "DELETE /api/v1/me/devices/:id",
 ]);
 
 /** A concrete, callable request for each protected route — the matrix's probes. */
@@ -303,6 +336,11 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/encounters/64b7f0000000000000000001/close",
     body: {},
   },
+  "POST /api/v1/encounters/:id/summary": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/summary",
+    body: {},
+  },
   "POST /api/v1/encounters/:id/cancel": {
     method: "post",
     url: "/api/v1/encounters/64b7f0000000000000000001/cancel",
@@ -370,6 +408,10 @@ const PROBES: Record<string, Probe> = {
    * desk must be able to pick a doctor without being handed a personnel file.
    */
   "GET /api/v1/doctors": { method: "get", url: "/api/v1/doctors" },
+  "GET /api/v1/doctors/:id": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001",
+  },
   "GET /api/v1/services": { method: "get", url: "/api/v1/services" },
   /**
    * The catalogue is the DOCTOR's view of the same collection, price-free. It is
@@ -377,6 +419,10 @@ const PROBES: Record<string, Probe> = {
    * `billing:read` — the rate card is not the bill.
    */
   "GET /api/v1/services/catalogue": { method: "get", url: "/api/v1/services/catalogue" },
+  "GET /api/v1/encounters/:id/billing": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/billing",
+  },
   "GET /api/v1/encounters/:id/bill": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/bill",
@@ -400,10 +446,19 @@ const PROBES: Record<string, Probe> = {
     method: "post",
     url: "/api/v1/encounters/64b7f0000000000000000001/bill/finalize",
   },
+  /**
+   * The cash counter's queue — visits with charges on no bill yet. `billing:read`, the same
+   * authority as the invoice list: it answers the same question one step earlier.
+   */
+  "GET /api/v1/billing/pending": { method: "get", url: "/api/v1/billing/pending" },
   "GET /api/v1/invoices": { method: "get", url: "/api/v1/invoices" },
   "GET /api/v1/invoices/:id": {
     method: "get",
     url: "/api/v1/invoices/64b7f0000000000000000001",
+  },
+  "GET /api/v1/invoices/:id/signatories": {
+    method: "get",
+    url: "/api/v1/invoices/64b7f0000000000000000001/signatories",
   },
   "POST /api/v1/invoices/:id/payments": {
     method: "post",
@@ -431,9 +486,19 @@ const PROBES: Record<string, Probe> = {
     url: "/api/v1/encounters/64b7f0000000000000000001/notes",
     body: { text: "matrix probe" },
   },
+  "POST /api/v1/encounters/:id/nursing-notes": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/nursing-notes",
+    body: { text: "matrix probe" },
+  },
   "GET /api/v1/encounters/:id/notes": {
     method: "get",
     url: "/api/v1/encounters/64b7f0000000000000000001/notes",
+  },
+  "POST /api/v1/encounters/:id/outcome": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/outcome",
+    body: { outcome: "lama", text: "matrix probe" },
   },
   "POST /api/v1/encounters/:id/discharge": {
     method: "post",
@@ -531,10 +596,156 @@ const PROBES: Record<string, Probe> = {
     body: { reason: "matrix probe" },
   },
 
+  /*
+   * ── Vitals ─────────────────────────────────────────────────────────────────
+   * `vitals:record` writes (nurses above all, and doctors); `emr:read` reads, because a
+   * reading is clinical PHI — the desk can see THAT a visit exists without being shown the
+   * patient's blood pressure.
+   */
+  "POST /api/v1/encounters/:encounterId/vitals": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/vitals",
+    body: { pulse: 72 },
+  },
+  "GET /api/v1/encounters/:encounterId/vitals": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/vitals",
+  },
+  "GET /api/v1/patients/:patientId/vitals": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/vitals",
+  },
+
+  /* ── Branches (ADR-0015) — the admin surface is `branch:manage`; the switcher is self-service. */
+  "GET /api/v1/branches": {
+    method: "get",
+    url: "/api/v1/branches",
+  },
+  "POST /api/v1/branches": {
+    method: "post",
+    url: "/api/v1/branches",
+    body: { name: "Matrix Probe Branch", code: "MPB" },
+  },
+  "PATCH /api/v1/branches/:id": {
+    method: "patch",
+    url: "/api/v1/branches/64b7f0000000000000000001",
+    body: { name: "Renamed" },
+  },
+
+  /* ── Departments (B2/B3) — the org chart. READ is the broad `patient:read` (reception routes a
+   * patient into a department; every clinical role reads the queue board). WRITE is
+   * `department:manage` (shaping the org chart — TENANT_ADMIN). */
+  "GET /api/v1/departments": { method: "get", url: "/api/v1/departments" },
+  "POST /api/v1/departments": {
+    method: "post",
+    url: "/api/v1/departments",
+    body: { name: "Matrix Department", code: "MPD", kind: "clinical" },
+  },
+  "PATCH /api/v1/departments/:id": {
+    method: "patch",
+    url: "/api/v1/departments/64b7f0000000000000000001",
+    body: { name: "Renamed Department" },
+  },
+
+  /* ── Bed inventory & board (B4) ──────────────────────────────────────────────
+   * READS are `emr:read` (the doctor about to admit and the nurse on the ward both see the free
+   * beds); WRITES are `bed:manage` (configuring the estate — TENANT_ADMIN, not the ward staff).
+   */
+  "GET /api/v1/bed-board": { method: "get", url: "/api/v1/bed-board" },
+  "GET /api/v1/wards": { method: "get", url: "/api/v1/wards" },
+  "POST /api/v1/wards": {
+    method: "post",
+    url: "/api/v1/wards",
+    body: { name: "Matrix Ward", kind: "general", tariffCode: "BED_GEN" },
+  },
+  "PATCH /api/v1/wards/:id": {
+    method: "patch",
+    url: "/api/v1/wards/64b7f0000000000000000001",
+    body: { name: "Renamed Ward" },
+  },
+  "GET /api/v1/beds": { method: "get", url: "/api/v1/beds" },
+  "POST /api/v1/beds": {
+    method: "post",
+    url: "/api/v1/beds",
+    body: { wardId: "64b7f0000000000000000001", code: "A-1" },
+  },
+  "PATCH /api/v1/beds/:id": {
+    method: "patch",
+    url: "/api/v1/beds/64b7f0000000000000000001",
+    body: { code: "A-2" },
+  },
+
+  /* ── Operation theatres (B5) — feature `module.clinical.ot`. READS `emr:read` (the board);
+   * the REGISTRY is `facility:manage`; SCHEDULING is `ot:schedule`; the OPERATION RECORD is
+   * `ot:record`, which the surgeon holds and the OT coordinator deliberately does not. */
+  "GET /api/v1/theatres": { method: "get", url: "/api/v1/theatres" },
+  "POST /api/v1/theatres": {
+    method: "post",
+    url: "/api/v1/theatres",
+    body: { name: "Matrix OT", code: "MOT", kind: "major_ot" },
+  },
+  "PATCH /api/v1/theatres/:id": {
+    method: "patch",
+    url: "/api/v1/theatres/64b7f0000000000000000001",
+    body: { name: "Renamed OT" },
+  },
+  "GET /api/v1/ot-bookings": { method: "get", url: "/api/v1/ot-bookings" },
+  "POST /api/v1/ot-bookings": {
+    method: "post",
+    url: "/api/v1/ot-bookings",
+    body: {
+      theatreId: "64b7f0000000000000000001",
+      patientId: "64b7f0000000000000000002",
+      surgeonId: "64b7f0000000000000000003",
+      procedureName: "Matrix procedure",
+      scheduledStart: "2999-01-01T09:00:00.000Z",
+      scheduledEnd: "2999-01-01T10:00:00.000Z",
+    },
+  },
+  "POST /api/v1/ot-bookings/:id/transition": {
+    method: "post",
+    url: "/api/v1/ot-bookings/64b7f0000000000000000001/transition",
+    body: { to: "cancelled" },
+  },
+  "POST /api/v1/ot-bookings/:id/operative-note": {
+    method: "post",
+    url: "/api/v1/ot-bookings/64b7f0000000000000000001/operative-note",
+    body: {
+      procedurePerformed: "Matrix procedure",
+      surgeonId: "64b7f0000000000000000003",
+      performedAt: "2999-01-01T09:30:00.000Z",
+    },
+  },
+
+  /* ── Emergency department (D10) — feature `module.clinical.emergency`. The BOARD is
+   * `encounter:read` (it is the queue, ranked); TRIAGE is `triage:perform` (a clinical judgement
+   * the registration desk must not make); TRANSFER OUT is `encounter:close` (it ends the visit). */
+  "GET /api/v1/emergency/board": { method: "get", url: "/api/v1/emergency/board" },
+  "POST /api/v1/emergency/triage": {
+    method: "post",
+    url: "/api/v1/emergency/triage",
+    body: {
+      encounterId: "64b7f0000000000000000001",
+      priority: "urgent",
+      chiefComplaint: "Matrix complaint",
+    },
+  },
+  "POST /api/v1/emergency/transfer-out": {
+    method: "post",
+    url: "/api/v1/emergency/transfer-out",
+    body: { encounterId: "64b7f0000000000000000001", destination: "Matrix General" },
+  },
+
   /* ── Diagnostic reports ─────────────────────────────────────────────────────
    * `order:perform` uploads a report (the technician/radiologist who ran the test);
-   * `emr:read` lists a patient's reports and opens a file (every clinical reader).
+   * `emr:read` lists a PATIENT's reports and opens a file (every clinical reader);
+   * `order:read` lists the reports on given ORDERS — the lab worklist, metadata only, so the
+   * technician who uploads them can see they landed without holding the chart's permission.
    */
+  "GET /api/v1/reports": {
+    method: "get",
+    url: "/api/v1/reports?orderIds=64b7f0000000000000000001",
+  },
   "POST /api/v1/orders/:id/reports": {
     method: "post",
     url: "/api/v1/orders/64b7f0000000000000000001/reports",
@@ -547,6 +758,34 @@ const PROBES: Record<string, Probe> = {
   "GET /api/v1/reports/:id/file": {
     method: "get",
     url: "/api/v1/reports/64b7f0000000000000000001/file",
+  },
+
+  /* ── Patient documents (A7) ──────────────────────────────────────────────────
+   * `file:upload` attaches, `file:read` lists + opens, `file:delete` removes (deleting PHI is
+   * heavier than reading it, so its own permission).
+   */
+  "POST /api/v1/patients/:patientId/documents": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/documents",
+    body: {
+      category: "id_proof",
+      title: "Matrix probe",
+      filename: "id.pdf",
+      contentType: "application/pdf",
+      dataBase64: "aGVsbG8=",
+    },
+  },
+  "GET /api/v1/patients/:patientId/documents": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/documents",
+  },
+  "GET /api/v1/documents/:id/file": {
+    method: "get",
+    url: "/api/v1/documents/64b7f0000000000000000001/file",
+  },
+  "DELETE /api/v1/documents/:id": {
+    method: "delete",
+    url: "/api/v1/documents/64b7f0000000000000000001",
   },
 
   /* ── Tariff management ───────────────────────────────────────────────────────
@@ -570,6 +809,16 @@ const PROBES: Record<string, Probe> = {
    */
   "GET /api/v1/medicines": { method: "get", url: "/api/v1/medicines" },
   "GET /api/v1/medicines/stock-report": { method: "get", url: "/api/v1/medicines/stock-report" },
+  // Availability is the PRESCRIBER's read (`prescription:create`), not the pharmacy's — see
+  // medicine.routes.ts. The matrix is what proves that distinction is real rather than commented.
+  "GET /api/v1/medicines/availability": {
+    method: "get",
+    url: "/api/v1/medicines/availability?codes=PARA500",
+  },
+  "GET /api/v1/medicines/:code/batches": {
+    method: "get",
+    url: "/api/v1/medicines/PARA500/batches",
+  },
   "GET /api/v1/medicines/:id": {
     method: "get",
     url: "/api/v1/medicines/64b7f0000000000000000001",
@@ -599,6 +848,61 @@ const PROBES: Record<string, Probe> = {
     body: { delta: -6, reason: "breakage" },
   },
 
+  /* ── General store (G1/G3) — feature `module.support.inventory` ─────────────
+   * FIVE different permissions across eight routes, which is the whole point of the module's
+   * authorization design and therefore the thing most worth pinning here. Reads are
+   * `inventory:manage`; the three movements are `inventory:purchase` / `:issue` / `:audit`; the
+   * supplier master is `vendor:manage`. STORE_KEEPER holds all five and nothing clinical — the
+   * matrix is what proves that role can actually work and cannot read a patient.
+   */
+  "GET /api/v1/inventory-items": { method: "get", url: "/api/v1/inventory-items" },
+  "GET /api/v1/inventory-destinations": { method: "get", url: "/api/v1/inventory-destinations" },
+  "GET /api/v1/inventory-items/:id/movements": {
+    method: "get",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/movements",
+  },
+  "POST /api/v1/inventory-items": {
+    method: "post",
+    url: "/api/v1/inventory-items",
+    body: {
+      code: "GLOVE_M",
+      name: "Examination gloves, medium",
+      category: "consumable",
+      unit: "box",
+    },
+  },
+  "PATCH /api/v1/inventory-items/:id": {
+    method: "patch",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001",
+    body: { reorderLevel: 20 },
+  },
+  "POST /api/v1/inventory-items/:id/receive": {
+    method: "post",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/receive",
+    body: { quantity: 100 },
+  },
+  "POST /api/v1/inventory-items/:id/issue": {
+    method: "post",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/issue",
+    body: { quantity: 10, departmentId: "64b7f0000000000000000002" },
+  },
+  "POST /api/v1/inventory-items/:id/adjust": {
+    method: "post",
+    url: "/api/v1/inventory-items/64b7f0000000000000000001/adjust",
+    body: { delta: -6, reason: "matrix probe" },
+  },
+  "GET /api/v1/suppliers": { method: "get", url: "/api/v1/suppliers" },
+  "POST /api/v1/suppliers": {
+    method: "post",
+    url: "/api/v1/suppliers",
+    body: { code: "ACME", name: "Acme Surgical Supplies" },
+  },
+  "PATCH /api/v1/suppliers/:id": {
+    method: "patch",
+    url: "/api/v1/suppliers/64b7f0000000000000000001",
+    body: { name: "Acme Surgical Supplies Ltd" },
+  },
+
   /* ── Reporting (the audit/register suite) ────────────────────────────────────
    * `report:view` — a hospital-wide read. Each takes a from/to range.
    */
@@ -621,6 +925,78 @@ const PROBES: Record<string, Probe> = {
   "GET /api/v1/reports/collections": {
     method: "get",
     url: "/api/v1/reports/collections?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/wallet": {
+    method: "get",
+    url: "/api/v1/reports/wallet?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/reports/discharge-outcomes": {
+    method: "get",
+    url: "/api/v1/reports/discharge-outcomes?from=2026-01-01&to=2026-02-01",
+  },
+  "GET /api/v1/billing/order-payments": {
+    method: "get",
+    url: "/api/v1/billing/order-payments?orderIds=64b7f0000000000000000001",
+  },
+  "GET /api/v1/billing/consultation-payments": {
+    method: "get",
+    url: "/api/v1/billing/consultation-payments?encounterIds=64b7f0000000000000000001",
+  },
+  "GET /api/v1/billing/order-settlement": {
+    method: "get",
+    url: "/api/v1/billing/order-settlement?orderIds=64b7f0000000000000000001",
+  },
+  "GET /api/v1/wallet/entries/:id": {
+    method: "get",
+    url: "/api/v1/wallet/entries/64b7f0000000000000000001",
+  },
+  "GET /api/v1/encounters/:id/charges": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/charges",
+  },
+  "GET /api/v1/reports/receipts": {
+    method: "get",
+    url: "/api/v1/reports/receipts?from=2026-07-01&to=2026-07-31",
+  },
+  "POST /api/v1/billing/orders/:id/settle-from-advance": {
+    method: "post",
+    url: "/api/v1/billing/orders/64b7f0000000000000000001/settle-from-advance",
+    body: {},
+  },
+  // API keys (A9) — `apikey:manage`, an administrative capability.
+  "GET /api/v1/api-keys": { method: "get", url: "/api/v1/api-keys" },
+  "POST /api/v1/api-keys": {
+    method: "post",
+    url: "/api/v1/api-keys",
+    body: { name: "Matrix probe key" },
+  },
+  "DELETE /api/v1/api-keys/:id": {
+    method: "delete",
+    url: "/api/v1/api-keys/64b7f0000000000000000001",
+  },
+
+  "GET /api/v1/site/settings": { method: "get", url: "/api/v1/site/settings" },
+  "PATCH /api/v1/site/settings": { method: "patch", url: "/api/v1/site/settings", body: {} },
+  // Logo upload/remove (A8) — `branding:manage`, like the rest of the site editor.
+  "PUT /api/v1/site/logo": {
+    method: "put",
+    url: "/api/v1/site/logo",
+    body: { contentType: "image/png", dataBase64: "aGVsbG8=" },
+  },
+  "DELETE /api/v1/site/logo": { method: "delete", url: "/api/v1/site/logo" },
+  "GET /api/v1/patients/:patientId/wallet": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/wallet",
+  },
+  "POST /api/v1/patients/:patientId/wallet/deposits": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/wallet/deposits",
+    body: { amount: 1000, method: "cash" },
+  },
+  "POST /api/v1/patients/:patientId/wallet/refunds": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/wallet/refunds",
+    body: { amount: 1000, method: "cash" },
   },
 
   "GET /api/v1/notifications": { method: "get", url: "/api/v1/notifications" },
@@ -652,17 +1028,453 @@ const PROBES: Record<string, Probe> = {
     method: "delete",
     url: "/api/v1/doctors/schedule/64b7f0000000000000000001",
   },
+
+  /* ──────────────────────────────────────────────────────────────────────────
+   * Routes that shipped between 2026-07-28 and 2026-07-30 without a probe.
+   *
+   * They were never unprotected — every one carries `authorize()`, which is why
+   * the coverage test could see them at all. What was missing is the DECISION:
+   * nobody had written down which roles may call them, so nothing verified the
+   * grants. The money-moving ones (discount, refund, payer-split, settle) are the
+   * reason this mattered — an over-wide grant there is a cashier who can write off
+   * their own till.
+   * ────────────────────────────────────────────────────────────────────────── */
+
+  // ── billing adjustments: a separate authority from taking payment ──────────
+  "POST /api/v1/invoices/:id/discount": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/discount",
+    body: { amount: 100, reason: "Approved concession" },
+  },
+  "POST /api/v1/invoices/:id/refund": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/refund",
+    body: { amount: 100, method: "cash", reason: "Overpayment returned" },
+  },
+  "POST /api/v1/invoices/:id/payer-split": {
+    method: "post",
+    url: "/api/v1/invoices/64b7f0000000000000000001/payer-split",
+    body: { policyId: "64b7f0000000000000000001", coveredAmount: 100 },
+  },
+
+  // ── care packages ──────────────────────────────────────────────────────────
+  "GET /api/v1/packages": { method: "get", url: "/api/v1/packages" },
+  "POST /api/v1/packages": {
+    method: "post",
+    url: "/api/v1/packages",
+    body: { code: "PKG-PROBE", name: "Probe Package", price: 1000 },
+  },
+  "PATCH /api/v1/packages/:id": {
+    method: "patch",
+    url: "/api/v1/packages/64b7f0000000000000000001",
+    body: { name: "Probe Package" },
+  },
+  "GET /api/v1/encounters/:id/package-enrollments": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/package-enrollments",
+  },
+  "POST /api/v1/encounters/:id/package-enrollments": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/package-enrollments",
+    body: { packageId: "64b7f0000000000000000001" },
+  },
+  "POST /api/v1/package-enrollments/:id/cancel": {
+    method: "post",
+    url: "/api/v1/package-enrollments/64b7f0000000000000000001/cancel",
+    body: { reason: "Probe" },
+  },
+
+  // ── beds and rooms (B4) ────────────────────────────────────────────────────
+  "POST /api/v1/encounters/:id/transfer-bed": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/transfer-bed",
+    body: { ward: "A", bedCode: "A-12", reason: "Probe" },
+  },
+  "GET /api/v1/rooms": { method: "get", url: "/api/v1/rooms" },
+  "POST /api/v1/rooms": {
+    method: "post",
+    url: "/api/v1/rooms",
+    body: { wardId: "64b7f0000000000000000001", code: "R-PROBE", name: "Probe Room" },
+  },
+  "PATCH /api/v1/rooms/:id": {
+    method: "patch",
+    url: "/api/v1/rooms/64b7f0000000000000000001",
+    body: { name: "Probe Room" },
+  },
+
+  // ── ambulance (B6) ─────────────────────────────────────────────────────────
+  "GET /api/v1/ambulances": { method: "get", url: "/api/v1/ambulances" },
+  "POST /api/v1/ambulances": {
+    method: "post",
+    url: "/api/v1/ambulances",
+    body: { code: "AMB-PROBE", registrationNumber: "KA01AB1234" },
+  },
+  "PATCH /api/v1/ambulances/:id": {
+    method: "patch",
+    url: "/api/v1/ambulances/64b7f0000000000000000001",
+    body: { code: "AMB-PROBE" },
+  },
+  "GET /api/v1/ambulance-trips": { method: "get", url: "/api/v1/ambulance-trips" },
+  "POST /api/v1/ambulance-trips": {
+    method: "post",
+    url: "/api/v1/ambulance-trips",
+    body: {
+      ambulanceId: "64b7f0000000000000000001",
+      purpose: "emergency",
+      startAt: "2026-01-01T09:00:00.000Z",
+      endAt: "2026-01-01T10:00:00.000Z",
+    },
+  },
+  "POST /api/v1/ambulance-trips/:id/transition": {
+    method: "post",
+    url: "/api/v1/ambulance-trips/64b7f0000000000000000001/transition",
+    body: { status: "in_progress" },
+  },
+
+  // ── assets (B7) ────────────────────────────────────────────────────────────
+  "GET /api/v1/assets": { method: "get", url: "/api/v1/assets" },
+  "POST /api/v1/assets": {
+    method: "post",
+    url: "/api/v1/assets",
+    body: { tag: "AST-PROBE", name: "Probe Monitor", category: "biomedical" },
+  },
+  "PATCH /api/v1/assets/:id": {
+    method: "patch",
+    url: "/api/v1/assets/64b7f0000000000000000001",
+    body: { name: "Probe Monitor" },
+  },
+  "GET /api/v1/assets/:id/maintenance": {
+    method: "get",
+    url: "/api/v1/assets/64b7f0000000000000000001/maintenance",
+  },
+  "POST /api/v1/assets/:id/maintenance": {
+    method: "post",
+    url: "/api/v1/assets/64b7f0000000000000000001/maintenance",
+    body: { type: "preventive", performedOn: "2026-01-01" },
+  },
+
+  // ── feedback & complaints (B10) ────────────────────────────────────────────
+  "GET /api/v1/feedback": { method: "get", url: "/api/v1/feedback" },
+  "POST /api/v1/feedback": {
+    method: "post",
+    url: "/api/v1/feedback",
+    body: { kind: "feedback", subject: "Probe", description: "Probe description" },
+  },
+  "GET /api/v1/feedback/:id": {
+    method: "get",
+    url: "/api/v1/feedback/64b7f0000000000000000001",
+  },
+  "POST /api/v1/feedback/:id/assign": {
+    method: "post",
+    url: "/api/v1/feedback/64b7f0000000000000000001/assign",
+    body: { assigneeId: "64b7f0000000000000000001" },
+  },
+  "POST /api/v1/feedback/:id/transition": {
+    method: "post",
+    url: "/api/v1/feedback/64b7f0000000000000000001/transition",
+    body: { status: "in_progress" },
+  },
+
+  // ── insurance (F2): link is the desk, claim is adjudication, settle is money ─
+  "GET /api/v1/patients/:patientId/insurance-policies": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-policies",
+  },
+  "POST /api/v1/patients/:patientId/insurance-policies": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-policies",
+    body: { insurer: "Probe Insurer", policyNumber: "POL-1", type: "cashless" },
+  },
+  "PATCH /api/v1/insurance-policies/:id": {
+    method: "patch",
+    url: "/api/v1/insurance-policies/64b7f0000000000000000001",
+    body: { insurer: "Probe Insurer" },
+  },
+  "GET /api/v1/patients/:patientId/insurance-claims": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-claims",
+  },
+  "POST /api/v1/patients/:patientId/insurance-claims": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/insurance-claims",
+    body: { policyId: "64b7f0000000000000000001", type: "cashless", claimedAmount: 1000 },
+  },
+  "POST /api/v1/insurance-claims/:id/transition": {
+    method: "post",
+    url: "/api/v1/insurance-claims/64b7f0000000000000000001/transition",
+    body: { status: "submitted" },
+  },
+  "POST /api/v1/insurance-claims/:id/settle": {
+    method: "post",
+    url: "/api/v1/insurance-claims/64b7f0000000000000000001/settle",
+    body: { settledAmount: 1000 },
+  },
+
+  // ── consultation note (D3) ─────────────────────────────────────────────────
+  "GET /api/v1/encounters/:id/consultation": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/consultation",
+  },
+  "PUT /api/v1/encounters/:id/consultation": {
+    method: "put",
+    url: "/api/v1/encounters/64b7f0000000000000000001/consultation",
+    body: { chiefComplaint: "Probe complaint" },
+  },
+
+  /* ── problem list (Problem List V1) ─────────────────────────────────────────
+   * The same `emr:read`/`emr:write` pair as the consultation note, deliberately — a problem is
+   * the same kind of clinical statement made by the same people, and a `problem:*` family would
+   * be role-catalogue churn for a distinction nobody in a hospital would recognise. So the READ
+   * reaches everyone clinical (the pharmacist included) and the WRITE is the doctor's.
+   *
+   * Note the reach is NOT what the probe measures: `emr:read` is declared `branch`-scoped and the
+   * list is nonetheless hospital-wide, because `problem.repository.ts` does not call
+   * `scopeFilter()`. That property is asserted in `problems.int.test.ts` §4.
+   */
+  "GET /api/v1/patients/:patientId/problems": {
+    method: "get",
+    url: "/api/v1/patients/64b7f0000000000000000001/problems",
+  },
+  "POST /api/v1/patients/:patientId/problems": {
+    method: "post",
+    url: "/api/v1/patients/64b7f0000000000000000001/problems",
+    body: { title: "Matrix probe" },
+  },
+  "POST /api/v1/encounters/:id/problems/promote": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/problems/promote",
+    body: { diagnosisIndex: 0 },
+  },
+  "POST /api/v1/problems/:id/resolve": {
+    method: "post",
+    url: "/api/v1/problems/64b7f0000000000000000001/resolve",
+    body: { reason: "matrix probe" },
+  },
+
+  // ── medication administration record (D5) ──────────────────────────────────
+  "GET /api/v1/encounters/:id/medication-administrations": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/medication-administrations",
+  },
+  "POST /api/v1/encounters/:id/medication-administrations": {
+    method: "post",
+    url: "/api/v1/encounters/64b7f0000000000000000001/medication-administrations",
+    body: { prescriptionId: "64b7f0000000000000000001", lineIndex: 0, status: "given" },
+  },
+  "GET /api/v1/ward-worklist": { method: "get", url: "/api/v1/ward-worklist" },
+  "GET /api/v1/medication-round": { method: "get", url: "/api/v1/medication-round" },
+  "GET /api/v1/encounters/:id/medication-schedule": {
+    method: "get",
+    url: "/api/v1/encounters/64b7f0000000000000000001/medication-schedule",
+  },
+
+  // ── lab test catalogue (D6) ────────────────────────────────────────────────
+  "GET /api/v1/lab-tests": { method: "get", url: "/api/v1/lab-tests" },
+  "GET /api/v1/lab-tests/:code": { method: "get", url: "/api/v1/lab-tests/CBC" },
+  "POST /api/v1/lab-tests": {
+    method: "post",
+    url: "/api/v1/lab-tests",
+    body: { code: "PROBE", name: "Probe Test" },
+  },
+  "PATCH /api/v1/lab-tests/:id": {
+    method: "patch",
+    url: "/api/v1/lab-tests/64b7f0000000000000000001",
+    body: { name: "Probe Test" },
+  },
+
+  // ── medico-legal (C3): consent is captured, death is CERTIFIED ─────────────
+  "GET /api/v1/consents": { method: "get", url: "/api/v1/consents" },
+  "POST /api/v1/consents": {
+    method: "post",
+    url: "/api/v1/consents",
+    body: { patientId: "64b7f0000000000000000001", type: "procedure", text: "Probe consent" },
+  },
+  "POST /api/v1/consents/:id/withdraw": {
+    method: "post",
+    url: "/api/v1/consents/64b7f0000000000000000001/withdraw",
+    body: { reason: "Probe" },
+  },
+  "GET /api/v1/death-records": { method: "get", url: "/api/v1/death-records" },
+  "POST /api/v1/death-records": {
+    method: "post",
+    url: "/api/v1/death-records",
+    body: { patientId: "64b7f0000000000000000001", diedAt: "2026-01-01T00:00:00.000Z" },
+  },
+
+  // ── MRD / ICD-10 coding (C7) ───────────────────────────────────────────────
+  "GET /api/v1/mrd/icd-codes": { method: "get", url: "/api/v1/mrd/icd-codes" },
+  "POST /api/v1/mrd/icd-codes": {
+    method: "post",
+    url: "/api/v1/mrd/icd-codes",
+    body: { code: "A00", title: "Cholera" },
+  },
+  "PATCH /api/v1/mrd/icd-codes/:id": {
+    method: "patch",
+    url: "/api/v1/mrd/icd-codes/64b7f0000000000000000001",
+    body: { title: "Cholera" },
+  },
+  "GET /api/v1/mrd/codings/:encounterId": {
+    method: "get",
+    url: "/api/v1/mrd/codings/64b7f0000000000000000001",
+  },
+  "PUT /api/v1/mrd/codings/:encounterId": {
+    method: "put",
+    url: "/api/v1/mrd/codings/64b7f0000000000000000001",
+    body: { codes: [] },
+  },
+  "GET /api/v1/mrd/disease-register": { method: "get", url: "/api/v1/mrd/disease-register" },
+
+  // ── mortuary (B13): release still refuses a medico-legal body without clearance ─
+  "GET /api/v1/mortuary/register": { method: "get", url: "/api/v1/mortuary/register" },
+  "GET /api/v1/mortuary/for-encounter/:encounterId": {
+    method: "get",
+    url: "/api/v1/mortuary/for-encounter/64b7f0000000000000000001",
+  },
+  "POST /api/v1/mortuary/register": {
+    method: "post",
+    url: "/api/v1/mortuary/register",
+    body: {
+      patientId: "64b7f0000000000000000001",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+    },
+  },
+  "POST /api/v1/mortuary/register/:id/release": {
+    method: "post",
+    url: "/api/v1/mortuary/register/64b7f0000000000000000001/release",
+    body: { releasedTo: "Probe Relative" },
+  },
+
+  // ── hospital profile (B1) ──────────────────────────────────────────────────
+  "GET /api/v1/hospital-profile": { method: "get", url: "/api/v1/hospital-profile" },
+  "PUT /api/v1/hospital-profile": {
+    method: "put",
+    url: "/api/v1/hospital-profile",
+    body: { name: "Probe Hospital" },
+  },
+
+  // ── doctor roster: sessions + leave (D2) ───────────────────────────────────
+  "GET /api/v1/doctors/:doctorId/availability": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001/availability",
+  },
+  "PUT /api/v1/doctors/availability": {
+    method: "put",
+    url: "/api/v1/doctors/availability",
+    body: { doctorId: "64b7f0000000000000000001", weekday: 1, sessions: ["morning"] },
+  },
+  "GET /api/v1/doctors/:doctorId/leave": {
+    method: "get",
+    url: "/api/v1/doctors/64b7f0000000000000000001/leave",
+  },
+  "POST /api/v1/doctors/leave": {
+    method: "post",
+    url: "/api/v1/doctors/leave",
+    body: {
+      doctorId: "64b7f0000000000000000001",
+      fromDate: "2026-01-01",
+      toDate: "2026-01-02",
+    },
+  },
+  "DELETE /api/v1/doctors/leave/:id": {
+    method: "delete",
+    url: "/api/v1/doctors/leave/64b7f0000000000000000001",
+  },
+
+  /**
+   * The doctor's OWN roster — `doctor:self-manage`. Note there is no `doctorId` in any of these
+   * bodies: the server takes it from the token, which is what makes the permission safe to grant
+   * to every doctor.
+   */
+  "PUT /api/v1/doctors/me/availability": {
+    method: "put",
+    url: "/api/v1/doctors/me/availability",
+    body: { weekday: 1, sessions: ["morning"] },
+  },
+  "POST /api/v1/doctors/me/leave": {
+    method: "post",
+    url: "/api/v1/doctors/me/leave",
+    body: { fromDate: "2026-01-01", toDate: "2026-01-02" },
+  },
+  "DELETE /api/v1/doctors/me/leave/:id": {
+    method: "delete",
+    url: "/api/v1/doctors/me/leave/64b7f0000000000000000001",
+  },
+
+  // ── the two financial registers (I1) — hospital-wide money, `report:view` ──
+  "GET /api/v1/reports/revenue-leakage": {
+    method: "get",
+    url: "/api/v1/reports/revenue-leakage",
+  },
+  "GET /api/v1/reports/dues-ageing": { method: "get", url: "/api/v1/reports/dues-ageing" },
 };
 
-/** The roles under test. Chosen to span the privilege range, not to be exhaustive. */
 /**
- * PHARMACIST is here because it is the only role that may hand a controlled drug to a
- * human being, and until the pharmacy shipped it had never had a single route tested.
- * The matrix is derived from `DEFAULT_ROLES`, so adding the name is enough — every route
- * is now probed against it.
+ * ── EVERY OPERATIONAL ROLE THE PRODUCT SHIPS ─────────────────────────────────
+ * This list was five for a long time, and "chosen to span the privilege range, not to be
+ * exhaustive" was the reason given. That reasoning does not survive contact with what the
+ * matrix actually is: it is the only test in the repository that answers "may this role call
+ * this route" for a route **nobody thought about**. A role outside the sweep gets that answer
+ * from its own module's suite, which by definition only covers the routes that module's author
+ * remembered — and a NEW route wired to the wrong permission is invisible to all of them.
+ *
+ * PHARMACIST was added when the pharmacy shipped, for exactly that reason. The other eight
+ * below are added now, for exactly that reason, and the argument is strongest where the
+ * previous coverage looked most adequate:
+ *
+ *   CASHIER               money. Its own description is a boundary — "cannot discount or refund
+ *                         without approval" — and nothing swept it.
+ *   FRONT_OFFICE          the union of RECEPTIONIST and CASHIER, assembled BY HAND. Sweeping the
+ *                         two parents proves nothing about the union: a permission added here
+ *                         that belongs to neither parent is a silent privilege grant.
+ *   LAB_TECHNICIAN        holds `order:perform` and deliberately NOT `order:verify`. The
+ *   PATHOLOGIST           two-person rule is a patient-safety property, and it is a property of
+ *                         these two grants being DIFFERENT.
+ *   RADIOLOGY_TECHNICIAN  the subtlest grant in the catalogue: it holds `order:verify`,
+ *                         `order:release` and `radiology:sign` — and NOT `emr:read`. "Widen the
+ *                         role until the worklist works" is a mistake this product has made
+ *                         before, and this is where it would show up.
+ *   RADIOLOGIST           the optional consultant; its authority must stay confined to imaging.
+ *   STORE_KEEPER          the narrow-grant claim in the flesh — it holds NOTHING clinical, and
+ *                         that is a property of the whole route surface, not of one module.
+ *   AUDITOR               a role defined entirely by what it cannot do. Any un-swept write it
+ *                         can reach is the whole role being wrong.
+ *
+ * The matrix is derived from `DEFAULT_ROLES`, so adding the name is enough.
  */
-const ROLES_UNDER_TEST = ["TENANT_ADMIN", "DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST"] as const;
+const ROLES_UNDER_TEST = [
+  "TENANT_ADMIN",
+  "DOCTOR",
+  "NURSE",
+  "RECEPTIONIST",
+  "FRONT_OFFICE",
+  "CASHIER",
+  "PHARMACIST",
+  "STORE_KEEPER",
+  "LAB_TECHNICIAN",
+  "PATHOLOGIST",
+  "RADIOLOGY_TECHNICIAN",
+  "RADIOLOGIST",
+  "AUDITOR",
+] as const;
 type TestedRole = (typeof ROLES_UNDER_TEST)[number];
+
+/**
+ * Roles deliberately OUTSIDE the sweep, each with the reason. An exclusion has to be written
+ * down or it is indistinguishable from an oversight — which is what the previous five-role list
+ * became.
+ *
+ * `PATIENT` is not a staff role. It is a portal identity holding `self:manage` and
+ * `booking:public`, neither of which gates a single `/api/v1` route, so sweeping it would
+ * generate ~250 assertions all restating what the `noRole` baseline already proves in one.
+ * **The risk it would have covered is covered directly instead** — see "an excluded role cannot
+ * reach the staff API", which fails the moment a route is wired to a permission this identity
+ * holds. That is the actual thing worth protecting, and it costs one test rather than 250.
+ */
+const ROLES_EXCLUDED_FROM_SWEEP: Record<string, string> = {
+  PATIENT:
+    "a patient-portal identity, not staff. Holds only self:manage and booking:public, neither of " +
+    "which gates an /api/v1 route; proved directly below rather than by 250 redundant probes.",
+};
 
 /** Permission codes each role holds — read from the catalog the app itself seeds from. */
 function permissionsOf(roleCode: string): Set<string> {
@@ -807,7 +1619,7 @@ afterAll(async () => {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("route coverage (the unprotected-route problem)", () => {
-  const routes = routeInventory(app).filter((r) => r.path.startsWith("/api/v1"));
+  const routes = routeInventory(expressApp).filter((r) => r.path.startsWith("/api/v1"));
   const key = (r: { method: string; path: string }): string => `${r.method} ${r.path}`;
 
   it("finds the tenant API surface (guards against the inventory silently returning nothing)", () => {
@@ -862,6 +1674,59 @@ describe("route coverage (the unprotected-route problem)", () => {
     const live = new Set(routes.map(key));
     expect(Object.keys(PROBES).filter((id) => !live.has(id))).toEqual([]);
   });
+
+  /**
+   * ── THE GAP THIS SUITE HAD, MADE UNREPEATABLE ──────────────────────────────
+   * The route side has been guarded since day one: a new protected route with no probe fails
+   * CI. The ROLE side never was. So `STORE_KEEPER` and `CASHIER` could ship — and did — with
+   * every route in the product unprobed against them, and nothing said so.
+   *
+   * This is the same guard, pointed the other way. A new role is either swept or excluded
+   * with a written reason; there is no third state.
+   */
+  it("every role in the catalogue is either swept or excluded for a written reason", () => {
+    const swept = new Set<string>(ROLES_UNDER_TEST);
+    const undecided = DEFAULT_ROLES.map((r) => r.code).filter(
+      (code) => !swept.has(code) && !(code in ROLES_EXCLUDED_FROM_SWEEP),
+    );
+
+    expect(
+      undecided,
+      "A role shipped without anyone deciding whether the matrix should probe it. " +
+        "Add it to ROLES_UNDER_TEST, or to ROLES_EXCLUDED_FROM_SWEEP with the reason.",
+    ).toEqual([]);
+  });
+
+  it("no excluded role can reach the staff API at all", () => {
+    /**
+     * What the exclusion actually claims, asserted rather than asserted-by-omission: an
+     * excluded role holds NO permission that gates a tenant route. The day somebody wires a
+     * patient-portal route into `/api/v1` under `self:manage`, this fails — which is the whole
+     * risk that sweeping `PATIENT` through 250 probes would have covered, at 1/250th the cost.
+     */
+    const gating = new Set(routes.map((r) => r.permission).filter((p): p is string => Boolean(p)));
+
+    for (const code of Object.keys(ROLES_EXCLUDED_FROM_SWEEP)) {
+      const role = DEFAULT_ROLES.find((r) => r.code === code);
+      expect(role, `excluded role ${code} is not in the catalogue`).toBeDefined();
+
+      const reachable = (role?.permissions ?? []).filter((p) => gating.has(p));
+      expect(
+        reachable,
+        `${code} is excluded from the matrix but holds a permission that gates a tenant route. ` +
+          `Either sweep it, or move the route off ${reachable.join(", ")}.`,
+      ).toEqual([]);
+    }
+  });
+
+  it("every role the matrix sweeps resolves to a non-empty grant", () => {
+    // `permissionsOf` throws on an empty set, but it is called lazily inside the matrix loop —
+    // a role whose grant vanished would surface as a wall of confusing "may NOT" passes long
+    // before anyone read the throw. Check it once, up front, where the message is legible.
+    for (const role of ROLES_UNDER_TEST) {
+      expect(permissionsOf(role).size, `${role} holds nothing`).toBeGreaterThan(0);
+    }
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -869,7 +1734,9 @@ describe("route coverage (the unprotected-route problem)", () => {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 describe("the matrix: role × route", () => {
-  const routes = routeInventory(app).filter((r) => r.path.startsWith("/api/v1") && r.permission);
+  const routes = routeInventory(expressApp).filter(
+    (r) => r.path.startsWith("/api/v1") && r.permission,
+  );
 
   for (const role of ROLES_UNDER_TEST) {
     const held = permissionsOf(role);
@@ -1145,6 +2012,82 @@ describe("privilege boundaries that must never move", () => {
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("HMS-AUTH-005");
   });
+
+  /**
+   * ── TAKING MONEY IS NOT ADJUSTING IT ────────────────────────────────────────
+   * These four are the reason the 68 unprobed routes mattered. The MATRIX cannot
+   * defend them: it derives its expectations from `DEFAULT_ROLES`, so widening a
+   * role moves the expectation with the behaviour and the suite stays green. Only a
+   * DELIBERATE FACT catches a grant that should never have been made.
+   *
+   * The line: `payment:collect` takes what the bill says. `billing:discount` changes
+   * what the bill says, `billing:refund` takes money back out of the drawer, and
+   * `insurance:reconcile` declares a payer's money received. Whoever holds the till
+   * must not also hold the authority to write down, reverse, or reconcile it —
+   * that separation is the oldest control in accounting, and it is exactly what an
+   * over-wide grant on a route nobody probed would have quietly removed.
+   */
+  it("a PHARMACIST takes payment but may NOT discount or refund a bill", async () => {
+    // PHARMACIST holds `payment:collect` and `billing:read` on purpose — a counter that
+    // hands over drugs also takes the money for them. Neither must imply adjusting it.
+    for (const id of ["POST /api/v1/invoices/:id/discount", "POST /api/v1/invoices/:id/refund"]) {
+      const probe = PROBES[id];
+      const res = await request(app)
+        [probe!.method](probe!.url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.PHARMACIST}`)
+        .send(probe!.body ?? {});
+
+      expect(res.status, `PHARMACIST must not be able to ${id}`).toBe(403);
+      expect(res.body.error.code).toBe("HMS-AUTH-005");
+    }
+  });
+
+  it("a RECEPTIONIST may read a bill but may NOT write one down or reverse it", async () => {
+    // The front desk holds `billing:read` so it can tell a patient what they owe. A
+    // concession and a refund are a supervisor's approval, not the front desk's.
+    for (const id of ["POST /api/v1/invoices/:id/discount", "POST /api/v1/invoices/:id/refund"]) {
+      const probe = PROBES[id];
+      const res = await request(app)
+        [probe!.method](probe!.url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens.RECEPTIONIST}`)
+        .send(probe!.body ?? {});
+
+      expect(res.status, `RECEPTIONIST must not be able to ${id}`).toBe(403);
+    }
+  });
+
+  it("settling an insurance claim is its own authority — no clinical role holds it", async () => {
+    // Adjudication (`insurance:claim`) decides what the payer OWES; settlement
+    // (`insurance:reconcile`) declares the money ARRIVED. Money landing is
+    // reconciliation, not a clinical or front-desk act.
+    const probe = PROBES["POST /api/v1/insurance-claims/:id/settle"];
+    for (const role of ["DOCTOR", "NURSE", "RECEPTIONIST", "PHARMACIST"] as const) {
+      const res = await request(app)
+        [probe!.method](probe!.url)
+        .set("Host", HOST_A)
+        .set("Authorization", `Bearer ${tokens[role]}`)
+        .send(probe!.body ?? {});
+
+      expect(res.status, `${role} must not settle an insurance claim`).toBe(403);
+    }
+  });
+
+  it("certifying a death is the doctor's alone — a nurse may run the mortuary but not certify", async () => {
+    // The NURSE deliberately holds `mortuary:manage`/`mortuary:release` (receiving and
+    // handing over a body is ward work). `death:certify` is a licensed medical act and
+    // must not arrive with the custody paperwork.
+    const probe = PROBES["POST /api/v1/death-records"];
+    const res = await request(app)
+      [probe!.method](probe!.url)
+      .set("Host", HOST_A)
+      .set("Authorization", `Bearer ${tokens.NURSE}`)
+      .send(probe!.body ?? {});
+
+    expect(res.status, "NURSE must not certify a death").toBe(403);
+    expect(res.body.error.code).toBe("HMS-AUTH-005");
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -1288,7 +2231,24 @@ describe("entitlement (layer 1): a hospital cannot use what it did not buy", () 
     // A gate on the read but not the write is worse than no gate: the hospital
     // simply uses the parts that were forgotten.
     for (const [id, probe] of Object.entries(PROBES)) {
-      if (!id.includes("/appointments") && !id.includes("/doctors/")) continue;
+      // Appointment + doctor-ROSTER routes are the scheduling feature: the slot schedule, and
+      // the session/leave roster that D2 added beside it (both gate on OPS_APPOINTMENTS). The
+      // plain doctor directory and a single doctor's card are core (no plan gate), like
+      // `GET /doctors`.
+      /**
+       * Matched on the DOCTOR roster specifically, not on the bare words. `/availability` on its
+       * own caught `GET /medicines/availability` — the prescribing screen's stock lookup, which
+       * has nothing to do with scheduling and is deliberately ungated so the smallest customers
+       * still see whether a drug is in the pharmacy. A substring filter that quietly widens onto
+       * every future route sharing a noun is a test that fails for reasons unrelated to its claim.
+       */
+      const isSchedulingFeature =
+        id.includes("/appointments") ||
+        id.includes("/doctors/schedule") ||
+        id.includes("/doctors/availability") ||
+        id.includes("/doctors/leave") ||
+        /\/doctors\/[^/]+\/(schedule|availability|leave)/.test(id);
+      if (!isSchedulingFeature) continue;
 
       const res = await request(app)
         [probe.method](probe.url)

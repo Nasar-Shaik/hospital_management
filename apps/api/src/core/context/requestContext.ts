@@ -23,6 +23,14 @@ export interface RequestContext {
   /** The actor's email, from the token — so the audit trail reads as people, not ids. */
   userEmail?: string;
   branchIds?: string[];
+  /**
+   * The ONE branch this request is acting in (ADR-0015), resolved by `authorize` from the
+   * `X-Active-Branch` header and validated against the caller's allowed set. `undefined` means
+   * "no single branch chosen" — All mode for reads (aggregate across the allowed set), and a
+   * write must resolve a default or refuse (`writeBranchId`). Distinct from `branchIds`, which is
+   * every branch the caller MAY reach; this is the one they are working in now.
+   */
+  activeBranchId?: string;
   roles?: string[];
   /**
    * Where the request came from. Carried in the context rather than read from

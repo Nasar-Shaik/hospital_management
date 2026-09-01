@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 /**
@@ -7,6 +8,24 @@ import { defineConfig } from "vitest/config";
  * must never be used anywhere else.
  */
 export default defineConfig({
+  /**
+   * ── THE MOBILE SUITE IMPORTS THE CLIENT'S SOURCE, NOT ITS dist ─────────────
+   * `mobileContract.int.test.ts` drives `@medicore/api-client` against the running app, and the
+   * package's `main` points at `dist/`. Without this alias the suite would silently test whatever
+   * was built LAST — and the release gate runs the tests before `pnpm build`, so a change to the
+   * client would be verified against the previous version of itself.
+   *
+   * A stale-artifact test that passes is worse than one that fails: it certifies a contract that
+   * is no longer the one being shipped. `pnpm build` and `typecheck` still compile the real
+   * package, so the artefact is covered — just not by this suite, whose subject is the contract.
+   */
+  resolve: {
+    alias: {
+      "@medicore/api-client": fileURLToPath(
+        new URL("../../packages/api-client/src/index.ts", import.meta.url),
+      ),
+    },
+  },
   test: {
     /**
      * ── SUITES RUN ONE AT A TIME, AND THE CONFIG DECIDES THAT — NOT THE CALLER ──
@@ -34,6 +53,13 @@ export default defineConfig({
     fileParallelism: false,
 
     /**
+     * Test servers bind loopback, not the wildcard — see the file for the outage
+     * this prevents. Here for the same reason `fileParallelism` is here: it must
+     * hold for every way of running these tests, not only the scripted one.
+     */
+    setupFiles: ["./src/test/noWildcardBinds.setup.ts"],
+
+    /**
      * ── WHY 20s AND NOT VITEST'S 5s ──────────────────────────────────────────
      * These suites talk to a REAL Mongo in Docker. A single login is ~8 sequential
      * round trips (user, credential, attempt, clear-failures, record-login, audit,
@@ -57,6 +83,45 @@ export default defineConfig({
       // base64("test-only-encryption-key-32bytes") — exactly 32 bytes, as AES-256 requires.
       API_ENCRYPTION_KEY: "dGVzdC1vbmx5LWVuY3J5cHRpb24ta2V5LTMyYnl0ZXM=",
       LOGIN_LOCKOUT_MINUTES: "15",
+
+      /**
+       * ── THE SUITE MUST NOT INHERIT THE MACHINE'S TIMEZONE ────────────────────
+       * Found by running the release gate on a UTC machine for the first time —
+       * which is what every CI runner and every container is, and what no
+       * developer here has been. One test failed:
+       *
+       *   notifications › "renders the time in the hospital's timezone, not UTC"
+       *   expected 'Dear Meera Nair…' to match /09:15\s*(am|AM)/
+       *
+       * The suite builds appointment times with `d.setHours(9, 15)`, which means
+       * 09:15 IN WHATEVER ZONE THE MACHINE IS SET TO. On a developer's machine
+       * that is Asia/Kolkata and the rendered mail says 09:15; on a UTC machine
+       * the same call produces a different instant and the mail says 02:45 pm.
+       * A green suite was therefore a property of the laptop, not of the code.
+       *
+       * Pinned here rather than in `test:int`, for the same reason
+       * `fileParallelism` is pinned here: a guarantee that depends on remembering
+       * a CLI flag is a guarantee you do not have.
+       *
+       * ── WHY Asia/Kolkata AND NOT UTC ─────────────────────────────────────────
+       * Because it is the zone the PRODUCT already assumes, and pinning it keeps
+       * this change to the test harness. `appointment.service.ts` resolves a
+       * doctor's session with `startAt.getDay()` and slot arithmetic in the
+       * PROCESS zone, while `appointment.consumers.ts` renders the patient's mail
+       * in `env.DEFAULT_TIMEZONE`. Those two agree only when the process zone IS
+       * the hospital's zone — an assumption nothing in the deployment enforces:
+       * no Dockerfile, compose file or `.env.example` sets `TZ`, so the shipped
+       * image runs UTC. There, a clinic's "Monday 09:00" session is offered at
+       * 09:00 UTC and the patient is emailed "02:45 pm".
+       *
+       * That is a product defect, not a test defect, and it is deliberately NOT
+       * fixed here: the correct zone for a session is a design decision (tenant
+       * default, or the branch's own zone — `branch.model.ts` allows a branch to
+       * sit in a different one), and it belongs in a milestone with its own
+       * tests. Recorded in PROJECT-STATUS.md. Pinning IST reproduces today's
+       * behaviour deterministically on every machine; it does not endorse it.
+       */
+      TZ: "Asia/Kolkata",
     },
   },
 });

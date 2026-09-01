@@ -17,9 +17,12 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds, respondsFile } from "../../middleware/responds.js";
 import * as controller from "./report.controller.js";
+import { reportMeta } from "./report.contract.js";
 import {
   orderIdParamSchema,
+  orderIdsQuerySchema,
   patientIdParamSchema,
   reportIdParamSchema,
   uploadReportSchema,
@@ -36,7 +39,29 @@ export function reportRouter(): Router {
     json({ limit: "15mb" }),
     validate(orderIdParamSchema, "params"),
     validate(uploadReportSchema),
+    responds(reportMeta, { status: 201 }),
     asyncHandler(controller.uploadReport),
+  );
+
+  /**
+   * The reports attached to a set of ORDERS — the lab worklist's read.
+   *
+   * Gated on `order:read` (NOT `emr:read`), by the same reasoning `/billing/order-payments` is
+   * gated that way for the same screen: a technician must be able to see whether the test in front
+   * of them already carries a file, and they hold `order:read`, not the chart's permission.
+   *
+   * `emr:read` would be the wrong grant to widen — it opens twenty-one routes across admissions,
+   * wards, prescriptions, theatres, the MAR and medico-legal records, and a lab technician has no
+   * business in any of them. This is metadata only; the BYTES stay behind `emr:read` below,
+   * because knowing a report exists and reading it are different acts.
+   */
+  router.get(
+    "/reports",
+    authenticate(),
+    authorize(PERMISSIONS.ORDER_READ),
+    validate(orderIdsQuerySchema, "query"),
+    responds(reportMeta.array()),
+    asyncHandler(controller.reportsForOrders),
   );
 
   router.get(
@@ -44,6 +69,7 @@ export function reportRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(patientIdParamSchema, "params"),
+    responds(reportMeta.array()),
     asyncHandler(controller.listPatientReports),
   );
 
@@ -52,6 +78,14 @@ export function reportRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.EMR_READ),
     validate(reportIdParamSchema, "params"),
+    respondsFile({
+      // Whatever content type was stored at upload — `contentType` is a free string there, and
+      // this route echoes it back. Naming PDF and images would document a rule nothing enforces.
+      media: ["*/*"],
+      description:
+        "The stored file, inline, served with the content type it was uploaded with and a " +
+        "`Content-Disposition` filename.",
+    }),
     asyncHandler(controller.downloadReport),
   );
 

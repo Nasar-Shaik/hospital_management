@@ -20,5 +20,7 @@ Every major architectural decision gets an ADR **before or with** the change (Co
 | 0012 | [Next.js (App Router) + React 19 for all web frontends](0012-nextjs-app-router.md)             | Accepted           |
 | 0013 | [Encounter is the central clinical object (not Appointment)](0013-encounter-central-object.md) | Accepted           |
 | 0014 | [One work-queue engine, as a projection](0014-universal-work-queue.md)                         | Accepted           |
+| 0015 | [Multi-branch — the active-branch context](0015-active-branch-context.md)                      | Accepted           |
+| 0016 | [Tenant licensing — tenure, branch cap, custom domains](0016-tenant-licensing.md)              | Accepted           |
 
 New ADR: copy the format, take the next number, add a row here, note it in `PROJECT_MEMORY.md`.

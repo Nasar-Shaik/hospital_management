@@ -26,7 +26,16 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./encounter.controller.js";
+import {
+  admitResult,
+  encounter,
+  encounterRow,
+  inpatientRow,
+  startEncounterResult,
+} from "./encounter.contract.js";
 import {
   admitSchema,
   transferSchema,
@@ -34,7 +43,9 @@ import {
   closeEncounterSchema,
   idParamSchema,
   listEncountersQuerySchema,
+  listInpatientsQuerySchema,
   startEncounterSchema,
+  visitSummarySchema,
 } from "./encounter.schema.js";
 
 const FEATURE = { feature: FEATURE_FLAGS.OPS_OPD } as const;
@@ -55,6 +66,8 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_CREATE, FEATURE),
     validate(startEncounterSchema),
+    responds(startEncounterResult, { status: [200, 201] }),
+    idempotent("Replays the visit this key already opened."),
     asyncHandler(controller.startEncounter),
   );
 
@@ -68,6 +81,9 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(listEncountersQuerySchema, "query"),
+    // `encounterRow`, not `encounter`: a list of visits is a screen somebody reads, and every one
+    // of its consumers had to turn `patientId` into a name somehow (D18, see the contract).
+    responds(encounterRow.array(), { meta: true }),
     asyncHandler(controller.listEncounters),
   );
 
@@ -76,6 +92,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.getEncounter),
   );
 
@@ -89,17 +106,25 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter.array()),
     asyncHandler(controller.getEpisodeTimeline),
   );
 
   /**
    * Everyone in a bed right now. Gated on `module.ops.ipd` — a clinic has no wards, and
    * the honest answer to a clinic asking for its ward list is "you did not buy one".
+   *
+   * Paged like every other list here. The default `limit` is 100 rather than the usual 20
+   * precisely so this stays backward compatible: that is what the controller hard-coded before
+   * there was a query schema, and shrinking an existing client's ward list would be the same
+   * "patients vanish" bug seen from the other side (`listInpatientsQuerySchema`).
    */
   router.get(
     "/inpatients",
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ, IPD_FEATURE),
+    validate(listInpatientsQuerySchema, "query"),
+    responds(inpatientRow.array(), { meta: true }),
     asyncHandler(controller.listInpatients),
   );
 
@@ -122,6 +147,8 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ADMISSION_CREATE, IPD_FEATURE),
     validate(idParamSchema, "params"),
     validate(admitSchema),
+    responds(admitResult, { status: 201 }),
+    idempotent("Replays the admission this key already made."),
     asyncHandler(controller.admitPatient),
   );
 
@@ -141,6 +168,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(transferSchema),
+    responds(encounter),
     asyncHandler(controller.transferDoctor),
   );
 
@@ -149,6 +177,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.queuePatient),
   );
 
@@ -157,6 +186,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.startConsultation),
   );
 
@@ -171,6 +201,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.sendForInvestigations),
   );
 
@@ -180,7 +211,22 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_CLOSE, FEATURE),
     validate(idParamSchema, "params"),
     validate(closeEncounterSchema),
+    responds(encounter),
     asyncHandler(controller.closeEncounter),
+  );
+
+  /**
+   * The doctor's OP visit summary (diagnosis / advice) for the OPD slip. `emr:write` — it is
+   * clinical documentation, the same authority as a ward note, not queue management.
+   */
+  router.post(
+    "/encounters/:id/summary",
+    authenticate(),
+    authorize(PERMISSIONS.EMR_WRITE, FEATURE),
+    validate(idParamSchema, "params"),
+    validate(visitSummarySchema),
+    responds(encounter),
+    asyncHandler(controller.recordVisitSummary),
   );
 
   router.post(
@@ -189,6 +235,7 @@ export function encounterRouter(): Router {
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
     validate(cancelEncounterSchema),
+    responds(encounter),
     asyncHandler(controller.cancelEncounter),
   );
 
@@ -203,6 +250,7 @@ export function encounterRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_UPDATE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(encounter),
     asyncHandler(controller.markLeftWithoutBeingSeen),
   );
 

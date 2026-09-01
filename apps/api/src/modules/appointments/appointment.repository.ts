@@ -1,18 +1,23 @@
 /**
- * Appointment repository — the ONLY code that queries `appointments` and
- * `doctorSchedules` (Constitution §6).
+ * Appointment repository — the ONLY code that queries `appointments`,
+ * `doctorSchedules` and `doctorLeave` (Constitution §6).
  */
 import type { ClientSession } from "mongoose";
-import { getTenantDb } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
 import { repointPatientId, type PatientMergeRef } from "../../core/db/repointPatient.js";
 import { scopeFilter } from "../../middleware/authorize.js";
 import {
   getAppointmentModel,
   getDoctorScheduleModel,
+  getDoctorLeaveModel,
+  getDoctorAvailabilityModel,
   occupiesSlot,
   type AppointmentDoc,
   type AppointmentStatus,
   type DoctorScheduleDoc,
+  type DoctorLeaveDoc,
+  type DoctorAvailabilityDoc,
+  type DoctorSession,
   type StatusChange,
 } from "./appointment.model.js";
 
@@ -94,18 +99,31 @@ export async function create(
   return toAppointment(doc);
 }
 
+/**
+ * One appointment by id, at the sites the caller may actually work in.
+ *
+ * ── WHY THERE IS NO LONGER AN UNSCOPED TWIN ─────────────────────────────────
+ * This module used to ship two reads: `findById` (bare) and `findByIdScoped`. The read paths
+ * picked the scoped one and the STATE MACHINE picked the bare one, so every transition it
+ * drives — confirm, check-in, start, complete, no-show, cancel — resolved an appointment
+ * belonging to any site in the hospital. `appointment:update` and `appointment:cancel` are
+ * both declared `"branch"`, so that contradicted the permission catalogue, and it did it on a
+ * WRITE: a clerk at one site could cancel another site's clinic list, or mark a patient
+ * sitting in a waiting room 600km away as a no-show, with the audit trail recording it as a
+ * legitimate action. Proven by the branch-isolation suite, which failed on exactly this.
+ *
+ * Two functions where one is safe and one is not is a choice nobody should have to make
+ * correctly every time, so there is now one. `scopeFilter()` returns `{}` when there is no
+ * `ctx.scope` — seeds, migrations, queue consumers — so internal callers are unaffected,
+ * exactly as `writeBranchId` treats an absent scope.
+ */
 export async function findById(
   id: string,
   session?: ClientSession,
 ): Promise<Appointment | undefined> {
   const doc = await getAppointmentModel(getTenantDb())
-    .findById(id)
+    .findOne({ _id: id, ...scopeFilter() })
     .session(session ?? null);
-  return doc ? toAppointment(doc) : undefined;
-}
-
-export async function findByIdScoped(id: string): Promise<Appointment | undefined> {
-  const doc = await getAppointmentModel(getTenantDb()).findOne({ _id: id, ...scopeFilter() });
   return doc ? toAppointment(doc) : undefined;
 }
 
@@ -214,9 +232,33 @@ function toSchedule(doc: DoctorScheduleDoc): DoctorSchedule {
   };
 }
 
-export async function findSchedules(doctorId: string, weekday?: number): Promise<DoctorSchedule[]> {
+/**
+ * The key a weekday template is upserted on — `{doctor, weekday}` AT A SITE (ADR-0015).
+ *
+ * `$exists: false` rather than `null` for the branchless case, and the difference matters at the
+ * upsert: Mongo copies equality fields from the filter into an inserted document, so `null` would
+ * WRITE `branchId: null` and quietly break every `{$exists: false}` audit and backfill that looks
+ * for unstamped rows. `$exists` is not an equality, so the insert simply omits the field — which
+ * is the state a single-site hospital is supposed to be in until its Main Branch is seeded.
+ */
+function branchKey(branchId?: string): Record<string, unknown> {
+  return branchId ? { branchId } : { branchId: { $exists: false } };
+}
+
+/**
+ * A doctor's active weekly templates. `branchId` narrows to ONE SITE's clinic — pass the branch
+ * the slots are being computed for, so "Monday" means Monday *here* and a Chennai session never
+ * offers slots to a Hyderabad booking. Omitted, it returns the doctor's templates everywhere,
+ * which is what a single-site hospital (and the roster screen) wants.
+ */
+export async function findSchedules(
+  doctorId: string,
+  weekday?: number,
+  branchId?: string,
+): Promise<DoctorSchedule[]> {
   const query: Record<string, unknown> = { doctorId, active: true };
   if (weekday !== undefined) query.weekday = weekday;
+  if (branchId) query.branchId = branchId;
 
   const docs = await getDoctorScheduleModel(getTenantDb()).find(query);
   return docs.map(toSchedule);
@@ -231,7 +273,7 @@ export async function upsertSchedule(input: {
   slotMinutes: number;
 }): Promise<DoctorSchedule> {
   const doc = await getDoctorScheduleModel(getTenantDb()).findOneAndUpdate(
-    { doctorId: input.doctorId, weekday: input.weekday },
+    { doctorId: input.doctorId, weekday: input.weekday, ...branchKey(input.branchId) },
     { ...input, active: true },
     { new: true, upsert: true },
   );
@@ -245,6 +287,169 @@ export async function deactivateSchedule(id: string): Promise<boolean> {
     { new: true },
   );
   return Boolean(doc);
+}
+
+/* ── doctor leave ─────────────────────────────────────────────────────────── */
+
+export interface DoctorLeave {
+  id: string;
+  doctorId: string;
+  branchId?: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+}
+
+function toLeave(doc: DoctorLeaveDoc): DoctorLeave {
+  return {
+    id: doc._id.toString(),
+    doctorId: doc.doctorId,
+    fromDate: doc.fromDate,
+    toDate: doc.toDate,
+    ...(doc.reason ? { reason: doc.reason } : {}),
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
+  };
+}
+
+/** A doctor's leave, most recent first — the roster view. Branch-scoped like every read. */
+export async function findLeave(doctorId: string): Promise<DoctorLeave[]> {
+  const docs = await getDoctorLeaveModel(getTenantDb())
+    .find({ doctorId, ...scopeFilter() })
+    .sort({ fromDate: -1 })
+    .lean<DoctorLeaveDoc[]>();
+  return docs.map(toLeave);
+}
+
+/**
+ * Is the doctor on leave on `dateStr` (`YYYY-MM-DD`)? True when any leave range covers
+ * it inclusively. This is the one query availability and booking consult — a string
+ * comparison, because `YYYY-MM-DD` sorts chronologically as text.
+ */
+export async function isOnLeave(doctorId: string, dateStr: string): Promise<boolean> {
+  const hit = await getDoctorLeaveModel(getTenantDb())
+    .findOne({
+      doctorId,
+      fromDate: { $lte: dateStr },
+      toDate: { $gte: dateStr },
+      ...scopeFilter(),
+    })
+    .lean<DoctorLeaveDoc>();
+  return Boolean(hit);
+}
+
+export async function addLeave(input: {
+  doctorId: string;
+  branchId?: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+}): Promise<DoctorLeave> {
+  const ctx = getContext();
+  const doc = await getDoctorLeaveModel(getTenantDb()).create({
+    tenantId: ctx.tenantId,
+    doctorId: input.doctorId,
+    fromDate: input.fromDate,
+    toDate: input.toDate,
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.branchId ? { branchId: input.branchId } : {}),
+    ...(ctx.userId ? { createdBy: ctx.userId } : {}),
+  });
+  return toLeave(doc.toObject() as DoctorLeaveDoc);
+}
+
+/**
+ * Deleted, not soft-deleted: unlike a schedule, no appointment is booked "against" a
+ * leave row — it only ever suppressed slots — so removing it leaves nothing dangling.
+ */
+export async function removeLeave(id: string): Promise<boolean> {
+  const doc = await getDoctorLeaveModel(getTenantDb())
+    .findOneAndDelete({ _id: id, ...scopeFilter() })
+    .lean<DoctorLeaveDoc>();
+  return Boolean(doc);
+}
+
+/**
+ * The same delete, restricted to ONE doctor's rows — what `/doctors/me/leave/:id` uses.
+ *
+ * ── ONE QUERY, NOT A READ THEN A CHECK THEN A DELETE ────────────────────────
+ * `doctorId` is part of the FILTER rather than something verified beforehand, so there is no
+ * window between the check and the delete for the row to change under it, and no code path where
+ * a future edit forgets the check. A row belonging to somebody else simply does not match.
+ *
+ * The caller turns "no match" into a 404 rather than a 403, deliberately: distinguishing "that
+ * leave row is not yours" from "no such row" would confirm to any doctor that a colleague has
+ * leave booked with that id, which is roster information they were not granted.
+ */
+export async function removeOwnLeave(id: string, doctorId: string): Promise<boolean> {
+  const doc = await getDoctorLeaveModel(getTenantDb())
+    .findOneAndDelete({ _id: id, doctorId, ...scopeFilter() })
+    .lean<DoctorLeaveDoc>();
+  return Boolean(doc);
+}
+
+/* ── doctor availability (session roster) ─────────────────────────────────── */
+
+export interface DoctorAvailability {
+  doctorId: string;
+  weekday: number;
+  sessions: DoctorSession[];
+  branchId?: string;
+}
+
+function toAvailability(doc: DoctorAvailabilityDoc): DoctorAvailability {
+  return {
+    doctorId: doc.doctorId,
+    weekday: doc.weekday,
+    sessions: doc.sessions,
+    ...(doc.branchId ? { branchId: doc.branchId } : {}),
+  };
+}
+
+/** A doctor's whole week, ordered Sunday→Saturday — what the roster and reception read. */
+export async function findAvailability(doctorId: string): Promise<DoctorAvailability[]> {
+  const docs = await getDoctorAvailabilityModel(getTenantDb())
+    .find({ doctorId, ...scopeFilter() })
+    .sort({ weekday: 1 })
+    .lean<DoctorAvailabilityDoc[]>();
+  return docs.map(toAvailability);
+}
+
+/**
+ * Sets the sessions a doctor holds on one weekday. An empty set DELETES the day's row —
+ * "not in" is the absence of a row, not a row that says nothing, so the roster stays clean.
+ */
+export async function setAvailability(input: {
+  doctorId: string;
+  branchId?: string;
+  weekday: number;
+  sessions: DoctorSession[];
+}): Promise<DoctorAvailability | undefined> {
+  const ctx = getContext();
+  const model = getDoctorAvailabilityModel(getTenantDb());
+
+  if (input.sessions.length === 0) {
+    // Clearing a day clears it AT ONE SITE — the roster row is per branch, like the template.
+    await model.deleteOne({
+      doctorId: input.doctorId,
+      weekday: input.weekday,
+      ...branchKey(input.branchId),
+      ...scopeFilter(),
+    });
+    return undefined;
+  }
+
+  const doc = await model.findOneAndUpdate(
+    { doctorId: input.doctorId, weekday: input.weekday, ...branchKey(input.branchId) },
+    {
+      $set: {
+        sessions: input.sessions,
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+      },
+      $setOnInsert: { tenantId: ctx.tenantId },
+    },
+    { new: true, upsert: true },
+  );
+  return toAvailability(doc);
 }
 
 /**

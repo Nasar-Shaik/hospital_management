@@ -7,14 +7,10 @@
  * one grid, and the breakdowns a screen shows around it are still one query away.
  */
 import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import { requireAuth } from "../../middleware/authenticate.js";
 import * as reporting from "./reporting.service.js";
 import type { ReportRangeQuery } from "./reporting.schema.js";
-
-function ok<T>(res: Response, data: T): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(200).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 function rangeOf(req: { query: unknown }): { range: reporting.DateRange; csv: boolean } {
   const q = req.query as ReportRangeQuery;
@@ -42,6 +38,15 @@ function sendCsv(
 
 /** Paise → rupees, two decimals, for a spreadsheet cell. */
 const rupees = (paise: number): string => (paise / 100).toFixed(2);
+
+/**
+ * A clinician's OWN activity for a period. Self-scoped to the caller — no `report:view`, because
+ * you can always see what you did. JSON only (it is a dashboard panel, not a spreadsheet export).
+ */
+export const myActivity: RequestHandler = async (req, res) => {
+  const { range } = rangeOf(req);
+  ok(res, await reporting.myActivity(requireAuth(req).userId, range));
+};
 
 export const stockRegister: RequestHandler = async (req, res) => {
   const { range, csv } = rangeOf(req);
@@ -116,6 +121,94 @@ export const collections: RequestHandler = async (req, res) => {
     return;
   }
   ok(res, report);
+};
+
+/**
+ * Revenue leakage — care given but never billed. The CSV's principal table is the visit list (who
+ * to bill and how much), the actionable output; the category/source breakdowns are screen summaries.
+ */
+export const revenueLeakage: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.revenueLeakage(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "revenue-leakage",
+      ["UHID", "Patient", "Unbilled (INR)", "Charges"],
+      report.byEncounter.map((r) => [r.uhid, r.patientName, rupees(r.amount), r.count]),
+    );
+    return;
+  }
+  ok(res, report);
+};
+
+/**
+ * Dues ageing — billed but unpaid, aged. The CSV's principal table is the debtor list (who owes,
+ * how much, how old), the collections desk's call sheet; the buckets are the screen summary.
+ */
+export const duesAgeing: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.duesAgeing(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "dues-ageing",
+      ["Bill No", "UHID", "Patient", "Outstanding (INR)", "Age (days)"],
+      report.topDebtors.map((r) => [
+        r.number ?? "",
+        r.uhid,
+        r.patientName,
+        rupees(r.outstanding),
+        r.ageDays,
+      ]),
+    );
+    return;
+  }
+  ok(res, report);
+};
+
+/**
+ * The advance register — admission advances in, utilised and refunded, plus the balance held.
+ * The CSV's principal table is deposits by method (the drawer view); utilisation and the current
+ * liability are the summary a screen shows around it.
+ */
+export const walletRegister: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const report = await reporting.walletRegister(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "advance-register",
+      ["Method", "Advances collected (INR)", "Deposits"],
+      report.deposits.byMethod.map((m) => [m.method, rupees(m.amount), m.count]),
+    );
+    return;
+  }
+  ok(res, report);
+};
+
+/** The receipts register — every payment taken in the period, for cross-checking a receipt later. */
+export const receipts: RequestHandler = async (req, res) => {
+  const { range, csv } = rangeOf(req);
+  const rows = await reporting.receiptsRegister(range);
+  if (csv) {
+    sendCsv(
+      res,
+      "receipts",
+      ["Receipt No", "Type", "Patient", "UHID", "Amount (INR)", "Method", "Date"],
+      rows.map((r) => [
+        r.receiptNo,
+        r.kind,
+        r.patientName,
+        r.uhid,
+        rupees(r.amount),
+        r.method ?? "",
+        r.at,
+      ]),
+    );
+    return;
+  }
+  ok(res, rows);
 };
 
 export const dischargeOutcomes: RequestHandler = async (req, res) => {

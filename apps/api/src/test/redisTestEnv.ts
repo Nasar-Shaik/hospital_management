@@ -35,8 +35,10 @@ import { Redis } from "ioredis";
 const TEST_REDIS_BASE = process.env.REDIS_TEST_URL ?? "redis://127.0.0.1:6380";
 
 /**
- * One private database per suite. Redis ships with 16 (0–15); 0 belongs to the dev
- * server, which leaves 15 for tests and 5 spare.
+ * One private database per suite. Redis ships with 16 (0–15) and the compose file raises it to
+ * 32 (`--databases 32`) — 0 belongs to the dev server, and the original fifteen were all claimed
+ * by the time idempotency needed one. If a suite here fails with "DB index is out of range", the
+ * local Redis predates that change: `pnpm docker:dev:down && pnpm docker:dev`.
  *
  * Assigned explicitly rather than hashed from the filename: a hash collision would
  * silently reintroduce exactly the cross-talk this exists to prevent, and would do
@@ -59,7 +61,80 @@ const SUITE_DB = {
   users: 12,
   patients: 13,
   lab: 14,
-  misc: 15,
+  /** Branch isolation (ADR-0015) — claimed from the spare pool, see the note above. */
+  branchIsolation: 15,
+  /** Idempotency-Key (Doc 04 §5.1) — the first suite past the stock 16-database ceiling. */
+  idempotency: 16,
+  /** The mobile contract suite — drives `@medicore/api-client` against the real app. */
+  mobile: 17,
+  /**
+   * The clinic-clock suite (M0 §21 item C). Its own database because it moves a branch into a
+   * far timezone, and a registry entry cached under another suite's key would hand that branch
+   * back with the wrong zone — which is precisely the thing it exists to detect.
+   */
+  appointmentsTz: 18,
+  /**
+   * The MAR safety spine (M3-S1). Its own database because it moves a branch to America/New_York
+   * to prove dose rounds resolve on the WARD's clock — a branch cached under another suite's key
+   * would hand it back in the default zone and the timezone assertions would pass for the wrong
+   * reason, which is the one outcome worse than failing.
+   */
+  mar: 19,
+  /** Nursing documentation + allergy reach (M3-S2). Two branches and two tenants of its own. */
+  nursing: 20,
+  /**
+   * Nurse vitals capture (M3-S4). Its own database because the idempotency assertions read the
+   * key store directly: a replay claimed under another suite's key would report "one reading" for
+   * the wrong reason, which is worse than failing.
+   */
+  vitals: 21,
+  /**
+   * Operation theatres (B5, Theatre v1). Its own database because it provisions three tenants —
+   * two hospitals and a clinic on an edition WITHOUT the OT flag — and the entitlement verdict is
+   * cached: a clinic's "no OT module" answer resolved from another suite's key would either pass
+   * for the wrong reason or fail for one that has nothing to do with theatres.
+   */
+  theatres: 22,
+  /**
+   * The emergency department (D10). Its own database because, like theatres, it provisions a
+   * clinic on an edition WITHOUT the ED flag, and the entitlement verdict is cached — a "no
+   * emergency module" answer resolved from another suite's key would pass for the wrong reason.
+   */
+  emergency: 23,
+  /**
+   * The audit plugin's own semantics (D17). Its own database because it asserts on the CONTENTS of
+   * `auditLogs` and on `seq`, which is a per-tenant counter — a suite sharing a database would
+   * interleave its own writes into the trail these assertions count.
+   */
+  auditPlugin: 24,
+  /**
+   * The general store (G1/G3). Its own database for the same reason as theatres and emergency: it
+   * provisions a clinic on an edition WITHOUT `module.support.inventory`, and the entitlement
+   * verdict is CACHED — a "no store module" answer resolved from another suite's key would pass
+   * for a reason that has nothing to do with the store.
+   */
+  inventory: 25,
+  /**
+   * Staff push (M4). Its own database because the push path runs through the TASK QUEUE, whose
+   * jobs are Redis keys: `push:<notificationId>` shared with another suite's database would let
+   * one suite's scheduled buzz be refused as another's duplicate, and the symptom is an
+   * assertion that finds no push for a reason unrelated to push.
+   */
+  push: 26,
+  /**
+   * Patient-merge reference coverage. Its own database because it registers EVERY model on one
+   * connection and drives the merge fan-out across twenty-nine collections — a tenant registry
+   * entry resolved from another suite's key would point the fan-out at that suite's database, and
+   * the symptom would be a coverage assertion passing over somebody else's rows.
+   */
+  mergeCoverage: 27,
+  /**
+   * The problem list (Problem List V1). Its own database because it provisions a SECOND tenant to
+   * prove the list does not cross hospitals — a tenant registry entry resolved from another
+   * suite's key would answer for the wrong database, and the isolation assertion would pass for a
+   * reason unrelated to isolation.
+   */
+  problems: 28,
 } as const;
 
 export type TestSuite = keyof typeof SUITE_DB;

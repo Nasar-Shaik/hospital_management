@@ -25,7 +25,10 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
+import { idempotent } from "../../middleware/idempotent.js";
 import * as controller from "./order.controller.js";
+import { order, orderRow, placeOrderResult } from "./order.contract.js";
 import {
   cancelOrderSchema,
   completeOrderSchema,
@@ -45,6 +48,8 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_CREATE, FEATURE),
     validate(placeOrderSchema),
+    responds(placeOrderResult, { status: [200, 201] }),
+    idempotent("Replays the order this key already placed."),
     asyncHandler(controller.placeOrder),
   );
 
@@ -54,6 +59,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
     validate(listOrdersQuerySchema, "query"),
+    responds(orderRow.array(), { meta: true }),
     asyncHandler(controller.listOrders),
   );
 
@@ -62,6 +68,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_READ, FEATURE),
     validate(idParamSchema, "params"),
+    responds(order),
     asyncHandler(controller.getOrder),
   );
 
@@ -72,6 +79,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_PERFORM, FEATURE),
     validate(idParamSchema, "params"),
+    responds(order),
     asyncHandler(controller.acceptOrder),
   );
 
@@ -80,6 +88,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_PERFORM, FEATURE),
     validate(idParamSchema, "params"),
+    responds(order),
     asyncHandler(controller.startOrder),
   );
 
@@ -96,6 +105,7 @@ export function orderRouter(): Router {
     authorize(PERMISSIONS.ORDER_PERFORM, FEATURE),
     validate(idParamSchema, "params"),
     validate(completeOrderSchema),
+    responds(order),
     asyncHandler(controller.completeOrder),
   );
 
@@ -105,6 +115,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_VERIFY, FEATURE),
     validate(idParamSchema, "params"),
+    responds(order),
     asyncHandler(controller.verifyOrder),
   );
 
@@ -120,6 +131,7 @@ export function orderRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.ORDER_RELEASE, FEATURE),
     validate(idParamSchema, "params"),
+    responds(order),
     asyncHandler(controller.releaseOrder),
   );
 
@@ -129,6 +141,7 @@ export function orderRouter(): Router {
     authorize(PERMISSIONS.ORDER_CANCEL, FEATURE),
     validate(idParamSchema, "params"),
     validate(cancelOrderSchema),
+    responds(order),
     asyncHandler(controller.cancelOrder),
   );
 

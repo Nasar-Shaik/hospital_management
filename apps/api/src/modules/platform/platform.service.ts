@@ -36,15 +36,23 @@ import { cacheKeys, cacheSet } from "../../core/redis/redis.js";
 import { seedTenantAdmin } from "../../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../../seed/notificationTemplates.js";
 import { seedTariff } from "../../seed/tariff.js";
+import { seedMainBranch } from "../../seed/mainBranch.js";
 import {
   provisionTenant,
   transitionStatus,
+  setLimits as setTenantLimits,
+  setLicense as setTenantLicense,
+  setCustomDomain as setTenantCustomDomain,
+  effectiveLicenseState,
   getById as getTenantById,
   listServable,
   type TenantRegistryEntry,
   type TenantStatus,
+  type LicensePatch,
+  type LicenseRuntimeState,
 } from "../tenants/index.js";
 import { changePlan, getSubscription, listPlans } from "../subscriptions/index.js";
+import type { SubscriptionView, UsageLine } from "../subscriptions/index.js";
 import * as repo from "./platform.repository.js";
 import type { PlatformRole } from "./platform.model.js";
 
@@ -151,6 +159,16 @@ export async function changeOperatorPassword(
 
 /* ── the fleet ────────────────────────────────────────────────────────────── */
 
+/** Licence view for the console — the runtime state plus what it takes to renew (ADR-0016). */
+export interface LicenseView {
+  state: LicenseRuntimeState | "PERPETUAL";
+  /** ISO expiry, or absent when perpetual. */
+  expiresAt?: string;
+  /** ACTIVE: days until expiry. GRACE: days until access is cut. EXPIRED: 0. Perpetual: null. */
+  daysRemaining: number | null;
+  plan?: string;
+}
+
 export interface HospitalSummary {
   id: string;
   slug: string;
@@ -158,8 +176,23 @@ export interface HospitalSummary {
   status: TenantStatus;
   planCode?: string;
   databaseName: string;
+  /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /** Custom domain (ADR-0005), when one is attached. */
+  customDomain?: string;
+  /** Tenure (ADR-0016). Perpetual for hospitals with no expiry set. */
+  license: LicenseView;
   /** Where this hospital is reachable — assembled here so no UI has to guess. */
   url: string;
+}
+
+function licenseViewOf(tenant: TenantRegistryEntry): LicenseView {
+  if (tenant.licenseExpiresAt == null) return { state: "PERPETUAL", daysRemaining: null };
+  const { state, daysRemaining } = effectiveLicenseState({
+    expiresAt: tenant.licenseExpiresAt,
+    graceUntil: tenant.licenseGraceUntil,
+  });
+  return { state, daysRemaining, expiresAt: new Date(tenant.licenseExpiresAt).toISOString() };
 }
 
 function hospitalUrl(slug: string, baseDomain: string): string {
@@ -180,6 +213,9 @@ function toSummary(tenant: TenantRegistryEntry, baseDomain: string): HospitalSum
     status: tenant.status,
     ...(tenant.planCode ? { planCode: tenant.planCode } : {}),
     databaseName: tenant.databaseName,
+    ...(typeof tenant.maxBranches === "number" ? { maxBranches: tenant.maxBranches } : {}),
+    ...(tenant.customDomain ? { customDomain: tenant.customDomain } : {}),
+    license: licenseViewOf(tenant),
     url: hospitalUrl(tenant.slug, baseDomain),
   };
 }
@@ -194,7 +230,9 @@ function toSummary(tenant: TenantRegistryEntry, baseDomain: string): HospitalSum
 export async function getHospital(
   tenantId: string,
   baseDomain: string,
-): Promise<HospitalSummary & { usage: unknown; features: string[] }> {
+  // `usage` was `unknown`; it is a `UsageLine[]` and always has been — the detail screen's
+  // seat-count bars are drawn from it.
+): Promise<HospitalSummary & { usage: UsageLine[]; features: string[] }> {
   const tenant = await getTenantById(tenantId);
   if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
 
@@ -246,6 +284,16 @@ export interface CreateHospitalInput {
    * consumption and per-patient cost even when nobody pays.
    */
   organizationType?: OrganizationType;
+  /** Supported branches (ADR-0015). Absent ⇒ single-site (1). */
+  maxBranches?: number;
+  /** Custom domain (ADR-0005) — a bare hostname resolving to this hospital. */
+  customDomain?: string;
+  /** Tenure at creation (ADR-0016). Absent ⇒ the default trial window. */
+  licensePlan?: string;
+  /** ISO expiry. Wins over `trialDays`. */
+  licenseExpiresAt?: string;
+  trialDays?: number;
+  graceDays?: number;
 }
 
 export interface CreateHospitalResult {
@@ -271,11 +319,28 @@ export async function createHospital(
   context: { ip?: string; traceId?: string },
   baseDomain: string,
 ): Promise<CreateHospitalResult> {
+  const hasLicenseInput =
+    input.licenseExpiresAt != null ||
+    input.trialDays != null ||
+    input.licensePlan != null ||
+    input.graceDays != null;
   const result = await provisionTenant({
     slug: input.slug,
     hospitalName: input.hospitalName,
     planCode: input.planCode,
     trial: input.trial ?? false,
+    ...(typeof input.maxBranches === "number" ? { maxBranches: input.maxBranches } : {}),
+    ...(input.customDomain ? { customDomain: input.customDomain.trim().toLowerCase() } : {}),
+    ...(hasLicenseInput
+      ? {
+          license: {
+            ...(input.licensePlan ? { plan: input.licensePlan } : {}),
+            ...(input.licenseExpiresAt ? { expiresAt: new Date(input.licenseExpiresAt) } : {}),
+            ...(input.trialDays != null ? { trialDays: input.trialDays } : {}),
+            ...(input.graceDays != null ? { graceDays: input.graceDays } : {}),
+          },
+        }
+      : {}),
     ...(input.organizationType ? { organizationType: input.organizationType } : {}),
   });
 
@@ -319,6 +384,18 @@ export async function createHospital(
   // Same reason, same trap: a hospital with no tariff posts every charge at 0 and
   // looks like it works right up until someone reads a bill.
   await seedTariff(tenant.id, tenant.slug, connection);
+  /**
+   * Same trap, THIRD instance — and the one with teeth. The CLI has always seeded the Main
+   * Branch (ADR-0015); this path did not, so a hospital provisioned over HTTP had NO branch at
+   * all. `writeBranchId()` finds no candidate and returns `undefined`, so every encounter,
+   * appointment, order and invoice it ever wrote was BRANCHLESS — invisible the day that
+   * hospital opens a second site, because a branch-confined user would not see the first site's
+   * history. Nothing failed loudly; the data was simply born wrong.
+   *
+   * Idempotent (upsert on `{tenantId, isMain: true}`), so it is also safe on a provisioning
+   * retry that got this far and then failed downstream.
+   */
+  await seedMainBranch(tenant.id, tenant.slug, connection);
 
   // OUR trail.
   await repo.recordPlatformAudit({
@@ -418,7 +495,10 @@ export async function setHospitalPlan(
   planCode: string,
   actor: { id: string; email: string },
   context: { ip?: string; traceId?: string },
-): Promise<unknown> {
+  // Was `Promise<unknown>`, which is what `changePlan` happens to be assignable to and not what
+  // it returns. An `unknown` here is not merely imprecise: it makes the operation's response
+  // impossible to state, so the console had to guess the shape of the plan it had just changed.
+): Promise<SubscriptionView> {
   const tenant = await getTenantById(tenantId);
   if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
 
@@ -436,6 +516,97 @@ export async function setHospitalPlan(
   });
 
   return view;
+}
+
+/**
+ * Raises/lowers a hospital's supported-branches cap (ADR-0015). Lowering never
+ * deletes a branch — the create-time cap simply refuses new ones until it is raised
+ * again, which is how a branch is "stopped" (e.g. for non-payment) without data loss.
+ */
+export async function setHospitalLimits(
+  tenantId: string,
+  limits: { maxBranches: number },
+  actor: { id: string; email: string },
+  context: { ip?: string; traceId?: string },
+  baseDomain: string,
+): Promise<HospitalSummary> {
+  const tenant = await getTenantById(tenantId);
+  if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
+
+  const updated = await setTenantLimits(tenantId, limits);
+
+  await repo.recordPlatformAudit({
+    action: "platform.hospital.limitsChanged",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    tenantSlug: tenant.slug,
+    meta: { from: tenant.maxBranches ?? 1, to: limits.maxBranches },
+    ...context,
+  });
+
+  return toSummary(updated, baseDomain);
+}
+
+/**
+ * Sets / renews / extends a hospital's licence (ADR-0016). The expiry is denormalised
+ * onto the registry cache by the tenant service, so a renewal un-blocks an expired
+ * hospital on its very next request — no status change, no redeploy.
+ */
+export async function setHospitalLicense(
+  tenantId: string,
+  patch: LicensePatch,
+  actor: { id: string; email: string },
+  context: { ip?: string; traceId?: string },
+  baseDomain: string,
+): Promise<HospitalSummary> {
+  const tenant = await getTenantById(tenantId);
+  if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
+
+  const { tenant: updated, license } = await setTenantLicense(tenantId, patch);
+
+  await repo.recordPlatformAudit({
+    action: "platform.hospital.licenseChanged",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    tenantSlug: tenant.slug,
+    meta: {
+      expiresAt: license.expiresAt ? new Date(license.expiresAt).toISOString() : null,
+      plan: license.plan,
+      ...(patch.extendDays != null ? { extendedDays: patch.extendDays } : {}),
+    },
+    ...context,
+  });
+
+  return toSummary(updated, baseDomain);
+}
+
+/**
+ * Attaches / replaces / clears a hospital's custom domain (ADR-0005). Pass `null` to
+ * detach. The tenant service refuses a host already owned by another hospital and
+ * busts both the old and new host caches.
+ */
+export async function setHospitalDomain(
+  tenantId: string,
+  customDomain: string | null,
+  actor: { id: string; email: string },
+  context: { ip?: string; traceId?: string },
+  baseDomain: string,
+): Promise<HospitalSummary> {
+  const tenant = await getTenantById(tenantId);
+  if (!tenant) throw new AppError("HMS-GEN-404", 404, "Hospital not found", { tenantId });
+
+  const updated = await setTenantCustomDomain(tenantId, customDomain);
+
+  await repo.recordPlatformAudit({
+    action: "platform.hospital.domainChanged",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    tenantSlug: tenant.slug,
+    meta: { from: tenant.customDomain ?? null, to: updated.customDomain ?? null },
+    ...context,
+  });
+
+  return toSummary(updated, baseDomain);
 }
 
 /**
@@ -564,5 +735,49 @@ export async function bootstrapFirstOperator(input: {
     meta: { note: "the first operator, created from the CLI" },
   });
 
+  return { created: true, email: user.email };
+}
+
+/**
+ * DEV ONLY — make a console operator that definitely works: create it if the email is new, or reset
+ * its password if it already exists.
+ *
+ * Unlike `bootstrapFirstOperator`, this does NOT refuse when operators exist — which is exactly why
+ * it must never run in production (it would let anyone with shell access seize a super-admin login).
+ * The caller (`scripts/ensureOperator.ts`) guards `NODE_ENV`; this function trusts that guard, the
+ * same contract `seed:demo` runs under. It is the "I locked myself out of my laptop's console"
+ * escape hatch, nothing more.
+ */
+export async function upsertDevOperator(input: {
+  email: string;
+  name: string;
+  password: string;
+}): Promise<{ created: boolean; email: string }> {
+  const email = input.email.toLowerCase().trim();
+  const passwordHash = await hashPassword(input.password);
+
+  const existing = await repo.findCredentialByEmail(email);
+  if (existing) {
+    await repo.setPlatformPassword(existing.id, passwordHash, false);
+    await repo.recordPlatformAudit({
+      action: "platform.operator.dev_password_reset",
+      actorEmail: email,
+      meta: { note: "dev operator password reset via ensureOperator" },
+    });
+    return { created: false, email: existing.email };
+  }
+
+  const user = await repo.createPlatformUser({
+    email,
+    name: input.name,
+    passwordHash,
+    roles: ["SUPER_ADMIN"],
+    mustChangePassword: false,
+  });
+  await repo.recordPlatformAudit({
+    action: "platform.operator.dev_created",
+    actorEmail: email,
+    meta: { note: "dev operator created via ensureOperator" },
+  });
   return { created: true, email: user.email };
 }

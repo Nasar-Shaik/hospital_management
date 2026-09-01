@@ -241,7 +241,7 @@ const lineSchema = new Schema<PrescriptionLine>(
 const prescriptionSchema = new Schema<PrescriptionDoc>(
   {
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String },
+    branchId: { type: String, required: true },
 
     encounterId: { type: Schema.Types.ObjectId, required: true },
     patientId: { type: Schema.Types.ObjectId, required: true },

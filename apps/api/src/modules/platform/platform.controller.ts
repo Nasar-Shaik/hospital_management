@@ -1,18 +1,13 @@
 /**
  * Platform controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { env } from "../../config/env.js";
 import { requireOperator } from "../../middleware/authenticatePlatform.js";
 import type { TenantStatus } from "../tenants/index.js";
 import type { PlatformRole } from "./platform.model.js";
 import * as service from "./platform.service.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /** Everything an audited platform action needs to know about the caller. */
 function actorOf(req: Parameters<RequestHandler>[0]) {
@@ -93,6 +88,66 @@ export const setPlan: RequestHandler = async (req, res) => {
   const { actor, context } = actorOf(req);
   const { planCode } = req.body as { planCode: string };
   ok(res, await service.setHospitalPlan(req.params.id ?? "", planCode, actor, context));
+};
+
+export const setLimits: RequestHandler = async (req, res) => {
+  const { actor, context } = actorOf(req);
+  const { maxBranches } = req.body as { maxBranches: number };
+  ok(
+    res,
+    await service.setHospitalLimits(
+      req.params.id ?? "",
+      { maxBranches },
+      actor,
+      context,
+      env.TENANT_BASE_DOMAIN,
+    ),
+  );
+};
+
+export const setLicense: RequestHandler = async (req, res) => {
+  const { actor, context } = actorOf(req);
+  const body = req.body as {
+    plan?: string;
+    status?: "TRIAL" | "ACTIVE" | "EXPIRED" | "CANCELLED";
+    expiresAt?: string;
+    graceDays?: number;
+    extendDays?: number;
+    notes?: string;
+  };
+  const patch = {
+    ...(body.plan != null ? { plan: body.plan } : {}),
+    ...(body.status != null ? { status: body.status } : {}),
+    ...(body.expiresAt != null ? { expiresAt: new Date(body.expiresAt) } : {}),
+    ...(body.graceDays != null ? { graceDays: body.graceDays } : {}),
+    ...(body.extendDays != null ? { extendDays: body.extendDays } : {}),
+    ...(body.notes != null ? { notes: body.notes } : {}),
+  };
+  ok(
+    res,
+    await service.setHospitalLicense(
+      req.params.id ?? "",
+      patch,
+      actor,
+      context,
+      env.TENANT_BASE_DOMAIN,
+    ),
+  );
+};
+
+export const setDomain: RequestHandler = async (req, res) => {
+  const { actor, context } = actorOf(req);
+  const { customDomain } = req.body as { customDomain: string | null };
+  ok(
+    res,
+    await service.setHospitalDomain(
+      req.params.id ?? "",
+      customDomain,
+      actor,
+      context,
+      env.TENANT_BASE_DOMAIN,
+    ),
+  );
 };
 
 export const issueAdmin: RequestHandler = async (req, res) => {

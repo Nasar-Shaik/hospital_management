@@ -9,6 +9,13 @@ export class AppError extends Error {
     message: string,
     public readonly details?: unknown,
     public readonly isOperational = true,
+    /**
+     * Seconds a client should wait before retrying; `errorHandler` turns this into `Retry-After`.
+     *
+     * Only meaningful on a refusal that is expected to clear on its own or after an operator acts
+     * (503/429). Omitted everywhere else, because telling a client to retry a 422 is a lie.
+     */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "AppError";
@@ -89,6 +96,17 @@ export class TenantSuspendedError extends AppError {
   }
 }
 
+/**
+ * HMS-TEN-005 — the tenant's LICENCE has lapsed past its grace window (ADR-0016).
+ * Distinct from HMS-TEN-002 (operator suspend): the fix is renewal, not reactivation,
+ * and it self-heals the moment the operator extends the expiry.
+ */
+export class LicenseExpiredError extends AppError {
+  constructor(details?: unknown) {
+    super("HMS-TEN-005", 403, "Subscription expired", details);
+  }
+}
+
 /** HMS-TEN-003 — JWT tenant claim does not match the host-resolved tenant (Doc 04 §2.2.1 step 4). */
 export class TenantMismatchError extends AppError {
   constructor(details?: unknown) {
@@ -100,6 +118,45 @@ export class TenantMismatchError extends AppError {
 export class TenantUnavailableError extends AppError {
   constructor(details?: unknown) {
     super("HMS-TEN-004", 503, "A dependency is unavailable", details);
+  }
+}
+
+/* ── Request-level guards (ERROR_CODES: HMS-REQ-*) ───────────────────────── */
+
+/**
+ * HMS-REQ-002 — this `Idempotency-Key` was already used, for a DIFFERENT request.
+ *
+ * The one case where replaying would be dangerous rather than helpful: the caller asked for
+ * something else under a name it had already spent. Answering with the old result would report
+ * success for an operation that never ran — the ₹5,000 payment the client believes it made and
+ * the hospital never took. So it is refused, loudly, and `details` carries what that key DID do
+ * (ERROR_CODES: "Original response returned in `details`") so the caller can reconcile rather
+ * than guess.
+ *
+ * Safe to disclose: a key is scoped to one tenant AND one user, so the original response is
+ * always the caller's own.
+ */
+export class IdempotencyConflictError extends AppError {
+  constructor(details: unknown) {
+    super("HMS-REQ-002", 409, "Duplicate request (idempotency)", details);
+  }
+}
+
+/**
+ * HMS-REQ-004 — the SAME request is already in flight under this key.
+ *
+ * Distinct from HMS-REQ-002 on purpose, because the remedies are opposite. A conflict means
+ * "your client has a bug, fix the key"; this means "your first attempt is still running, wait
+ * and ask again" — and it is the answer a double-click gets, which is the most common thing
+ * that will ever produce it. Collapsing the two into one code would tell a cashier to
+ * investigate a defect that does not exist.
+ *
+ * This is what a claim looks like from the losing side of the unique index. Retryable: the
+ * winner will finish, and the retry will then replay its result.
+ */
+export class IdempotencyInProgressError extends AppError {
+  constructor(details: unknown) {
+    super("HMS-REQ-004", 409, "A request with this Idempotency-Key is still in progress", details);
   }
 }
 

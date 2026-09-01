@@ -14,10 +14,20 @@
     "provision": "tsx --env-file-if-exists=.env src/scripts/provisionTenant.ts",
     "migrate": "tsx --env-file-if-exists=.env src/scripts/migrateTenants.ts",
     "seed:demo": "tsx --env-file-if-exists=.env src/scripts/seedDemo.ts",
+    "dev:device-domains": "tsx --env-file-if-exists=.env src/scripts/devDeviceDomains.ts",
+    "seed:clinical": "tsx --env-file-if-exists=.env src/scripts/seedClinical.ts",
+    "seed:validation": "tsx --env-file-if-exists=.env src/scripts/seedValidation.ts",
     "plan": "tsx --env-file-if-exists=.env src/scripts/setPlan.ts",
     "audit:chain": "tsx --env-file-if-exists=.env src/scripts/auditChain.ts",
     "operator": "tsx --env-file-if-exists=.env src/scripts/createOperator.ts",
-    "routes": "tsx --env-file-if-exists=.env src/scripts/routeAudit.ts"
+    "operator:ensure": "tsx --env-file-if-exists=.env src/scripts/ensureOperator.ts",
+    "routes": "tsx --env-file-if-exists=.env src/scripts/routeAudit.ts",
+    "openapi": "tsx --env-file-if-exists=.env src/scripts/generateOpenapi.ts",
+    "openapi:check": "tsx --env-file-if-exists=.env src/scripts/generateOpenapi.ts --check",
+    "contract:check": "tsx src/scripts/checkContract.ts",
+    "contract:accept": "tsx src/scripts/checkContract.ts --accept",
+    "client:check": "tsx src/scripts/checkClientContract.ts",
+    "licence": "tsx --env-file-if-exists=.env src/scripts/setLicenseState.ts"
   },
   "dependencies": {
     "@medicore/logger": "workspace:*",
@@ -34,9 +44,11 @@
     "jose": "^5.10.0",
     "mongoose": "^8.13.0",
     "nodemailer": "^9.0.3",
-    "otpauth": "^9.5.1"
+    "otpauth": "^9.5.1",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
+    "@medicore/api-client": "workspace:*",
     "@medicore/config": "workspace:*",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
@@ -45,6 +57,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/supertest": "^6.0.3",
     "eslint": "^9.24.0",
+    "prettier": "^3.5.0",
     "supertest": "^7.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",

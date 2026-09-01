@@ -23,6 +23,7 @@ import { verifyToken } from "../core/crypto/jwt.js";
 import { cacheGet, cacheKeys } from "../core/redis/redis.js";
 import { tagMiddleware } from "../core/http/routeInventory.js";
 import { SessionExpiredError, TenantMismatchError } from "../core/errors/appError.js";
+import { API_KEY_PREFIX, resolveApiKey } from "../modules/apiKeys/index.js";
 
 function bearerToken(req: Request): string | undefined {
   const header = req.headers.authorization;
@@ -40,6 +41,30 @@ export function authenticate() {
         try {
           const token = bearerToken(req);
           if (!token) throw new SessionExpiredError({ reason: "missing bearer token" });
+
+          // ── API key (A9) ────────────────────────────────────────────────────
+          // A key is told from a JWT by its `mk_` prefix. It is resolved in the tenant DB the host
+          // already selected, so a key from another hospital simply is not found here. It binds to
+          // a USER and authenticates as them — `authorize` downstream reads that user's live
+          // permissions and branch scope by id, exactly as for a session, so nothing else changes.
+          if (token.startsWith(API_KEY_PREFIX)) {
+            const resolved = await resolveApiKey(token);
+            if (!resolved) throw new SessionExpiredError({ reason: "invalid api key" });
+
+            const ctx = getContext();
+            ctx.userId = resolved.userId;
+            req.auth = {
+              userId: resolved.userId,
+              roles: [],
+              branchIds: [],
+              jti: `apikey:${resolved.keyId}`,
+              expiresAt: resolved.expiresAt
+                ? Math.floor(resolved.expiresAt.getTime() / 1000)
+                : Math.floor(Date.now() / 1000) + 3600,
+            };
+            next();
+            return;
+          }
 
           let claims;
           try {

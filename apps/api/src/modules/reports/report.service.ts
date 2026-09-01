@@ -15,6 +15,13 @@ export type { ReportMeta, ReportBytes } from "./report.repository.js";
 /** 10 MB. Above a multi-page PDF or a compressed image, well under Mongo's 16 MB ceiling. */
 const MAX_BYTES = 10 * 1024 * 1024;
 
+/**
+ * The most orders one worklist lookup may ask about. The lab page fetches a single patient's
+ * orders, so a handful; the cap is what stops the same route being used to walk the collection.
+ * Matches the ceiling `orderPaymentStatus` puts on the same screen's payment lookup.
+ */
+const MAX_ORDERS_PER_LOOKUP = 100;
+
 const ALLOWED_TYPES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -66,6 +73,14 @@ export async function uploadReport(input: UploadReportInput): Promise<repo.Repor
     data,
     ...(order.branchId ? { branchId: order.branchId } : {}),
   });
+}
+
+/**
+ * The reports attached to a set of orders — the lab worklist's read, reachable with `order:read`.
+ * Capped so a caller cannot turn one request into a scan of the collection.
+ */
+export async function reportsForOrders(orderIds: string[]): Promise<repo.ReportMeta[]> {
+  return repo.listForOrders(orderIds.slice(0, MAX_ORDERS_PER_LOOKUP));
 }
 
 export async function listPatientReports(patientId: string): Promise<repo.ReportMeta[]> {

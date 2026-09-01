@@ -33,7 +33,7 @@
 import { Worker, type ConnectionOptions } from "bullmq";
 import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
-import { runWithContext } from "../context/requestContext.js";
+import { getContext, runWithContext } from "../context/requestContext.js";
 import { getTenantConnection } from "../db/connectionManager.js";
 import { getById } from "../../modules/tenants/index.js";
 import { appointmentConsumers } from "../../modules/appointments/index.js";
@@ -44,9 +44,32 @@ import { medicineConsumers } from "../../modules/medicines/index.js";
 import { patientConsumers } from "../../modules/patients/index.js";
 import { encounterConsumers } from "../../modules/encounters/index.js";
 import { allergyConsumers } from "../../modules/allergies/index.js";
+import { vitalsConsumers } from "../../modules/vitals/index.js";
 import { dispenseConsumers } from "../../modules/pharmacy/index.js";
 import { wardNoteConsumers } from "../../modules/admissions/index.js";
 import { reportConsumers } from "../../modules/reports/index.js";
+import { documentConsumers } from "../../modules/documents/index.js";
+import { walletConsumers } from "../../modules/wallet/index.js";
+import { notificationConsumers } from "../../modules/notifications/index.js";
+/**
+ * ── THE REST OF THE MERGE FAN-OUT (added when the invariant was audited) ────
+ * repointPatient.ts states the rule as "EVERY module that stores a patientId must re-point its
+ * own references". Thirteen collections across these eleven modules did not, and nothing failed
+ * when they did not — the merge simply left part of a person's record on the retired chart. The
+ * guard that now catches the next one is `patientMergeCoverage.int.test.ts`.
+ */
+import { consultationConsumers } from "../../modules/consultations/index.js";
+import { marConsumers } from "../../modules/mar/index.js";
+import { mrdConsumers } from "../../modules/mrd/index.js";
+import { emergencyConsumers } from "../../modules/emergency/index.js";
+import { theatreConsumers } from "../../modules/theatres/index.js";
+import { insuranceConsumers } from "../../modules/insurance/index.js";
+import { medicolegalConsumers } from "../../modules/medicolegal/index.js";
+import { mortuaryConsumers } from "../../modules/mortuary/index.js";
+import { ambulanceConsumers } from "../../modules/ambulance/index.js";
+import { feedbackConsumers } from "../../modules/feedback/index.js";
+import { userConsumers } from "../../modules/users/index.js";
+import { problemConsumers } from "../../modules/problems/index.js";
 import { NOTIFICATION_QUEUE, TASK_PREFIX, type TaskJob } from "./taskQueue.js";
 import type { DomainEvent, EventHandler, ModuleConsumers, TaskHandler } from "./consumers.js";
 
@@ -79,9 +102,37 @@ const MODULES: ModuleConsumers[] = [
   // (appointments, orders, prescriptions, billing) also handle it; these are the rest.
   encounterConsumers,
   allergyConsumers,
+  vitalsConsumers,
   dispenseConsumers,
   wardNoteConsumers,
   reportConsumers,
+  documentConsumers,
+  walletConsumers,
+  // The rest of the merge fan-out. Every one of these reacts to PATIENTS_MERGED and nothing else:
+  // the clinical record (the note, the administrations, the coding, triage, theatre), the
+  // medico-legal record (consent, death, the mortuary register), the money (cover and claims),
+  // the operational links (ambulance, feedback) and the portal identity.
+  consultationConsumers,
+  marConsumers,
+  mrdConsumers,
+  emergencyConsumers,
+  theatreConsumers,
+  insuranceConsumers,
+  medicolegalConsumers,
+  mortuaryConsumers,
+  ambulanceConsumers,
+  feedbackConsumers,
+  userConsumers,
+  // The problem list (Problem List V1) — a patient-level collection, so it joins the fan-out
+  // the day it ships rather than the day somebody notices.
+  problemConsumers,
+  /**
+   * The only entry here that reacts to nothing in the hospital. It registers ONE task —
+   * `push.deliver` — which this module scheduled for itself when an in-app message was delivered
+   * (M4). Push is a knock on the door after the record is already safe, so it runs on the queue
+   * with its retries and its DLQ rather than inside the request that raised the alert.
+   */
+  notificationConsumers,
 ];
 
 function mergeHandlers(): {
@@ -130,8 +181,29 @@ function redisConnection(url: string): ConnectionOptions {
  * `userId` is deliberately absent. Nobody clicked anything — this is the system
  * acting on its own, and the audit trail should say so rather than blame the clerk
  * whose booking happened to trigger it.
+ *
+ * ── THE BRANCH TRAVELS WITH THE EVENT (ADR-0015) ────────────────────────────
+ * `activeBranchId` is bound from the envelope, so a handler reacting to something that
+ * happened in Chennai writes its charge, its stock movement and its SMS record in Chennai —
+ * through `writeBranchId()`, the same choke point a request uses, with no per-consumer
+ * plumbing. Before this, the context carried no branch at all and each consumer had to
+ * remember `event.branchId` for itself: billing, medicines, patients and prescriptions did;
+ * `order.result.released` did not, and neither did anything reached through `notify()` that
+ * had not thought to look it up. Per-consumer plumbing always ends with that split.
+ *
+ * It also makes the branch survive a RETRY, which per-handler plumbing could not guarantee:
+ * the value is re-read from the persisted outbox row on every redelivery, so attempt five
+ * binds exactly what attempt one did.
+ *
+ * `scope` stays absent. There is no user to constrain here, and `writeBranchId` already reads
+ * an absent scope as "internal caller, trust the branch" — the same way `scopeFilter` does.
  */
-async function withTenant<T>(tenantId: string, traceId: string, fn: () => Promise<T>): Promise<T> {
+async function withTenant<T>(
+  tenantId: string,
+  traceId: string,
+  fn: () => Promise<T>,
+  branchId?: string,
+): Promise<T> {
   const tenant = await getById(tenantId);
   if (!tenant) {
     // A tenant that no longer exists (or was terminated) is not a retryable
@@ -147,7 +219,16 @@ async function withTenant<T>(tenantId: string, traceId: string, fn: () => Promis
     ...(tenant.dbUri ? { dbUri: tenant.dbUri } : {}),
   });
 
-  return runWithContext({ traceId, tenantId: tenant.id, tenantSlug: tenant.slug, connection }, fn);
+  return runWithContext(
+    {
+      traceId,
+      tenantId: tenant.id,
+      tenantSlug: tenant.slug,
+      connection,
+      ...(branchId ? { activeBranchId: branchId } : {}),
+    },
+    fn,
+  );
 }
 
 /**
@@ -207,8 +288,11 @@ export function startEventConsumer(): void {
         return;
       }
 
-      await withTenant(event.tenantId, event.traceId ?? `event-${event.eventId}`, () =>
-        dispatchEvent(handlers, event),
+      await withTenant(
+        event.tenantId,
+        event.traceId ?? `event-${event.eventId}`,
+        () => dispatchEvent(handlers, event),
+        event.branchId,
       );
     },
     {
@@ -258,7 +342,20 @@ export async function stopEventConsumer(): Promise<void> {
 export async function dispatchEventInline(event: DomainEvent): Promise<void> {
   const { events } = mergeHandlers();
   const handlers = events.get(event.name) ?? [];
-  await dispatchEvent(handlers, event);
+
+  /**
+   * The branch is bound here for the same reason `withTenant` binds it, and the duplication is
+   * the point: a seam that skipped it would let a test prove a propagation production does not
+   * perform. The caller has already bound the tenant (that is what this seam exists to avoid
+   * re-doing), so only the branch is layered on.
+   */
+  if (!event.branchId) {
+    await dispatchEvent(handlers, event);
+    return;
+  }
+  await runWithContext({ ...getContext(), activeBranchId: event.branchId }, () =>
+    dispatchEvent(handlers, event),
+  );
 }
 
 export async function dispatchTaskInline(

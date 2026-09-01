@@ -19,17 +19,21 @@
  */
 import { createLogger } from "@medicore/logger";
 import { env } from "../../config/env.js";
+import { getContext } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
+import { scheduleTask } from "../../core/events/taskQueue.js";
 import { getChannel } from "./channels/channel.js";
 import { renderTemplate } from "./notification.model.js";
+import { PUSH_TASK, shouldPush } from "./push.service.js";
 import * as repo from "./notification.repository.js";
 
 // Registers the channels. The registry is populated by import side effect, so
 // these are load-bearing — they are not unused imports.
 //
-// `inapp` has no template pointing at it yet: patients have no app, and every
-// message A6 sends today is patient-facing. It is registered because the STAFF
-// inbox and the WhatsApp-style staff chat are the next milestone, and they deliver
-// through this same door — the ledger row IS the message (see channels/inapp.ts).
+// `inapp` carries the STAFF messages (`order.critical`, `order.result.released`); `email` carries
+// the patient-facing ones and the password reset, which by definition cannot be delivered to a
+// person who is not signed in. The split, and why it is the template's decision rather than the
+// caller's, is `AI_Workflow/docs/COMMUNICATION_POLICY.md`.
 import "./channels/email.js";
 import "./channels/inapp.js";
 
@@ -59,6 +63,14 @@ export interface NotifyInput {
   dedupeKey: string;
   branchId?: string;
   eventId?: string;
+  /**
+   * WHAT the message is about, so a client can open it (M4).
+   *
+   * Generic on purpose — this module does not know what an order is (Rule P1). The caller names
+   * the kind and the id; each client maps a kind to one of its own screens. Optional, because a
+   * password reset is about nothing anyone can open.
+   */
+  resource?: { type: string; id: string };
 }
 
 /**
@@ -74,6 +86,76 @@ export interface NotifyInput {
 export type NotifyOutcome = "sent" | "duplicate" | "unreachable" | "suppressed" | "failed";
 
 /**
+ * Which site's ledger this message belongs to (ADR-0015).
+ *
+ * `NotifyInput.branchId` was left to each caller, and the callers disagreed: the three appointment
+ * messages and the patient welcome passed one, `order.result.released` and `password.reset` did
+ * not. Per-caller plumbing always ends this way — the gap is invisible until someone reads a
+ * report and finds a message that cannot say which site sent it.
+ *
+ * It is now DERIVED, and an explicit argument still wins for a caller that knows better. For a
+ * queue handler the derived value is the branch of the EVENT that triggered it (bound in
+ * `eventConsumer.withTenant`); for a direct call it is the branch the clerk is working at.
+ *
+ * ── WHY THIS ONE FAILS SOFT WHERE A CHARGE FAILS CLOSED ─────────────────────
+ * `writeBranchId()` refuses (HMS-BRANCH-001) when a caller could mean several branches and has
+ * named none. That is right for a record OF something — an admission must know its site. It is
+ * wrong here: this is the record of a MESSAGE, and a critical-result alert must never fail to
+ * send because nobody picked a branch in a dropdown. So an ambiguous branch downgrades to "not
+ * recorded" and the message goes out, which is the lesser of the two harms.
+ */
+async function deliveryBranchId(explicit?: string): Promise<string | undefined> {
+  try {
+    return await writeBranchId(explicit);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Queues a push for a message that has just been delivered in-app (M4).
+ *
+ * ── WHY IT HANGS OFF `inapp` AND NOT A CHANNEL OF ITS OWN ───────────────────
+ * `dedupeKey` is unique per tenant, so a template delivered on two channels collides on
+ * `one_message_per_cause` and the second is dropped as a duplicate — the problem
+ * COMMUNICATION_POLICY records for email-plus-inapp, and the reason push is not a `Channel`.
+ * It is not a second message: `channels/inapp.ts` has said since it was written that a phone
+ * notification is *"a push wrapper around one of these rows, not a separate system"*.
+ *
+ * `inapp` is also exactly the right predicate for WHO gets pushed. That channel carries the staff
+ * messages and only staff have logins, so a patient — who has no app, no login and no device row —
+ * cannot be reached here by construction rather than by a check somebody has to remember.
+ *
+ * ── FAILING TO QUEUE MUST NOT FAIL THE MESSAGE ──────────────────────────────
+ * The row is already `sent`; the alert is already in the doctor's inbox. Throwing here would turn
+ * a delivered message into a retry that re-sends nothing (the dedupe sees to that) and reports a
+ * failure that did not happen. A machine with no Redis simply does not buzz any phones, which is
+ * the same degradation `scheduleTask` already documents for reminders.
+ */
+async function knockOnTheirPhone(
+  notificationId: string,
+  channel: string,
+  recipientId?: string,
+): Promise<void> {
+  if (!shouldPush(channel, recipientId)) return;
+  try {
+    await scheduleTask(
+      PUSH_TASK,
+      getContext().tenantId,
+      { notificationId },
+      // One push per message, however many times the event is redelivered. BullMQ refuses a
+      // duplicate jobId, so at-least-once delivery of the CAUSE cannot become two buzzes.
+      { jobId: `push-${notificationId}` },
+    );
+  } catch (err) {
+    logger.warn(
+      { notificationId, err: err instanceof Error ? err.message : String(err) },
+      "could not queue a push — the message is delivered, the phone will not buzz",
+    );
+  }
+}
+
+/**
  * Sends one message, exactly once, and records what happened either way.
  *
  * Throws ONLY when the provider fails — that is the signal the caller (a queue
@@ -83,6 +165,7 @@ export type NotifyOutcome = "sent" | "duplicate" | "unreachable" | "suppressed" 
  * them forever is a queue nobody reads.
  */
 export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
+  const branchId = await deliveryBranchId(input.branchId);
   const template = await repo.findTemplate(input.templateKey);
   if (!template) {
     // A missing template is a BUG (a caller named one that was never seeded), and
@@ -121,8 +204,9 @@ export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
     ...(input.recipient.name ? { recipientName: input.recipient.name } : {}),
     ...(input.recipient.type ? { recipientType: input.recipient.type } : {}),
     ...(input.recipient.id ? { recipientId: input.recipient.id } : {}),
-    ...(input.branchId ? { branchId: input.branchId } : {}),
+    ...(branchId ? { branchId } : {}),
     ...(input.eventId ? { eventId: input.eventId } : {}),
+    ...(input.resource ? { resourceType: input.resource.type, resourceId: input.resource.id } : {}),
   });
 
   /** Already delivered (or already given up on). THE dedupe. */
@@ -188,6 +272,7 @@ export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
     }
 
     await repo.markSent(notification.id);
+    await knockOnTheirPhone(notification.id, template.channel, input.recipient.id);
     logger.info(
       { templateKey: input.templateKey, channel: template.channel, to: notification.to },
       "notification sent",
@@ -208,4 +293,45 @@ export async function notify(input: NotifyInput): Promise<NotifyOutcome> {
 export const listNotifications = repo.list;
 export const listTemplates = repo.listTemplates;
 export const updateTemplate = repo.updateTemplate;
-export type { Notification, NotificationTemplate } from "./notification.repository.js";
+
+/* ── The recipient's own inbox ─────────────────────────────────────────────── */
+
+/**
+ * What has been sent TO the caller.
+ *
+ * ── THE RECIPIENT IS THE SESSION, NEVER A PARAMETER ─────────────────────────
+ * `recipientId` comes from `getContext().userId` and there is no way to ask for anybody else's.
+ * That is what makes the route safe to expose with no permission at all: the same reasoning as
+ * `GET /reports/my-activity` and `GET /me/branches` (rbac.int.test.ts `SELF_SERVICE_ROUTES`).
+ * Requiring a permission here would mean a hospital could accidentally configure a role that
+ * cannot read its own alerts — a locked door in front of the user's own mail.
+ *
+ * The admin-facing `GET /notifications` (`notification:manage`) is a DIFFERENT question over the
+ * same collection: "what has this hospital sent to anyone?" It stays where it is.
+ */
+export async function inbox(input: {
+  unreadOnly?: boolean;
+  limit: number;
+  skip: number;
+}): Promise<{ items: repo.InboxMessage[]; total: number }> {
+  const recipientId = getContext().userId;
+
+  // A session with no user is not a state any authenticated route reaches — but returning an
+  // EMPTY inbox rather than every message in the hospital is the only safe way to be wrong here.
+  if (!recipientId) return { items: [], total: 0 };
+
+  return repo.listForRecipient({
+    recipientId,
+    limit: input.limit,
+    skip: input.skip,
+    ...(input.unreadOnly ? { unreadOnly: true } : {}),
+  });
+}
+
+/** Opening one message. Idempotent, and scoped to the caller inside the repository's filter. */
+export const markRead = repo.markRead;
+export type {
+  InboxMessage,
+  Notification,
+  NotificationTemplate,
+} from "./notification.repository.js";

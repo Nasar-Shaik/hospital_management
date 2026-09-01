@@ -9,6 +9,13 @@
  */
 export { allergyRouter } from "./allergy.routes.js";
 
+/**
+ * The ward worklist's batch read (M3-S3). Exposed from the repository rather than wrapped in a
+ * service call because there is no rule to apply — it is `listActiveForPatient` for many patients,
+ * and hospital-wide for exactly the same reason.
+ */
+export { activeForPatients } from "./allergy.repository.js";
+
 export {
   recordAllergy,
   listAllergies,

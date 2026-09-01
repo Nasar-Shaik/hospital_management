@@ -18,6 +18,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
+import { listening } from "./test/appServer.js";
 import { createLogger } from "@medicore/logger";
 import { assertMongoReachable, dropDatabases, TEST_MONGO_URI } from "./test/mongoTestEnv.js";
 import { assertRedisReachable, flushTestCache, testRedisUrl } from "./test/redisTestEnv.js";
@@ -33,19 +34,21 @@ const { getTenantConnection, closeAllTenantConnections } =
   await import("./core/db/connectionManager.js");
 const { closeMaster } = await import("./core/db/masterDb.js");
 const { closeRedis } = await import("./core/redis/redis.js");
+const { forgetSchemaReadiness } = await import("./core/db/schemaReadiness.js");
 const { runWithContext } = await import("./core/context/requestContext.js");
 const { createUser, transitionStatus } = await import("./modules/users/index.js");
 const { assignRoleByCode, seedRbac } = await import("./modules/rbac/index.js");
 const { setPassword } = await import("./modules/auth/index.js");
 const { seedTariff } = await import("./seed/tariff.js");
 const { dispatchEventInline } = await import("./core/events/eventConsumer.js");
+const batches = await import("./modules/medicines/batch.repository.js");
 
 const PVT = "test-rx-pvt";
 const GOV = "test-rx-gov";
 const CLINIC = "test-rx-clinic";
 const PASSWORD = "V4lid!Password#2026";
 
-const app = createApp(createLogger({ service: "rx-int-test" }));
+const app = await listening(createApp(createLogger({ service: "rx-int-test" })));
 
 interface Hospital {
   id: string;
@@ -56,6 +59,8 @@ interface Hospital {
   doctorToken: string;
   doctorId: string;
   pharmacistToken: string;
+  /** NURSE — charting and observations, which no other role in this harness may do. */
+  nurseToken: string;
   connection: Awaited<ReturnType<typeof getTenantConnection>>;
 }
 
@@ -129,6 +134,20 @@ async function setup(
       await transitionStatus(doc.id, "active");
       doctorId = doc.id;
 
+      /**
+       * A nurse, so the suite can prove what a dispensing refusal must NOT touch. Charting a dose
+       * and recording observations are NURSE permissions — neither the doctor nor the admin holds
+       * them — so without this the proportionality claim could only be asserted, not exercised.
+       */
+      const nurse = await createUser({
+        email: `nurse@${slug}.test`,
+        name: "Sister Fernandes",
+        status: "invited",
+      });
+      await setPassword(nurse.id, PASSWORD, { mustChangePassword: false });
+      await assignRoleByCode(nurse.id, "NURSE", []);
+      await transitionStatus(nurse.id, "active");
+
       const pharm = await createUser({
         email: `pharm@${slug}.test`,
         name: "Pharmacist Iqbal",
@@ -149,6 +168,7 @@ async function setup(
     token: await login({ host }, `admin@${slug}.test`),
     doctorToken: await login({ host }, `doc@${slug}.test`),
     pharmacistToken: await login({ host }, `pharm@${slug}.test`),
+    nurseToken: await login({ host }, `nurse@${slug}.test`),
     doctorId,
     connection,
   };
@@ -945,5 +965,819 @@ describe("an allergy blocks the signature until it is acknowledged", () => {
     // one, or the log would show overrides that never overrode anything.
     const res = await rawSign(pvt, rx.id, { overrideReason: "just in case" }).expect(200);
     expect(res.body.data.safetyOverride).toBeUndefined();
+  });
+});
+
+/**
+ * ── WHAT THE WIRE MUST NEVER CARRY AGAIN ─────────────────────────────────────
+ *
+ * Two defects found by the response contract in Phase 2, both invisible to every test that
+ * existed. Both had the same cause and it is worth naming: a repository mapper that is correct
+ * for the object a `.lean()` READ returns and wrong for the hydrated document `create()` returns.
+ * Seven of eight paths were lean, so seven of eight were right.
+ *
+ * These tests assert the shape of the CREATE response specifically, because that is the path that
+ * was broken and the path no assertion had ever looked at.
+ */
+describe("the create response is the shape the contract promises", () => {
+  it("a prescription's lines are the prescription's lines — never Mongoose's internals", async () => {
+    const encounterId = await arrive(pvt, "Serialization Check", "9400200001");
+
+    const res = await auth(request(app).post("/api/v1/prescriptions"), pvt, pvt.doctorToken)
+      .send({ encounterId, lines: [PARACETAMOL] })
+      .expect(201);
+
+    const line = (res.body as { data: { lines: Record<string, unknown>[] } }).data.lines[0];
+
+    // What a client actually needs off a freshly created prescription.
+    expect(line).toMatchObject({
+      drugCode: PARACETAMOL.drugCode,
+      drugName: PARACETAMOL.drugName,
+      dose: PARACETAMOL.dose,
+      route: PARACETAMOL.route,
+      frequency: PARACETAMOL.frequency,
+      quantity: PARACETAMOL.quantity,
+      dispensedQty: 0,
+    });
+
+    /**
+     * The regression itself. `{ ...subdocument }` copied Mongoose's internals instead of the
+     * fields, so this endpoint answered with `__parentArray`, `__index` and a `$__parent` that
+     * carried the ENTIRE raw document — `tenantId` included — back to the caller. The drug code
+     * and dose a pharmacist needs were not in the payload at all.
+     */
+    for (const forbidden of ["__parentArray", "__index", "$__parent", "$__", "_doc", "$isNew"]) {
+      expect(Object.keys(line ?? {})).not.toContain(forbidden);
+    }
+    // Nothing anywhere in the response may leak the tenant id.
+    expect(JSON.stringify(res.body)).not.toContain(pvt.id);
+  });
+
+  it("an ordinary dispense carries no creditOverride at all — not an empty one", async () => {
+    const encounterId = await arrive(pvt, "Credit Override Check", "9400200002");
+    const rx = await draft(pvt, encounterId, [PARACETAMOL]);
+    await sign(pvt, rx);
+
+    const res = await dispense(pvt, rx.id, [{ lineIndex: 0, quantity: 5 }]);
+    expect(res.status).toBe(201);
+
+    const dispensed = (res.body as { data: { dispense: Record<string, unknown> } }).data.dispense;
+
+    /**
+     * `creditOverride` is declared as a nested path GROUP rather than a subdocument, so a
+     * hydrated document materializes it whether or not anything was ever set. Every handover was
+     * answering with `creditOverride: {}` — an empty object where the type promises either a
+     * complete authorisation record or nothing at all, and where a client reading
+     * `if (d.creditOverride)` would conclude that ordinary medicine had been dispensed on credit.
+     *
+     * The populated case needs no assertion here: the response contract requires all four fields
+     * together, and `ok()` parses every payload against it outside production — so a partial
+     * override cannot reach a caller without failing the suite that produced it.
+     */
+    expect(dispensed).not.toHaveProperty("creditOverride");
+    expect(Object.keys(dispensed)).not.toContain("creditOverride");
+  });
+});
+
+/**
+ * DISPENSING RUNTIME SCHEMA SAFETY — the counter refuses when the rule cannot be enforced.
+ *
+ * ── WHY DISPENSING NEEDS THIS EVEN THOUGH IT ALREADY PRE-CHECKS ─────────────
+ * Unlike the MAR, `dispense()` DOES read before it writes: `findByRequestId` catches the ordinary
+ * sequential retry. That read is a courtesy and says so itself — "two clicks can be in flight at
+ * once and this read would miss". The unique index from migration 0015 is what actually arbitrates
+ * the race, and measured on 2026-08-17 with it absent both inserts of one `requestId` are accepted:
+ * two handovers of the same drugs, billed twice, from one intent. Once that pair exists the index
+ * cannot be rebuilt over it.
+ *
+ * The suite drops a real index on its own throwaway tenant and puts it straight back. Readiness is
+ * cached for a minute, so every transition clears it — the documented way an operator's repair
+ * becomes visible before the TTL expires.
+ */
+describe("dispensing refuses when the database cannot enforce one-handover-per-request", () => {
+  const DISPENSE_INDEX = "one_dispense_per_request_id";
+
+  async function dropDispenseIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("dispenses").dropIndex(DISPENSE_INDEX);
+    forgetSchemaReadiness();
+  }
+
+  async function restoreDispenseIndex(h: Hospital): Promise<void> {
+    await h.connection.collection("dispenses").createIndex(
+      { tenantId: 1, requestId: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { requestId: { $exists: true } },
+        background: true,
+        name: DISPENSE_INDEX,
+      },
+    );
+    forgetSchemaReadiness();
+  }
+
+  /** A fresh signed prescription, via the suite's own arrive → draft → sign chain. */
+  let phone = 9100900000;
+  async function signedFor(h: Hospital): Promise<{ id: string; encounterId: string }> {
+    phone += 1;
+    const encounterId = await arrive(h, "Guard Subject", String(phone));
+    const rx = await draft(h, encounterId);
+    await sign(h, rx);
+    return { id: rx.id as string, encounterId };
+  }
+
+  it("hands over normally while every invariant it rests on is armed", async () => {
+    const { id } = await signedFor(pvt);
+
+    const res = await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }]);
+
+    expect(res.status).toBe(201);
+  });
+
+  /**
+   * ── THE REFUSAL ───────────────────────────────────────────────────────────
+   * Nothing is written: the check runs before the prescription is even read, so a refusal cannot
+   * leave a half-resolved handover or a decremented quantity behind.
+   */
+  it("answers 503 HMS-PHM-004 with Retry-After when the dispense index is gone", async () => {
+    const { id } = await signedFor(pvt);
+
+    await dropDispenseIndex(pvt);
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      ).send({ items: [{ lineIndex: 0, quantity: 5 }], requestId: "guard-refusal-0001" });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-PHM-004");
+      expect(res.headers["retry-after"]).toBe("60");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0015-prescriptions");
+      // It must tell the pharmacist what to DO, not merely that something failed.
+      expect(String(res.body.error.message)).toMatch(/paper/i);
+
+      // NOTHING handed over, and the prescription untouched.
+      expect(
+        await pvt.connection
+          .collection("dispenses")
+          .countDocuments({ requestId: "guard-refusal-0001" }),
+      ).toBe(0);
+      const after = await auth(request(app).get(`/api/v1/prescriptions/${id}`), pvt).expect(200);
+      expect((after.body.data.lines as { dispensedQty: number }[])[0]?.dispensedQty).toBe(0);
+    } finally {
+      await restoreDispenseIndex(pvt);
+    }
+  });
+
+  it("hands over again the moment the index is restored", async () => {
+    const { id } = await signedFor(pvt);
+
+    await dropDispenseIndex(pvt);
+    const refused = await auth(
+      request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+      pvt,
+      pvt.pharmacistToken,
+    ).send({ items: [{ lineIndex: 0, quantity: 5 }] });
+    expect(refused.status).toBe(503);
+
+    await restoreDispenseIndex(pvt);
+    expect((await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }])).status).toBe(201);
+  });
+
+  /**
+   * The index is PARTIAL on `requestId`, so a handover without one is deliberately unconstrained —
+   * partial dispensing is legitimate and may happen many times. For those the Idempotency-Key
+   * claim is the only guard, which is why dispensing asks for both invariants and not just its own.
+   */
+  it("also refuses when the idempotency claim index is gone", async () => {
+    const { id } = await signedFor(pvt);
+
+    await pvt.connection.collection("idempotencyKeys").dropIndex("one_claim_per_idempotency_key");
+    forgetSchemaReadiness();
+    try {
+      const res = await auth(
+        request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      ).send({ items: [{ lineIndex: 0, quantity: 5 }] });
+
+      expect(res.status).toBe(503);
+      expect(res.body.error.code).toBe("HMS-PHM-004");
+      const missing = res.body.error.details.missing as { migration: string }[];
+      expect(missing.map((m) => m.migration)).toContain("0048-idempotency-key-claims");
+    } finally {
+      await pvt.connection
+        .collection("idempotencyKeys")
+        .createIndex(
+          { tenantId: 1, userId: 1, key: 1 },
+          { unique: true, background: true, name: "one_claim_per_idempotency_key" },
+        );
+      forgetSchemaReadiness();
+    }
+  });
+
+  /**
+   * ── PROPORTIONALITY ───────────────────────────────────────────────────────
+   * A missing dispensing constraint says nothing about whether a nurse may chart a dose. Charting
+   * rests on its own two invariants, both still armed here, so MAR must be untouched — as must the
+   * capabilities that depend on no uniqueness at all.
+   */
+  it("does not block medication charting, vitals, nursing notes or reads", async () => {
+    const { id } = await signedFor(pvt);
+    const encounterId = (
+      await auth(request(app).get(`/api/v1/prescriptions/${id}`), pvt).expect(200)
+    ).body.data.encounterId as string;
+
+    await dropDispenseIndex(pvt);
+    try {
+      await auth(
+        request(app).post(`/api/v1/prescriptions/${id}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      )
+        .send({ items: [{ lineIndex: 0, quantity: 5 }] })
+        .expect(503);
+
+      // MAR is a different capability with different invariants, and both of its are armed.
+      await auth(
+        request(app).post(`/api/v1/encounters/${encounterId}/medication-administrations`),
+        pvt,
+        pvt.nurseToken,
+      )
+        .send({ prescriptionId: id, drugCode: "DRUG_PARA_500", status: "given" })
+        .expect(201);
+
+      // Vitals: migration 0025 creates NO unique index, so nothing here can ever block them.
+      await auth(request(app).post(`/api/v1/encounters/${encounterId}/vitals`), pvt, pvt.nurseToken)
+        .send({ systolic: 120, diastolic: 78, pulse: 70 })
+        .expect(201);
+
+      /**
+       * Nursing notes: `wardNotes`' only uniqueness is partial on discharge summaries, so a note
+       * has no correctness dependency on any constraint and must never be blocked by one.
+       *
+       * This encounter is OPD, and `addNursingNote` requires an OPEN ADMISSION — so the right
+       * proof here is not that the note succeeds but that it is refused for its OWN reason. A 422
+       * about the stay means the dispensing guard never saw it; a 503 would mean it did.
+       * (The success path is covered in `mar.int.test.ts`, which has an admitted patient.)
+       */
+      const note = await auth(
+        request(app).post(`/api/v1/encounters/${encounterId}/nursing-notes`),
+        pvt,
+        pvt.nurseToken,
+      ).send({ text: "Drugs handed over on paper; pharmacy system refusing, escalated." });
+
+      expect(note.status).not.toBe(503);
+      expect(note.body.error?.code).not.toBe("HMS-PHM-004");
+
+      // Reads stay legible precisely when a write is refused.
+      await auth(request(app).get(`/api/v1/prescriptions/${id}`), pvt).expect(200);
+    } finally {
+      await restoreDispenseIndex(pvt);
+    }
+  });
+
+  /**
+   * One hospital's schema says nothing about another's — the databases are physically separate
+   * (ADR-0005) and so are their indexes.
+   */
+  it("refuses only the tenant whose index is missing", async () => {
+    await dropDispenseIndex(pvt);
+    try {
+      const { id: mine } = await signedFor(pvt);
+      await auth(
+        request(app).post(`/api/v1/prescriptions/${mine}/dispense`),
+        pvt,
+        pvt.pharmacistToken,
+      )
+        .send({ items: [{ lineIndex: 0, quantity: 5 }] })
+        .expect(503);
+
+      // The other hospital dispenses normally throughout.
+      const { id: theirs } = await signedFor(clinic);
+      expect((await dispense(clinic, theirs, [{ lineIndex: 0, quantity: 5 }])).status).toBe(201);
+    } finally {
+      await restoreDispenseIndex(pvt);
+    }
+  });
+
+  /** The guard sits in front of the existing protection; it must not replace or weaken it. */
+  it("leaves the existing duplicate-handover protection exactly as it was", async () => {
+    const { id } = await signedFor(pvt);
+    const key = "guard-duplicate-request-0001";
+
+    const first = await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }], key);
+    expect(first.status).toBe(201);
+
+    const second = await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }], key);
+    expect(second.status).toBe(200);
+    expect(second.body.data.duplicate).toBe(true);
+    expect(second.body.data.dispense.id).toBe(first.body.data.dispense.id);
+  });
+
+  /**
+   * ── THE ORDER GUARD MUST NOT REACH THE COUNTER ────────────────────────────
+   * `one_order_per_request_id` (migration 0013) protects raising an investigation. Handing over
+   * drugs against an already-signed prescription depends on nothing it provides — dispensing keys
+   * off the prescription, not the order — so a pharmacist must keep working while the lab's
+   * constraint is being repaired.
+   */
+  it("hands over normally when the ORDER index is gone — that is a different capability", async () => {
+    const { id } = await signedFor(pvt);
+
+    await pvt.connection.collection("orders").dropIndex("one_order_per_request_id");
+    forgetSchemaReadiness();
+    try {
+      expect((await dispense(pvt, id, [{ lineIndex: 0, quantity: 5 }])).status).toBe(201);
+    } finally {
+      await pvt.connection.collection("orders").createIndex(
+        { tenantId: 1, requestId: 1 },
+        {
+          unique: true,
+          partialFilterExpression: { requestId: { $exists: true } },
+          background: true,
+          name: "one_order_per_request_id",
+        },
+      );
+      forgetSchemaReadiness();
+    }
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * PHARMACY v1 — the shelf: batches, expiry, FEFO, and what may never block a patient
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * WHAT DEFECT WOULD THIS CATCH?
+ *
+ * The one that had already shipped: `batchNo` and `expiry` were captured on receipt and NOTHING
+ * ever read them. A pharmacy could book in a lot expiring last March and hand it to a patient,
+ * and every screen would agree that was fine — there was no code that could disagree.
+ *
+ * This whole area had essentially no behavioural coverage. `medicines` appeared in the RBAC
+ * probes and in one branch-isolation test, and a probe asserts who is REFUSED, never that the
+ * thing works. That is the same shape as the `settle-from-advance` 500 found last milestone: an
+ * endpoint nobody had ever driven.
+ */
+describe("stock is kept by batch, and expiry is what makes that worth doing", () => {
+  const DAY = 86_400_000;
+  const future = (days: number) => new Date(Date.now() + days * DAY).toISOString();
+
+  /** A medicine on the master, fresh per test so no block depends on another's leftovers. */
+  async function medicine(code: string, name = code): Promise<string> {
+    const res = await auth(request(app).post("/api/v1/medicines"), pvt)
+      .send({ code, name, form: "tablet" })
+      .expect(201);
+    return res.body.data.id as string;
+  }
+
+  const receive = (id: string, body: Record<string, unknown>) =>
+    auth(request(app).post(`/api/v1/medicines/${id}/receive`), pvt).send(body);
+
+  /** Runs `fn` inside the private hospital's tenant context — the repository needs one. */
+  const inPvt = <T>(fn: () => Promise<T>): Promise<T> =>
+    runWithContext(
+      {
+        traceId: "pharmacy-batch-test",
+        tenantId: pvt.id,
+        tenantSlug: pvt.slug,
+        connection: pvt.connection,
+      },
+      fn,
+    );
+
+  const batchesOf = (code: string) =>
+    auth(request(app).get(`/api/v1/medicines/${code}/batches`), pvt);
+
+  it("books a delivery in as a lot with its own expiry", async () => {
+    const id = await medicine("BATCH_A");
+    await receive(id, { quantity: 50, batchNo: "L-001", expiry: future(400) }).expect(201);
+
+    const shelf = await batchesOf("BATCH_A").expect(200);
+    expect(shelf.body.data).toHaveLength(1);
+    expect(shelf.body.data[0]).toMatchObject({ batchNo: "L-001", remaining: 50, state: "ok" });
+  });
+
+  /**
+   * The same lot arriving twice — a split delivery, or the rest of a short order. Two rows for
+   * one physical box would let FEFO hand the same tablets out twice and would make a recall miss
+   * half of them, so the second receipt must TOP UP.
+   */
+  it("tops up a lot that arrives twice rather than creating a second one", async () => {
+    const id = await medicine("BATCH_B");
+    const expiry = future(300);
+    await receive(id, { quantity: 20, batchNo: "L-7", expiry }).expect(201);
+    await receive(id, { quantity: 30, batchNo: "L-7", expiry }).expect(201);
+
+    const shelf = await batchesOf("BATCH_B").expect(200);
+    expect(shelf.body.data).toHaveLength(1);
+    expect(shelf.body.data[0].remaining).toBe(50);
+  });
+
+  /**
+   * ── A BATCH NEEDS BOTH HALVES ───────────────────────────────────────────────
+   * A lot number with no expiry cannot be refused when it lapses; an expiry with no lot number
+   * cannot be recalled. Either alone is a field that LOOKS like stock control and is not — which
+   * is exactly the state this milestone found.
+   */
+  it("refuses half a batch", async () => {
+    const id = await medicine("BATCH_C");
+    await receive(id, { quantity: 10, batchNo: "L-9" }).expect(400);
+    await receive(id, { quantity: 10, expiry: future(100) }).expect(400);
+    // Neither is fine — that is a hospital that does not track lots, and most do not yet.
+    await receive(id, { quantity: 10 }).expect(201);
+    expect((await batchesOf("BATCH_C").expect(200)).body.data).toHaveLength(0);
+  });
+
+  it("refuses stock that has already expired on arrival", async () => {
+    const id = await medicine("BATCH_D");
+    const res = await receive(id, {
+      quantity: 10,
+      batchNo: "OLD",
+      expiry: new Date(Date.now() - DAY).toISOString(),
+    }).expect(422);
+    expect(res.body.error.code).toBe("HMS-STATE-001");
+  });
+
+  it("labels a lot near its expiry without hiding it", async () => {
+    const id = await medicine("BATCH_E");
+    await receive(id, { quantity: 10, batchNo: "SOON", expiry: future(30) }).expect(201);
+    await receive(id, { quantity: 10, batchNo: "LATER", expiry: future(400) }).expect(201);
+
+    const shelf = await batchesOf("BATCH_E").expect(200);
+    const states = Object.fromEntries(
+      (shelf.body.data as { batchNo: string; state: string }[]).map((b) => [b.batchNo, b.state]),
+    );
+    expect(states).toEqual({ SOON: "near_expiry", LATER: "ok" });
+  });
+
+  /* ── FEFO, and the expiry refusal that is the point of it ──────────────────── */
+
+  /** Dispenses `qty` of one drug through the REAL chain: prescribe → sign → dispense. */
+  async function dispenseOf(code: string, name: string, qty: number, prescribed = qty) {
+    const encounterId = await arrive(
+      pvt,
+      `Shelf ${code}`,
+      `90000${Math.floor(Math.random() * 90000) + 10000}`,
+    );
+    const rx = await draft(pvt, encounterId, [
+      {
+        drugCode: code,
+        drugName: name,
+        dose: "1",
+        route: "oral",
+        frequency: "OD",
+        quantity: prescribed,
+      },
+    ]);
+    await sign(pvt, rx);
+    const res = await auth(
+      request(app).post(`/api/v1/prescriptions/${rx.id}/dispense`),
+      pvt,
+      pvt.pharmacistToken,
+    )
+      .send({ items: [{ lineIndex: 0, quantity: qty }] })
+      .expect(201);
+    // The decrement is a CONSUMER of the handover, exactly as in production.
+    await asRelay(pvt, () =>
+      dispatchEventInline({
+        eventId: `evt-disp-${res.body.data.dispense.id as string}`,
+        name: "pharmacy.medication.dispensed",
+        version: 1,
+        tenantId: pvt.id,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          dispenseId: res.body.data.dispense.id,
+          lines: [{ drugCode: code, quantity: qty }],
+        },
+      }),
+    );
+    return res.body.data;
+  }
+
+  /**
+   * THE ASSERTION THIS BLOCK EXISTS FOR. Two lots, the older one going off first, and the
+   * handover must come out of the older one — that is the entire clinical value of tracking
+   * batches, and it is what stops a pharmacy quietly accumulating stock it can never use.
+   */
+  it("takes from the earliest-expiring lot first", async () => {
+    const id = await medicine("FEFO_A", "Fefo Tablet");
+    await receive(id, { quantity: 10, batchNo: "OLDER", expiry: future(60) }).expect(201);
+    await receive(id, { quantity: 10, batchNo: "NEWER", expiry: future(500) }).expect(201);
+
+    await dispenseOf("FEFO_A", "Fefo Tablet", 6);
+
+    const shelf = await batchesOf("FEFO_A").expect(200);
+    const left = Object.fromEntries(
+      (shelf.body.data as { batchNo: string; remaining: number }[]).map((b) => [
+        b.batchNo,
+        b.remaining,
+      ]),
+    );
+    expect(left, "the newer lot was opened while an older one was still on the shelf").toEqual({
+      OLDER: 4,
+      NEWER: 10,
+    });
+  });
+
+  it("spills into the next lot when the first cannot cover it, still oldest first", async () => {
+    const id = await medicine("FEFO_B", "Spill Tablet");
+    await receive(id, { quantity: 5, batchNo: "FIRST", expiry: future(60) }).expect(201);
+    await receive(id, { quantity: 20, batchNo: "SECOND", expiry: future(500) }).expect(201);
+
+    await dispenseOf("FEFO_B", "Spill Tablet", 12);
+
+    const shelf = await batchesOf("FEFO_B").expect(200);
+    const left = Object.fromEntries(
+      (shelf.body.data as { batchNo: string; remaining: number }[]).map((b) => [
+        b.batchNo,
+        b.remaining,
+      ]),
+    );
+    expect(left).toEqual({ FIRST: 0, SECOND: 13 });
+  });
+
+  /**
+   * ── EXPIRED STOCK IS NEVER ALLOCATED ────────────────────────────────────────
+   * The lot is made expired by moving its date into the past directly, because the API refuses
+   * to receive expired stock — which is the point: the only way a pharmacy gets an expired lot is
+   * by holding it until it lapses, and that is exactly the case that must be caught.
+   */
+  it("never hands over an expired lot, even when it is the only stock there is", async () => {
+    const id = await medicine("EXPIRED_A", "Lapsed Tablet");
+    await receive(id, { quantity: 20, batchNo: "GONE_OFF", expiry: future(1) }).expect(201);
+
+    await pvt.connection
+      .collection("medicineBatches")
+      .updateOne(
+        { medicineCode: "EXPIRED_A" },
+        { $set: { expiry: new Date(Date.now() - 5 * DAY) } },
+      );
+
+    /**
+     * The handover still SUCCEEDS. That is deliberate and it is this module's founding rule: the
+     * pharmacist is at the counter with the box in their hand, the drugs cross it before this
+     * consumer runs, and refusing here would not un-give them — it would only lose the record.
+     * What must never happen is the expired lot being decremented as though it were used.
+     */
+    await dispenseOf("EXPIRED_A", "Lapsed Tablet", 5);
+
+    const shelf = await batchesOf("EXPIRED_A").expect(200);
+    expect(shelf.body.data[0]).toMatchObject({ remaining: 20, state: "expired" });
+
+    // And the shortfall is visible rather than silent: the master went negative, which the stock
+    // report has always called `reconcile` — "more went out than was ever booked in".
+    const report = await auth(request(app).get("/api/v1/medicines/stock-report"), pvt).expect(200);
+    const row = (report.body.data as { code: string; stockUnits: number; status: string }[]).find(
+      (r) => r.code === "EXPIRED_A",
+    );
+    expect(row?.stockUnits).toBe(15);
+    expect(row?.status).toBe("ok");
+  });
+
+  /* ── concurrency ───────────────────────────────────────────────────────────── */
+
+  /**
+   * Two handovers racing for the same last lot. The guard is the conditional update inside
+   * `takeFromBatch`, not a read-then-check: without it both see twenty remaining, both pass, and
+   * the box is empty while the records say it is not.
+   */
+  /**
+   * ── THE GUARD, DRIVEN DIRECTLY, BECAUSE NOTHING ELSE CAN REACH IT ───────────
+   * Two handovers racing for the same lot cannot be made to over-draw it through the API, and
+   * that is worth stating rather than hiding: each consumer opens its own transaction, the second
+   * re-reads a lot the first has already emptied, and `Math.min(outstanding, remaining)` then asks
+   * for nothing. An end-to-end "race" test therefore passes with EVERY bound removed — it proves
+   * the arithmetic around the guard, not the guard.
+   *
+   * So the conditional take is exercised where it lives. This is the line that stands between a
+   * stale listing and a box with minus five tablets in it, and removing it turns this red.
+   */
+  it("refuses to take more from a lot than it holds", async () => {
+    const id = await medicine("GUARD_A", "Guard Tablet");
+    await receive(id, { quantity: 5, batchNo: "ONLY", expiry: future(200) }).expect(201);
+
+    await inPvt(async () => {
+      const [lot] = await batches.listForMedicine("GUARD_A");
+      expect(lot).toBeTruthy();
+
+      const over = await batches.takeFromBatch(lot!.id, 6, new Date());
+      expect(over, "took six tablets out of a lot holding five").toBeUndefined();
+
+      const exact = await batches.takeFromBatch(lot!.id, 5, new Date());
+      expect(exact?.remaining).toBe(0);
+
+      // And an empty lot yields nothing rather than going negative.
+      expect(await batches.takeFromBatch(lot!.id, 1, new Date())).toBeUndefined();
+    });
+  });
+
+  /** The same guard, for the other half of its filter: a lot that has lapsed yields nothing. */
+  it("refuses to take from a lot that expired since it was listed", async () => {
+    const id = await medicine("GUARD_B", "Lapsing Tablet");
+    await receive(id, { quantity: 10, batchNo: "SOON", expiry: future(1) }).expect(201);
+
+    await inPvt(async () => {
+      const [lot] = await batches.listForMedicine("GUARD_B");
+      // "Now" is a parameter precisely so this is testable against a fixed instant rather than a
+      // sleep: the caller listed the lot while it was valid and takes it a day later.
+      const tooLate = new Date(Date.now() + 2 * DAY);
+      expect(await batches.takeFromBatch(lot!.id, 1, tooLate)).toBeUndefined();
+      expect(await batches.takeFromBatch(lot!.id, 1, new Date())).toBeTruthy();
+    });
+  });
+
+  /**
+   * And the end-to-end OUTCOME, stated as what it is rather than as proof of the guard: two
+   * handovers totalling more than the shelf held leave the lot at zero and the shortfall on the
+   * master, where `reconcile` is the report a pharmacy needs to see.
+   */
+  it("leaves a lot at zero, never below, when more is handed over than was booked in", async () => {
+    const id = await medicine("RACE_A", "Race Tablet");
+    await receive(id, { quantity: 5, batchNo: "ONLY", expiry: future(200) }).expect(201);
+
+    const encounterId = await arrive(pvt, "Race Patient", "9000077001");
+    const rx = await draft(pvt, encounterId, [
+      {
+        drugCode: "RACE_A",
+        drugName: "Race Tablet",
+        dose: "1",
+        route: "oral",
+        frequency: "OD",
+        quantity: 10,
+      },
+    ]);
+    await sign(pvt, rx);
+
+    const dispenses = await Promise.all(
+      [0, 1].map(() =>
+        auth(request(app).post(`/api/v1/prescriptions/${rx.id}/dispense`), pvt, pvt.pharmacistToken)
+          .send({ items: [{ lineIndex: 0, quantity: 5 }] })
+          .expect(201),
+      ),
+    );
+
+    await Promise.all(
+      dispenses.map((d) =>
+        asRelay(pvt, () =>
+          dispatchEventInline({
+            eventId: `evt-race-${d.body.data.dispense.id as string}`,
+            name: "pharmacy.medication.dispensed",
+            version: 1,
+            tenantId: pvt.id,
+            occurredAt: new Date().toISOString(),
+            payload: {
+              dispenseId: d.body.data.dispense.id,
+              lines: [{ drugCode: "RACE_A", quantity: 5 }],
+            },
+          }),
+        ),
+      ),
+    );
+
+    const shelf = await batchesOf("RACE_A").expect(200);
+    expect(shelf.body.data[0].remaining, "a box cannot hold a negative number of tablets").toBe(0);
+  });
+
+  /* ── availability, which informs and never refuses ─────────────────────────── */
+
+  it("tells a prescriber what the pharmacy could give today", async () => {
+    const id = await medicine("AVAIL_A", "Available Tablet");
+    await receive(id, { quantity: 40, batchNo: "A1", expiry: future(300) }).expect(201);
+
+    const res = await auth(
+      request(app).get("/api/v1/medicines/availability?codes=AVAIL_A"),
+      pvt,
+      pvt.doctorToken,
+    ).expect(200);
+
+    expect(res.body.data[0]).toMatchObject({ code: "AVAIL_A", units: 40, batched: true });
+    expect(res.body.data[0].nearestExpiry).toBeTruthy();
+  });
+
+  /** A drug nobody has booked in reads zero — not an error, and not an absent row. */
+  it("says zero for a drug the pharmacy does not stock", async () => {
+    await medicine("AVAIL_NONE", "Never Stocked");
+    const res = await auth(
+      request(app).get("/api/v1/medicines/availability?codes=AVAIL_NONE,NOT_A_DRUG"),
+      pvt,
+      pvt.doctorToken,
+    ).expect(200);
+
+    const byCode = Object.fromEntries(
+      (res.body.data as { code: string; units: number }[]).map((a) => [a.code, a.units]),
+    );
+    expect(byCode).toEqual({ AVAIL_NONE: 0, NOT_A_DRUG: 0 });
+  });
+
+  /**
+   * Falls back to the running total for a pharmacy that tracks no lots — which is every hospital
+   * until it starts. Reporting a fully stocked shelf as empty would be a worse answer than the
+   * one it replaces.
+   */
+  it("uses the running total when a drug has no lots", async () => {
+    const id = await medicine("AVAIL_B", "Unbatched Tablet");
+    await receive(id, { quantity: 25 }).expect(201);
+
+    const res = await auth(
+      request(app).get("/api/v1/medicines/availability?codes=AVAIL_B"),
+      pvt,
+      pvt.doctorToken,
+    ).expect(200);
+    expect(res.body.data[0]).toMatchObject({ code: "AVAIL_B", units: 25, batched: false });
+  });
+
+  /**
+   * ── AVAILABILITY IS INFORMATION, NOT PERMISSION ─────────────────────────────
+   * THE PRODUCT DECISION OF THIS MILESTONE, pinned so it cannot be "fixed" into a stock check.
+   * A doctor prescribes what the patient needs; if the hospital is out, the patient buys it
+   * outside and the prescription is what they take to the shop.
+   */
+  it("lets a doctor prescribe a drug the pharmacy has none of", async () => {
+    await medicine("OUT_A", "Out Of Stock Tablet");
+    const encounterId = await arrive(pvt, "Out Of Stock Patient", "9000077002");
+
+    const rx = await draft(pvt, encounterId, [
+      {
+        drugCode: "OUT_A",
+        drugName: "Out Of Stock Tablet",
+        dose: "1",
+        route: "oral",
+        frequency: "OD",
+        quantity: 10,
+      },
+    ]);
+    await sign(pvt, rx);
+
+    const after = await auth(request(app).get(`/api/v1/prescriptions/${rx.id}`), pvt).expect(200);
+    expect(after.body.data.status).toBe("signed");
+    expect(after.body.data.lines[0].quantity).toBe(10);
+  });
+
+  it("lets a doctor prescribe a drug that is not on the master at all", async () => {
+    const encounterId = await arrive(pvt, "Unknown Drug Patient", "9000077003");
+    const rx = await draft(pvt, encounterId, [
+      {
+        drugCode: "NOT_STOCKED_ANYWHERE",
+        drugName: "Imported Tablet",
+        dose: "1",
+        route: "oral",
+        frequency: "OD",
+        quantity: 4,
+      },
+    ]);
+    await sign(pvt, rx);
+    expect(
+      (await auth(request(app).get(`/api/v1/prescriptions/${rx.id}`), pvt).expect(200)).body.data
+        .status,
+    ).toBe("signed");
+  });
+
+  /* ── who may touch the shelf ───────────────────────────────────────────────── */
+
+  it("does not let a doctor receive stock or write it off", async () => {
+    const id = await medicine("PERM_A");
+    await auth(request(app).post(`/api/v1/medicines/${id}/receive`), pvt, pvt.doctorToken)
+      .send({ quantity: 10 })
+      .expect(403);
+    await auth(request(app).post(`/api/v1/medicines/${id}/adjust`), pvt, pvt.doctorToken)
+      .send({ delta: -5, reason: "not mine to write off" })
+      .expect(403);
+    // Nor read the shelf: batch numbers and quantities are the pharmacy's books to keep.
+    await auth(request(app).get(`/api/v1/medicines/PERM_A/batches`), pvt, pvt.doctorToken).expect(
+      403,
+    );
+  });
+
+  it("does not let a nurse adjust stock", async () => {
+    const id = await medicine("PERM_B");
+    await auth(request(app).post(`/api/v1/medicines/${id}/adjust`), pvt, pvt.nurseToken)
+      .send({ delta: 100, reason: "found some" })
+      .expect(403);
+  });
+
+  /** Every adjustment carries its reason and its author — an unexplained mutation is refused. */
+  it("records who adjusted stock and why", async () => {
+    const id = await medicine("ADJ_A");
+    await receive(id, { quantity: 30 }).expect(201);
+    await auth(request(app).post(`/api/v1/medicines/${id}/adjust`), pvt)
+      .send({ delta: -2, reason: "damaged in transit" })
+      .expect(201);
+
+    // No reason, no adjustment.
+    await auth(request(app).post(`/api/v1/medicines/${id}/adjust`), pvt)
+      .send({ delta: -2 })
+      .expect(400);
+
+    const moves = await auth(request(app).get(`/api/v1/medicines/${id}/movements`), pvt).expect(
+      200,
+    );
+    const adjustment = (
+      moves.body.data as { kind: string; reason?: string; createdBy?: string }[]
+    ).find((m) => m.kind === "adjustment");
+    expect(adjustment?.reason).toBe("damaged in transit");
+    expect(adjustment?.createdBy).toBeTruthy();
   });
 });

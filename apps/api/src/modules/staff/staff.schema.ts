@@ -30,6 +30,17 @@ export const staffProfileSchema = z
     address: z.string().max(500).optional(),
     emergencyContactName: z.string().max(120).optional(),
     emergencyContactPhone: z.string().max(20).optional(),
+    /** Opt-in to the public website (doctors only). */
+    showOnPublicSite: z.boolean().optional(),
+    /**
+     * A scanned signature as a `data:image/...;base64,…` URI, for the OPD slip. Bounded and shape-
+     * checked so only an image data URI can be stored — never an arbitrary string or a remote URL.
+     */
+    signature: z
+      .string()
+      .max(350_000)
+      .regex(/^data:image\/(png|jpeg|jpg|webp|gif);base64,/, "must be an image data URI")
+      .optional(),
   })
   .strict();
 

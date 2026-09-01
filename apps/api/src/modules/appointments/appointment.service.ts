@@ -22,16 +22,26 @@
  */
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
+import { env } from "../../config/env.js";
+import { dayKeyInZone, dayRangeInZone } from "../../core/time/day.js";
+import { zoneOrDefault } from "../../core/time/zone.js";
 import { getPatient } from "../patients/index.js";
+import { getBranch } from "../branches/index.js";
 import { startEncounter } from "../encounters/index.js";
 import * as repo from "./appointment.repository.js";
 import { canTransition, type AppointmentStatus } from "./appointment.model.js";
 import { availableSlots, slotsFor, type Slot } from "./slots.js";
 
-export type { Appointment, DoctorSchedule } from "./appointment.repository.js";
+export type {
+  Appointment,
+  DoctorSchedule,
+  DoctorLeave,
+  DoctorAvailability,
+} from "./appointment.repository.js";
 
 /** HMS-APT-001 — the slot went while the clerk was typing. Carries a way forward. */
 class SlotUnavailableError extends AppError {
@@ -45,16 +55,59 @@ function invalidTransition(from: AppointmentStatus, to: AppointmentStatus): AppE
   return new AppError("HMS-STATE-001", 422, "Invalid state transition", { from, to });
 }
 
-function startOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
+/* ════════════════════════════════════════════════════════════════════════════
+ * THE CLINIC'S CLOCK (M0 §21 item C)
+ *
+ * ── THE DEFECT THIS REPLACES ────────────────────────────────────────────────
+ * Every boundary here used to read the PROCESS timezone: `d.setHours(0,0,0,0)` for the day,
+ * `d.getDay()` for the weekday, `d.getFullYear()` for the leave key. That is correct only when the
+ * server happens to run in the hospital's zone — and nothing sets `TZ` in the Dockerfile, the
+ * compose file or `.env.example`, so the shipped image runs in **UTC**. A clinic configured
+ * 09:00–13:00 therefore had its slots generated at 09:00 UTC, which is **14:30 IST**: every
+ * appointment in production offered at the wrong time.
+ *
+ * It survived because the API suite pins `TZ: "Asia/Kolkata"` (vitest.config.ts) — the tests ran in
+ * the one timezone where the bug is invisible. `appointments.tz.int.test.ts` is written to be
+ * immune to that pin: it puts the clinic in a branch zone 9.5 hours away from the process zone.
+ *
+ * ── THE RULE ────────────────────────────────────────────────────────────────
+ * A clinic session is a WALL-CLOCK fact at a SITE: "Mondays, 09:00–13:00, in Hyderabad". Every
+ * boundary resolves through the branch's own zone, never the container's.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The zone a doctor's clinic keeps: the branch's, else the platform default.
+ *
+ * A branch row whose timezone was written before `isValidTimeZone` existed falls through
+ * `zoneOrDefault` rather than throwing — a booking screen must not 500 over a settings field
+ * somebody typed two years ago.
+ */
+async function clinicZone(branchId?: string): Promise<string> {
+  if (!branchId) return env.DEFAULT_TIMEZONE;
+  const branch = await getBranch(branchId).catch(() => undefined);
+  return zoneOrDefault(branch?.timezone, env.DEFAULT_TIMEZONE);
 }
 
-function endOfDay(d: Date): Date {
-  const x = startOfDay(d);
-  x.setDate(x.getDate() + 1);
-  return x;
+/**
+ * `YYYY-MM-DD` at the clinic, for an INSTANT.
+ *
+ * ── EVERY DATE THAT REACHES THIS SERVICE IS AN INSTANT, AND THAT IS THE CONTRACT ─
+ * `?date=` is `z.coerce.date()` and the shipped client sends `date.toISOString()`, so what arrives
+ * is a moment, not a calendar square. Which clinic day it belongs to is therefore a genuine zone
+ * question and this is the only correct way to ask it.
+ *
+ * The trap, recorded because the first draft of this fix fell into it: if the parameter ever
+ * becomes a date-only `YYYY-MM-DD` string, it must NOT come through here. `2026-08-17` coerces to
+ * UTC midnight, which in New York is 20:00 on the 16th — a Monday clinic would resolve to Sunday
+ * and the grid would come back empty. A named date has no zone to convert FROM; its parts are the
+ * answer. Changing the schema means changing this line with it.
+ */
+const clinicDayKey = (at: Date, zone: string): string => dayKeyInZone(at, zone);
+
+/** The weekday a `YYYY-MM-DD` key falls on, 0 = Sunday. Parsed as UTC so no zone can shift it. */
+function weekdayOf(dayKey: string): number {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1)).getUTCDay();
 }
 
 /**
@@ -69,14 +122,37 @@ export async function getAvailability(
   day: Date,
   now = new Date(),
 ): Promise<Slot[]> {
-  const schedules = await repo.findSchedules(doctorId, day.getDay());
+  /**
+   * Slots are offered for the site the user is WORKING AT. A doctor who runs Monday mornings in
+   * Hyderabad and Monday afternoons in Chennai has two templates; showing both to a Hyderabad
+   * booker would offer an afternoon the patient cannot attend.
+   *
+   * The ACTIVE branch, not `writeBranchId()`: this is a read, and a read must not refuse just
+   * because the user has picked no site yet (HMS-BRANCH-001 is a write-time rule). With nothing
+   * selected the doctor's whole week is offered, exactly as before branches existed.
+   */
+  const activeBranchId = getContext().activeBranchId;
+  const zone = await clinicZone(activeBranchId);
+
+  /**
+   * One key, derived once, so the weekday, the leave lookup and the slot anchor cannot disagree
+   * about which day is being discussed — which is exactly how the old code drifted.
+   */
+  const dayKey = clinicDayKey(day, zone);
+
+  const schedules = await repo.findSchedules(doctorId, weekdayOf(dayKey), activeBranchId);
   if (schedules.length === 0) return [];
 
-  const taken = await repo.bookedStartsFor(doctorId, startOfDay(day), endOfDay(day));
+  // On leave that day → no slots, whatever the weekly schedule says. Leave is the exception that wins.
+  if (await repo.isOnLeave(doctorId, dayKey)) return [];
+
+  // The clinic's own day, as UTC instants. Half-open — see `dayRangeInZone`.
+  const { from, before } = dayRangeInZone(dayKey, zone);
+  const taken = await repo.bookedStartsFor(doctorId, from, before);
 
   // A doctor may hold more than one session in a day (a morning and an evening
   // clinic), so the slots of every matching template are unioned.
-  const all = schedules.flatMap((s) => slotsFor(day, s));
+  const all = schedules.flatMap((s) => slotsFor(from, s));
   return availableSlots(all, taken, now).sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
 }
 
@@ -93,9 +169,11 @@ export interface BookAppointmentInput {
  * Checking a patient in for next Tuesday puts them in TODAY's queue and makes the
  * doctor's list lie about who is actually waiting.
  */
-function assertToday(startAt: Date): void {
-  const today = startOfDay(new Date());
-  if (startAt < today || startAt >= endOfDay(new Date())) {
+async function assertToday(startAt: Date, branchId?: string): Promise<void> {
+  // Compared as DAY KEYS at the clinic. On a UTC server the old instant comparison let a 09:00 IST
+  // appointment be checked in from 18:30 the evening before, and refused it at 05:00 on the day.
+  const zone = await clinicZone(branchId);
+  if (clinicDayKey(startAt, zone) !== clinicDayKey(new Date(), zone)) {
     throw new AppError("HMS-STATE-001", 422, "Invalid state transition", {
       to: "checked_in",
       reason: "a patient can only be checked in on the day of their appointment",
@@ -121,12 +199,28 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
   }
 
   /**
+   * The branch this appointment is booked AT (ADR-0015) — the site the patient will be seen. The
+   * encounter created from it later inherits this branch.
+   *
+   * Resolved BEFORE the schedule check, because it is an input to it: the slot has to exist in
+   * the doctor's clinic AT THIS SITE. Resolving it afterwards would validate a Hyderabad booking
+   * against a Chennai session and hand the patient a time nobody is there for.
+   */
+  const branchId = await writeBranchId(input.branchId);
+
+  /**
    * The slot must belong to the doctor's schedule. Without this, any instant is
    * bookable and the schedule becomes decorative — you get 03:47 appointments and
    * a doctor with no idea they were expected.
    */
-  const schedules = await repo.findSchedules(input.doctorId, input.startAt.getDay());
-  const offered = schedules.flatMap((s) => slotsFor(input.startAt, s));
+  const zone = await clinicZone(branchId);
+  // `startAt` IS an instant here — it came off the wire as a full timestamp — so which clinic day
+  // it belongs to is a genuine zone question, unlike the named date in `getAvailability`.
+  const dayKey = clinicDayKey(input.startAt, zone);
+  const { from: clinicMidnight } = dayRangeInZone(dayKey, zone);
+
+  const schedules = await repo.findSchedules(input.doctorId, weekdayOf(dayKey), branchId);
+  const offered = schedules.flatMap((s) => slotsFor(clinicMidnight, s));
   const slot = offered.find((s) => s.startAt.getTime() === input.startAt.getTime());
 
   if (!slot) {
@@ -141,6 +235,13 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
     });
   }
 
+  // The doctor is on leave that day — the schedule would offer the slot, but they are away.
+  if (await repo.isOnLeave(input.doctorId, clinicDayKey(slot.startAt, zone))) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      startAt: ["the doctor is on leave that day"],
+    });
+  }
+
   try {
     return await withTransaction(async (session) => {
       // No availability check. The unique index decides — see the header.
@@ -150,7 +251,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
           doctorId: input.doctorId,
           startAt: slot.startAt,
           endAt: slot.endAt,
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.reason ? { reason: input.reason } : {}),
           ...(ctx.userId ? { bookedBy: ctx.userId } : {}),
@@ -170,7 +271,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<repo
             doctorId: appointment.doctorId,
             startAt: appointment.startAt.toISOString(),
           },
-          ...(input.branchId ? { branchId: input.branchId } : {}),
+          branchId,
         },
         session,
       );
@@ -222,7 +323,7 @@ async function transition(
      * lie about who is actually waiting.
      */
     if (to === "checked_in") {
-      assertToday(current.startAt);
+      await assertToday(current.startAt, current.branchId);
       // The TOKEN is no longer issued here. It belongs to the Encounter (ADR-0013):
       // a walk-in has a token and no appointment, and in a government hospital that
       // is not an edge case — it is every patient. `checkInAppointment` creates the
@@ -248,6 +349,9 @@ async function transition(
       await publish(
         {
           name: EVENTS.APPOINTMENT_CANCELLED,
+          // From the RECORD, not the request: a cancellation is about the appointment's own
+          // site, and the clerk cancelling it may be working at another one (ADR-0015).
+          ...(updated.branchId ? { branchId: updated.branchId } : {}),
           payload: {
             appointmentId: updated.id,
             patientId: updated.patientId,
@@ -305,7 +409,7 @@ export async function checkInAppointment(id: string): Promise<repo.Appointment> 
   if (!canTransition(current.status, "checked_in")) {
     throw invalidTransition(current.status, "checked_in");
   }
-  assertToday(current.startAt);
+  await assertToday(current.startAt, current.branchId);
 
   const { encounter } = await startEncounter({
     patientId: current.patientId,
@@ -342,7 +446,7 @@ export async function rescheduleAppointment(
   startAt: Date,
   reason: string,
 ): Promise<{ cancelled: repo.Appointment; booked: repo.Appointment }> {
-  const current = await repo.findByIdScoped(id);
+  const current = await repo.findById(id);
   if (!current) throw new AppError("HMS-GEN-404", 404, "Appointment not found", { id });
 
   if (!canTransition(current.status, "rescheduled")) {
@@ -373,7 +477,7 @@ export async function rescheduleAppointment(
 }
 
 export async function getAppointment(id: string): Promise<repo.Appointment> {
-  const appointment = await repo.findByIdScoped(id);
+  const appointment = await repo.findById(id);
   if (!appointment) throw new AppError("HMS-GEN-404", 404, "Appointment not found", { id });
   return appointment;
 }
@@ -402,7 +506,17 @@ export async function setDoctorSchedule(input: {
       slotMinutes: ["the session is shorter than one slot"],
     });
   }
-  return repo.upsertSchedule(input);
+  /**
+   * A schedule belongs to the SITE the doctor holds it at (ADR-0015): "Dr Rao, Mondays, Hyderabad"
+   * and "Dr Rao, Mondays, Chennai" are two different clinics, and the unique key now says so.
+   *
+   * Through `writeBranchId` rather than straight from the body, for the reason the patient/
+   * appointment/encounter/order paths already learned the hard way: a `branchId` in a request
+   * body is a caller's instruction and must be checked against what that caller may reach, or a
+   * receptionist confined to one site can rewrite another site's clinic hours.
+   */
+  const branchId = await writeBranchId(input.branchId);
+  return repo.upsertSchedule({ ...input, ...(branchId ? { branchId } : {}) });
 }
 
 export const getDoctorSchedules = (doctorId: string): Promise<repo.DoctorSchedule[]> =>
@@ -413,4 +527,62 @@ export async function removeDoctorSchedule(id: string): Promise<void> {
   // "why was this patient given a 4pm slot" must remain answerable.
   const removed = await repo.deactivateSchedule(id);
   if (!removed) throw new AppError("HMS-GEN-404", 404, "Schedule not found", { id });
+}
+
+/* ── doctor availability (session roster) & leave (Doc 02 D2) ──────────────── */
+
+export const getDoctorAvailability = (doctorId: string): Promise<repo.DoctorAvailability[]> =>
+  repo.findAvailability(doctorId);
+
+export async function setDoctorAvailability(input: {
+  doctorId: string;
+  weekday: number;
+  sessions: repo.DoctorAvailability["sessions"];
+  branchId?: string;
+}): Promise<repo.DoctorAvailability | undefined> {
+  // `full_day` already means the whole day, so pairing it with a part-session is
+  // contradictory — collapse it to just `full_day` rather than reject and nag.
+  const sessions = input.sessions.includes("full_day")
+    ? (["full_day"] as repo.DoctorAvailability["sessions"])
+    : [...new Set(input.sessions)];
+  // Same key, same site rule, same reason as `setDoctorSchedule` — the roster is per branch.
+  const branchId = await writeBranchId(input.branchId);
+  return repo.setAvailability({ ...input, sessions, ...(branchId ? { branchId } : {}) });
+}
+
+export const getDoctorLeave = (doctorId: string): Promise<repo.DoctorLeave[]> =>
+  repo.findLeave(doctorId);
+
+export async function addDoctorLeave(input: {
+  doctorId: string;
+  fromDate: string;
+  toDate: string;
+  reason?: string;
+  branchId?: string;
+}): Promise<repo.DoctorLeave> {
+  if (input.toDate < input.fromDate) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      toDate: ["leave cannot end before it starts"],
+    });
+  }
+  // Leave is READ back through `scopeFilter`, so the branch it is stamped with decides who sees
+  // it — which makes an unchecked body value a way to hide a doctor's absence from another site.
+  const branchId = await writeBranchId(input.branchId);
+  return repo.addLeave({ ...input, ...(branchId ? { branchId } : {}) });
+}
+
+export async function removeDoctorLeave(id: string): Promise<void> {
+  const removed = await repo.removeLeave(id);
+  if (!removed) throw new AppError("HMS-GEN-404", 404, "Leave not found", { id });
+}
+
+/**
+ * A doctor cancelling their OWN leave.
+ *
+ * Identical to the administrator's version except that the doctor is part of the query, and the
+ * failure is deliberately indistinguishable from "no such row" — see `repo.removeOwnLeave`.
+ */
+export async function removeOwnDoctorLeave(id: string, doctorId: string): Promise<void> {
+  const removed = await repo.removeOwnLeave(id, doctorId);
+  if (!removed) throw new AppError("HMS-GEN-404", 404, "Leave not found", { id });
 }

@@ -60,7 +60,12 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # `--databases 32`: the integration suites take one logical database each so a
+    # `flushdb` can never erase another suite's state (see `src/test/redisTestEnv.ts`).
+    # Redis defaults to 16, database 0 belongs to the dev server, and the fifteen that
+    # left were all claimed. Raising the ceiling costs nothing — an empty database is
+    # a few bytes of bookkeeping — and the alternative was suites sharing again.
+    command: ["redis-server", "--appendonly", "yes", "--databases", "32"]
     ports:
       # Host 6380, not 6379 — same reason as mongo above. Override with REDIS_PORT.
       # 127.0.0.1, not the 0.0.0.0 wildcard — same reasoning as mongo: a specific

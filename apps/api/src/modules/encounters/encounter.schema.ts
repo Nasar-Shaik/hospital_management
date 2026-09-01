@@ -23,6 +23,8 @@ export const startEncounterSchema = z
     doctorId: objectId.optional(),
     departmentId: objectId.optional(),
     reason: z.string().max(500).optional(),
+    /** A paid fast-track OP visit — priority in the queue plus an express surcharge. */
+    express: z.boolean().default(false),
     branchId: objectId.optional(),
   })
   .strict();
@@ -47,10 +49,53 @@ export const listEncountersQuerySchema = z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
       .optional(),
+    /**
+     * The LAST day of a span, when the desk is asking about more than one.
+     *
+     * `date` alone still means exactly that day, which is what every existing caller sends and
+     * what the register defaults to — adding an end is additive and changes nothing for them. With
+     * both, the range is inclusive at both ends: "the 16th to the 22nd" covers seven whole days,
+     * because that is what those words mean to the person asking.
+     *
+     * A separate name rather than reusing `date` as a start: a caller that sent `date` and now
+     * sends `dateTo` gets a span, and a caller that never heard of it keeps its day.
+     */
+    dateTo: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "expected YYYY-MM-DD")
+      .optional(),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();
+
+/**
+ * The ward round's list. Same `page`/`limit` pair as every other list on this API.
+ *
+ * ── THE DEFAULT IS 100, NOT 20, AND THAT IS THE COMPATIBILITY PROMISE ───────
+ * This endpoint took no parameters at all and the controller called the repository with a
+ * hard-coded `{ limit: 100, skip: 0 }`, so a caller that sends nothing has always received up to a
+ * hundred stays. Defaulting to the usual 20 would silently shrink every existing client's ward
+ * list by 80% — the exact "patients disappear" failure this change exists to fix, introduced from
+ * the other direction. The default therefore preserves today's behaviour EXACTLY, and `page` is
+ * what makes the rest reachable.
+ *
+ * The `max(100)` cap is the house limit and is unchanged from what the controller enforced.
+ */
+export const listInpatientsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(100),
+    /**
+     * One ward, by NAME — an admission stores its bed as text, so the name is the key that
+     * actually matches (see `listInpatients`). Additive: omitting it lists the whole branch,
+     * exactly as before.
+     */
+    ward: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+
+export type ListInpatientsQuery = z.infer<typeof listInpatientsQuerySchema>;
 
 export const idParamSchema = z.object({ id: objectId }).strict();
 
@@ -60,23 +105,47 @@ export const cancelEncounterSchema = z.object({ reason: z.string().min(3).max(50
 export const closeEncounterSchema = z.object({ reason: z.string().max(500).optional() }).strict();
 
 /**
+ * The OP visit summary for the OPD slip. Both optional and both may be an EMPTY string — that is a
+ * deliberate clear (the doctor wiped the box), which the service turns into `$unset`.
+ */
+export const visitSummarySchema = z
+  .object({
+    diagnosis: z.string().max(2000).optional(),
+    advice: z.string().max(2000).optional(),
+  })
+  .strict();
+
+export type VisitSummaryBody = z.infer<typeof visitSummarySchema>;
+
+/**
  * Admitting a patient.
  *
- * `tariffCode` is what the bed-day is billed at, and it is chosen by the person admitting
- * rather than derived from the ward name: "ICU" is not a price, and a hospital that renames
- * a ward must not silently re-price every bed in it.
+ * TWO WAYS IN, ONE OF THEM PREFERRED:
+ *  - `bedId` — pick a bed from the inventory (B4). The ward name, bed code and tariff are taken
+ *    from the catalogue, so a typo can no longer invent an untraceable bed and the tariff is the
+ *    one configured for that bed.
+ *  - `ward` + `bedCode` + `tariffCode` — the legacy free-text path, kept for hospitals that have
+ *    not built their bed inventory yet (and for the existing tests). `tariffCode` is chosen by the
+ *    admitter rather than derived from the ward name: "ICU" is not a price, and renaming a ward
+ *    must not silently re-price every bed in it.
+ *
+ * Exactly one shape must be present — `bedId`, OR all three free-text fields.
  */
 export const admitSchema = z
   .object({
-    ward: z.string().min(1).max(100),
-    /** `A-12`. Free text — there is no bed inventory to validate against (see the model). */
-    bedCode: z.string().min(1).max(32),
-    tariffCode: z.string().min(1).max(64),
+    bedId: objectId.optional(),
+    ward: z.string().min(1).max(100).optional(),
+    bedCode: z.string().min(1).max(32).optional(),
+    tariffCode: z.string().min(1).max(64).optional(),
     /** The consultant on the ward. Defaults to the OP doctor when omitted. */
     doctorId: objectId.optional(),
     reason: z.string().max(500).optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => (b.bedId ? true : Boolean(b.ward && b.bedCode && b.tariffCode)), {
+    message: "pick a bed (bedId) or give the ward, bedCode and tariffCode",
+    path: ["bedId"],
+  });
 
 /**
  * Handing the patient to another doctor.

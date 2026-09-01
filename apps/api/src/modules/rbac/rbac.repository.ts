@@ -163,6 +163,42 @@ export interface RoleBinding {
   branchIds: string[];
 }
 
+/**
+ * Users whose bindings ALL point somewhere other than this branch.
+ *
+ * ── WHY THE EXCLUSION AND NOT THE INCLUSION ─────────────────────────────────
+ * The staff directory has no `branchId` of its own — a person belongs to the hospital, and where
+ * they work is a property of their ROLE BINDING (ADR-0015: "one staff directory"). So scoping the
+ * directory to a branch cannot be a `scopeFilter()` on the user document; it has to come from here.
+ *
+ * Returning who to HIDE rather than who to show matters twice over:
+ *
+ *   1. It is the short list. Most staff in a real hospital are hospital-wide (`branchScope: "all"`)
+ *      and stay visible everywhere, so the exclusion set is only the staff confined to OTHER sites.
+ *      The inclusion set would be nearly the whole directory, re-sent on every page.
+ *   2. A user with NO binding at all is not in it, so they stay visible. That is deliberate: an
+ *      account created but not yet given a role belongs to no branch, and hiding it from every
+ *      branch view would make it unfindable by the person who has to assign the role. Invisible is
+ *      worse than misfiled — this is the safer horn of the same dilemma D11 records for un-stamped
+ *      clinical rows.
+ *
+ * `branchScope` is the authority, not the emptiness of `branchIds`: `"branches"` with an empty list
+ * means NOWHERE, deliberately, and this must not silently read it as "everywhere".
+ */
+export async function userIdsOutsideBranch(branchId: string): Promise<string[]> {
+  const model = getUserRoleModel(getTenantDb());
+
+  const [bound, reaching] = await Promise.all([
+    model.distinct("userId", {}),
+    model.distinct("userId", {
+      $or: [{ branchScope: "all" }, { branchScope: "branches", branchIds: branchId }],
+    }),
+  ]);
+
+  const visible = new Set(reaching);
+  return bound.filter((id) => !visible.has(id));
+}
+
 export async function findBindingsForUser(userId: string): Promise<RoleBinding[]> {
   const db = getTenantDb();
   const bindings = await getUserRoleModel(db).find({ userId });

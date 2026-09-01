@@ -29,6 +29,7 @@ const { getTenantConnection, closeAllTenantConnections, openConnectionCount } =
 const { runWithContext } = await import("./core/context/requestContext.js");
 const { tenantScopePlugin } = await import("./core/db/plugins/tenantScope.js");
 const { provisionTenant, transitionStatus } = await import("./modules/tenants/index.js");
+const { seedIcdCodes, STARTER_ICD_COUNT } = await import("./seed/icdCodes.js");
 const { resolveTenantFromHost, slugFromHost, normalizeHost } =
   await import("./middleware/resolveTenant.js");
 const { getMasterConnection, closeMaster } = await import("./core/db/masterDb.js");
@@ -88,6 +89,56 @@ describe("provisioning (BUSINESS_WORKFLOWS §13)", () => {
       // Idempotent: a second run applies nothing.
       expect(await pendingCount(db, tenantMigrations)).toBe(0);
     }
+  });
+
+  /**
+   * ── A HOSPITAL IS BORN WITH A CODE MASTER ───────────────────────────────────
+   * `icdCodes` shipped empty, which turned a whole module into a blank page: Medical Records
+   * opened on an empty list beside an "Add code" button, the doctor's Coding tab had nothing to
+   * pick from, and the disease register — the morbidity return a hospital files monthly — could
+   * only ever report zero. Manual testing asked, reasonably, "why this page?"
+   *
+   * The seed lives in `provisionTenant` rather than in the CLI for the reason the Main Branch
+   * does: the CLI seeds the tariff and the templates, the operator console does not, and a
+   * "provision now, seed later" split is the trap this codebase has already fallen into three
+   * times.
+   */
+  it("seeds an ICD-10 starter set, so Medical Records is never a blank page", async () => {
+    for (const tenant of [tenantA, tenantB]) {
+      const db = await getTenantConnection(tenant);
+      const codes = await db.collection("icdCodes").countDocuments({ tenantId: tenant.id });
+      expect(codes).toBe(STARTER_ICD_COUNT);
+      expect(codes).toBeGreaterThan(0);
+
+      // The codes a general hospital in India reaches for first — and the one the UI names.
+      const pneumonia = await db
+        .collection("icdCodes")
+        .findOne({ tenantId: tenant.id, code: "J18.9" });
+      expect(pneumonia?.title).toBe("Pneumonia, unspecified organism");
+      expect(pneumonia?.active).toBe(true);
+    }
+  });
+
+  it("never overwrites a code master the hospital has curated", async () => {
+    /**
+     * The promise `$setOnInsert` makes, and the one that matters on every future upgrade: a
+     * hospital that has retitled a code or retired one it does not use keeps those decisions.
+     * Re-running the seed over an edited master must change nothing.
+     */
+    const db = await getTenantConnection(tenantA);
+    await db
+      .collection("icdCodes")
+      .updateOne(
+        { tenantId: tenantA.id, code: "J18.9" },
+        { $set: { title: "Pneumonia (ward protocol B)", active: false } },
+      );
+
+    const added = await seedIcdCodes(tenantA.id, tenantA.slug, db);
+    expect(added).toBe(0);
+
+    const after = await db.collection("icdCodes").findOne({ tenantId: tenantA.id, code: "J18.9" });
+    expect(after?.title).toBe("Pneumonia (ward protocol B)");
+    expect(after?.active).toBe(false);
   });
 
   it("rejects a duplicate slug instead of half-creating a tenant", async () => {

@@ -1,5 +1,175 @@
 # TESTING — How to run and test locally
 
+> ### 👉 New here or feeling lost? Read only **Section 0** below.
+>
+> Everything after it (Ports, replica sets, 47 numbered scenarios…) is **reference**.
+> You do **not** need any of it to start testing. Come back to it when you want detail on
+> one specific feature.
+
+---
+
+## 0. The simple guide — walk one patient through the hospital (15 min)
+
+This is the whole product in one story: a patient arrives, sees a doctor, gets a test and a
+medicine, and pays. You will log in as a different staff member at each step — that is the point.
+
+### Step 1 · Start it (do this once)
+
+Open **three terminals** in the project folder and run one command in each, in order:
+
+```bash
+pnpm docker:dev    # terminal 1 · the databases (leave it running)
+pnpm dev           # terminal 2 · the actual app  (leave it running)
+pnpm verify        # terminal 3 · "is it working?" — run anytime
+```
+
+The **first time only**, load the demo hospital (two hospitals, staff, prices) in a 4th terminal:
+
+```bash
+pnpm --filter @medicore/api migrate --all    # set up the database (safe to re-run)
+pnpm --filter @medicore/api seed:demo         # operator + 2 hospitals + staff + prices + drugs
+pnpm --filter @medicore/api seed:clinical     # OPTIONAL: fill Sunrise with demo patients & visits
+```
+
+**You only seed once.** The data lives in the database and survives restarts — `pnpm dev` never
+touches it. Re-seed only if you wipe the database (a fresh machine, or `docker:dev:down` with
+volumes removed). All three commands above are safe to re-run.
+
+- `seed:demo` creates the login accounts, both hospitals, the price list and the drug list — but
+  **no patients**.
+- `seed:clinical` (optional) adds ~6 patients to **Sunrise**, already spread across the flow: some
+  waiting in the doctor's queue, some mid-consult, some with tests at the lab. Run it with
+  `pnpm dev` up so the bills catch up. Great if you don't want to register patients by hand first.
+
+> **If anything looks broken, run `pnpm verify` first.** It checks everything and prints the
+> _fix_, not the error. Don't debug the login screen by hand.
+
+### Step 2 · Open the hospital
+
+|                         |                                   |
+| ----------------------- | --------------------------------- |
+| **Open this**           | **http://sunrise.localhost:3000** |
+| **Password (everyone)** | `123456`                          |
+
+The web address **is** the hospital — `sunrise.localhost` is "Sunrise Hospital". (There's a second
+demo hospital, a free government one, at `district.localhost:3000` — same steps, every price ₹0.)
+
+You'll log in as these people. Use one browser tab per person, **or** just log out and back in
+between steps:
+
+| Log in as                  | This person is…                     |
+| -------------------------- | ----------------------------------- |
+| `reception@sunrise.test`   | the front desk                      |
+| `drrao@sunrise.test`       | the doctor (Dr Rao)                 |
+| `cashier@sunrise.test`     | the billing counter                 |
+| `labtech@sunrise.test`     | the lab technician                  |
+| `pathologist@sunrise.test` | the senior who approves lab results |
+| `pharmacy@sunrise.test`    | the pharmacy counter                |
+
+### Step 3 · The walkthrough
+
+Follow it top to bottom. Each step says **who to log in as**, **what to do**, and ✅ **what you
+should see** (so you know it worked).
+
+**1. Reception registers the patient** — log in as `reception@sunrise.test`, open **Reception**.
+
+- Register a walk-in, pick **Dr Rao**, click **Add to queue**.
+- ✅ The patient appears in the day's list, and a ₹500 consultation fee shows on their bill.
+
+**2. Cashier takes the consultation fee** — log in as `cashier@sunrise.test`, open **Billing**.
+
+- Find the patient, **Finalize** the bill, then **Collect payment**.
+- ✅ The bill is marked paid. (A government hospital's ₹0 bill is paid the moment it's finalized.)
+
+**3. Doctor sees the patient and orders a test** — log in as `drrao@sunrise.test`, open **My patients**.
+
+- You only see _your own_ patients. Click the patient → **Call in**.
+- In the **Order** section, tap a test (e.g. **CBC** or **Chest X-ray**), then **Order 1 test**.
+- ✅ It says the test is on the department's worklist. You can tap more tests and order again —
+  add as many as you like.
+- When you're done ordering, click **Send for tests** (the button above).
+- ✅ **New:** if you ordered _nothing_, **Send for tests** is greyed out — you must order at
+  least one test first. Once you've ordered one, it works and the patient moves to "at the lab".
+
+**4. Cashier takes payment for the test** — log in as `cashier@sunrise.test`, open **Billing**.
+
+- **Finalize** and **Collect payment** for the new test charge.
+- ✅ Paid. This is what lets the lab actually run the test. Tests ordered _after_ this payment
+  become a separate bill — that's by design.
+
+**5. Lab runs the test** — log in as `labtech@sunrise.test`, open **Worklist**.
+
+- The test is _already there_ (nobody "sent" it — it appeared the moment it was ordered).
+- **Accept** → **Start** → enter a result.
+- ✅ It says "awaiting verification — not yet visible to the doctor". A lab tech can't approve
+  their own work.
+
+**6. Pathologist approves the result** — log in as `pathologist@sunrise.test`, open **Worklist**.
+
+- **Verify** → **Release**.
+- ✅ Only now can the doctor see the number, and the patient returns to the doctor's list
+  automatically.
+
+**7. Doctor prescribes a medicine** — back as `drrao@sunrise.test`, open the patient.
+
+- In **Prescribe**, pick a drug, set dose / route / frequency / days / quantity, **Sign**.
+- ✅ It's now on the pharmacy counter. Nothing is charged yet — medicine is billed only when
+  it's actually handed over.
+
+**8. Pharmacy dispenses** — log in as `pharmacy@sunrise.test`, open **Pharmacy**.
+
+- The prescription is already there. Hand over some (e.g. 6 of 10), **Dispense**.
+- ✅ The badge shows "6/10 given", and the patient is billed for 6, not 10.
+
+**That's the full loop.** The one idea behind all of it: **nothing is ever "sent" anywhere** —
+work shows up in the next department the instant it's created. The one exception you just used,
+"Send for tests", only moves the _patient_ to a waiting state; the tests were already at the lab.
+
+### Logging in as the platform operator (a different app)
+
+The hospital app (`sunrise.localhost:3000`) and the **operator console** are two separate apps with
+two separate user lists. The console is where the _software company_ creates and manages hospitals —
+not a hospital login.
+
+|               |                                                                    |
+| ------------- | ------------------------------------------------------------------ |
+| **Open this** | **http://localhost:3001** (the operator console, a different port) |
+| **Email**     | `ops@paperlesstech.in`                                             |
+| **Password**  | `123456`                                                           |
+
+There is **only one** seeded operator: `ops@paperlesstech.in`. An email like `nasar@paperlesstech.in`
+does not exist until you create it, and logging in with it just fails — the error is deliberately the
+same for a wrong password, an unknown email, and a disabled account, so it always _looks_ like a
+password problem. To add another operator, log in as `ops@…` first and create it from the console
+(the bootstrap CLI only works on a brand-new database with no operators yet).
+
+### If you get stuck
+
+| Problem                                      | Do this                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------- |
+| Login page won't load / "can't connect"      | Run `pnpm verify` — it names the cause and the fix.                        |
+| Blank page at `localhost:3000`               | Use `sunrise.localhost:3000`. Plain `localhost` is "no hospital".          |
+| "No patients" as the doctor                  | Reception must register one **and pick that doctor** first.                |
+| Rx pad (prescribe) is empty                  | Run `pnpm --filter @medicore/api migrate --all` — it loads the drug list.  |
+| A number seems ~1–2s behind after dispensing | Normal — billing catches up a moment later. Don't take payment off it yet. |
+
+### Where to go next (reference sections below)
+
+- **Section 1d** — the same demo in more depth, plus "try to break it" security tests.
+- **Section 1** — ports and URLs, if a port is taken.
+- **Sections 23–47** — one feature at a time (wallet, express visits, receipts, vitals, branches…).
+- **[`docs/testing/HMS_ROLE_BASED_UAT_TEST_PLAN.md`](docs/testing/HMS_ROLE_BASED_UAT_TEST_PLAN.md)** —
+  the master role-based UAT plan: 149 scenarios organised role → module → workflow, each carrying its
+  automated coverage and a manual status. It is the document to work through when you want to validate
+  MediCore as a hospital rather than as a set of screens. §11 below is what decides which layer proves
+  what; the UAT plan is what a person actually executes.
+- **[`docs/testing/HMS_UAT_EXECUTION_WAVES.md`](docs/testing/HMS_UAT_EXECUTION_WAVES.md)** — the
+  execution companion to that plan: the 95 P0/C0 scenarios scheduled into six waves, with the
+  fixtures, the cross-role handoffs and the clock constraints each one needs. Open it on the morning
+  of a manual campaign; open the plan above to find out what any single scenario means.
+
+---
+
 **Start here: open http://demo.localhost:3000 and sign in.** That is the app.
 
 Two things trip everyone up:
@@ -594,6 +764,154 @@ All gates, as of **2026-07-16**: integration **658 passing**, typecheck 17/17, l
 
 **Known flake:** seen twice (`1 failed | 437 passed`, then `1 failed | 601 passed`), green on every re-run, and **the name was not captured either time** — which is the actual failure. Suspected the Mailhog timing suite under load, but that has never been confirmed. Recorded as debt in `PROJECT_MEMORY` §5. Next occurrence: pipe the full output to a file BEFORE filtering it. **It must not be "fixed" by deleting the assertion.**
 
+#### 2026-08-17 — the names, at last, and what they rule out
+
+The instruction above was followed and the output kept. **Four consecutive runs, four disjoint sets
+of failures, zero overlap in test names:**
+
+| Run                      | Result                    | Failed                                                                                                                                                                                                                                   |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| full `test:int`          | `1 failed \| 1734 passed` | `mar > lets a doctor read the round…` (`admitToWard` got **404**, expected 201) · `branchIsolation.int.test.ts:180` **`beforeAll` hook timeout**                                                                                         |
+| full `test:int`          | `4 failed \| 1834 passed` | `mar > shows a charted dose as given on the very next read` · `prescriptions > SIGNING … does not charge the patient a paisa` · `rbac > DOCTOR may NOT GET /billing/pending` · `rbac > RECEPTIONIST may NOT GET /reports/patient-visits` |
+| `rbac.int.test.ts` alone | `1 failed \| 1225 passed` | `rbac > PHARMACIST may NOT POST /appointments/:id/reschedule`                                                                                                                                                                            |
+| `rbac.int.test.ts` alone | `1 failed \| 1225 passed` | `rbac > RECEPTIONIST may NOT DELETE /users/:id/roles/:roleCode`                                                                                                                                                                          |
+
+**No failure was ever a wrong answer.** Not one assertion about a permission, a price or a dose has
+failed. The RBAC rows are the most alarming to read in a log — a line saying
+`DOCTOR may NOT GET /api/v1/billing/pending — FAIL` looks exactly like a permission leak — and they
+are the least meaningful. Anyone triaging this must read the failure body before reacting to the
+test name.
+
+**What it ruled out.** The tracker's standing advice is _"check Docker memory first"_, and it was
+checked **during** a failing run: `medicore-hms-mongo-1` at **3.4 GiB of 7.75 GiB**, **no HMS
+container exited 137**. Not the OOM-kill scenario that had been the leading explanation. Not
+accumulated state either — 14 databases, 5 of them test. Not a code regression: the session that
+observed it changed **only** files under `AI_Workflow/`.
+
+#### 2026-08-19 — one more, and it was not the harness this time
+
+A single-test failure during a `pnpm gate:full` run, identity not captured. Nine full integration
+runs afterwards were green at 2,057/2,057, so it looked exactly like T3 returning. **It was not.**
+Following this file's own instruction — keep the output — three deliberate reproduction runs were
+logged to a file, and **all three failed**, two on the same test and one on a suite. The isolation
+runs were green because the isolation runs are not loaded enough to race.
+
+**Two distinct causes, one a product defect and one a harness defect.**
+
+**1 · A concurrent triage answered 500.** `emergency.int.test.ts > survives two nurses triaging the
+same patient at the same instant`. An upsert is find-then-insert inside the server: both callers
+found nothing, both attempted the insert, and `one_triage_per_encounter` refused the loser with
+E11000. Nothing caught it, so the error handler answered `HMS-GEN-500` — for a write whose row was
+sitting right there, and with the one status a client is entitled to read as "the server is broken,
+stop". Fixed by retrying the upsert once (`upsertRetryingOnDuplicate`); on the retry the document
+exists and the upsert is an ordinary update. Falsified: removing the retry fails 2 runs in 6 **in
+isolation**, where the race is rarest.
+
+**The test is the other half of the story.** It asserted `[a.status, b.status].every(s => s === 201
+|| s === 409)` — a shape chosen before anyone knew what the race actually produced, and lenient
+enough to accept a 500 for an entire milestone had the third status never appeared. It now demands
+both succeed. **A test that accepts several answers cannot tell you which one it got.**
+
+**2 · `dropDatabases` returned before the drop had finished.** The third run failed at
+`beforeAll` with `Cannot create collection hms_test-emergency-rival.wardNotes - database is in the
+process of being dropped`, thrown from a migration inside `provisionTenant`. Under full-run load
+Mongo keeps a just-dropped namespace in a dropping state after `dropDatabase()` resolves, and every
+suite's next act is to provision into it. The whole file reports as a failed suite and every test in
+it is **skipped** — which is worse than a failure, because a skip reads as "not a problem".
+`dropDatabases` now waits until the namespace can be written again, probing with a **write**
+(a read succeeds against a database that is still being dropped, so `listCollections` would answer
+"fine" and prove nothing).
+
+This one is shared by all 23 suites, and its shape — a `beforeAll` dying on a database operation, in
+a different suite each time — matches the hook timeouts recorded above during the T3 investigation.
+It is **not** claimed to be the same cause: T3's was proven to be foreign processes answering on
+colliding ports, and that fix is still armed.
+
+**Four full integration runs after both fixes: 2,057/2,057, four for four**, where the same
+build had failed three for three.
+
+**What this says about the previous entries on this page.** Both causes were inside the boundary of
+this system, and both were found by keeping the output of a failing run rather than by re-running
+until it passed. The standing instruction on this page — capture the name before filtering — is the
+only reason there is anything to write here.
+
+#### A clean run that looked like an answer, and was not
+
+Docker Desktop crashed a few hours after the runs above. When it came back **only HMS's four
+containers were running**, so the host went from ~30 containers to 4 with no change to this
+repository, and the next run was **1838/1838** with `pnpm gate` exiting 0 end to end.
+
+That was written up here as "the natural experiment that settled it: contention from other
+projects". **It did not survive the next run.** With the host still at four containers, the very
+next gate failed 4 of 1842. The retraction is kept rather than edited away, because the mistake is
+the instructive part: a single green run after changing one big variable is exactly what a
+wandering flake looks like when you want it to be solved. Mailhog was investigated and rejected on
+the same evidence — only `orders` and `notifications` import `mailTestEnv`, no failure was ever in
+either, and a shared-inbox race produces a wrong count, not a 404.
+
+#### 2026-08-17 — SOLVED: the request was answered by a different process on this machine
+
+The tell was the thing that had looked like a logging bug. `requestLog` is registered **second in
+the chain, before helmet and cors, precisely so every request is logged** — yet the failing
+requests had **no log line at all**. That was not a lost line. It was the literal truth: the
+request never arrived here.
+
+Proven by tracing below Express, at `node:http`, writing to a file of its own so nothing depended
+on vitest's stdout capture. Three instrumented full runs, five anomalies, and every one of them
+resolved the same way:
+
+| Run | Symptom the suite reported                                       | What the transport showed                              |
+| --- | ---------------------------------------------------------------- | ------------------------------------------------------ |
+| 1   | `billing` — `Error: socket hang up`                              | connected to :49671, **no `request` event ever fired** |
+| 2   | `rbac` — PHARMACIST reached `/reports/discharge-outcomes`: 404   | answered **without an `x-request-id`**                 |
+| 3   | `vitals` ×2 — 404 on `POST /encounters/:id/vitals`               | answered **without an `x-request-id`**                 |
+| 3   | `branchIsolation` — 401 on a request that had just authenticated | answered **without an `x-request-id`**                 |
+
+`requestId` is the FIRST middleware, so a response with no `x-request-id` did not come from this
+application. `lsof`, run at the moment of the anomaly, named who it did come from:
+
+```
+Code Helper  738   127.0.0.1:49183 (LISTEN)     Code Helper 2007  127.0.0.1:53579 (LISTEN)
+Code Helper  1559  127.0.0.1:49435 (LISTEN)     java        2393  127.0.0.1:49671 (LISTEN)
+Code Helper  1991  127.0.0.1:49715 (LISTEN)
+node        14992  *:49183 (LISTEN)   ← ours, on the same port
+```
+
+**Five foreign listeners, and every anomaly across all three runs landed on one of those five
+ports.** The mechanism, end to end:
+
+1. `request(app)` is **one HTTP server per request** — supertest wraps the app in a fresh
+   `http.createServer(app)` and calls `app.listen(0)` every time. A full run makes ~4,100 requests
+   and burns ~8,200 ephemeral ports; the macOS ephemeral range is 16,384 wide (49152–65535). One
+   run sweeps most of it.
+2. `listen(0)` with no host binds the **wildcard** address, and Node sets `SO_REUSEADDR`. On
+   BSD/macOS that bind **succeeds** on a port another process already holds on a specific address —
+   no `EADDRINUSE`, no warning.
+3. supertest then connects to `127.0.0.1:<port>`, and the kernel routes to the **most specific**
+   listener: the other process.
+4. It answers. Plausibly — some of those editor helpers are themselves Express, so what comes back
+   is a real Express 404 (`x-powered-by: Express`) for a route it has never heard of. The JVM
+   accepted the connection and reset it: "socket hang up".
+
+Everything the flake did follows from that. Green in isolation, because a single suite makes ~120
+requests and rarely lands on one of the five. Wandering, because it is positional in the port
+sequence and has nothing to do with any suite's code. Never a wrong clinical answer, because the
+application never processed the request. And invisible in the logs, for the same reason.
+
+**The fix** is one listening server per suite, bound to `127.0.0.1` — `listening()` in
+`src/test/appServer.ts`. The kernel will not hand a `127.0.0.1:0` bind a port already in LISTEN on
+127.0.0.1, so the collision goes from rare to impossible, and the ~4,100 binds per run become 21.
+`src/test/noWildcardBinds.setup.ts` makes a wildcard ephemeral bind throw, so the default cannot be
+reintroduced quietly; `src/testServerBinding.test.ts` pins both the guard and the platform
+behaviour it defends against.
+
+Verified: full `pnpm gate` green end to end, integration **1842/1842**, with the five foreign
+listeners still up on the machine that had been failing about once a run.
+
+**Do not raise `testTimeout`/`hookTimeout` if something like this returns.** A test that needs
+longer under load is evidence; a test that is allowed longer is silence. And if a failing request
+has no line in the request log, believe the log: it did not arrive.
+
 ---
 
 ### `Cannot find module './963.js'` — or any Webpack chunk that does not exist
@@ -623,7 +941,365 @@ pnpm dev
 
 ---
 
-## 11. What you cannot test yet (updated 2026-07-16)
+## 11. Validation strategy — automated, not manual (2026-08-18)
+
+**The manual validation campaign was deliberately replaced by automated engineering validation.**
+Browser-dependent scenarios are covered by Playwright where a browser genuinely adds coverage;
+security, clinical, business and persistence scenarios are covered at the lowest layer that can
+prove them. `MANUAL_VALIDATION_RUNBOOK.md` remains the authority for **what each scenario means** —
+it is what the tests were written from — but it is no longer a checklist anybody works through.
+
+### What the audit found
+
+The runbook's 232 IDs were audited against the existing suites before a line of test code was
+written. The headline is that **the API was already far better covered than the runbook implies**:
+
+| Manual scenario                          | Invariant                                     | Existing coverage                                                                                                       | Browser needed?      | Action                                                           |
+| ---------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------- |
+| **BR-10** cross-branch report file       | The bytes stop at the branch                  | `branchIsolation.int.test.ts` §22 — real upload, list check, exploit by id, All-branches mode, and the positive control | No                   | **Strengthened** — also asserts the refusal carries no PDF bytes |
+| **BR-11** cross-branch appointment write | A foreign site cannot drive the state machine | §23 — all three transitions, the positive control, **and the re-read** the runbook's "trap" demands                     | No                   | **Keep** — already stronger than the manual row                  |
+| **BR-07** branch-confined user           | A bound user cannot exceed their binding      | §2, plus confined NURSEs in `mar` and `nursing`                                                                         | No                   | **Keep**                                                         |
+| **BR-12** wallet is hospital-wide        | A deliberate non-boundary                     | §24, pinned in that direction on purpose                                                                                | No                   | **Keep**                                                         |
+| **TEN-01** tenant isolation              | Separate databases (ADR-0005)                 | `tenancy.int.test.ts`, plus cross-tenant refusals in `mar`                                                              | No                   | **Keep**                                                         |
+| **DRIFT-01…12** schema guards            | Refuse when the rule cannot be enforced       | Five capabilities × refusal + code + `Retry-After` + **row count** + proportionality + cross-tenant + recovery          | No                   | **Keep**                                                         |
+| **JR-01…22** clinical journey            | The state machine                             | `encounters`, `admissions`, `orders`, `prescriptions`, `billing`                                                        | Partly               | **Keep** API; Playwright for the browser seams                   |
+| **WEB-01…24**                            | Mixed                                         | jsdom suites cover rendering with a mocked `fetch`                                                                      | **Yes, for several** | **Playwright**                                                   |
+| Mobile M2/M3                             | Mixed                                         | 1647 mobile tests + the client contract suite                                                                           | Device-only for some | **Keep** + documented limits                                     |
+
+**Two "gaps" in the first pass were artifacts of a keyword search, not real.** Proportionality
+(DRIFT-02), cross-tenant independence (DRIFT-08) and the DRIFT-05 database-state check all already
+existed under names the search missed — `"does not block vitals, nursing notes, or reads while
+charting is refused"`, `"refuses only the tenant whose index is missing"`, `"leaves the outpatient
+encounter untouched when it refuses"`. Duplicates written before that was noticed were **removed**:
+the existing tests are stronger, because they also cover reads and the other tenant actually
+writes. Recorded because "add a test" is the cheap answer and "the test is already there under a
+better name" is the correct one.
+
+### What was genuinely missing: the browser
+
+**Every one of the fifteen web suites runs in jsdom with `fetch` mocked.** They prove a component
+renders what it is handed; none proves the assembled application, talking to a real API over real
+cookies, hands it the right thing. That is the whole of what the manual campaign was really for,
+and it is now `e2e/`.
+
+```bash
+pnpm test:e2e        # the browser suite (starts the stack if it is not already up)
+pnpm gate            # everything else — now also typechecks e2e/
+pnpm gate:full       # both, in order. This is the release gate.
+```
+
+**Ten tests, deliberately not a mirror of the checklist.** Each one is a thing only a browser can
+see:
+
+| Spec                         | What it proves                                                                                                                                                                                                                                                                          | What it would catch                                                                                                                                                                                         |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.spec.ts`               | Sign-in lands in a named hospital with navigation; an unknown host blames the **address**; a wrong password keeps the email                                                                                                                                                             | A permission→navigation break; a whole hospital resetting passwords over a DNS error                                                                                                                        |
+| `branchSwitch.spec.ts`       | Switching sites repaints the ward, **no bed from the previous site survives**, and the choice outlives a reload                                                                                                                                                                         | The original defect this design exists to prevent — a header naming one site over another site's patients                                                                                                   |
+| `clinicalSafety.spec.ts`     | A doctor's round renders with every dose row **inert**, a nurse's does not; every ward row is named and the chart carries a UHID                                                                                                                                                        | A doctor able to chart a dose from the UI (P1); web defect **D-1** returning — `Patient: —` at the moment of administration                                                                                 |
+| `staffDirectory.spec.ts`     | The directory narrows to the active site, says which scope it counted, and shows each person's branch binding                                                                                                                                                                           | The staff branch scope silently going away — nothing in the tenantScope plugin holds it up                                                                                                                  |
+| `pageHealth.spec.ts`         | The eleven back-office pages, and the patient chart, load against the real API and are **refused nothing they did not expect**                                                                                                                                                          | A page being told "no" and drawing a zero. **It found two live defects doing exactly that** — see below                                                                                                     |
+| `reportsExport.spec.ts`      | Export CSV hands over a file named for the period, with rows under its header                                                                                                                                                                                                           | The Blob → object URL → anchor → revoke path breaking: a button that spins, succeeds, and delivers nothing                                                                                                  |
+| `labWorklist.spec.ts`        | The bench: the ordered test reaches the queue named and UHID'd, the payment badge agrees with the server, the matching control is offered, and a branch switch clears it                                                                                                                | A worklist that loads empty because the page sends no branch; a row that cannot name its patient; a badge that holds work already paid for                                                                  |
+| `alertInbox.spec.ts`         | A released result reaches the ordering doctor's **bell**, opening it tells the SERVER (survives a reload), the message stays on `/alerts` once read, and an administrator holding every permission sees none of it                                                                      | A perfect delivery to a bell that renders no badge, a dropdown that lists nothing, or a click that greys a row on screen and never persists — all three look exactly like "there is nothing for you"        |
+| `radiologyWorkflow.spec.ts`  | A radiographer takes a study from the imaging worklist to the doctor's chart — settle from advance, accept, start, **findings and impression** rather than the lab's analyte grid, verify, release — with no radiologist, and cannot open a chart                                       | Imaging shown the laboratory's result form; a study that can be performed but not released, leaving the chart empty while everything looks finished; a role widened to `emr:read` to make the worklist work |
+| `pharmacyDispensing.spec.ts` | A prescriber sees "40 in stock" / "out of stock" and can still prescribe what the hospital lacks; the counter hands over 12 of 20 and keeps "12/20 given · of 8 still owed"; the charge follows the 12; the pharmacist sees the batch and its expiry; a prescriber is refused the shelf | Availability turned into a disabled button, so a patient who would have bought the drug outside goes home without a prescription for it; a counter that reports the prescribed quantity as dispensed        |
+
+`workers: 1`, `retries: 0`, no `waitForTimeout` anywhere, and site names are **discovered from the
+switcher** rather than hardcoded, because `seed:validation` names the second site differently when
+it adopts an existing branch.
+
+### What the page sweep found: two pages showing a refusal as emptiness
+
+The eleven pages this document previously listed as having no coverage at any layer — `/mrd`,
+`/mortuary`, `/theatres`, `/ambulance`, `/assets`, `/packages`, `/tariff`, `/feedback`, `/audit`,
+`/subscription`, `/reports` — now have one test each. (An earlier revision of that list also named
+`/insurance`; **there is no such page** — insurance is a tab on the patient chart.)
+
+The sweep is deliberately not eleven CRUD flows. It asserts something narrower and much harder to
+fake: **every request the page made came back, and none was refused unless the refusal is declared
+in the spec with its reason.** Writing it turned up two live defects of a single shape:
+
+| Where         | The request                       | What the user saw                                                         |
+| ------------- | --------------------------------- | ------------------------------------------------------------------------- |
+| `/feedback`   | `GET /users?limit=200` → **400**  | Every ticket's assignee shown as an unresolved id. Never a name. Ever.    |
+| Patient chart | `GET /orders?limit=200` → **400** | **"Tests 0"** on a patient holding three orders — a short clinical record |
+
+The cap on every list is **100**. Both callers asked for 200, both were refused with
+`HMS-VAL-001`, and both pages had a `catch` written for the _permission_ case — `.catch(() =>
+setStaff([]))` and `soft(…)` — which folded a validation error into ordinary emptiness.
+
+Neither is visible from below. The API is correct and its tests pass; the jsdom suites mock `fetch`
+and never send the bad request. Only a browser against a real server can watch a page be told "no"
+and draw a zero. Both call sites now request 100, and reverting either turns the sweep red.
+
+The one **declared** refusal is `/mortuary`: `module.support.mortuary` is not in `PLAN_HOSPITAL`,
+so the API answers `HMS-PLAN-002` and the page says "Feature not in your edition" with a reference.
+That is the entitlement gate working, and it is swept precisely so a plan refusal keeps reading as
+an explanation rather than as a blank register.
+
+### A missing seed is now a failure, not a pass
+
+`preflight.setup.ts` is a **setup project every other project depends on**. It checks over HTTP, in
+about a second, that the hospital `seed:validation` builds is actually present: the four demo
+accounts can sign in, the nurse can work in two open sites, **both sites have occupied beds and
+their bed codes are disjoint**, doses are scheduled today, and the directory has people. Each
+failure names `pnpm docker:dev && pnpm seed:migrate && pnpm seed:validation`.
+
+The third check is the one that matters. `branchSwitch.spec.ts` asserts that no bed from site A
+survives a switch to site B — and on a hospital whose second site is empty, that compares against
+nothing and **passes for free**. The specs used to guard this with `test.skip(sites.length < 2)`,
+which reports a missing environment as a PASS: the gate would have said 10/10 having never
+exercised cross-branch display of PHI in a browser. Every skip has been replaced by a hard
+assertion, and the environment is now proved once, out loud, before the browser opens.
+
+### Falsification — these tests were proven able to fail
+
+| Protection removed                                             | Test result                                                                                                  |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Branch scope on the single-report read (**reintroducing D10**) | 🔴 _"a Chennai administrator downloaded a Hyderabad report (status 200)"_                                    |
+| Branch scope on the appointment read (**reintroducing D9**)    | 🔴 all four, including _"leaves the Hyderabad appointment untouched"_ — the half the runbook's trap is about |
+| `BranchScope`'s subtree key                                    | 🔴 _"beds from Main Branch survived a switch to apollo golconda"_                                            |
+| The staff-directory branch exclusion                           | 🔴 2 of 4 integration tests                                                                                  |
+| The staff count reading the server total                       | 🔴 _"expected '100 people at Main Branch' to match /Showing 100 of 137/"_                                    |
+| The loopback test-server guard (T3)                            | 🔴 binds `::`                                                                                                |
+| The `limit: 100` fix on `/feedback` and the patient chart      | 🔴 _"400 HMS-VAL-001 /api/v1/users?limit=200"_, _"…/orders?…&limit=200"_                                     |
+| The UHID beside the name on a medication-round row (FR-02)     | 🔴 _"a dose row carried no UHID beside the patient's name"_                                                  |
+| `hostIsUnknown` on the branding call (**WEB-02**)              | 🔴 the address is never blamed before a password is submitted                                                |
+| The preflight's disjoint-bed check, pointed at one site twice  | 🔴 _"… use the same bed codes … indistinguishable from a legitimate one"_                                    |
+| The preflight, run at a tenant without the demo accounts       | 🔴 _"these demo accounts cannot sign in at http://district.localhost:4000 — run `pnpm …`"_                   |
+| Badge removed from the bell                                    | 🔴 the released result never announced itself                                                                |
+| Mark-read made optimistic-only (screen updated, server not)    | 🔴 the unread count came back after a reload                                                                 |
+| `radiology:sign` removed from RADIOLOGY_TECHNICIAN             | 🔴 the study could be reported and never released — a radiologist would be required                          |
+| Imaging shown the lab's result form                            | 🔴 no findings-and-impression box on the imaging console                                                     |
+| Availability wired to `disabled` on the prescribing pad        | 🔴 an out-of-stock drug could not be prescribed                                                              |
+| The counter sending the prescribed quantity, not the dispensed | 🔴 the patient was charged for 20 tablets they were given 12 of                                              |
+| Expired lots made allocatable                                  | 🔴 an expired box was handed to a patient                                                                    |
+| FEFO reversed to last-expiring-first                           | 🔴 the newer lot was opened while an older one was still on the shelf                                        |
+
+Production code was restored after each, and the gate re-run green.
+
+### Two disagreements between the runbook and the implementation — now decided
+
+Both were found while automating and left open as PRODUCT DECISION candidates. They have since
+been investigated against the implementation, ADR-0005, §9 of the runbook and the existing tests,
+and **decided in opposite directions** — which is the point: neither "the doc wins" nor "the code
+wins" is a rule.
+
+#### WEB-02 — the runbook was right. **Product changed.**
+
+The row says: browse a slug that does not exist, and be told _"This address does not belong to any
+hospital"_. The implementation only said it **on submit**, mapped from the login response.
+
+What settled it was finding that the app **already had the answer and discarded it**.
+`BrandingProvider` calls the public `GET /site` on every page load, and on an unknown host that
+returns exactly `HMS-TEN-001` — the API's code for "this hostname matches no tenant in the
+registry", distinct from suspended (`002`), licence lapsed (`005`) and registry unreachable
+(`004`). The provider caught it and set `loaded: true`.
+
+So the only way to learn you were at the wrong address was **to type your real password into a host
+that is not your hospital's**. The hostname IS the tenant (ADR-0005): a wrong address is not a typo
+in a form, it is a different machine. Withholding an answer the app already holds, until after the
+credential has been sent, is the wrong order.
+
+The fix publishes one flag, `hostIsUnknown`, and is deliberately narrow — **`HMS-TEN-001` only**. A
+network blip or a restarting API must never tell a working hospital that it does not exist, and
+`e2e/auth.spec.ts` asserts that negative directly ("does not accuse a real hospital's address of
+being wrong") alongside the positive.
+
+#### WEB-04 — the runbook was over-specified. **Product unchanged; the row amended.**
+
+The row says "Name + UHID on every row" of `/ward`. The ward puts the name on the row and the UHID
+on the chart the row opens.
+
+The row points at **§9**, and §9 is explicit about where the five rights apply: _"every
+administering surface … the confirmation screen a nurse reads at the moment of giving."_ **A ward
+list is not one** — no drug can be given from it. It is a navigation rail beside a patient panel,
+and the panel carries both identifiers. The surfaces that ARE administering already satisfy the
+rule on the row itself: `/medication-round` renders `patientName` and `uhid` together, resolved
+server-side, and passes both into the confirmation.
+
+Changing the ward row would have been changing the product to satisfy a document that was stricter
+than its own safety rule. Instead the runbook row now says where the requirement applies — and the
+requirement is now **tested where it matters**, which it previously was not:
+`clinicalSafety.spec.ts` asserts every dose row on the round carries a name AND a UHID. That is
+FR-02's actual claim, and until now no test made it in a browser.
+
+### Not automatable — stated plainly, not quietly dropped
+
+These were **never** manually executed either, so nothing is being lost. They are recorded so a
+green suite is not mistaken for coverage of them:
+
+- **Biometrics** (M2-35…M2-47) — no enrolled fingerprint or Face ID exists in CI or in a
+  simulator. The lock's _logic_ is covered by the mobile suite; the **OS prompt** is not.
+- **A real radio** — cellular handover mid-save (NET-08). A mocked failure is a decision; a lost
+  packet is an accident, and only the second one tests reconciliation honestly.
+- **App-switcher snapshots**, sunlight legibility, and layout at the largest OS text size — these
+  need eyes and a device.
+- **Two physical devices in two hands** (MAR-02). The concurrency invariant _is_ proven — two real
+  HTTP clients race the same dose in `mar.int.test.ts` — but two nurses reaching for the same
+  drug is a human scenario, not a client one.
+- **Writes on the back-office registers.** `e2e/pageHealth.spec.ts` loads all eleven of them
+  (see below) but creates nothing: driving a theatre booking or an ambulance dispatch through a
+  browser would leave rows in the shared seeded hospital and make the suite's second run differ
+  from its first. Those writes are proven at the integration layer against a real Mongo.
+- **The activity trail's CSV export.** `/reports` proves the Blob-and-anchor download path;
+  `/audit` uses the same mechanism, and a second browser test of it would re-prove the same
+  plumbing at the cost of a minute per run. Its rows and columns are the API's, and the API's
+  tests own them.
+
+**Status vocabulary.** Automated coverage is recorded as `AUTOMATED — PROVEN`,
+`AUTOMATED — STRENGTHENED`, `AUTOMATED — PLAYWRIGHT`, or
+`NOT AUTOMATABLE — DOCUMENTED LIMITATION`. **"Manual PASS" is never used**, because no human has
+executed any row.
+
+> **Still true on 2026-08-19, and worth stating precisely.** Stage A was executed that day — see
+> §11b — but by an agent driving a real browser, not by a person. The vocabulary above is unchanged:
+> nothing below is marked "manual PASS", because nobody has looked at this product with their eyes.
+
+---
+
+## 11b. Stage A executed — 2026-08-19, in a browser, as each role
+
+The gate the tracker had been asking for since 2026-08-14, finally run. **Seven defects, in a
+product whose automated gate was green** — 2,060 integration tests, 45 Playwright specs, 234 paths,
+0 boundary violations. Three were fixed the same day; four are open on the risk register as
+D17–D20. The full list, with evidence, is `AI_Workflow/docs/RISK_REGISTER.md` §0, D14–D20.
+
+### How it was run, and what that is worth
+
+A real Chromium instance against the running dev stack, signing in and out as
+`admin` · `reception` · `drrao` · `nurse` · `cashier`, plus API-level probes as `drkhan`,
+`pharmacy`, `labtech`, `radiographer` and a branch-confined front-desk user. Every clinical write
+below went through the actual screen a member of staff would use.
+
+**This is not the same as a human, and the difference matters in both directions.**
+
+_What it did better than a person:_ it read the database after every write, so a screen that
+_looked_ right was still checked against what was actually stored. That is how D14 was found —
+the browser showed a plausible refusal; the collection showed a destroyed destination.
+
+_What it cannot do at all:_ judge legibility, layout, colour, density, or whether a screen is
+usable under time pressure. It cannot use a phone. **The mobile device checklists (`M2`, 61 rows;
+`M3`, 45 rows) remain 0/106 and are not addressable this way** — they need hardware and eyes. §11's
+"Not automatable" list is unchanged by this pass.
+
+### What passed
+
+**Theatre** — registry create as admin (read-only for a doctor, correctly); booking; overlap
+refused in the browser with `HMS-VAL-001` and the form preserved; back-to-back slots at a shared
+boundary accepted (half-open intervals); start; operative note; write-once enforced at the API
+(409 on a second note, 409 on a note against a `scheduled` booking); role matrix across five roles;
+branch isolation (a booking made in MAIN returns `[]` under GC01).
+
+**Emergency** — arrival from Reception with the emergency checkbox; the board inside a minute;
+untriaged sorting **above** critical, with the banner saying so; triage; re-triage as a revision
+with the modal pre-filled; "send to doctor"; the doctor's queue, order pad and "send for tests";
+**an ED imaging order landing on the ordinary radiology bench** — the claim the whole module rests
+on; admission closing the ER encounter and opening an IP stay, with the patient leaving the board;
+transfer out recording destination, reason, time and actor, and walking `arrived → in_progress →
+closed`; the full role matrix; `HMS-TEN-003` on both cross-tenant directions.
+
+**Entitlement** — a `PLAN_CLINIC` tenant provisioned with the documented command answers
+`HMS-PLAN-002` naming `module.clinical.ot` / `module.clinical.emergency`, not a permission error.
+
+**BR-07, executed for the first time** — the row the tracker called "the highest-value account in
+the campaign". A front-desk user bound to GC01 sees **4 GC01 patients** whether they send
+`x-active-branch: GC01`, `x-active-branch: MAIN`, or no header at all; an unbound admin sees 192 in
+MAIN and 4 in GC01. The header filters within what you may see. It does not grant.
+
+**Platform** — public site, login/logout, patient registration (UHID for life), reception register,
+consultation, multi-select order pad, admission with the bed picker, and the money path end to end:
+bill raised (`INV-2026-00134`), payment taken, invoice `paid`.
+
+### One thing that looked like a defect and was not
+
+Twice, mid-session, the browser stopped delivering trusted input to the page: clicks reported
+success, nothing happened, and `page.evaluate` still worked. Instrumenting document-level capture
+listeners showed **zero DOM events arriving** — so the input never reached the page at all, and a
+reload restored it. A harness artefact, recorded here because the obvious reading ("the modal will
+not open") would have been filed as a product bug.
+
+### D17, and the subsystem that had no tests
+
+Closed on the same day it was filed, and worth recording for how it hid rather than for what it was.
+
+`auditPlugin` carries Doc 09 §9's requirement — an entry for every mutation of PHI or money — for
+54 models. When D17 was found, **not one test asserted that it wrote anything.** Route permissions
+were covered, the export's content type was covered, `/audit` loaded in Playwright; the trail's
+contents were not checked by anything. So a whole branch of the plugin could be wrong indefinitely,
+and was: the query path discarded any write it had found no pre-image for, which silently threw
+away the first write of every document created by an upsert.
+
+Fixing it turned up a second defect (**D21**) inside an hour, from the first assertion in the
+project that recomputed a stored audit hash: an update that only ADDS fields produced an empty
+`before`, Mongoose's default `minimize` stripped it after the hash had been taken over it, and the
+entry could never verify. The tamper alarm would have fired on an entry nobody touched.
+
+`apps/api/src/auditPlugin.int.test.ts` is the suite that should have existed. It asserts the
+create/update pair on the real ED triage flow, that a no-op and a failed write record nothing, that
+the trail stays inside one hospital and stamps the right branch, that each entry names its own
+actor — and that every entry recomputes to its stored hash.
+
+### D18–D20: the three that were UX findings, and what could actually test them
+
+Closed 2026-08-19, after D17. All three were found in a browser and none of them could have been
+found by reading the code, but they needed three different kinds of test — which is the useful part
+of the record.
+
+**D18 needed a fixture that is bigger than the bug.** The doctor's queue joined `patientId` against
+`listPatients({ limit: 100 })`, so the name was right for everyone inside that page and a dash for
+everyone outside it: 15 of 99 rows on the demo hospital. Any test with five patients passes against
+the defect, which is how a green suite of 2,060 tests missed it. So `encounters.int.test.ts` §8
+buries the queued patient under **120 later registrations** and `queueIdentity.test.tsx` answers
+`/patients` with a hundred OTHER people. The fix is server-side (`EncounterRow` carries
+`patientName` and `uhid`), so the same test protects `/my-patients`, `/reception` and the phone.
+
+**D19 needed a browser for the starting state, not for the widget.** The guard itself — several
+sites reachable, none chosen, so a branch-stamping write cannot succeed — is a pure function and is
+tested as one. What jsdom cannot stage is how a real session ARRIVES in that state: `/me/branches`
+plus `reconcileBranch` plus an empty `sessionStorage` is why an administrator signing in lands in
+"All branches" at all, and that is the whole premise of the defect. `branchSwitch.spec.ts` signs in,
+asserts the switcher says "All branches" without having been told to, and finds "Book a procedure"
+disabled — then asserts in the same test that the server still answers `HMS-BRANCH-001`, because a
+fix that disabled the button and relaxed the server would be worse than the defect.
+
+**And repeating the browser suite found a third thing neither of them would have.** Running the
+affected specs three times over turned `emergencyWorkflow` red — looking for a patient who was
+genuinely in the doctor's queue, two rows past the end of the page it asks for.
+`pharmacyDispensing.spec.ts` opens a visit and must keep it open while it runs; its teardown
+cancelled the prescription and never closed the visit, so **every run of the suite added one
+patient to Dr Rao's queue, permanently**. 57 had accumulated, the queue held 107, and
+`/my-patients` asks for one page of 100.
+
+Both halves were fixed, and only one of them is a test fix. The spec now closes its visit (52
+queued before three consecutive runs, 52 after). The PRODUCT now says how many patients are queued
+beyond the page — not by raising the limit, because the rows are in token order and the hundred
+shown are the earliest arrivals, but because a cap that silently drops the tail is D18 again with a
+different symptom. It took a test standing in the truncated part to notice.
+
+**D20 could not have Playwright, and the reason is worth stating.** Proving the nav for a clinic
+needs a `PLAN_CLINIC` tenant; the seeded hospital is `PLAN_HOSPITAL`, and the only way to make one
+mid-run is an operator feature override. A run that died between the override and its restore would
+leave the shared seeded hospital missing a module and would poison every other spec — a fixture that
+can corrupt the environment is worse than a missing test. So the nav is proved in jsdom against the
+REAL `EDITIONS` data from `@medicore/permissions` (withdraw one flag from a full edition, assert
+exactly the entries depending on it disappear), and the refusals are proved over real HTTP in
+`emergency.int.test.ts`. Recorded as a known gap rather than papered over.
+
+### The environment notes
+
+- `pnpm verify` defaulted to a hospital called `demo` that no documented command creates, so the
+  "is it working?" check failed on a working stack. Fixed (`2ef81a2`); it now defaults to
+  `sunrise`, which is what `seed:demo` actually makes.
+- **`seed:demo` creates no operating theatre.** Theatre reads as unbuilt on a fresh seed until an
+  admin adds one. Not fixed — adding demo data is a product call, not a validation fix.
+- The demo hospital now carries 192 patients and 165 encounters, most of them E2E residue
+  (`E2E Pharmacy Patient …`, `ED Walkin …`), and today's OT schedule is ~29 `E2E appendectomy`
+  rows. Deliberate, per §11 — but it is what a first-time validator opens the product to.
+
+---
+
+## 12. What you cannot test yet (updated 2026-07-16)
 
 Not bugs — **not built**, each for a stated reason. The reasons are recorded in
 `AI_Workflow/PROJECT_MEMORY.md` §4 and §5. Do not demo anything in this list.
@@ -672,7 +1348,7 @@ Not bugs — **not built**, each for a stated reason. The reasons are recorded i
 
 ---
 
-## 12. Manual Verification — enhancement tracks (2026-07-16)
+## 13. Manual Verification — enhancement tracks (2026-07-16)
 
 Short, hands-on checks for the admin/clinical enhancements. Log in at `sunrise.localhost:3000`; every dev account is `123456` (the demo admin `admin@sunrise.test` is now `123456` too — a seed bug that left it on the provisioning password is fixed).
 
@@ -1093,3 +1769,908 @@ its own. It is intentionally NOT re-pointed here.
   OLD id, which no longer exists after the first pass, so the second pass moves 0 rows. The
   per-module consumer logs `re-pointed … references to the surviving patient` with a count only when
   it actually moved something.
+
+## 21 · Per-hospital public website (⏳ eyeball)
+
+**Why:** a visitor who types a hospital's address (`sunrise.localhost:3000`) should meet that
+hospital's own professional website — its name, services, doctors, contact — and step into sign-in
+from there, exactly like a real hospital's site. The content lives in the hospital's OWN database
+(`siteSettings`, one document per tenant), is served by a public, no-auth endpoint (`GET /api/v1/site`)
+that resolves the tenant from the host, and is rendered server-side for SEO. A hospital that has saved
+nothing still gets a full page: the service composes saved content over sensible defaults derived from
+the hospital's name. Provisioning (and `pnpm migrate --all`, which backfills existing hospitals) seeds
+a concrete starter site.
+
+**Storage / editing:** content is the tenant's; only a hospital admin with `branding:manage` may edit
+it (Phase B — §22). The doctors shown are pulled LIVE from the staff directory, opt-in per person, so
+nobody's name reaches the open internet unless deliberately published, and a doctor who leaves stops
+appearing with no edit to the site.
+
+### S1 · The site renders at the hospital root
+
+- Open **http://sunrise.localhost:3000/** (signed out). Expect a full landing page: brand name in the
+  header, a hero with the tagline, a stats strip (24/7 · 20+ · 50+), a services grid, an About block,
+  a contact section with opening hours, and a footer. The accent colour is the hospital's (default
+  teal until changed).
+- **Sign in** (header, hero and footer) → `/login`. After signing in, return to `/` — the button now
+  reads **Go to dashboard** instead of Sign in.
+
+### S2 · It is per-hospital and isolated
+
+- **http://district.localhost:3000/** shows the district hospital's own name and content, independent
+  of sunrise (separate tenant databases). An edit to one never touches the other.
+
+### S3 · Fallbacks are graceful
+
+- An **unknown host** (e.g. `nope.localhost:3000`) or the API being down shows a neutral "being set
+  up" page with a Sign-in link — never a stack trace.
+- A hospital whose site is **unpublished** (Phase B toggle) sends visitors straight to `/login`.
+
+### S4 · SEO
+
+- View source / browser tab on `/`: the `<title>` is `‹Hospital› — ‹tagline›` and there is a
+  `<meta name="description">` plus Open Graph tags, all from the hospital's saved content.
+
+### S5 · Doctors appear only when published (needs a flagged doctor — see §22)
+
+- Until a staff doctor is flagged "show on public website", the **Doctors** section is absent. Once
+  one is flagged (Phase B), they appear with name and specialty; the nav gains a **Doctors** link.
+
+## 22 · Editing the public website (self-service) (⏳ eyeball)
+
+**Why:** each hospital controls its own site without a support ticket. A hospital admin (anyone with
+`branding:manage`, which `TENANT_ADMIN` inherits) edits it from **Administration → Public website**;
+the server refuses the same endpoints for anyone without that permission, and the nav entry is hidden
+from them. Verified live against the running stack (2026-07-18): logging in as the sunrise admin and
+`PATCH /api/v1/site/settings` with a new accent + tagline was reflected immediately by the public
+`GET /api/v1/site`.
+
+### E1 · Edit the brand and copy
+
+- Sign in as an admin at **sunrise.localhost:3000** (admin@sunrise.test / 123456) → **Administration →
+  Public website**.
+- Change the **display name**, pick an **accent colour**, edit the **tagline** and **about**, add a
+  **service** and a **highlight**, fill in **contact** details → **Save changes**.
+- Click **View public site →** (opens `/`) → every change is live, and the whole site is now tinted
+  with the accent colour you picked.
+
+### E2 · Announcement + publish toggle
+
+- Add an **announcement** message → a strip appears across the top of the public site. Clear it → the
+  strip disappears.
+- Turn **Publish** off → visiting `/` signed-out now goes straight to `/login`. Turn it back on.
+
+### E3 · Feature a doctor
+
+- **Administration → Staff** → edit a **doctor** → tick **Show on the public website** → Save.
+- Public site now shows a **Doctors** section with that doctor's name and specialty, and the header
+  gains a **Doctors** link. Untick and save → they disappear (the flag is merged server-side, so the
+  `false` genuinely clears it).
+
+### E4 · Permission is enforced, not just hidden
+
+- A user without `branding:manage` (e.g. a receptionist) has **no** "Public website" nav entry, and
+  visiting `/settings/site` shows a "No access" notice. The API independently returns 403 on
+  `GET/PATCH /api/v1/site/settings` for them — the hidden nav is convenience, not the guard.
+
+## 23 · Patient profile & clinical timeline (⏳ eyeball)
+
+**Why:** the most-asked hospital question — "who is this patient and what has happened to them?" — was
+scattered across the encounter, order, prescription, billing and lab screens. The patient profile
+gathers the whole record in one place: a header stating the safety-critical facts (allergies, dues) and
+a timeline plus tabs tracing every visit, test, prescription and bill. It is read-only and built
+entirely from existing per-patient endpoints, so any role can open it within its own permissions (a
+strand the user cannot read, e.g. billing, simply shows empty rather than blanking the page). This is
+the spine the later dashboard drill-downs link into.
+
+### PP1 · Open a patient
+
+- **Patients** (`sunrise.localhost:3000/patients`) → click a **UHID** or **name** → the profile opens.
+- Header shows **name · UHID · age/sex · blood group · phone · registered-on**, an **allergy banner**
+  (red chips when present, "No known allergies" otherwise), and — if anything is unpaid — a **Dues
+  ₹…** pill. A **Start visit** button appears only with `encounter:create`.
+
+### PP2 · The tabs
+
+- **Timeline** — visits, tests ordered, results released, reports uploaded and prescriptions, merged
+  and grouped by day, newest first (a critical result shows in red).
+- **Visits / Tests / Prescriptions / Bills** — each lists the matching records with counts in the tab.
+  A **released** lab result shows its summary; an uploaded report has a **Download** link. Prescriptions
+  show per-line **dispensed / authorised** quantities. Bills show total / paid / **outstanding** + status.
+
+### PP3 · Empty and dues
+
+- A brand-new patient with no history shows clean empty states per tab and "No known allergies".
+- Clicking the **Dues** pill jumps to the **Bills** tab; the outstanding figure = sum of unpaid
+  finalized invoices.
+
+## 24 · Role-aware dashboard & "my day" activity (⏳ eyeball)
+
+**Why:** the dashboard used to show the same thin card to everyone. Now it is role-aware — a doctor
+lands on their own day, an administrator on the hospital's numbers, everyone on the quick actions
+their permissions allow. The **"My activity"** panel answers the question the user asked for directly:
+"today I treated this many patients, sent this many to tests, prescribed this many medicines" — each a
+click into the underlying list, each row a link to the patient chart. It is **self-scoped**: the
+`GET /reports/my-activity` endpoint returns only what the caller personally did (keyed on
+doctorId / orderedBy / prescribedBy), so it needs no `report:view` — you can always see your own work.
+Verified live (2026-07-18): the endpoint answers `{ patientsSeen, tests, prescriptions }` for the
+authenticated user over a half-open date range.
+
+### D1 · A doctor's day
+
+- Sign in as a **doctor** → the dashboard shows **My activity** with **Today / 7 days / 30 days**.
+- Three cards: **Patients seen · Tests ordered · Prescriptions**. Click one → an inline list drops
+  down; each row shows the patient (name + UHID) and the detail (test/status, or drugs), and links to
+  that patient's profile. Switch the date range → the numbers and lists update.
+- A day with no activity shows a plain "Nothing in today." rather than a broken panel.
+
+### D2 · An administrator's view
+
+- Sign in as an **admin** (has `report:view`) → below (or instead of) My activity, a **Today,
+  hospital-wide** strip shows **patient visits** and **collected** (₹), with **All reports →**.
+
+### D3 · Quick actions are permission-driven
+
+- The **Quick actions** grid lists only what your roles allow (a receptionist sees Register / Reception
+  / Billing; a lab tech sees Worklist; etc.). A role with none shows no grid.
+
+## 25 · Lab worklist — tabs, filters & mark-complete (⏳ eyeball)
+
+**Why:** the worklist showed one flat list of outstanding work. A technician now sees it the way they
+work it — **Pending / In progress / Completed** tabs with live counts, a **filter-by-test** box, and a
+**date filter** on completed work (Today / 7 days / All) so "what did we run today" is one click. A
+quick **Mark complete** moves work whose deliverable is an uploaded document to "completed" without the
+full values form, while still respecting the two-person rule (a technician completes; only a
+pathologist/radiologist verifies and releases).
+
+### W1 · Tabs and counts
+
+- **Worklist** → pick a department (Blood & lab / X-ray / Procedures). Three tabs show with counts:
+  **Pending** (placed/accepted), **In progress** (running / awaiting verify / awaiting release),
+  **Completed** (released).
+- Newly ordered tests land in **Pending** instantly (the order is the hand-off — no "send to lab" step).
+
+### W2 · Filter and date
+
+- Type in **Filter by test** → the list narrows to matching test names across the current tab.
+- On **Completed**, switch **Today / 7 days / All** → the released history filters by release date.
+
+### W3 · Run and complete
+
+- On an **in-progress** order: **Enter result** (values + optional critical flag) as before, OR **Mark
+  complete** → a short note prompt (defaults to "See uploaded report") → the order moves to Completed
+  (status "completed", awaiting verification). **Upload report** still attaches a scan at any point.
+- A technician never sees **Verify** / **Release** — those need category authority (pathologist for
+  blood, radiologist for imaging). Once released, the item appears under **Completed** with "Released
+  … — visible to the doctor."
+
+## 26 · Front Office hybrid role (reception + cash) (⏳ eyeball)
+
+**Why:** in a small hospital ONE person at the front desk both registers the patient and takes the OP
+fee. Rather than staple two roles together, there is now a single **Front Office (Reception + Cash)**
+role — the union of Receptionist and Cashier. It invents no new privilege: every permission it holds
+already belongs to one of those two roles, so a hospital that separates the desk from the cash counter
+simply grants the two roles instead. (The RBAC layer already unions permissions across roles; this just
+gives the common combination a name.) Seeded to every hospital by `pnpm migrate --all` (roles 11 → 12).
+
+### F1 · Assign it
+
+- **Administration → Staff** → add or edit a person → role **Front Office (Reception + Cash)**. They
+  can now register patients, manage the queue, create/finalize bills and collect payments — from one
+  login.
+
+### F2 · The registration-to-payment flow
+
+- As Front Office: **Reception** → register/queue a walk-in and tag them to a **doctor**. Starting the
+  encounter raises the consultation charge automatically — at THAT doctor's fee if one is set on their
+  staff profile, otherwise the hospital's general consultation tariff.
+- **Billing** → the charge is there to finalize and **collect** — same person, no hand-off.
+
+_(The pharmacy wallet/budget with doctor override is the next slice — Phase 4B-ii.)_
+
+## 27 · Worklist payment badge (paid before the lab runs) (⏳ eyeball)
+
+**Why:** a technician about to run a test should see whether it has been paid for — but the system
+must not hard-block them (an emergency, or a zero-tariff government patient, still gets run). So the
+worklist now shows an advisory **PAID / UNPAID** badge per order, traced order → charge → invoice. It
+is a status flag only (no amounts), so it is reachable with `order:read` — a lab technician sees it
+without the counter's `billing:read`. Verified live (2026-07-18): `GET /billing/order-payments`
+returns `unbilled` for an order with no charge.
+
+### PB1 · The badge
+
+- Open **Worklist** → each order shows, next to its status: **paid** (green), **unpaid** (red),
+  **no charge** (zero-tariff / free), or **not billed** (no charge raised yet). No badge appears if
+  the viewer's account cannot read billing status — the list still works.
+- Register a walk-in, order a lab test, **collect payment** for it (Billing) → the test's badge turns
+  **paid**. Before payment it reads **unpaid**; the technician can still run it (advisory, not a gate).
+
+## 28 · Patient wallet — advance balance (OP & admission), settle bills from it (⏳ eyeball UI)
+
+**Why:** a hospital takes money BEFORE the care is costed — an OP advance at reception, and (the case
+this was built for) an **admission advance** when a doctor decides to admit. That money is credit the
+patient holds; every treatment cost is settled against it, and the leftover is refunded on discharge.
+The wallet is a per-patient stored-value account: an authoritative `walletAccounts` balance plus an
+immutable `walletEntries` ledger, both moved together inside one transaction. The balance guard lives
+in the **database query** (`balance: { $gte: amount }`), so two cashiers cannot both spend the same
+₹500. Gated on `wallet:manage` (CASHIER, FRONT_OFFICE, TENANT_ADMIN).
+
+**Backend verified live (2026-07-18, sunrise):**
+
+- Deposit ₹500 (reason "Admission advance") → balance `50000`, ledger row carries `balanceAfter` + `by`.
+- Partial refund ₹200 → balance `30000`, ledger `[refund, deposit]`.
+- **Over-refund** (more than balance) → **422 "Insufficient wallet balance"** — the atomic guard holds.
+- Paise-not-rupees fat-finger (amount `5000000000`) → **400** (capped at ₹10,00,000 per transaction).
+- **Settle a bill from advance:** deposit ₹800 → pay a finalized ₹500 invoice with `method: "wallet"`
+  → invoice goes **paid** (`paid 50000`, payment method `wallet`), wallet balance drops `80000 → 30000`,
+  ledger gains a `debit` of `50000`. The debit and the invoice payment are one transaction — an
+  insufficient balance throws and rolls **both** back (nothing half-done).
+
+### W1 · The wallet panel (Cashier / Front Office login)
+
+- Open a patient profile → a green **Advance ₹X** pill sits in the header next to any **Dues** pill,
+  and a **Wallet** tab appears (only for `wallet:manage` — a doctor's view has neither).
+- Wallet tab → a big **balance card**. When the patient owes money it reads "Covers current dues of ₹X"
+  or "Short of current dues by ₹X". Below it, the full ledger (movement, +/− amount, running balance).
+- **Add advance** → enter ₹, method (cash/card/UPI/net-banking), optional reason ("Admission advance")
+  → the balance and ledger update. **Refund** → hands money back; disabled at zero balance, and a
+  refund larger than the balance is refused.
+
+### W2 · Settling a bill from the advance
+
+- Deposit an advance, then open the **Bills** tab → a finalized invoice with an outstanding amount and a
+  positive balance shows a **"Pay ₹X from advance"** button (X = min(outstanding, balance)).
+- Click it → the invoice's paid/outstanding move, its status can reach **paid**, and the wallet balance
+  drops by the same amount (a `debit` row in the ledger). If the advance only partly covers the bill,
+  the rest stays owed and can be collected by another method.
+
+## 29 · Audit reports — advance register, and collections that don't double-count (⏳ eyeball UI)
+
+**Why:** once "wallet" is a way to pay a bill, a naive collections report double-counts. A ₹500 cash
+advance is real money in the drawer; settling a bill "from advance" later is that **same** ₹500 moving
+from the patient's advance to revenue — not a second ₹500. So the two reports are kept apart, each with
+one meaning: **Collections** = money that crossed the counter directly (cash/card/UPI, wallet
+EXCLUDED); **Advances** = the admission-advance story (collected, utilised, refunded, held). The wallet
+is mostly an **admission** tool; OPD/walk-in patients pay per test directly, and those are collections.
+
+**The reconciliation an auditor can trust:**
+`money actually received = Collections (counter) + Advances collected − Advances refunded`.
+"Utilised against bills" and "Settled from advance" are the SAME figure — a transfer, never new income.
+
+**Backend verified live (2026-07-18, sunrise), reconciles to the ₹ test transactions above:**
+
+- `GET /reports/wallet` → deposits ₹1300 (upi ₹800 + cash ₹500), refunds ₹200, **utilised ₹500**,
+  **held ₹600**. Check: `deposits − refunds − utilised = held` (1300 − 200 − 500 = 600). ✓
+- `GET /reports/collections` → counter **total ₹0**, **settledFromAdvance ₹500**. The one bill paid so
+  far was paid from advance, so it is correctly OUT of the counter total and shown only as context. ✓
+  (Before the fix this ₹500 would have inflated "total received".)
+
+### R1 · Advances report (Reports → Advances, needs `report:view`)
+
+- Pick a period → four figures: **Advances collected**, **Utilised against bills**, **Refunded**,
+  **Currently held**. Below them, "collected by method" and "refunds by method" tables (cash/card/UPI).
+- Read the one-line note: _utilised_ is a transfer to revenue (already counted at deposit), _currently
+  held_ is a point-in-time liability (balance owed back to patients), not a period total.
+- **Export CSV** → the advance-register file lists advances collected by method.
+
+### R2 · Collections report now separates counter cash from advance
+
+- Reports → **Collections** → three figures: **Collected at counter** (direct cash/card/UPI),
+  **Payments taken**, **Settled from advance**. The note explains the last is shown for context only,
+  counted in Advances — never added to the counter total. "By method" no longer lists `wallet`.
+
+### R3 · End-to-end reconciliation walkthrough
+
+1. As Cashier/Front-Office, **deposit ₹1000 cash** as an admission advance on a patient → Advances
+   report: _collected_ +₹1000, _held_ +₹1000; Collections unchanged.
+2. Run up a bill on that patient (consult + a test), finalize it, **Pay from advance** ₹600 → Advances:
+   _utilised_ ₹600, _held_ ₹400; Collections: _settled from advance_ ₹600, _counter total_ unchanged.
+3. **Refund ₹400** on discharge → Advances: _refunded_ ₹400, _held_ ₹0.
+4. A second patient pays a ₹300 bill in **cash** at the counter → Collections: _counter total_ +₹300;
+   Advances untouched. The two reports never overlap.
+
+## 30 · Admission → advance, at the moment it happens (⏳ eyeball UI)
+
+**Why:** the wallet is mostly an ADMISSION tool, so it should appear where a patient is admitted, not
+only buried in the patient profile. Two touches: the doctor's admit confirmation now tells them to
+**send the patient to reception for the advance**, and the **Ward chart** carries an **Admission
+advance** panel — balance, whether it covers what the stay owes, and a one-click **Collect advance** —
+for staff who hold `wallet:manage` (cashier / front office). A doctor's ward round never sees it. This
+is frontend only; it reuses the wallet endpoints proven in §28.
+
+### A1 · The admit nudge (Doctor login, `drrao`)
+
+- **My patients** → open a patient in a visit → **Admit to a bed** → pick bed class + number → **Admit**.
+- The success message reads: _"Admitted … Send the patient to reception to pay the admission advance."_
+  The visit closes and the patient appears on the **Ward** list.
+
+### A2 · The advance panel on the ward (Cashier login, `cashier`)
+
+- **Ward** → pick the admitted patient → below the header, an **Admission advance** card shows the
+  current balance (₹0 for a fresh admission).
+- It reads **"Short of the ₹X owed by ₹Y — collect more"** when the running stay bill exceeds the
+  advance, or **"Covers the ₹X this stay owes"** in green once the advance is enough. (The "owed"
+  figure needs `billing:read`, which the cashier holds; a login without it just sees the balance.)
+- **Collect advance** → amount + method (reason is stamped "Admission advance") → **Take advance** →
+  the balance jumps and the coverage line re-colours. The deposit shows in the patient's Wallet tab
+  ledger and in the **Advances** report (§29).
+- A **doctor** opening the same ward chart sees the notes and (no) bill, but **no advance panel** — it
+  is the cash counter's job, not the clinician's.
+
+## 31 · Consult & worklist flow validations (⏳ eyeball UI)
+
+Four related tightenings across the doctor's consult (My patients) and the lab **Worklist**. All
+frontend, no backend change.
+
+### C1 · Call in before you order or prescribe (Doctor, `drrao`)
+
+- **My patients** → pick a patient who is **in the queue** (not yet called in). The right pane shows
+  only the header with **Call in** and a line: _"Call the patient in to begin … press Call in above."_
+  The **Order** and **Prescribe** pads are **not shown**.
+- Click **Call in** → status becomes _in progress_ → the **Order** and **Prescribe** pads appear.
+  Sending for tests / prescribing is now possible. (You cannot investigate or medicate someone still
+  waiting in the queue.)
+
+### C2 · Collapsible consult sections (Doctor)
+
+- With a patient called in, the panel now stacks **Order**, **Prescribe**, **Allergies**, **Prescribed
+  on this visit**, **Ordered on this visit** as **collapsible cards** (click the title to fold/unfold).
+  Order/Prescribe start open; Allergies and the two history lists start folded with a **count** in the
+  header, so the screen stays short — useful once the patient is sent to the lab.
+
+### C3 · Pay before the lab runs (Lab technician, `labtech`)
+
+- Order a lab test for a patient (as a doctor), do **not** pay for it → **Worklist** shows the test with
+  an **unpaid** badge and, in place of the action buttons, **"Awaiting payment — held until paid at
+  billing."** Accept / Start / Enter result / Upload are all withheld. (Cancel still works.)
+- Collect payment for that test at **Billing** → back on the worklist the badge turns **paid** and the
+  actions appear. A **free** (zero-tariff / government) or **not-billed** test is never held — only a
+  real, raised, unpaid charge is.
+
+### C4 · No completing on thin air (Lab technician)
+
+- A test **in progress** shows **Enter result** and, instead of a bare "Mark complete", the hint
+  **"Enter result or upload a report to complete."**
+- **Enter result** refuses an empty result (the button stays disabled until a summary or a value is
+  typed). **Upload a report** → once a document is attached, **Mark complete** appears and completes the
+  order against that document. There is no way to mark a result complete with nothing entered or
+  uploaded.
+
+### C5 · Completed work reaches the Completed tab (Lab technician) — bug fix
+
+- After **Enter result** (or Mark complete on an uploaded report), the test now moves to the
+  **Completed** tab (previously it was stranded in _In progress_, because a technician cannot verify
+  their own work). The card carries an _"awaiting verification"_ note until a pathologist/radiologist
+  verifies and releases it; once **released** it reads _"visible to the doctor."_ The In-progress tab
+  now holds only work actively being run.
+
+## 32 · Express OP — paid fast-track visit (⏳ eyeball UI)
+
+**Why:** some patients pay to be seen ahead of the queue. Reception marks the visit **Normal** or
+**Express**; Express floats the patient above normal patients in the doctor's list (each group still in
+token order) and adds an **express surcharge** on top of the consultation fee. It is a first-class
+field on the encounter, priced through the same event-driven billing as the consultation — so
+zero-tariff government hospitals flatten it to ₹0 like everything else, and a missing tariff never
+blocks the visit.
+
+**Backend verified live (2026-07-18, sunrise):** registering a visit with `express: true` →
+`encounter.express = true`, and the bill carries **two** consultation lines — `CONSULT_GEN` ₹500 +
+`CONSULT_EXPRESS` ₹200 = ₹700. The `CONSULT_EXPRESS` tariff (₹200) is seeded for new hospitals and was
+added to the two dev tenants.
+
+### E1 · Register an express visit (Reception / Front Office)
+
+- **Reception** → choose a patient and doctor → under **Visit type** pick **Express (fast-track)** (a
+  warning line explains the surcharge) → **Register arrival**. The confirmation notes the express
+  surcharge is on the bill. Leaving it **Normal** behaves exactly as before.
+- In **Who came in**, an express visit shows an **EXPRESS** pill next to the patient's name.
+- Open that visit's **Bill** → two consultation lines: the consultation + **Express OP Surcharge**.
+  (A zero-tariff hospital shows both at ₹0.)
+
+### E2 · Express jumps the queue (Doctor, `drrao`)
+
+- Queue two patients to the same doctor — one **Normal**, one **Express** — with the Normal one
+  registered **first**. In **My patients**, the **Express** patient sorts **above** the Normal one and
+  carries an **EXPRESS** pill, even though they arrived later. Two express patients keep their own token
+  order between themselves.
+
+## 33 · Take payment at reception — finalize ≠ pay (⏳ eyeball UI)
+
+**Why (the bug you hit):** reception could **Finalize** a bill but there was **no way to record
+payment**. Finalizing only freezes the lines into a numbered document; the money is a separate act.
+So a test showed **unpaid** on the worklist and the lab held it — the bill looked "done" but nothing
+had been collected. The reception bill panel is now a proper till: **Pending** (what's owed, with the
+collect box) and **Cleared** (what's been paid).
+
+**Verified live (2026-07-18, sunrise), reproducing the exact case:** order a Blood Glucose test →
+payment status **unpaid**; **finalize** the bill → **still unpaid**; **record payment** of the
+outstanding → **paid**. Only then does the lab worklist offer Accept/Start (§31 C3).
+
+### P1 · Collect payment (Cashier / Front Office / Admin — needs `payment:collect`)
+
+- **Reception** → open a visit's **Bill**. It lists the charges and a **Total**.
+- If it is a **Draft**, press **Finalize bill** (needs `billing:finalize`) — this issues the numbered
+  document. Payment cannot be taken on a draft (by design).
+- A **Pending** panel now shows **₹X due** with an **Amount** box **prefilled to the full
+  outstanding** (editable for a part payment) and a **Method** (cash / card / UPI / net banking) →
+  **Record payment**.
+  - Pay the full amount → the invoice flips to **paid** and moves to **Cleared**; a **part** payment
+    leaves it **finalized** with the remainder still due.
+- **Cleared** lists each payment (method, reference, date) and the total paid, with the invoice
+  number and status.
+
+### P2 · This is what unblocks the lab
+
+- With a lab test ordered but the bill only **finalized**, the **Worklist** still shows **unpaid** and
+  holds it (§31 C3). Come back to reception, **Record payment** → the worklist badge turns **paid** and
+  Accept / Start appear. That is the end-to-end reception → pay → lab flow.
+
+> Per-batch billing (consultation and tests as **separate** bills) is now built — see §35.
+
+## 34 · OPD slip — the take-home summary (⏳ eyeball UI)
+
+**Why:** at checkout the patient should walk out with one printed sheet — who saw them, the diagnosis,
+what was tested and found, what was prescribed, the advice, and what it cost — on the hospital's
+letterhead with its seal and the doctor's signature block. It is **composed** from data that already
+exists (the encounter, its orders + results, its prescriptions, its bill) plus the hospital's own site
+branding, and renders **outside the app shell** so it prints as a clean A4 sheet.
+
+**New backend (verified live, sunrise):** the doctor records a visit **diagnosis** and **advice** —
+`POST /encounters/:id/summary` (needs `emr:write`) → both persist on the encounter and print on the
+slip. All the slip's other data (orders, prescriptions, bill) is already per-encounter.
+
+### S1 · Record the visit summary (Doctor, `drrao`)
+
+- **My patients** → call a patient in → open the **Visit summary** section → type a **Diagnosis** and
+  **Advice** → **Save summary**. (Optional — a slip prints fine from the reason, tests and
+  prescriptions without it.)
+
+### S2 · Open & print the slip
+
+- From **My patients** (consult header), **Reception** (each register row), or a patient profile's
+  **Visits** tab, click **OPD slip ↗** → a clean printable page opens in a new tab with:
+  - **Hospital header** — name, address, phone, and a circular **seal** in the hospital's accent
+    colour (from Settings → Public website branding).
+  - **Patient** (name, UHID, age/sex) and **doctor**; visit date and token; an **EXPRESS** pill if it
+    was a fast-track visit.
+  - **Chief complaint → Diagnosis → Investigations** (each test with its result or "See report") **→
+    Rx** (a medicines table: drug, dose, route, frequency, days, instructions) **→ Advice**.
+  - **Bill** — itemised charges, **Total / Paid / Balance**, and the invoice number (shown to anyone
+    with `billing:read`; a doctor's view simply omits the money section).
+  - A **signature block** with the doctor's name and a **Print / Save PDF** button (hidden on the
+    printout).
+- **Print / Save PDF** → the toolbar and app chrome drop away and it prints as a one-page A4 document.
+
+## 35 · Per-batch billing — consultation and tests as separate bills (⏳ eyeball UI)
+
+**Why:** a visit is paid in batches — the consultation at registration, the tests once a doctor has
+ordered them, the pharmacy after. Each batch is its **own numbered bill**, and a charge that arrives
+after a bill is issued lands on the **next** bill, never on the frozen one. This is what lets a patient
+pay to see the doctor, then pay for the tests separately, and it is what makes the lab's paid-before-run
+check turn green **per test**. Built on a per-batch view (`GET /encounters/:id/billing`) that returns
+the pending (unbilled) charges plus every bill raised, with payment state.
+
+**Backend verified live (2026-07-18, sunrise):** register → consultation is **pending ₹500** →
+**issue bill** → `INV-…05 ₹500`. Order a Blood Glucose test → the test is a **new pending ₹120**
+(the consultation bill is untouched) → **issue bill** → a **separate** `INV-…07 ₹120`. Two bills on one
+visit; the test's lab gate keys off its own bill. The frozen-invoice contract and all 663 billing/RBAC
+tests still pass.
+
+### B1 · Two bills on one visit (Cashier / Front Office / Admin)
+
+- **Reception** → register a patient (consultation charge appears) → open **Bill**. A **Pending — not
+  yet billed** panel lists the consultation with **Issue bill for these** → it becomes an issued bill
+  row with a number.
+- **Record payment** on that bill (amount prefilled to its balance) → it reads **paid in full**.
+- Now (as the doctor) order a test for the same visit. Back on the reception **Bill**, the test shows in
+  **Pending** as a fresh batch — the consultation bill is unchanged. **Issue bill for these** →
+  a **second** numbered bill. Pay it → **paid**.
+- The footer shows the **Visit total** — paid vs grand total, and any amount still due across all bills.
+
+### B2 · Each bill unblocks its own tests
+
+- With the test on an **unpaid** second bill, the **Worklist** holds it (§31 C3). Pay **that** bill →
+  the test's badge turns **paid** and the lab can start — even though the consultation bill was paid
+  earlier and separately.
+- The **OPD slip** (§34) and the **ward**'s "this stay owes" now read the whole-visit totals across
+  every bill, so no two screens disagree on what is owed.
+
+## 36 · Doctor signature on the OPD slip (⏳ eyeball UI)
+
+**Why:** a printed OPD slip should carry the doctor's signature, not just their typed name.
+
+**Verified live (2026-07-18):** a signature set on a doctor persists, is returned by the doctor card
+(`GET /doctors/:id`), and a non-image string is refused (400).
+
+### G1 · Upload a signature (Admin, Staff editor)
+
+- **Staff** → edit a **doctor** → the profile form shows a **Signature** field (doctors only) → upload
+  a PNG/JPG under ~200 KB → a preview appears → **Save**.
+
+### G2 · It prints on the slip
+
+- Open that doctor's **OPD slip** (§34) → the uploaded signature image appears **above** the signature
+  line, over the printed **Dr <name>** and qualification. A doctor with no signature uploaded prints a
+  blank space above the line for a wet signature, exactly as before.
+
+## 37 · Session expiry → a clean bounce to login (⏳ eyeball UI)
+
+**Why:** the reported bug — a hospital left a tab open overnight, came back, and pages showed
+"session expired" / "could not load roles" while stranding the user on a dead screen. A page whose
+session has ended should recover silently if it still can, and otherwise send the user to a login
+form that explains what happened — never leave a broken page on display.
+
+**How it works:** the API client now intercepts an expired-session error (`HMS-AUTH-002/003`) on
+ANY request. It asks the auth provider to refresh once; if that succeeds the original request
+replays transparently, if it fails the session is cleared and the user is redirected to
+`/login?reason=expired` (the form then reads that reason and says "your session has expired"). A
+burst of calls firing at once shares a single refresh, not one per request. Auth endpoints
+(login/refresh/mfa/reset) are excluded so a bad password on the login page is untouched.
+
+### H1 · Mid-session expiry recovers or bounces (the reported case)
+
+- Sign in, open **Roles** (or any page). Leave the tab; let the access token expire (or force it —
+  e.g. clear the in-memory token via a reload after the refresh cookie has also expired).
+- Trigger any action that hits the API. **Expected:** either the page loads normally (silent refresh
+  succeeded) OR you land on **/login** with the banner "your session has expired" — you are NEVER
+  left on a page reading "Could not load roles".
+
+### H2 · A still-valid session is not disturbed
+
+- Normal use across several pages with a live session shows no extra redirects and no re-login — the
+  interceptor only fires on a genuine `HMS-AUTH-002/003`.
+
+### H3 · The login form itself still reports bad credentials
+
+- On **/login**, enter a wrong password → you see the normal "invalid credentials" error and stay on
+  the form (the interceptor skips auth endpoints, so it does not loop or redirect).
+
+## 38 · Pay the OP fee before joining the doctor's queue (⏳ eyeball UI)
+
+**Why:** a walked-in patient should not enter the doctor's queue until the consultation (OP) fee is
+settled — the same pay-first discipline the lab already has for tests. The register now hides "Add to
+queue" until the consultation is paid (or is free for a zero-tariff patient).
+
+**How it works:** a new status-only endpoint `GET /billing/consultation-payments?encounterIds=…`
+(reachable with `encounter:read`) returns **paid / unpaid / unbilled / free** per visit, traced
+consultation-charge → invoice — the mirror of the lab's `order-payments`. The register reads it and,
+for an `arrived` visit, draws **"Add to queue"** only when the fee is `paid` or `free`; otherwise it
+shows an **"OP fee due"** chip. Because the fee is drawn on the same visit, `free` (₹0, government)
+queues instantly with no friction. **Separation of duties:** a plain **RECEPTIONIST cannot take
+money** (no `payment:collect`), so they see "Collect at cash counter"; a **CASHIER** or the combined
+**FRONT_OFFICE** login sees **"Collect OP fee"**, which opens the bill panel — issue the bill, record
+the payment — and the moment it is paid, **"Add to queue" appears** (the panel refreshes the gate).
+
+### I1 · Unpaid walk-in is not queueable (as receptionist)
+
+- Sign in as a **RECEPTIONIST**, register a walk-in (Normal). In "Who came in" the row shows an **OP
+  fee due** chip and **"Collect at cash counter"** — there is **no "Add to queue"** button.
+
+### I2 · Collect the fee, then queue (as Front Office / Cashier)
+
+- Sign in as **FRONT_OFFICE** (or a CASHIER for the money step). On the unpaid row click **Collect OP
+  fee** → the bill panel opens → **Issue bill for these** (a numbered bill INV-… is generated) →
+  **Record payment** with the prefilled amount. The row flips to show **Add to queue**; click it and
+  the patient gets a token and moves to `in queue`.
+
+### I3 · A zero-tariff (government) patient queues immediately
+
+- On a government-edition tenant (consultation ₹0), a registered walk-in shows **Add to queue** at
+  once — the gate reads `free`, never "OP fee due".
+
+### I4 · The bill is generated as part of paying
+
+- After I2, the visit carries a numbered consultation bill marked **paid**; it prints on the patient's
+  **OPD slip** (§34) and appears in collections (§29). Tests ordered later bill separately (§35).
+
+## 39 · Payment receipt — the money proof at every counter (⏳ eyeball UI)
+
+**Why:** each payment point in a visit (OP fee, tests, pharmacy) should hand the patient a printable
+receipt. Rather than three documents, all three are one reusable page keyed on the bill.
+
+**How it works:** a standalone print page `/receipt/[invoiceId]` composes the receipt from the invoice
+that already exists — its **number is the receipt number**, its lines are the items, its `payments`
+are the money actually taken — with the hospital's header + seal and a **PAID / PART PAID / DUE**
+stamp. It reads `GET /invoices/:id` (needs `billing:read`, which reception, cashier and pharmacist
+hold). It is deliberately separate from the OPD slip (§34): the slip is the clinical take-home, this
+is the financial record.
+
+### J1 · Receipt from reception
+
+- Reception → open a visit's **Bill** → each issued bill row now has a **Receipt ↗** link → opens a
+  clean printable slip with the hospital header, receipt number, items, total, amount paid + method,
+  and a green **PAID** stamp (or **DUE** when unpaid). **Print / Save PDF** yields an A4 slip with no
+  app chrome.
+- Do it for the **consultation** bill (receipt #1), the **tests** bill (receipt #2), and the
+  **pharmacy** bill (receipt #3) — same page, three bills.
+
+### J2 · Part-paid and unpaid stamps
+
+- A bill paid in part shows **PART PAID** and a **Balance due** line; an unissued/unpaid one shows
+  **DUE**. The stamp colour matches (green / amber / red).
+
+## 40 · Admitted patient — settle a test from the advance (⏳ eyeball UI)
+
+**Why:** an inpatient's advance is collected up front; their x-ray or blood test must not wait at a
+cash counter like an OP test. The lab technician should see the patient is admitted and their advance,
+and proceed by drawing the test straight from that advance — even into a negative balance, so a report
+is never held.
+
+**How it works:** two endpoints, both reachable with the technician's own order permissions.
+`GET /billing/order-settlement?orderIds=…` (`order:read`) returns per order **{ admitted,
+advanceBalance, amount }**. `POST /billing/orders/:id/settle-from-advance` (`order:perform`) bills that
+one test into its own invoice and pays it from the wallet in one transaction — this draws DOWN an
+advance the desk already collected (not new cash), so the technician may do it, and the ledger records
+who. For an **IP** patient the wallet debit is **allowed to go negative**; an **OP** test is refused
+here (pay at the counter). Only the wallet's admitted path can go negative — refunds and OP settles
+still cannot.
+
+### K1 · Admitted test shows advance + proceed
+
+- Admit a patient (ward), collect an advance. As the ordering doctor order a **blood test / x-ray**.
+- Sign in as **LAB_TECHNICIAN** → Worklist. The unpaid test now shows **"Admitted · Advance ₹X"** and
+  a **"Proceed — deduct ₹Y"** button (instead of "Awaiting payment"). Click it → the test flips to
+  **paid**, the advance drops by ₹Y, and Accept/Start/Upload become available.
+
+### K2 · Negative balance never holds a report
+
+- Order a test whose amount **exceeds** the remaining advance. **Proceed** still works; the balance
+  goes **negative (shown in red)** and the notice says the ward should collect the shortfall. The
+  report is not held. Confirm the negative balance on the ward panel / patient Wallet tab.
+
+### K3 · OP test is refused the advance path
+
+- For a normal **OP** patient, the worklist shows the ordinary **"Awaiting payment — pay at billing"**,
+  not the advance panel. (If the settle endpoint is called for an OP order it returns 422.)
+
+## 41 · Errors carry a traceable reference (⏳ eyeball UI)
+
+**Why:** when something fails, we should be able to find the exact cause. Every API error already
+carries a stable `code` and a `traceId` that is stamped on the server log line for that request;
+surfacing them in the UI turns "it didn't work" into a thread back to the one log line.
+
+**How it works:** `lib/errors.ts#describeError` extracts `{ message, reference }` from any thrown value
+(prefers a field-level validation message, then the error message; reference = `code · traceId`). The
+shared **`ErrorAlert`** component renders the message with a small monospaced **`Ref: …`** line.
+Adopted on **reception** and **worklist**; other screens can drop it in the same way.
+
+### L1 · A failure shows a reference
+
+- Force an API error on **reception** or **worklist** (e.g. act on a stale row). The red alert shows
+  the message plus a **`Ref: HMS-… · <traceId>`** line. Search the API logs for that `traceId` and it
+  is the exact request that failed.
+
+## 42 · Advance receipts & the receipts register (⏳ eyeball UI)
+
+**Why:** a patient should get a receipt for EVERY payment — the OP fee, tests, pharmacy (bill
+receipts, §39) and now the **advance** they deposit (OP or admission). And any receipt must be
+findable and re-printable later for verification.
+
+**How it works:** an advance deposit is a wallet entry, so it gets its own printable page
+`/receipt/advance/[entryId]` (same hospital-branded chrome as the bill receipt, a green **RECEIVED**
+stamp, receipt no **`ADV-…`**), fetched via `GET /wallet/entries/:id` (`wallet:manage`). A new
+**Receipts** register (`/receipts`, **Finance** nav, `report:view`) reads
+`GET /reports/receipts?from&to` — which merges issued **bills** and advance **deposits** with patient
+names (reporting composes billing + wallet + patients server-side) — and links each row to its
+printable receipt. Both bill and advance receipts open **in the same tab** (the print pages need the
+signed-in, per-tab-in-dev session) and both have a **← Back** button.
+
+### M1 · Advance deposit gives a receipt
+
+- Ward → a bed → **Admission advance** → **Collect advance** → **Take advance**. The success line
+  now offers **"Print receipt →"** → opens a professional advance receipt with the hospital header,
+  **ADV-…** number, amount, method and a **RECEIVED** stamp. **Print / Save PDF** is clean.
+- Same from a patient's **Wallet** tab: each **deposit** row in the ledger has a **Receipt →** link.
+
+### M2 · The receipts register finds and reprints any receipt
+
+- **Finance → Receipts**. Defaults to today; set a **From/To** range. The table lists every payment —
+  **Bill** rows (INV-…) and **Advance** rows (ADV-…) — with patient, amount and time, newest first,
+  and a running **Total**.
+- **Search** by patient name, UHID or receipt number narrows the loaded period.
+- Click **Receipt →** on any row → the exact printable receipt (bill or advance) reopens — the
+  cross-check / reprint path.
+
+### M3 · Regeneration by id
+
+- The receipt URLs (`/receipt/<invoiceId>` and `/receipt/advance/<entryId>`) are stable — the same
+  receipt reprints whenever opened, so a lost slip is always recoverable.
+
+## 43 · Inpatient treatment sheet & discharge summary (⏳ eyeball UI)
+
+**Why:** an admitted patient's record is a story told over days, not the one-moment OP slip. Two new
+printable documents cover it: a day-wise **treatment sheet** for the file, and a formal **discharge
+summary** handed over at the end.
+
+**How it works:** both are standalone print pages composed from data that already exists (encounter,
+ward notes, orders, prescriptions, dated charges via new `GET /encounters/:id/charges`, the advance
+ledger, and per-encounter billing), hospital-branded with the seal and the consultant's signature.
+They open **same-tab** (dev per-tab session) and fail gracefully with a sign-in prompt.
+
+### N1 · Treatment sheet is day-wise, money inline
+
+- Admit a patient; add a **ward note**, order a **test**, prescribe a **drug**, and collect an
+  **advance**; on another day (or after a bed-day posts) let more charges accrue.
+- **Ward → the patient → Treatment sheet →**. Expect: an IP header (admitted date, bed, consultant,
+  status) and a **money summary** (advance balance — red if negative — total charges, paid/drawn,
+  outstanding), then **Day 1 … Day N** sections, each grouping that day's **notes, investigations,
+  medications, charges (with a day subtotal) and advance movements**. **Print** gives a clean A4 sheet.
+
+### N2 · Discharge summary reads as a handover + settlement
+
+- Discharge the patient with a summary (ward Discharge form) — or open it before discharge to see the
+  **"Provisional — not yet discharged"** badge.
+- **Ward → the patient → Discharge summary →**. Expect: **final diagnosis**, **course of stay** (the
+  discharge-summary ward note), **discharge medications** table, **advice & follow-up**, and a **final
+  settlement** block — total charges, paid/drawn from advance, advance balance, and either a **balance
+  payable** (red) or a **refund due** (green) or **settled in full**.
+
+### N3 · Not an inpatient
+
+- Opening either page for an OP encounter shows a plain "this is for admitted patients" message, not a
+  broken sheet.
+
+## 44 · Session model: workstation inactivity lock (⏳ eyeball UI)
+
+Background: access token = 15 min (silently auto-refreshed), refresh/session = 30 days ABSOLUTE
+(rotation does not extend it — `apps/api/src/config/env.ts`, `auth.service.ts`). Returning within 30
+days lands you on the dashboard with no login — that is a correct "keep me signed in" session. The
+inactivity lock (`components/IdleGuard.tsx`, `lib/idle.ts`) is the separate workstation control.
+
+For a fast manual test, set `NEXT_PUBLIC_IDLE_TIMEOUT_MINUTES=1` and
+`NEXT_PUBLIC_IDLE_WARN_SECONDS=20` in `apps/web/.env`, then restart the web app.
+
+### O1 · Warning then auto sign-out
+
+- Sign in, then do nothing (don't move the mouse) for ~40s → the "Still there?" dialog appears with a
+  live countdown. Keep waiting → at 0 you are signed out and land on `/login?reason=timeout` showing
+  "You were signed out after a period of inactivity."
+- The session is genuinely gone: pressing Back / reloading a protected page does NOT restore it (logout
+  revoked the refresh family server-side).
+
+### O2 · "Stay signed in" resets the clock
+
+- Let the dialog appear, click **Stay signed in** → dialog closes, you remain on the page, and the
+  timer restarts (no sign-out until another full idle period passes). A jiggled mouse while the dialog
+  is open does NOT dismiss it — only the button does.
+
+### O3 · Machine sleep / background tab
+
+- With the dialog logic armed, switch to another tab (or lock the laptop) for longer than the idle
+  limit, then return → you are signed out on the spot (the check runs on focus/visibility, not only on
+  a timer that a sleeping machine never fires).
+
+### O4 · Public pages and login are unaffected
+
+- The lock never arms when signed out: the hospital public site (`/`) and `/login` can sit idle
+  indefinitely with no dialog.
+- Set `NEXT_PUBLIC_IDLE_TIMEOUT_MINUTES=0` → the lock is fully disabled (no dialog ever). Restore to
+  `30` for normal use.
+
+## 45 · Free follow-up within the OP validity (⏳ eyeball UI)
+
+The consultation tariff carries `followUpDays` ("OP validity"). A revisit to the SAME doctor inside
+that window, where the first consultation was actually PAID, posts the consultation at ₹0 instead of
+charging again. Run `pnpm --filter @medicore/api migrate -- --all` first (migration `0024`).
+
+Setup: **Tariff → CONSULT_GEN → edit** → set **OP validity (days) = 15** → save. The row shows a
+`15-day follow-up` badge.
+
+### P1 · First visit is charged, follow-up is free
+
+- Register patient P with Dr A → reception shows **OP fee due**. Collect it (invoice → paid).
+- Register P again with **Dr A** (same day or a few days later) → the consultation posts at **₹0**,
+  reception shows **Add to queue** with a **No fee** chip, and no cash-counter detour.
+- Open that visit's bill → the line reads
+  `Consultation — free follow-up (within 15 days of <date of the first visit>)`.
+
+### P2 · The four conditions
+
+- **Different doctor**: register P with **Dr B** → charged the normal fee (the window is per-doctor).
+- **Unpaid original**: new patient Q, register with Dr A but do NOT pay → register Q again with Dr A →
+  still **charged** (an unpaid consult entitles nobody to a free one).
+- **Outside the window**: set validity to `1`, and revisit after the window has passed → charged again.
+- **A waiver does not extend itself**: after a free follow-up, the NEXT visit is still measured from
+  the original PAID consultation, not from the free one (a ₹0 line never opens a new window).
+
+### P3 · Off by default / turning it off
+
+- Set OP validity to blank or `0` → every visit is charged again, immediately. This is the default for
+  any hospital that never configures it, and for all existing tariffs.
+
+### P4 · Express is still chargeable
+
+- A follow-up patient registered as **express** pays the express surcharge (a fast-track is a separate
+  purchase) while the consultation line itself remains ₹0.
+
+## 46 · Vitals & observations (⏳ eyeball UI)
+
+New `vitals` module. Run `pnpm --filter @medicore/api migrate -- --all` first (migration `0025`).
+Permissions: **`vitals:record`** to chart (NURSE, DOCTOR — reception does NOT have it),
+**`emr:read`** to read (a receptionist must not see a patient's blood pressure).
+
+### Q1 · A nurse charts observations
+
+- Sign in as a **nurse**. Open **Patients → a patient with an open visit → Vitals** tab.
+- The form appears with the current visit named above it. Enter BP `130/85`, pulse `92`,
+  temperature `38.2`, SpO₂ `96` → **Save observations**.
+- The reading appears under "Most recent" with **BP, temperature flagged** (arrow + colour) and an
+  **"Outside normal range"** badge. Pulse and SpO₂ read as normal.
+- Enter only a pulse and save → it saves fine (a partial set is valid). Save with every box blank →
+  refused with "Enter at least one observation".
+
+### Q2 · The doctor sees them at the point of care
+
+- Sign in as the **doctor**, open **My patients → that patient**. The **Vitals** card is present and
+  **already expanded** because the reading is abnormal. It sits ABOVE the "Call the patient in"
+  gate — a doctor must be able to read obs before deciding to call someone in early.
+- Weight + height on one reading → **BMI** is shown, derived by the API.
+
+### Q3 · Entry guards
+
+- Enter systolic `80` and diastolic `120` → refused: "diastolic must be lower than systolic". This is
+  the commonest vitals typo and it silently corrupts every trend once charted.
+- A temperature of `50` or a pulse of `500` is refused as implausible; a systolic of `250` is
+  ACCEPTED — a hypertensive emergency must be chartable.
+
+### Q4 · Inpatient day sheet
+
+- For an admitted patient, chart obs on two different days, then open **Ward → patient →
+  Treatment sheet**. Each day leads with an **Observations** line —
+  `BP 130/85 ↑ · HR 92 · T 38.2 ↑ · SpO2 96%` — before the progress notes.
+- **Print it**: the arrows survive on a monochrome ward printer (abnormality is never colour-only).
+
+### Q5 · Reads are gated
+
+- Sign in as a **receptionist**: the patient profile shows **no Vitals tab** (no `emr:read`), and
+  `GET /api/v1/patients/<id>/vitals` returns **403**.
+
+### Q6 · Append-only
+
+- There is no edit or delete control anywhere. A wrong reading is corrected by charting a new one —
+  the sequence IS the chart, and a doctor may have prescribed against the old value.
+
+## 47 · Multi-branch — the active-branch context (ADR-0015) (⏳ eyeball UI)
+
+Branches are physical sites of one tenant, sharing its DB, patient UHID and staff. Run
+`pnpm --filter @medicore/api migrate -- --all` first (migration `0026` + the Main Branch seed +
+backfill). A super-admin sets a tenant's cap via `limits.maxBranches` on the master record.
+
+### R1 · Backward compatibility (single-branch)
+
+- An existing hospital after `migrate --all` has ONE branch, **Main Branch**, and every historical
+  record now belongs to it (the seed backfills `patients/encounters/orders/charges/…`). Everything
+  works exactly as before; the header switcher does NOT appear (nothing to choose).
+
+### R2 · Create branches
+
+- **Administration → Branches** (needs `branch:manage`). Add "Apollo Chennai" (code `CHN`). Adding
+  beyond `maxBranches` fails with **HMS-PLAN-001** ("Plan limit reached", metric `branches`).
+- The Main Branch shows a **Main** badge and cannot be deactivated.
+
+### R3 · The switcher + write stamping
+
+- With ≥2 branches, the header shows a **branch switcher**. Pick "Apollo Chennai" → the app refreshes;
+  every list now shows Chennai only.
+- Register a patient / start an encounter while Chennai is active → the record is stamped
+  `branchId = Chennai`. Switch to "Main Branch" → that patient is NOT in Main's reception list, but IS
+  found by UHID search (identity is tenant-wide).
+- An admin who can reach several branches and selects **All branches**, then tries to create a
+  record → the write is refused with **HMS-BRANCH-001** ("pick a branch"). Reads still aggregate.
+
+### R4 · All-branches aggregate
+
+- Select **All branches** (offered only to users whose binding reaches >1). Reports/dashboards and
+  lists aggregate across every branch. Select one branch → the same screens scope to it.
+
+### R5 · Branch-confined staff
+
+- Give a receptionist `branchScope: branches` + only Chennai (Roles/staff binding). They see only
+  Chennai's patients and queue; the switcher shows just Chennai; writes stamp Chennai automatically
+  (no prompt — a single-branch user never chooses).
+
+### R6 · Reads scope live
+
+- A hospital-wide user selecting Chennai sees Chennai; the selection is validated against the live
+  allowed set every request, so a stale `X-Active-Branch` for a branch they lost access to is ignored
+  (falls back to their own scope), never leaked.

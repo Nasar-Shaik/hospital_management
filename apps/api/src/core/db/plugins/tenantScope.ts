@@ -14,7 +14,6 @@ import { getContext, tryGetContext } from "../../context/requestContext.js";
 export function applyCommonFields(schema: Schema): void {
   schema.add({
     tenantId: { type: String, required: true, index: true },
-    branchId: { type: String, index: true },
     createdBy: { type: String },
     updatedBy: { type: String },
     isDeleted: { type: Boolean, default: false, index: true },
@@ -22,6 +21,27 @@ export function applyCommonFields(schema: Schema): void {
     version: { type: Number, default: 0 },
     schemaVersion: { type: Number, default: 1 },
   });
+
+  /**
+   * ── branchId: THE MODEL'S OWN DECLARATION WINS ──────────────────────────────
+   * `schema.add` REPLACES a path, and this plugin runs after the schema literal. So for as long
+   * as `branchId` was in the block above, all 29 models that carefully declared
+   *
+   *     branchId: { type: String },
+   *
+   * were having it silently overwritten, and every one of those lines was dead code. Harmless
+   * while the declarations agreed — and not harmless at all the moment one of them tried to say
+   * something DIFFERENT: marking a branch-scoped collection `required: true` (ADR-0015, the
+   * fail-closed rule) compiled, read correctly, passed review, and enforced nothing. Proven by
+   * probe: 14 encounters written with `branchId: undefined` under `required: true`, suite green.
+   *
+   * Enforcement that silently does nothing is worse than no enforcement, because it stops anyone
+   * looking. So the default is only applied when the model has not spoken for itself.
+   *
+   * (`index: true` is dropped along with it and nothing is lost: every model sets
+   * `autoIndex: false` and its indexes are owned by a migration, so this hint never built one.)
+   */
+  if (!schema.path("branchId")) schema.add({ branchId: { type: String } });
 }
 
 export function tenantScopePlugin(schema: Schema): void {

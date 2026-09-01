@@ -126,6 +126,25 @@ export async function listActiveForPatient(patientId: string): Promise<Allergy[]
   return docs.map(toAllergy);
 }
 
+/**
+ * Active allergies for MANY patients at once — the ward worklist's single query.
+ *
+ * Exists so a twenty-bed round costs one round trip instead of twenty. Hospital-wide like every
+ * other read here: no `scopeFilter()`, deliberately (see the header). An allergy the worklist
+ * fails to show because the patient was admitted at another site is the exact harm this module
+ * is built to prevent.
+ */
+export async function activeForPatients(patientIds: readonly string[]): Promise<Allergy[]> {
+  const ids = patientIds
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (ids.length === 0) return [];
+  const docs = await getAllergyModel(getTenantDb())
+    .find({ patientId: { $in: ids }, status: "active" })
+    .lean<AllergyDoc[]>();
+  return docs.map(toAllergy);
+}
+
 export async function findById(id: string): Promise<Allergy | undefined> {
   if (!Types.ObjectId.isValid(id)) return undefined;
   const doc = await getAllergyModel(getTenantDb())

@@ -19,17 +19,27 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import { writeBranchId } from "../../core/context/activeBranch.js";
 import { withTransaction } from "../../core/db/transaction.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
-import { getEncounter, isOpen } from "../encounters/index.js";
-import { getPatient } from "../patients/index.js";
+import {
+  getEncounter,
+  isOpen,
+  recordOrderPlaced,
+  recordOrderCancelled,
+} from "../encounters/index.js";
+import { getPatient, namesByIds } from "../patients/index.js";
 import { notify } from "../notifications/index.js";
+import { isFeatureEnabled } from "../entitlements/index.js";
 import { getById as getUser } from "../users/index.js";
 import { getById as getTenant } from "../tenants/index.js";
 import * as repo from "./order.repository.js";
 import { verifyAuthorityFor } from "./order.authority.js";
+import { featureForCategory } from "./order.entitlement.js";
 import {
   canTransition,
   type OrderCategory,
@@ -93,6 +103,109 @@ function invalidTransition(from: OrderStatus, to: OrderStatus): AppError {
 }
 
 /**
+ * The capabilities placing an order rests on. ONE — and the omission is the point.
+ *
+ * ── WHY NOT `idempotent-replay` TOO, AS MAR AND DISPENSING BOTH REQUIRE ─────
+ * Two locks stand between a retry and a second order: the `Idempotency-Key` claim (index 0048)
+ * and `one_order_per_request_id` (index 0013). MAR and dispensing each have a class of
+ * LEGITIMATE write that carries no module identifier — a PRN dose has no `scheduledFor`, a
+ * partial handover has no `requestId` — so for those writes the header claim is the only lock and
+ * its index must be sound. Ordering has no such class: `orderRequests` (mobile) and the web
+ * OrderPad both put the same string in the header AND in `requestId`, and the one non-HTTP caller
+ * sets `requestId: "rx:<prescriptionId>"` explicitly.
+ *
+ * So losing 0048 alone leaves every order write still arbitrated by 0013, and refusing to order
+ * because of it would block a hospital that is demonstrably still safe. Losing 0013 is different,
+ * and worse than it looks — see below.
+ */
+const ORDER_REQUIRES: readonly ClinicalCapability[] = ["ordering"];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * `placeOrder` performs NO read-before-write. It goes straight into the transaction and inserts,
+ * and the `catch` below only consults `findByRequestId` AFTER the database has said E11000. The
+ * index is therefore the sole race arbiter, exactly as `order.repository.ts` states. Without it
+ * the insert simply succeeds twice: a second tube of blood from a real arm, a second exposure for
+ * an X-ray, and a second bill — measured, not assumed (two rows, no error).
+ *
+ * ── AND THE CONSUMER PATH HAS NOTHING ELSE AT ALL ───────────────────────────
+ * `prescription.signed` raises the pharmacy order through this same function, with a `requestId`
+ * and NO HTTP request — so no `Idempotency-Key` middleware exists on that path to fall back on.
+ * Delivery is at-least-once by design and the handler's own comment says it will run twice. With
+ * 0013 gone, every redelivery puts another identical row on the pharmacy counter, and
+ * `setOrderId` repoints the prescription at the newest one, orphaning the rest as work that can
+ * never be completed.
+ *
+ * ── AND IT CANNOT BE UNDONE BY REBUILDING ───────────────────────────────────
+ * Once two rows share a `requestId`, recreating the index is refused (E11000 — measured). The
+ * repair is a destructive delete, which Constitution §3.9 does not permit casually. Refusing is
+ * recoverable in the minutes it takes to run the migration; drift is not.
+ *
+ * Placed before the encounter read purely so the refusal is the FIRST thing the caller hears; the
+ * read itself is harmless and its position is not a safety claim.
+ */
+async function assertOrderingIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), ORDER_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-ORD-001",
+    503,
+    "Ordering is unavailable on this system — order on paper and escalate",
+    {
+      // Named, not counted: whoever is paged needs the rule and the migration, not a number.
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    // A minute: the readiness verdict is re-checked on that cadence anyway, so retrying sooner
+    // cannot produce a different answer.
+    60,
+  );
+}
+
+/**
+ * Did this hospital buy this KIND of work?
+ *
+ * ── PLACING ONLY, FOR THE SAME REASON THE READINESS GUARD IS ────────────────
+ * Guarded here and nowhere in the state machine, exactly like `assertOrderingIsSafe` above and for
+ * the same clinical reason, stated there: a transition updates a row that already exists. If a
+ * hospital's RIS entitlement lapses on the day a patient is halfway through a CT, blocking
+ * `complete` strands a scan that has already been performed — the dose is delivered, the image
+ * exists, and the only thing refusing achieves is that the doctor never sees it. An expired
+ * subscription is a commercial problem and must never be allowed to become a clinical one.
+ *
+ * Reads are not guarded either, and it is the same argument once more: a record already created
+ * must stay readable. A hospital that stops paying for imaging does not thereby lose the right to
+ * see last year's chest X-ray, and a product that hid it would be destroying a medical record
+ * over an invoice.
+ *
+ * So the entitlement stops NEW work starting — the one point at which refusing costs nobody
+ * anything.
+ */
+async function assertCategoryIsSold(category: OrderCategory): Promise<void> {
+  const feature = featureForCategory(category);
+  if (!feature) return;
+
+  const ctx = getContext();
+  if (await isFeatureEnabled(ctx.tenantId, feature)) return;
+
+  // HMS-PLAN-002 — the same code and shape `authorize({ feature })` raises, so a client that
+  // already knows how to say "not in your edition" needs no second case. Mobile reads exactly this
+  // code to hide a module rather than report a fault (`queue.tsx`).
+  throw new AppError("HMS-PLAN-002", 403, "Feature not in your edition", {
+    feature,
+    category,
+    hint: `ordering ${category} needs the ${feature} module`,
+  });
+}
+
+/**
  * A doctor asks for something.
  *
  * ── AN ORDER REQUIRES AN OPEN ENCOUNTER ─────────────────────────────────────
@@ -103,6 +216,16 @@ function invalidTransition(from: OrderStatus, to: OrderStatus): AppError {
  * encounter in the same episode — which is exactly what an Episode of Care is for.
  */
 export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResult> {
+  /**
+   * Only PLACING is guarded. The state machine below (accept → start → complete → verify →
+   * release, and cancel) updates a row that already exists and rests on nothing this invariant
+   * provides — so a drifted tenant can still finish the work already on its benches, which is
+   * exactly what you want while somebody runs the migration. Blocking those would strand samples
+   * mid-analysis for a rule that has no bearing on them.
+   */
+  await assertOrderingIsSafe();
+  await assertCategoryIsSold(input.category);
+
   const encounter = await getEncounter(input.encounterId);
   if (!encounter) {
     throw new AppError("HMS-GEN-404", 404, "Encounter not found", {
@@ -118,6 +241,15 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
   }
 
   const priority: OrderPriority = input.priority ?? "routine";
+
+  /**
+   * The branch, by the same rule as `patientId` below: an order happens where its encounter
+   * is. A caller MAY name one explicitly, but only one they can actually reach —
+   * `writeBranchId` refuses anything outside their allowed set (HMS-AUTH-005). Before that
+   * check existed, `input.branchId ?? encounter.branchId` let a branch-confined user file an
+   * order into a site they cannot see.
+   */
+  const branchId = input.branchId ? await writeBranchId(input.branchId) : encounter.branchId;
 
   try {
     return await withTransaction(async (session) => {
@@ -136,12 +268,18 @@ export async function placeOrder(input: PlaceOrderInput): Promise<PlaceOrderResu
           ...(input.departmentId ? { departmentId: input.departmentId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(input.orderedBy ? { orderedBy: input.orderedBy } : {}),
-          ...((input.branchId ?? encounter.branchId)
-            ? { branchId: (input.branchId ?? encounter.branchId) as string }
-            : {}),
+          ...(branchId ? { branchId } : {}),
         },
         session,
       );
+
+      /**
+       * Count this test on the visit, in the SAME transaction as the order. This is what lets
+       * "send for tests" refuse an empty investigations visit the instant after the order is
+       * placed — an event consumer would not have caught up yet. Only genuinely new orders reach
+       * here; a duplicate `requestId` throws below and never counts twice.
+       */
+      await recordOrderPlaced(encounter.id, session);
 
       /**
        * THIS is the hand-off. Published in the SAME transaction as the order, so the
@@ -222,6 +360,11 @@ async function transition(
     if (!updated) throw new AppError("HMS-GEN-404", 404, "Order not found", { id });
 
     if (to === "cancelled") {
+      // The test is no longer live — take it off the visit's count, in the same transaction as the
+      // cancellation, so "send for tests" reflects it immediately (and a visit whose every order was
+      // cancelled is correctly blocked again).
+      await recordOrderCancelled(updated.encounterId, session);
+
       await publish(
         {
           name: EVENTS.ORDER_CANCELLED,
@@ -384,6 +527,13 @@ async function raiseCriticalAlert(order: repo.Order): Promise<void> {
       },
       // One alert per order, however many times anything retries.
       dedupeKey: `order.critical:${order.id}`,
+      /**
+       * WHERE the alert opens (M4). "A critical result" is not a destination; order 64b7… is —
+       * and the doctor who is being asked to act in the next few minutes should arrive at the
+       * value, not at a list to search. The kind is a string because the notifications module is
+       * not allowed to know what an order is (Rule P1); each client maps it to its own screen.
+       */
+      resource: { type: "order", id: order.id },
       ...(order.branchId ? { branchId: order.branchId } : {}),
     });
 
@@ -486,7 +636,46 @@ export const cancelOrder = (id: string, reason: string): Promise<repo.Order> =>
   transition(id, "cancelled", { reason, alsoSet: { cancelReason: reason } });
 
 export const getOrder = (id: string): Promise<repo.Order | undefined> => repo.findById(id);
-export const listOrders = repo.list;
+/** A worklist row: the order, plus who it is for. */
+export interface OrderRow extends repo.Order {
+  /** `Unknown patient` when the record cannot be read — never silently blank. */
+  patientName: string;
+  /** Empty only when the patient record itself carries none. */
+  uhid: string;
+}
+
+/**
+ * A page of orders, each carrying its patient's identity.
+ *
+ * ── WHY IDENTITY IS RESOLVED HERE AND NOT BY THE CALLER ─────────────────────
+ * The web worklist used to fetch "the first 100 patients in the hospital" and look each order's
+ * patient up in that array. Two silent truncations sat on top of each other: an order past the
+ * 100th row never appeared, and an order whose patient was not among the first 100 patients
+ * rendered as "—". Both failed toward *less* work being visible, which on a lab queue means a
+ * sample nobody runs, and neither said anything was missing.
+ *
+ * `InpatientRow` already carries its name for the same reason, and says so: "a client must never
+ * reconstruct it from a patient list." This is that rule applied to the second list that was
+ * doing it. One extra query per page, however long the page.
+ */
+export async function listOrders(
+  filter: repo.ListOrdersFilter,
+): Promise<{ items: OrderRow[]; total: number }> {
+  const { items, total } = await repo.list(filter);
+  if (items.length === 0) return { items: [], total };
+
+  const named = await namesByIds([...new Set(items.map((o) => o.patientId))]);
+  const byId = new Map(named.map((p) => [p.id, p]));
+
+  return {
+    items: items.map((o) => {
+      const p = byId.get(o.patientId);
+      return { ...o, patientName: p?.name ?? "Unknown patient", uhid: p?.uhid ?? "" };
+    }),
+    total,
+  };
+}
+
 export const isWaitingOnResults = repo.isWaitingOnResults;
 
 /** The diagnostics register for a period — used by the reporting module. */

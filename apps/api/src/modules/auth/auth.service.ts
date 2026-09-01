@@ -46,6 +46,7 @@ import * as users from "../users/index.js";
 import type { User } from "../users/index.js";
 import { notify } from "../notifications/index.js";
 import { getEffectivePermissions, getRoleClaims } from "../rbac/index.js";
+import { getEnabledFeatures } from "../entitlements/index.js";
 import * as repo from "./auth.repository.js";
 import type { Session } from "./auth.repository.js";
 
@@ -85,6 +86,26 @@ export interface AuthenticatedUser {
    * than when the token expires.
    */
   permissions?: string[];
+  /**
+   * The MODULES THIS HOSPITAL BOUGHT — layer 1 of ADR-0010, alongside layer 2 above.
+   *
+   * ── WHY A CLIENT NEEDS THIS AND DID NOT HAVE IT ───────────────────────────
+   * The navigation gated on permission and never on entitlement, so a clinic administrator — who
+   * holds every permission — was offered Theatres, Emergency, Ward, Ambulance and Mortuary, and
+   * every one of them opened onto `HMS-PLAN-002` beside an empty module state. The two are
+   * genuinely different questions with different remedies ("ask an admin" vs "buy the module"),
+   * and a client that can only see one of them has to guess the other (D20).
+   *
+   * There was no other door: `GET /subscription` needs `subscription:manage`, which no clinician
+   * holds, so the mobile app learned the hospital's edition by ASKING FOR A MODULE AND READING THE
+   * REFUSAL (`isFeatureUnavailable`). That works and stays — a refusal is authoritative where this
+   * list is a hint — but it cannot answer "what should the menu contain" before the menu is drawn.
+   *
+   * Same rules as `permissions`: `/auth/me` only, never in the token, never an authorization
+   * decision. `authorize()` checks the live entitlement on every request, so editing this array in
+   * a browser reveals a menu item and nothing behind it.
+   */
+  features?: string[];
 }
 
 export interface TokenPair {
@@ -766,6 +787,9 @@ export async function getCurrentUser(userId: string): Promise<AuthenticatedUser>
   const claims = await getRoleClaims(userId);
   const credential = await repo.findCredential(userId);
   const permissions = await getEffectivePermissions(userId);
+  // The hospital's edition, from the same resolver `authorize()` consults — cached per tenant, so
+  // this costs a Redis read on the one call a client makes per session.
+  const features = await getEnabledFeatures(getContext().tenantId);
 
   return {
     id: user.id,
@@ -776,6 +800,7 @@ export async function getCurrentUser(userId: string): Promise<AuthenticatedUser>
     mfaEnabled: user.mfaEnabled,
     mustChangePassword: credential?.mustChangePassword ?? false,
     permissions: [...permissions],
+    features: [...features],
   };
 }
 

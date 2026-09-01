@@ -16,7 +16,15 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./staff.controller.js";
+import {
+  createStaffResult,
+  doctorCard,
+  doctorRef,
+  staffMember,
+  temporaryPassword,
+} from "./staff.contract.js";
 import {
   createUserSchema,
   idParamSchema,
@@ -34,6 +42,7 @@ export function staffRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.USER_READ),
     validate(listUsersQuerySchema, "query"),
+    responds(staffMember.array(), { meta: true }),
     asyncHandler(controller.listStaff),
   );
 
@@ -46,7 +55,19 @@ export function staffRouter(): Router {
     "/doctors",
     authenticate(),
     authorize(PERMISSIONS.ENCOUNTER_READ),
+    responds(doctorRef.array()),
     asyncHandler(controller.listDoctors),
+  );
+
+  // One doctor's card (name, qualification, signature) for the OPD slip. Same authority as the
+  // directory — a document the desk prints needs the signing doctor, not the personnel file.
+  router.get(
+    "/doctors/:id",
+    authenticate(),
+    authorize(PERMISSIONS.ENCOUNTER_READ),
+    validate(idParamSchema, "params"),
+    responds(doctorCard),
+    asyncHandler(controller.getDoctorCard),
   );
 
   router.get(
@@ -54,6 +75,7 @@ export function staffRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.USER_READ),
     validate(idParamSchema, "params"),
+    responds(staffMember),
     asyncHandler(controller.getStaff),
   );
 
@@ -62,6 +84,7 @@ export function staffRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.USER_CREATE),
     validate(createUserSchema),
+    responds(createStaffResult, { status: 201 }),
     asyncHandler(controller.createStaff),
   );
 
@@ -71,6 +94,7 @@ export function staffRouter(): Router {
     authorize(PERMISSIONS.USER_UPDATE),
     validate(idParamSchema, "params"),
     validate(updateUserSchema),
+    responds(staffMember),
     asyncHandler(controller.updateStaff),
   );
 
@@ -80,6 +104,7 @@ export function staffRouter(): Router {
     authorize(PERMISSIONS.USER_DEACTIVATE),
     validate(idParamSchema, "params"),
     validate(setUserStatusSchema),
+    responds(staffMember),
     asyncHandler(controller.setStaffStatus),
   );
 
@@ -89,6 +114,7 @@ export function staffRouter(): Router {
     authorize(PERMISSIONS.USER_UPDATE),
     validate(idParamSchema, "params"),
     validate(resetPasswordSchema),
+    responds(temporaryPassword),
     asyncHandler(controller.resetStaffPassword),
   );
 

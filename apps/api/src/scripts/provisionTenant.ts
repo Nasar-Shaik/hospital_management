@@ -21,6 +21,10 @@ import { seedTenantAdmin } from "../seed/seedTenantAdmin.js";
 import { seedNotificationTemplates } from "../seed/notificationTemplates.js";
 import { seedTariff } from "../seed/tariff.js";
 import { seedFormulary } from "../seed/formulary.js";
+import { seedLabTests } from "../seed/labTests.js";
+import { seedStoreItems } from "../seed/storeItems.js";
+import { seedSiteSettings } from "../seed/siteSettings.js";
+import { seedMainBranch } from "../seed/mainBranch.js";
 import { closeAllTenantConnections, getTenantConnection } from "../core/db/connectionManager.js";
 import { closeMaster } from "../core/db/masterDb.js";
 import { closeRedis } from "../core/redis/redis.js";
@@ -123,6 +127,34 @@ async function main(): Promise<void> {
   // shelf. Reference data only (zero stock) — a pharmacist receives the actual quantities.
   const formulary = await seedFormulary(result.tenant.id, result.tenant.slug, connection);
   logger.info({ formulary }, "formulary seeded");
+
+  // The laboratory's test master, keyed on the SAME codes as the lab tariff above. Without it,
+  // result entry falls back to a blank grid and the technician re-types every reference range —
+  // which is the failure the catalogue module was built to end.
+  const labTests = await seedLabTests(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ labTests }, "lab test catalogue seeded");
+
+  // The general store's starter list — twelve things a store room runs out of. Reference data
+  // only (no shelf rows): a store keeper receives the actual quantities, exactly as the pharmacist
+  // does. A master that ships empty is a module nobody opens twice.
+  const storeItems = await seedStoreItems(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ storeItems }, "store item list seeded");
+
+  // The hospital's own public website — a presentable landing page from the first minute, so a
+  // brand-new tenant at <slug>.<domain> shows a real page rather than a bare login.
+  const siteSeeded = await seedSiteSettings(
+    result.tenant.id,
+    result.tenant.slug,
+    connection,
+    result.tenant.hospitalName,
+  );
+  logger.info({ siteSeeded }, "site settings seeded");
+
+  // The hospital's first physical site — its Main Branch (ADR-0015). Every operational record from
+  // the first minute is stamped with a real branch, and a single-site hospital never has to think
+  // about branches at all: it simply has one.
+  const mainBranch = await seedMainBranch(result.tenant.id, result.tenant.slug, connection);
+  logger.info({ branchId: mainBranch.branchId }, "main branch seeded");
 
   if (admin.generatedPassword) {
     // Deliberately on stdout, not through the logger: logs are shipped, indexed

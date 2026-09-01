@@ -20,13 +20,24 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import {
   ApiClientError,
   STAFF_GENDERS,
+  type Branch,
   type Role,
   type StaffMember,
   type StaffProfile,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
-import { Alert, Badge, Button, Card, Field, PermissionGate } from "../../components/ui";
+import { useBranch } from "../../components/BranchProvider";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  ConfirmDialog,
+  DataTable,
+  Field,
+  PermissionGate,
+  type Column,
+} from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
 function statusTone(status: StaffMember["status"]): "success" | "danger" | "neutral" {
@@ -41,6 +52,7 @@ const CLINICAL_ROLES = new Set([
   "NURSE",
   "LAB_TECHNICIAN",
   "PATHOLOGIST",
+  "RADIOLOGY_TECHNICIAN",
   "RADIOLOGIST",
   "PHARMACIST",
 ]);
@@ -66,6 +78,19 @@ interface FormState {
   address: string;
   emergencyContactName: string;
   emergencyContactPhone: string;
+  /** Doctors only: feature this person on the public website. */
+  showOnPublicSite: boolean;
+  /**
+   * A scanned signature, for the documents this person signs. NOT doctors-only: a doctor signs the
+   * OPD slip, and whoever takes the money signs the receipt — a cashier's signature on a payment
+   * is as much a signature as a clinician's on a prescription, and the desk is where the same
+   * document is signed by several different people across a shift.
+   */
+  signature: string;
+  /** Branch access (ADR-0015): true = every branch; false = only `branchIds`. */
+  allBranches: boolean;
+  /** The specific branches this person works in — meaningful only when `allBranches` is false. */
+  branchIds: string[];
 }
 
 const EMPTY_FORM: FormState = {
@@ -86,6 +111,10 @@ const EMPTY_FORM: FormState = {
   address: "",
   emergencyContactName: "",
   emergencyContactPhone: "",
+  showOnPublicSite: false,
+  signature: "",
+  allBranches: true,
+  branchIds: [],
 };
 
 function formFromMember(m: StaffMember): FormState {
@@ -108,6 +137,11 @@ function formFromMember(m: StaffMember): FormState {
     address: p.address ?? "",
     emergencyContactName: p.emergencyContactName ?? "",
     emergencyContactPhone: p.emergencyContactPhone ?? "",
+    showOnPublicSite: p.showOnPublicSite ?? false,
+    signature: p.signature ?? "",
+    // An empty branch list is a hospital-wide binding ("all branches"); a non-empty one confines.
+    allBranches: (m.branchIds ?? []).length === 0,
+    branchIds: m.branchIds ?? [],
   };
 }
 
@@ -130,6 +164,12 @@ function profileFromForm(f: FormState): StaffProfile {
   put("address", f.address);
   put("emergencyContactName", f.emergencyContactName);
   put("emergencyContactPhone", f.emergencyContactPhone);
+  // Always sent (not via `put`), because the profile is MERGED server-side: to UN-publish a
+  // doctor the `false` has to overwrite the stored `true`, so omitting it would never clear.
+  out.showOnPublicSite = f.showOnPublicSite;
+  // Only a valid image data URI goes on the wire (the server enforces this too). Omitted when
+  // blank — the merge keeps any existing signature rather than the empty box wiping it.
+  if (f.signature.startsWith("data:image")) out.signature = f.signature;
   return out;
 }
 
@@ -200,6 +240,7 @@ function StaffForm({
   mode,
   initial,
   roles,
+  branches,
   onSubmit,
   saving,
   fieldErrors,
@@ -207,14 +248,28 @@ function StaffForm({
   mode: "create" | "edit";
   initial: FormState;
   roles: Role[];
+  branches: Branch[];
   onSubmit: (f: FormState) => void;
   saving: boolean;
   fieldErrors: Record<string, string[]>;
 }) {
   const [form, setForm] = useState<FormState>(initial);
+  /**
+   * Why the signature's size complaint is a line under the field and not `window.alert`: an alert
+   * is dismissed and then gone, so the person is left staring at a form with no signature on it and
+   * nothing saying why. This stays until they pick a different file.
+   */
+  const [signatureError, setSignatureError] = useState<string | null>(null);
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
   const isClinical = CLINICAL_ROLES.has(form.role);
   const hasSpecialty = SPECIALTY_ROLES.has(form.role);
+
+  const toggleBranch = (id: string) =>
+    set({
+      branchIds: form.branchIds.includes(id)
+        ? form.branchIds.filter((b) => b !== id)
+        : [...form.branchIds, id],
+    });
 
   return (
     <form
@@ -270,6 +325,67 @@ function StaffForm({
         )}
       </div>
 
+      {/*
+        Branch access (ADR-0015). Shown only when the hospital actually has more than one site —
+        a single-branch hospital never needs to think about this, and the binding stays "all".
+        "All branches" is the hospital-wide binding (admins, directors); "Specific branches"
+        confines a receptionist or nurse to where they work.
+      */}
+      {branches.length > 1 && (
+        <div>
+          <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
+            Branch access
+          </p>
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-[var(--color-fg)]">
+              <input
+                type="radio"
+                name="branch-access"
+                checked={form.allBranches}
+                onChange={() => set({ allBranches: true })}
+              />
+              All branches
+              <span className="text-xs text-[var(--color-fg-muted)]">
+                — works across every site, and may switch between them
+              </span>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-[var(--color-fg)]">
+              <input
+                type="radio"
+                name="branch-access"
+                checked={!form.allBranches}
+                onChange={() => set({ allBranches: false })}
+              />
+              Specific branches
+            </label>
+
+            {!form.allBranches && (
+              <div className="ml-6 mt-1 grid gap-1.5 sm:grid-cols-2">
+                {branches.map((b) => (
+                  <label
+                    key={b.id}
+                    className="flex items-center gap-2 text-sm text-[var(--color-fg)]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={form.branchIds.includes(b.id)}
+                      onChange={() => toggleBranch(b.id)}
+                    />
+                    {b.name}
+                    <span className="text-xs text-[var(--color-fg-subtle)]">{b.code}</span>
+                  </label>
+                ))}
+                {form.branchIds.length === 0 && (
+                  <p className="text-xs text-[var(--color-danger)] sm:col-span-2">
+                    Pick at least one branch, or choose “All branches”.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div>
         <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--color-fg-subtle)] uppercase">
           Professional details
@@ -310,6 +426,67 @@ function StaffForm({
               hint="Charged when a patient starts a visit with them. Blank = hospital rate."
             />
           )}
+          {hasSpecialty && (
+            <label className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+              <input
+                type="checkbox"
+                checked={form.showOnPublicSite}
+                onChange={(e) => set({ showOnPublicSite: e.target.checked })}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span className="text-sm text-[var(--color-fg)]">
+                Show on the public website
+                <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
+                  Features this doctor (name and specialty only) in the Doctors section of your
+                  hospital&apos;s public site.
+                </span>
+              </span>
+            </label>
+          )}
+          {/* Offered to EVERY role, not just clinical ones: the front desk signs receipts, and a
+              receipt with a name and no signature is the document a patient disputes. */}
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] p-3">
+            <span className="text-sm font-medium text-[var(--color-fg)]">Signature</span>
+            <span className="mt-0.5 block text-xs text-[var(--color-fg-muted)]">
+              A scanned signature (PNG/JPG under ~200&nbsp;KB) — printed on the documents this
+              person signs: OPD slips for a doctor, payment receipts for whoever takes the money.
+              Optional; without one those documents print a blank line to sign by hand.
+            </span>
+            <div className="mt-2 flex items-center gap-3">
+              {form.signature.startsWith("data:image") ? (
+                <img
+                  src={form.signature}
+                  alt="Staff signature"
+                  className="h-12 rounded border border-[var(--color-border)] bg-white object-contain px-2"
+                />
+              ) : (
+                <span className="text-xs text-[var(--color-fg-subtle)]">None uploaded</span>
+              )}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="text-xs"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  if (file.size > 200_000) {
+                    setSignatureError(
+                      `That image is ${String(Math.round(file.size / 1024))} KB — please use one under 200 KB.`,
+                    );
+                    return;
+                  }
+                  setSignatureError(null);
+                  const reader = new FileReader();
+                  reader.onload = () => set({ signature: String(reader.result) });
+                  reader.readAsDataURL(file);
+                }}
+              />
+            </div>
+            {signatureError && (
+              <p className="mt-2 text-xs text-[var(--color-danger)]">{signatureError}</p>
+            )}
+          </div>
           {isClinical && (
             <Field
               label="Qualification"
@@ -401,8 +578,31 @@ function DetailRow({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function StaffDetail({ member }: { member: StaffMember }) {
+/**
+ * The sites a member of staff works at, named.
+ *
+ * An EMPTY binding is the HOSPITAL-WIDE one, not "nowhere" — and that distinction is the whole
+ * reason this is worth showing in the list rather than only in the detail panel. A director bound
+ * to nothing works everywhere; a receptionist bound to one site works there only; anyone bound to
+ * two or more is genuinely shared between sites. Reading the directory, those three look identical
+ * until something says so.
+ *
+ * Falls back to the raw id if a branch has since been renamed away, because a row that silently
+ * drops a binding it cannot resolve would under-report where someone works.
+ */
+function branchNamesOf(member: StaffMember, branches: Branch[]): string[] {
+  return member.branchIds.map((id) => branches.find((b) => b.id === id)?.name ?? id);
+}
+
+function StaffDetail({ member, branches }: { member: StaffMember; branches: Branch[] }) {
   const p = member.profile ?? {};
+  // Only worth showing once a hospital actually has branches.
+  const branchAccess =
+    branches.length > 1
+      ? member.branchIds.length === 0
+        ? "All branches"
+        : branchNamesOf(member, branches).join(", ")
+      : undefined;
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -440,6 +640,7 @@ function StaffDetail({ member }: { member: StaffMember }) {
         <DetailRow label="Address" value={p.address} />
         <DetailRow label="Emergency contact" value={p.emergencyContactName} />
         <DetailRow label="Emergency phone" value={p.emergencyContactPhone} />
+        <DetailRow label="Branch access" value={branchAccess} />
         <DetailRow label="Two-step verification" value={member.mfaEnabled ? "On" : "Off"} />
         <DetailRow
           label="Last sign-in"
@@ -452,11 +653,24 @@ function StaffDetail({ member }: { member: StaffMember }) {
 
 type StatusFilter = "all" | "active" | "disabled";
 
+/**
+ * One page, deliberately: the directory of a hospital is hundreds of people at most, and paging
+ * a list somebody is scanning for a colleague costs more than it saves. Named so the count row
+ * can tell the truth if a hospital ever outgrows it.
+ */
+const LIMIT = 100;
+
 function StaffDirectory() {
   const { api, can, user } = useAuth();
+  // The site the header is currently pointing at — the third thing filtering this list, and the
+  // one with no other explanation on screen.
+  const { active: activeBranch } = useBranch();
+  const activeBranchName = activeBranch?.name;
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [total, setTotal] = useState(0);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [error, setError] = useState<string | null>(null);
@@ -469,16 +683,28 @@ function StaffDirectory() {
 
   const [viewing, setViewing] = useState<StaffMember | null>(null);
   const [editing, setEditing] = useState<StaffMember | null>(null);
+  /**
+   * The account action awaiting confirmation. Both end somebody's sessions mid-shift, so both are
+   * asked in the application rather than through `window.confirm` — which cannot name the person
+   * in a styled, screen-readable way and which the browser may refuse to show at all.
+   */
+  const [confirming, setConfirming] = useState<{
+    member: StaffMember;
+    action: "disable" | "reset";
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const page = await api.listStaff({
-        limit: 100,
+        limit: LIMIT,
         ...(query ? { q: query } : {}),
         ...(statusFilter !== "all" ? { status: statusFilter } : {}),
       });
       setStaff(page.items);
+      // `total` is what the server counted; falling back to the page length keeps the row honest
+      // rather than showing 0 if a future endpoint stops sending it.
+      setTotal(page.meta.total ?? page.items.length);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load staff.");
@@ -499,6 +725,16 @@ function StaffDirectory() {
       .catch(() => setRoles([]));
   }, [api, can]);
 
+  // The branch list drives the "which sites?" picker. It needs `branch:manage`; an admin who
+  // cannot see branches simply gets no branch picker and every hire stays hospital-wide.
+  useEffect(() => {
+    if (!can("branch:manage")) return;
+    void api
+      .listBranches()
+      .then((all) => setBranches(all.filter((b) => b.status === "active")))
+      .catch(() => setBranches([]));
+  }, [api, can]);
+
   async function create(f: FormState) {
     setSaving(true);
     setFieldErrors({});
@@ -513,6 +749,11 @@ function StaffDirectory() {
         ...(f.employeeId.trim() ? { employeeId: f.employeeId.trim() } : {}),
         ...(Object.keys(profile).length ? { profile } : {}),
       });
+      // Confine to specific branches, if chosen. "All branches" needs no call — a new binding is
+      // hospital-wide by default. Only meaningful once the role and >1 branch both exist.
+      if (f.role && !f.allBranches && f.branchIds.length > 0) {
+        await api.assignStaffRole(result.user.id, f.role, f.branchIds);
+      }
       setCreated({
         email: result.user.email,
         ...(result.temporaryPassword ? { password: result.temporaryPassword } : {}),
@@ -533,6 +774,13 @@ function StaffDirectory() {
 
   async function saveEdit(f: FormState) {
     if (!editing) return;
+
+    // Guard the one invalid branch state before we touch the server.
+    if (branches.length > 1 && !f.allBranches && f.branchIds.length === 0) {
+      setError("Pick at least one branch, or choose “All branches”.");
+      return;
+    }
+
     setSaving(true);
     setFieldErrors({});
     try {
@@ -542,6 +790,12 @@ function StaffDirectory() {
         ...(f.employeeId.trim() ? { employeeId: f.employeeId.trim() } : {}),
         profile: profileFromForm(f),
       });
+      // Update branch access on the member's role. Re-assigning the same role updates the binding;
+      // an empty list resets it to "all branches". Skipped for a member with no role to bind to.
+      const role = editing.roles[0];
+      if (role && branches.length > 1) {
+        await api.assignStaffRole(editing.id, role, f.allBranches ? [] : f.branchIds);
+      }
       setEditing(null);
       await load();
     } catch (err) {
@@ -556,23 +810,28 @@ function StaffDirectory() {
     }
   }
 
+  /** Re-ENABLING is not asked about — it restores access rather than taking it away. */
   async function toggleStatus(member: StaffMember) {
     const next = member.status === "active" ? "disabled" : "active";
-    if (
-      next === "disabled" &&
-      !window.confirm(`Disable ${member.name}'s login? Their sessions end immediately.`)
-    )
+    if (next === "disabled") {
+      setConfirming({ member, action: "disable" });
       return;
+    }
+    await setStatus(member, next);
+  }
+
+  async function setStatus(member: StaffMember, next: "active" | "disabled") {
     try {
       await api.setStaffStatus(member.id, next);
       await load();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not update the account.");
+    } finally {
+      setConfirming(null);
     }
   }
 
   async function resetPassword(member: StaffMember) {
-    if (!window.confirm(`Reset ${member.name}'s password? Their current sessions end.`)) return;
     try {
       const res = await api.resetStaffPassword(member.id);
       setCreated({
@@ -581,10 +840,131 @@ function StaffDirectory() {
       });
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not reset the password.");
+    } finally {
+      setConfirming(null);
     }
   }
 
   const roleName = useMemo(() => new Map(roles.map((r) => [r.code, r.name])), [roles]);
+
+  const columns: Column<StaffMember>[] = [
+    {
+      key: "name",
+      header: "Name",
+      render: (member) => (
+        <>
+          <p className="font-medium text-[var(--color-fg)]">{member.name}</p>
+          <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
+        </>
+      ),
+    },
+    {
+      key: "role",
+      header: "Role",
+      render: (member) => (
+        <div className="flex flex-wrap gap-1">
+          {member.roles.length > 0 ? (
+            member.roles.map((r) => (
+              <Badge key={r} tone="brand">
+                {roleName.get(r) ?? r}
+              </Badge>
+            ))
+          ) : (
+            <span className="text-xs text-[var(--color-fg-subtle)]">none</span>
+          )}
+        </div>
+      ),
+    },
+    /**
+     * Only once a hospital has more than one site — a single-branch hospital would get a column
+     * that says the same thing on every row. Matches the create/edit form, which hides the branch
+     * control on the same condition.
+     */
+    ...(branches.length > 1
+      ? ([
+          {
+            key: "branch",
+            header: "Branch",
+            render: (member: StaffMember) =>
+              member.branchIds.length === 0 ? (
+                // The hospital-wide binding. Toned differently from a named site because it is a
+                // different KIND of answer, not another place: this person works at all of them.
+                <Badge tone="info">All branches</Badge>
+              ) : (
+                <div className="flex flex-wrap gap-1">
+                  {branchNamesOf(member, branches).map((name) => (
+                    <Badge key={name} tone="neutral">
+                      {name}
+                    </Badge>
+                  ))}
+                </div>
+              ),
+          },
+        ] satisfies Column<StaffMember>[])
+      : []),
+    {
+      key: "dept",
+      header: "Department / specialty",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (member) => {
+        const p = member.profile ?? {};
+        return [p.specialty, p.department].filter(Boolean).join(" · ") || "—";
+      },
+    },
+    {
+      key: "phone",
+      header: "Phone",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (member) => member.phone ?? "—",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (member) => <Badge tone={statusTone(member.status)}>{member.status}</Badge>,
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (member) => (
+        <div className="flex justify-end gap-1">
+          <Button variant="ghost" className="text-xs" onClick={() => setViewing(member)}>
+            View
+          </Button>
+          <PermissionGate can={can} permission="user:update">
+            <Button
+              variant="ghost"
+              className="text-xs"
+              onClick={() => {
+                setFieldErrors({});
+                setEditing(member);
+              }}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="ghost"
+              className="text-xs"
+              onClick={() => setConfirming({ member, action: "reset" })}
+            >
+              Reset password
+            </Button>
+          </PermissionGate>
+          <PermissionGate can={can} permission="user:deactivate">
+            {member.id !== user?.id && (
+              <Button
+                variant="ghost"
+                className={`text-xs ${member.status === "active" ? "text-[var(--color-danger)]" : ""}`}
+                onClick={() => void toggleStatus(member)}
+              >
+                {member.status === "active" ? "Disable" : "Enable"}
+              </Button>
+            )}
+          </PermissionGate>
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -625,8 +1005,8 @@ function StaffDirectory() {
 
       {error && <Alert tone="danger">{error}</Alert>}
 
-      <Card>
-        <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] p-4">
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center gap-3">
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -649,112 +1029,45 @@ function StaffDirectory() {
               </button>
             ))}
           </div>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
-              <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Role</th>
-                <th className="px-4 py-3 font-medium">Department / specialty</th>
-                <th className="px-4 py-3 font-medium">Phone</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[var(--color-border)]">
-              {loading && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                    Loading…
-                  </td>
-                </tr>
+          {/*
+            The count, and it is not decoration. This list is filtered by three things at once —
+            the search box, the status chips, and (since the directory became branch-scoped) the
+            site in the header. A directory that silently returns a subset looks exactly like a
+            directory that is complete, which is the confusion that prompted this: the same twelve
+            faces at both sites, with nothing on screen to say what the list was answering.
+
+            So it names the scope rather than only the number. `LIMIT` is the ceiling the fetch
+            asks for; if a hospital ever exceeds it the row says so instead of quietly stopping at
+            a hundred, because "100 staff" and "100 of 137 staff" are different facts.
+          */}
+          {!loading && (
+            <p className="ml-auto text-sm text-[var(--color-fg-muted)]">
+              {total > LIMIT ? (
+                <>
+                  Showing <span className="font-medium text-[var(--color-fg)]">{staff.length}</span>{" "}
+                  of <span className="font-medium text-[var(--color-fg)]">{total}</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-medium text-[var(--color-fg)]">{total}</span>{" "}
+                  {total === 1 ? "person" : "people"}
+                </>
               )}
-              {!loading && staff.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                    Nobody matches.
-                  </td>
-                </tr>
-              )}
-              {staff.map((member) => {
-                const p = member.profile ?? {};
-                const deptSpec = [p.specialty, p.department].filter(Boolean).join(" · ");
-                return (
-                  <tr key={member.id} className="hover:bg-[var(--color-bg-subtle)]">
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-[var(--color-fg)]">{member.name}</p>
-                      <p className="text-xs text-[var(--color-fg-muted)]">{member.email}</p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {member.roles.length > 0 ? (
-                          member.roles.map((r) => (
-                            <Badge key={r} tone="brand">
-                              {roleName.get(r) ?? r}
-                            </Badge>
-                          ))
-                        ) : (
-                          <span className="text-xs text-[var(--color-fg-subtle)]">none</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-[var(--color-fg-muted)]">{deptSpec || "—"}</td>
-                    <td className="px-4 py-3 text-[var(--color-fg-muted)]">
-                      {member.phone ?? "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge tone={statusTone(member.status)}>{member.status}</Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          className="text-xs"
-                          onClick={() => setViewing(member)}
-                        >
-                          View
-                        </Button>
-                        <PermissionGate can={can} permission="user:update">
-                          <Button
-                            variant="ghost"
-                            className="text-xs"
-                            onClick={() => {
-                              setFieldErrors({});
-                              setEditing(member);
-                            }}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            className="text-xs"
-                            onClick={() => void resetPassword(member)}
-                          >
-                            Reset password
-                          </Button>
-                        </PermissionGate>
-                        <PermissionGate can={can} permission="user:deactivate">
-                          {member.id !== user?.id && (
-                            <Button
-                              variant="ghost"
-                              className={`text-xs ${member.status === "active" ? "text-[var(--color-danger)]" : ""}`}
-                              onClick={() => void toggleStatus(member)}
-                            >
-                              {member.status === "active" ? "Disable" : "Enable"}
-                            </Button>
-                          )}
-                        </PermissionGate>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+              {query || statusFilter !== "all" ? " matching" : ""}
+              {activeBranchName ? ` at ${activeBranchName}` : " across all branches"}
+            </p>
+          )}
         </div>
       </Card>
+
+      <DataTable<StaffMember>
+        columns={columns}
+        rows={loading ? [] : staff}
+        keyOf={(member) => member.id}
+        loading={loading}
+        empty="Nobody matches."
+      />
 
       {showCreate && (
         <Modal title="Add staff" onClose={() => setShowCreate(false)}>
@@ -762,6 +1075,7 @@ function StaffDirectory() {
             mode="create"
             initial={EMPTY_FORM}
             roles={roles}
+            branches={branches}
             onSubmit={(f) => void create(f)}
             saving={saving}
             fieldErrors={fieldErrors}
@@ -775,6 +1089,7 @@ function StaffDirectory() {
             mode="edit"
             initial={formFromMember(editing)}
             roles={roles}
+            branches={branches}
             onSubmit={(f) => void saveEdit(f)}
             saving={saving}
             fieldErrors={fieldErrors}
@@ -784,17 +1099,45 @@ function StaffDirectory() {
 
       {viewing && (
         <Modal title="Staff profile" onClose={() => setViewing(null)}>
-          <StaffDetail member={viewing} />
+          <StaffDetail member={viewing} branches={branches} />
         </Modal>
+      )}
+
+      {confirming?.action === "disable" && (
+        <ConfirmDialog
+          title={`Disable ${confirming.member.name}'s login?`}
+          confirmLabel="Disable the login"
+          cancelLabel="Leave it active"
+          tone="danger"
+          onConfirm={() => void setStatus(confirming.member, "disabled")}
+          onCancel={() => setConfirming(null)}
+        >
+          <p>
+            Every session they have open ends <strong>immediately</strong> — including one part-way
+            through charting. The account can be re-enabled from this screen afterwards.
+          </p>
+        </ConfirmDialog>
+      )}
+
+      {confirming?.action === "reset" && (
+        <ConfirmDialog
+          title={`Reset ${confirming.member.name}'s password?`}
+          confirmLabel="Reset the password"
+          cancelLabel="Leave it alone"
+          tone="danger"
+          onConfirm={() => void resetPassword(confirming.member)}
+          onCancel={() => setConfirming(null)}
+        >
+          <p>
+            Their current sessions end and a temporary password is shown <em>once</em> on this
+            screen — there is no way to see it again, so hand it over before closing the dialog.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <StaffDirectory />
-    </Protected>
-  );
+  return <StaffDirectory />;
 }

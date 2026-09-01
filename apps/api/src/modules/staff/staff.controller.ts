@@ -1,15 +1,11 @@
 /**
  * Staff controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope, PageMeta } from "@medicore/types";
+import type { RequestHandler } from "express";
+import { AppError } from "../../core/errors/appError.js";
 import * as staff from "./staff.service.js";
 import type { ListUsersQuery, StaffProfileBody } from "./staff.schema.js";
-
-function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 /**
  * Turns the wire profile into the service profile: the two date fields arrive as
@@ -79,6 +75,17 @@ export const getStaff: RequestHandler = async (req, res) => {
  */
 export const listDoctors: RequestHandler = async (_req, res) => {
   ok(res, await staff.listDoctors());
+};
+
+/**
+ * One doctor as a document needs them — name, qualification, signature — for the OPD slip. Same
+ * small `encounter:read` authority as the directory; a 404 when the id is not an active doctor.
+ */
+export const getDoctorCard: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const card = await staff.getDoctorCard(id);
+  if (!card) throw new AppError("HMS-GEN-404", 404, "Doctor not found", { id });
+  ok(res, card);
 };
 
 export const updateStaff: RequestHandler = async (req, res) => {

@@ -23,8 +23,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClientError, type AuditEntry, type AuditIntegrity } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { useBranch } from "../../components/BranchProvider";
+import { todayInZone } from "../../lib/day";
+import { Alert, Badge, Button, DataTable, PermissionGate, type Column } from "../../components/ui";
 
 const CATEGORIES = [
   { value: "", label: "All activity" },
@@ -59,6 +60,7 @@ function changedFields(entry: AuditEntry): string {
 
 function AuditTrail() {
   const { api, can } = useAuth();
+  const { timezone } = useBranch();
 
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [category, setCategory] = useState("");
@@ -107,6 +109,8 @@ function AuditTrail() {
     void load();
   }, [load]);
 
+  const [exporting, setExporting] = useState(false);
+
   async function verify() {
     setChecking(true);
     try {
@@ -118,7 +122,89 @@ function AuditTrail() {
     }
   }
 
+  /**
+   * ── WHY THIS IS A BUTTON AND NOT A LINK ─────────────────────────────────────
+   * It was `<a href={api.auditExportUrl(filters)}>`, which cannot work: `/audit/export` is behind
+   * `authenticate()`, which reads `Authorization: Bearer` and nothing else, and a plain
+   * navigation carries no such header. The link produced a 401 page — and it LOOKED right in
+   * review, because a URL builder cannot fail; only the far end can.
+   *
+   * Fetching it authenticated also recovers something the file cannot say about itself: the
+   * export is capped, and a truncated CSV is byte-indistinguishable from a complete one. Handing
+   * an auditor a trail that silently stops is the failure worth spending a button on.
+   */
+  async function exportCsv() {
+    setExporting(true);
+    setError(null);
+    try {
+      const { blob, rows, truncated } = await api.fetchAuditCsv(filters);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // Named for the hospital's day, so a file exported at 01:00 IST is not stamped yesterday.
+      a.download = `audit-${todayInZone(timezone)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      if (truncated) {
+        setError(
+          `Exported ${String(rows ?? 0)} entries — the trail was longer than one export allows. ` +
+            `Narrow the dates and export again; this file is not complete.`,
+        );
+      }
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not export the trail.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const pages = Math.max(1, Math.ceil(total / 25));
+
+  const columns: Column<AuditEntry>[] = [
+    {
+      key: "when",
+      header: "When",
+      cellClassName: "whitespace-nowrap text-[var(--color-fg-muted)]",
+      render: (e) => new Date(e.at).toLocaleString(),
+    },
+    {
+      key: "who",
+      header: "Who",
+      render: (e) => (
+        <>
+          <span className="block text-[var(--color-fg)]">
+            {e.actorEmail ?? e.actorId ?? "System"}
+          </span>
+          {e.actorRoles?.[0] && (
+            <span className="text-xs text-[var(--color-fg-subtle)]">{e.actorRoles[0]}</span>
+          )}
+        </>
+      ),
+    },
+    {
+      key: "what",
+      header: "What",
+      render: (e) => (
+        <div className="flex items-center gap-2">
+          <span className="text-[var(--color-fg)]">{humanize(e.action)}</span>
+          <Badge tone={categoryTone(e.category)}>{e.category}</Badge>
+          {e.outcome === "failure" && <Badge tone="danger">refused</Badge>}
+        </div>
+      ),
+    },
+    {
+      key: "changed",
+      header: "Changed",
+      cellClassName: "text-[var(--color-fg-muted)]",
+      render: (e) => changedFields(e),
+    },
+    {
+      key: "from",
+      header: "From",
+      cellClassName: "font-mono text-xs text-[var(--color-fg-subtle)]",
+      render: (e) => e.ip ?? "—",
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -137,12 +223,9 @@ function AuditTrail() {
           </Button>
 
           <PermissionGate can={can} permission="audit:export">
-            <a
-              href={api.auditExportUrl(filters)}
-              className="inline-flex items-center rounded-lg border border-[var(--color-border)] px-3 py-2 text-sm font-medium text-[var(--color-fg-muted)] hover:bg-[var(--color-bg-subtle)]"
-            >
-              Export CSV
-            </a>
+            <Button variant="secondary" onClick={() => void exportCsv()} disabled={exporting}>
+              {exporting ? "Exporting…" : "Export CSV"}
+            </Button>
           </PermissionGate>
         </div>
       </header>
@@ -257,69 +340,14 @@ function AuditTrail() {
         )}
       </div>
 
-      <Card className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-[var(--color-border)] text-xs text-[var(--color-fg-subtle)] uppercase">
-            <tr>
-              <th className="px-4 py-3 font-medium">When</th>
-              <th className="px-4 py-3 font-medium">Who</th>
-              <th className="px-4 py-3 font-medium">What</th>
-              <th className="px-4 py-3 font-medium">Changed</th>
-              <th className="px-4 py-3 font-medium">From</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border)]">
-            {loading && (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Loading…
-                </td>
-              </tr>
-            )}
-
-            {!loading && entries.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-fg-muted)]">
-                  Nothing recorded yet in this category.
-                </td>
-              </tr>
-            )}
-
-            {!loading &&
-              entries.map((entry) => (
-                <tr
-                  key={entry.id}
-                  className={entry.outcome === "failure" ? "bg-[var(--color-danger-bg)]/30" : ""}
-                >
-                  <td className="px-4 py-3 whitespace-nowrap text-[var(--color-fg-muted)]">
-                    {new Date(entry.at).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="block text-[var(--color-fg)]">
-                      {entry.actorEmail ?? entry.actorId ?? "System"}
-                    </span>
-                    {entry.actorRoles?.[0] && (
-                      <span className="text-xs text-[var(--color-fg-subtle)]">
-                        {entry.actorRoles[0]}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[var(--color-fg)]">{humanize(entry.action)}</span>
-                      <Badge tone={categoryTone(entry.category)}>{entry.category}</Badge>
-                      {entry.outcome === "failure" && <Badge tone="danger">refused</Badge>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-[var(--color-fg-muted)]">{changedFields(entry)}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-subtle)]">
-                    {entry.ip ?? "—"}
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-      </Card>
+      <DataTable<AuditEntry>
+        columns={columns}
+        rows={loading ? [] : entries}
+        keyOf={(e) => e.id}
+        loading={loading}
+        empty="Nothing recorded yet in this category."
+        rowClassName={(e) => (e.outcome === "failure" ? "bg-[var(--color-danger-bg)]/30" : "")}
+      />
 
       {pages > 1 && (
         <div className="flex items-center justify-between text-sm text-[var(--color-fg-muted)]">
@@ -345,9 +373,5 @@ function AuditTrail() {
 }
 
 export default function AuditPage() {
-  return (
-    <Protected>
-      <AuditTrail />
-    </Protected>
-  );
+  return <AuditTrail />;
 }

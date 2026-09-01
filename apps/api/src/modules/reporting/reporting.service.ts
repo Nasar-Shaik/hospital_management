@@ -21,16 +21,57 @@ import {
   type DischargeRegister,
 } from "../encounters/index.js";
 import { diagnosticsReport, type DiagnosticsReport } from "../orders/index.js";
-import { collectionsReport, type CollectionsReport } from "../billing/index.js";
+import {
+  collectionsReport,
+  revenueLeakage as billingRevenueLeakage,
+  duesAgeing as billingDuesAgeing,
+  listReceipts,
+  type CollectionsReport,
+  type RevenueLeakageReport,
+  type DuesAgeingReport,
+} from "../billing/index.js";
+import { walletReport, listDeposits, type WalletRegister } from "../wallet/index.js";
 import { getById as getUser } from "../users/index.js";
+import { encountersByDoctor } from "../encounters/index.js";
+import { ordersByUser } from "../orders/index.js";
+import { prescriptionsByUser } from "../prescriptions/index.js";
+import { namesByIds } from "../patients/index.js";
 
 export type {
   StockRegisterRow,
   VisitReport,
   DiagnosticsReport,
   CollectionsReport,
+  RevenueLeakageReport,
+  DuesAgeingReport,
   DischargeRegister,
+  WalletRegister,
 };
+
+/** Revenue leakage with the visits named — a patient and UHID beside each unbilled amount. */
+export interface RevenueLeakageReportNamed extends Omit<RevenueLeakageReport, "byEncounter"> {
+  byEncounter: {
+    encounterId: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    amount: number;
+    count: number;
+  }[];
+}
+
+/** Dues ageing with each debtor named — a patient and UHID beside each outstanding bill. */
+export interface DuesAgeingReportNamed extends Omit<DuesAgeingReport, "topDebtors"> {
+  topDebtors: {
+    invoiceId: string;
+    number?: string;
+    patientId: string;
+    patientName: string;
+    uhid: string;
+    outstanding: number;
+    ageDays: number;
+  }[];
+}
 
 export interface DateRange {
   from: Date;
@@ -49,14 +90,97 @@ export interface DiagnosticsReportNamed extends Omit<DiagnosticsReport, "byPerfo
   byPerformer: { performedBy: string; performerName: string; performed: number }[];
 }
 
+/** Collections with each cashier named — "how much did each of my desk staff take?". */
+export interface CollectionsReportNamed extends Omit<CollectionsReport, "byCollector"> {
+  byCollector: { collectedBy: string; collectorName: string; amount: number; count: number }[];
+}
+
 export const pharmacyStockRegister = (range: DateRange): Promise<StockRegisterRow[]> =>
   stockRegister(range.from, range.to);
 
 export const patientVisits = (range: DateRange): Promise<VisitReport> =>
   visitReport(range.from, range.to);
 
-export const collections = (range: DateRange): Promise<CollectionsReport> =>
-  collectionsReport(range.from, range.to);
+/**
+ * Money received in a period, with each collector named — the drawer, per person.
+ *
+ * Composed exactly like the diagnostics register: billing owns the figures and does the grouping,
+ * this only turns the user ids into names. A payment recorded with no collector (an automated
+ * posting) keeps its row and is labelled, rather than being silently dropped from a total that
+ * has to reconcile.
+ */
+export async function collections(range: DateRange): Promise<CollectionsReportNamed> {
+  const report = await collectionsReport(range.from, range.to);
+  const names = await resolveNames(report.byCollector.map((c) => c.collectedBy).filter(Boolean));
+  return {
+    ...report,
+    byCollector: report.byCollector.map((c) => ({
+      collectedBy: c.collectedBy,
+      collectorName: c.collectedBy ? (names.get(c.collectedBy) ?? c.collectedBy) : "Not recorded",
+      amount: c.amount,
+      count: c.count,
+    })),
+  };
+}
+
+/**
+ * Revenue leakage — care given but never billed — with each carrying visit named. Billing owns the
+ * money; this only puts a patient and UHID beside the bare ids so the auditor can act on the list.
+ */
+export async function revenueLeakage(range: DateRange): Promise<RevenueLeakageReportNamed> {
+  const report = await billingRevenueLeakage(range.from, range.to);
+  const named = await namesByIds(report.byEncounter.map((r) => r.patientId));
+  const byId = new Map(named.map((n) => [n.id, n]));
+  return {
+    ...report,
+    byEncounter: report.byEncounter.map((r) => {
+      const p = byId.get(r.patientId);
+      return {
+        encounterId: r.encounterId,
+        patientId: r.patientId,
+        patientName: p?.name ?? `Unknown (${r.patientId.slice(-6)})`,
+        uhid: p?.uhid ?? "",
+        amount: r.amount,
+        count: r.count,
+      };
+    }),
+  };
+}
+
+/**
+ * Dues ageing — billed but unpaid, bucketed by age — with each debtor named. `asOf` is the report's
+ * `to` date, so the ageing is a snapshot "as of" that day. Billing owns the balances; this names the
+ * bills so the collections desk sees who to call, not a column of ids.
+ */
+export async function duesAgeing(range: DateRange): Promise<DuesAgeingReportNamed> {
+  const report = await billingDuesAgeing(range.to);
+  const named = await namesByIds(report.topDebtors.map((r) => r.patientId));
+  const byId = new Map(named.map((n) => [n.id, n]));
+  return {
+    ...report,
+    topDebtors: report.topDebtors.map((r) => {
+      const p = byId.get(r.patientId);
+      return {
+        invoiceId: r.invoiceId,
+        patientId: r.patientId,
+        patientName: p?.name ?? `Unknown (${r.patientId.slice(-6)})`,
+        uhid: p?.uhid ?? "",
+        outstanding: r.outstanding,
+        ageDays: r.ageDays,
+        ...(r.number ? { number: r.number } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * The advance register — admission advances collected, refunded, utilised against bills, and the
+ * balance the hospital currently holds. The counterpart to `collections`: money that came in as an
+ * advance and how it was drawn down, kept apart from direct counter collections so neither figure
+ * double-counts the other.
+ */
+export const walletRegister = (range: DateRange): Promise<WalletRegister> =>
+  walletReport({ from: range.from, to: range.to });
 
 /** How inpatient stays ended in the period — routine discharges, LAMA, absconded, deaths. */
 export const dischargeOutcomes = (range: DateRange): Promise<DischargeRegister> =>
@@ -98,6 +222,150 @@ export async function diagnostics(range: DateRange): Promise<DiagnosticsReportNa
       performedBy: p.performedBy,
       performerName: names.get(p.performedBy) ?? p.performedBy,
       performed: p.performed,
+    })),
+  };
+}
+
+/* ── "My day" — a clinician's OWN activity ──────────────────────────────────────
+ * Not a hospital-wide register but a personal one: "what did I do in this period?".
+ * Composed the same way — each figure summed by the module that owns the collection — but keyed
+ * on the CALLER's id, so it needs no `report:view`; you can always see your own work. Patient
+ * ids are resolved to a name/UHID here (one batch) so each drill-down row links to a real chart. */
+
+/** A patient as an activity row shows them — enough to recognise and to link to the profile. */
+export interface ActivityPatientRef {
+  id: string;
+  uhid: string;
+  name: string;
+}
+
+export interface MyActivity {
+  /** Distinct patients seen (encounters), not visit count — a returning patient is one person. */
+  patientsSeen: number;
+  visits: {
+    patient: ActivityPatientRef;
+    encounterId: string;
+    at: string;
+    class: string;
+    status: string;
+  }[];
+  tests: {
+    patient: ActivityPatientRef;
+    orderId: string;
+    name: string;
+    category: string;
+    status: string;
+    at: string;
+  }[];
+  prescriptions: {
+    patient: ActivityPatientRef;
+    prescriptionId: string;
+    drugs: string[];
+    at: string;
+  }[];
+}
+
+/* ── Receipts register — every payment taken in a period, for cross-checking ── */
+
+export interface ReceiptRow {
+  /** A bill payment (OP fee, tests, pharmacy) or an advance deposit (OP/admission advance). */
+  kind: "bill" | "advance";
+  /** The id to reprint by: an invoice id for a bill, a wallet-entry id for an advance. */
+  refId: string;
+  /** The receipt number — the invoice number for a bill, `ADV-…` for an advance. */
+  receiptNo: string;
+  patientId: string;
+  patientName: string;
+  uhid: string;
+  /** Paise received. */
+  amount: number;
+  /** Payment method for an advance; blank for a bill (which may span methods). */
+  method?: string;
+  at: string;
+}
+
+/**
+ * Every receipt (money taken) in a period, newest first — the register for cross-checking a payment
+ * later. Merges issued BILLS (consultation, tests, pharmacy) with advance DEPOSITS (OP/admission),
+ * resolving patient names so a clerk can search by person as well as by number. Each row carries the
+ * id needed to reprint the exact receipt.
+ */
+export async function receiptsRegister(range: DateRange): Promise<ReceiptRow[]> {
+  const [bills, deposits] = await Promise.all([listReceipts(range), listDeposits(range)]);
+
+  const patientIds = [
+    ...new Set([...bills.map((b) => b.patientId), ...deposits.map((d) => d.patientId)]),
+  ];
+  const names = new Map((await namesByIds(patientIds)).map((n) => [n.id, n]));
+  const who = (id: string): { name: string; uhid: string } =>
+    names.get(id) ?? { name: "Unknown patient", uhid: "—" };
+
+  const billRows: ReceiptRow[] = bills.map((b) => ({
+    kind: "bill",
+    refId: b.invoiceId,
+    receiptNo: b.number ?? b.invoiceId.slice(-8).toUpperCase(),
+    patientId: b.patientId,
+    patientName: who(b.patientId).name,
+    uhid: who(b.patientId).uhid,
+    amount: b.paid,
+    at: b.at.toISOString(),
+  }));
+
+  const advanceRows: ReceiptRow[] = deposits.map((d) => ({
+    kind: "advance",
+    refId: d.id,
+    receiptNo: `ADV-${d.id.slice(-8).toUpperCase()}`,
+    patientId: d.patientId,
+    patientName: who(d.patientId).name,
+    uhid: who(d.patientId).uhid,
+    amount: d.amount,
+    ...(d.method ? { method: d.method } : {}),
+    at: d.at.toISOString(),
+  }));
+
+  return [...billRows, ...advanceRows].sort((a, b) => b.at.localeCompare(a.at));
+}
+
+export async function myActivity(userId: string, range: DateRange): Promise<MyActivity> {
+  const [encs, ords, rxs] = await Promise.all([
+    encountersByDoctor(userId, range.from, range.to),
+    ordersByUser(userId, range.from, range.to),
+    prescriptionsByUser(userId, range.from, range.to),
+  ]);
+
+  const patientIds = [
+    ...new Set([
+      ...encs.map((e) => e.patientId),
+      ...ords.map((o) => o.patientId),
+      ...rxs.map((r) => r.patientId),
+    ]),
+  ];
+  const names = new Map((await namesByIds(patientIds)).map((n) => [n.id, n]));
+  const ref = (id: string): ActivityPatientRef =>
+    names.get(id) ?? { id, uhid: "—", name: "Unknown patient" };
+
+  return {
+    patientsSeen: new Set(encs.map((e) => e.patientId)).size,
+    visits: encs.map((e) => ({
+      patient: ref(e.patientId),
+      encounterId: e.id,
+      at: e.arrivedAt.toISOString(),
+      class: e.class,
+      status: e.status,
+    })),
+    tests: ords.map((o) => ({
+      patient: ref(o.patientId),
+      orderId: o.id,
+      name: o.name,
+      category: o.category,
+      status: o.status,
+      at: o.orderedAt.toISOString(),
+    })),
+    prescriptions: rxs.map((r) => ({
+      patient: ref(r.patientId),
+      prescriptionId: r.id,
+      drugs: r.lines.map((l) => l.drugName),
+      at: (r.signedAt ?? r.prescribedAt).toISOString(),
     })),
   };
 }

@@ -10,24 +10,51 @@
  *
  * The period is HALF-OPEN: the "To" date the user picks is a whole day, so the request's upper
  * bound is the start of the day after it — nothing that happens in that last day is lost.
+ *
+ * ── DATES ARE THE BRANCH'S, NOT THE BROWSER'S ───────────────────────────────
+ * Every day key and range boundary comes from `lib/day.ts`, resolved in the site's timezone. The
+ * month presets used to be built with `new Date(y, m, 1).toISOString().slice(0, 10)` — UTC applied
+ * to a local midnight — so in India "This month" asked for a range starting 31 July and every
+ * figure on this screen was a day out at both ends. Nothing looked wrong: the picker showed the
+ * right dates and only the request was shifted.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ApiClientError,
   type CollectionsReport,
   type DiagnosticsReport,
   type DischargeRegister,
   type DoctorLoadRow,
+  type DuesAgeingReport,
   type ReportRange,
+  type RevenueLeakageReport,
   type StockRegisterRow,
   type VisitReport,
+  type WalletRegister,
 } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
+import { useBranch } from "../../components/BranchProvider";
+import {
+  dayRangeInZone,
+  endOfPreviousMonth,
+  startOfMonth,
+  startOfMonthsAgo,
+  todayInZone,
+} from "../../lib/day";
 import { Alert, Button, Card } from "../../components/ui";
 import { rupees } from "../../lib/money";
 
-type Tab = "stock" | "visits" | "doctors" | "diagnostics" | "collections" | "discharges";
+type Tab =
+  | "stock"
+  | "visits"
+  | "doctors"
+  | "diagnostics"
+  | "collections"
+  | "leakage"
+  | "dues"
+  | "advances"
+  | "discharges";
 
 const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "stock", label: "Pharmacy stock", slug: "pharmacy-stock" },
@@ -35,8 +62,19 @@ const TABS: { id: Tab; label: string; slug: string }[] = [
   { id: "doctors", label: "Doctor load", slug: "doctor-load" },
   { id: "diagnostics", label: "Diagnostics", slug: "diagnostics" },
   { id: "collections", label: "Collections", slug: "collections" },
+  { id: "leakage", label: "Revenue leakage", slug: "revenue-leakage" },
+  { id: "dues", label: "Dues ageing", slug: "dues-ageing" },
+  { id: "advances", label: "Advances", slug: "wallet" },
   { id: "discharges", label: "Discharges", slug: "discharge-outcomes" },
 ];
+
+/** Human labels for the ageing buckets — the collections desk reads days, not raw keys. */
+const DUES_BUCKET_LABEL: Record<string, string> = {
+  "0-30": "0–30 days",
+  "31-60": "31–60 days",
+  "61-90": "61–90 days",
+  "90+": "Over 90 days",
+};
 
 /** The human name for each way a stay ends — what an auditor reads, not the wire value. */
 const DISPOSITION_LABEL: Record<string, string> = {
@@ -54,19 +92,6 @@ const CLASS_LABEL: Record<string, string> = {
   HOME: "Home",
 };
 
-function iso(dateStr: string): string {
-  return new Date(`${dateStr}T00:00:00`).toISOString();
-}
-/** The day AFTER the chosen end date, at 00:00 — the half-open upper bound. */
-function isoNextDay(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString();
-}
-function ymd(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
 function ReportTable({
   headers,
   rows,
@@ -82,7 +107,7 @@ function ReportTable({
         <thead className="border-b border-[var(--color-border)] text-xs tracking-wide text-[var(--color-fg-subtle)] uppercase">
           <tr>
             {headers.map((h, i) => (
-              <th key={h} className={`px-4 py-3 font-medium ${i === 0 ? "" : "text-right"}`}>
+              <th key={h} className={`px-4 py-3.5 font-medium ${i === 0 ? "" : "text-right"}`}>
                 {h}
               </th>
             ))}
@@ -100,11 +125,11 @@ function ReportTable({
             </tr>
           ) : (
             rows.map((r, ri) => (
-              <tr key={ri} className="hover:bg-[var(--color-bg-subtle)]">
+              <tr key={ri} className="transition-colors hover:bg-[var(--color-bg-subtle)]">
                 {r.map((cell, ci) => (
                   <td
                     key={ci}
-                    className={`px-4 py-3 ${ci === 0 ? "text-[var(--color-fg)]" : "text-right text-[var(--color-fg-muted)]"}`}
+                    className={`px-4 py-3.5 ${ci === 0 ? "text-[var(--color-fg)]" : "text-right tabular-nums text-[var(--color-fg-muted)]"}`}
                   >
                     {cell}
                   </td>
@@ -130,10 +155,17 @@ function Stat({ label, value }: { label: string; value: string }) {
 function ReportsPage() {
   const { api } = useAuth();
 
-  const now = new Date();
-  const [fromStr, setFromStr] = useState(ymd(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [toStr, setToStr] = useState(ymd(now));
-  const [tab, setTab] = useState<Tab>("stock");
+  // Deep-link support: `/reports?tab=dues` lands on that report (the dashboard links in this way).
+  const params = useSearchParams();
+  const requested = params.get("tab");
+  const initialTab: Tab =
+    requested && TABS.some((t) => t.id === requested) ? (requested as Tab) : "stock";
+
+  const { timezone } = useBranch();
+  const today = todayInZone(timezone);
+  const [fromStr, setFromStr] = useState(() => startOfMonth(today));
+  const [toStr, setToStr] = useState(() => today);
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,11 +176,15 @@ function ReportsPage() {
   const [doctors, setDoctors] = useState<DoctorLoadRow[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsReport | null>(null);
   const [collections, setCollections] = useState<CollectionsReport | null>(null);
+  const [leakage, setLeakage] = useState<RevenueLeakageReport | null>(null);
+  const [dues, setDues] = useState<DuesAgeingReport | null>(null);
+  const [advances, setAdvances] = useState<WalletRegister | null>(null);
   const [discharges, setDischarges] = useState<DischargeRegister | null>(null);
 
+  // Half-open, in the branch's zone: `>= from 00:00` and `< the midnight after to`.
   const range: ReportRange = useMemo(
-    () => ({ from: iso(fromStr), to: isoNextDay(toStr) }),
-    [fromStr, toStr],
+    () => dayRangeInZone(fromStr, toStr, timezone),
+    [fromStr, toStr, timezone],
   );
 
   const load = useCallback(async () => {
@@ -160,6 +196,9 @@ function ReportsPage() {
       else if (tab === "doctors") setDoctors(await api.reportDoctorLoad(range));
       else if (tab === "diagnostics") setDiagnostics(await api.reportDiagnostics(range));
       else if (tab === "collections") setCollections(await api.reportCollections(range));
+      else if (tab === "leakage") setLeakage(await api.reportRevenueLeakage(range));
+      else if (tab === "dues") setDues(await api.reportDuesAgeing(range));
+      else if (tab === "advances") setAdvances(await api.reportWallet(range));
       else if (tab === "discharges") setDischarges(await api.reportDischargeOutcomes(range));
     } catch (e) {
       setError(e instanceof ApiClientError ? e.message : "Could not load the report.");
@@ -208,12 +247,10 @@ function ReportsPage() {
     }
   }
 
+  /** `0` is this month to date; `n` is the whole month `n` months back. All in the branch's zone. */
   function applyPreset(months: number) {
-    const base = new Date();
-    const start = new Date(base.getFullYear(), base.getMonth() - months, 1);
-    const end = months === 0 ? base : new Date(base.getFullYear(), base.getMonth(), 0);
-    setFromStr(ymd(start));
-    setToStr(ymd(end));
+    setFromStr(startOfMonthsAgo(today, months));
+    setToStr(months === 0 ? today : endOfPreviousMonth(startOfMonth(today)));
   }
 
   return (
@@ -443,12 +480,70 @@ function ReportsPage() {
             </div>
           )}
 
+          {tab === "advances" && advances && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-4">
+                <Stat label="Advances collected" value={rupees(advances.deposits.total)} />
+                <Stat label="Utilised against bills" value={rupees(advances.utilized.total)} />
+                <Stat label="Refunded" value={rupees(advances.refunds.total)} />
+                <Stat label="Currently held" value={rupees(advances.outstandingHeld)} />
+              </div>
+              {/* The advance register is a liability story: money the hospital holds on patients'
+                  behalf. "Utilised" is a transfer to revenue, not new income; "currently held" is a
+                  point-in-time balance, not a period total. */}
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                Admission advances the hospital holds on patients’ behalf. “Utilised against bills”
+                is that money moving to revenue as care is billed — a transfer, already counted when
+                it was deposited. “Currently held” is the balance owed to patients right now, not a
+                total for the period.
+              </p>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    Advances collected by method
+                  </h3>
+                  <ReportTable
+                    headers={["Method", "Collected", "Deposits"]}
+                    rows={advances.deposits.byMethod.map((m) => [
+                      m.method,
+                      rupees(m.amount),
+                      m.count,
+                    ])}
+                    empty="No advances collected in this period."
+                  />
+                </Card>
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    Refunds by method
+                  </h3>
+                  <ReportTable
+                    headers={["Method", "Refunded", "Refunds"]}
+                    rows={advances.refunds.byMethod.map((m) => [
+                      m.method,
+                      rupees(m.amount),
+                      m.count,
+                    ])}
+                    empty="No refunds in this period."
+                  />
+                </Card>
+              </div>
+            </div>
+          )}
+
           {tab === "collections" && collections && (
             <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Stat label="Total received" value={rupees(collections.total)} />
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Stat label="Collected at counter" value={rupees(collections.total)} />
                 <Stat label="Payments taken" value={String(collections.count)} />
+                <Stat label="Settled from advance" value={rupees(collections.settledFromAdvance)} />
               </div>
+              {/* Say plainly what "collected" does and does not include — the one sentence that keeps
+                  an auditor from adding the advance figure twice. */}
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                “Collected at counter” is direct payment (cash, card, UPI). “Settled from advance”
+                was collected earlier as an admission advance and is shown here only for context —
+                it is counted in the Advances report, not added to the counter total.
+              </p>
               <div className="grid gap-4 lg:grid-cols-2">
                 <Card>
                   <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
@@ -471,6 +566,121 @@ function ReportsPage() {
                   />
                 </Card>
               </div>
+              {/* The drawer, per person. The reason this table exists: a desk run by several
+                  people across a shift cannot be counted from one hospital-wide total. */}
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  Taken by
+                </h3>
+                <ReportTable
+                  headers={["Staff member", "Received", "Payments"]}
+                  rows={collections.byCollector.map((c) => [
+                    c.collectorName,
+                    rupees(c.amount),
+                    c.count,
+                  ])}
+                  empty="No payments."
+                />
+                <p className="px-4 pt-1 pb-3 text-xs text-[var(--color-fg-muted)]">
+                  Direct counter payments only, so these rows add up to “Collected at counter”. “Not
+                  recorded” is money posted without a signed-in collector.
+                </p>
+              </Card>
+            </div>
+          )}
+
+          {tab === "leakage" && leakage && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Stat label="Unbilled (revenue at risk)" value={rupees(leakage.total)} />
+                <Stat label="Unbilled charges" value={String(leakage.count)} />
+              </div>
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                Care that was given and priced but never put on a bill — a charge posted in this
+                period, worth more than ₹0, not voided, and still on no invoice. Finalize these
+                visits&apos; bills to recover the money.
+              </p>
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  Visits to bill
+                </h3>
+                <ReportTable
+                  headers={["UHID", "Patient", "Unbilled", "Charges"]}
+                  rows={leakage.byEncounter.map((r) => [
+                    r.uhid,
+                    r.patientName,
+                    rupees(r.amount),
+                    r.count,
+                  ])}
+                  empty="Nothing unbilled in this period — every charge is on a bill."
+                />
+              </Card>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    By category
+                  </h3>
+                  <ReportTable
+                    headers={["Category", "Unbilled", "Charges"]}
+                    rows={leakage.byCategory.map((c) => [c.category, rupees(c.amount), c.count])}
+                    empty="Nothing unbilled."
+                  />
+                </Card>
+                <Card>
+                  <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                    By source
+                  </h3>
+                  <ReportTable
+                    headers={["Source", "Unbilled", "Charges"]}
+                    rows={leakage.bySource.map((s) => [s.source, rupees(s.amount), s.count])}
+                    empty="Nothing unbilled."
+                  />
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {tab === "dues" && dues && (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Stat label="Outstanding (billed, unpaid)" value={rupees(dues.totalOutstanding)} />
+                <Stat label="Bills with a balance" value={String(dues.invoiceCount)} />
+              </div>
+              <p className="text-xs text-[var(--color-fg-muted)]">
+                Finalized bills not yet fully paid, as of{" "}
+                {periodLabel.split(" – ")[1] || "the To date"}, aged by when the bill was raised.
+                The older a debt, the harder it is to collect — work the oldest buckets first.
+              </p>
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  By age
+                </h3>
+                <ReportTable
+                  headers={["Age", "Outstanding", "Bills"]}
+                  rows={dues.buckets.map((b) => [
+                    DUES_BUCKET_LABEL[b.bucket] ?? b.bucket,
+                    rupees(b.amount),
+                    b.count,
+                  ])}
+                  empty="Nothing outstanding."
+                />
+              </Card>
+              <Card>
+                <h3 className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-semibold">
+                  Who owes (heaviest first)
+                </h3>
+                <ReportTable
+                  headers={["Bill", "UHID", "Patient", "Outstanding", "Age (days)"]}
+                  rows={dues.topDebtors.map((r) => [
+                    r.number ?? "—",
+                    r.uhid,
+                    r.patientName,
+                    rupees(r.outstanding),
+                    r.ageDays,
+                  ])}
+                  empty="No outstanding bills — everything billed has been paid."
+                />
+              </Card>
             </div>
           )}
         </>
@@ -480,9 +690,10 @@ function ReportsPage() {
 }
 
 export default function Page() {
+  // `useSearchParams` (the ?tab= deep-link) must sit under a Suspense boundary in the App Router.
   return (
-    <Protected>
+    <Suspense fallback={null}>
       <ReportsPage />
-    </Protected>
+    </Suspense>
   );
 }

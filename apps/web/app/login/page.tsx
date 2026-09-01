@@ -16,6 +16,7 @@ import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiClientError, isMfaChallenge } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
+import { useBranding } from "../../components/BrandingProvider";
 import { apiTarget } from "../../lib/api";
 import { Alert, Button, Card, Field } from "../../components/ui";
 import {
@@ -25,10 +26,18 @@ import {
   type RememberedAccount,
 } from "../../lib/devSession";
 
+/**
+ * One sentence, used in two places — on load once branding has resolved the host to nothing, and
+ * again if a submit comes back `HMS-TEN-001`. Written once so the two can never drift into saying
+ * different things about the same problem.
+ */
+const UNKNOWN_HOST = "This address does not belong to any hospital. Check the web address.";
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const { login, completeMfa } = useAuth();
+  const branding = useBranding();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -51,9 +60,54 @@ function LoginForm() {
    * It also outranks the real error: once they submit and get the password wrong,
    * that message replaces this one rather than sitting in a stack of two alerts.
    */
-  const expired = params.get("reason") === "expired";
+  const reason = params.get("reason");
+
+  /**
+   * Why they are looking at this form, if we know — at most one line, and the most specific one.
+   *
+   * Ordered by how much the reader needs it. Someone who just replaced a temporary password is
+   * mid-task and needs to know their new password is the one to use now; a timeout is a security
+   * sign-out ("you walked away") and reads differently from an ordinary expiry ("we ended it").
+   * Collapsing them into one "your session ended" would be true and useless.
+   */
+  const notice: { tone: "success" | "info"; text: string } | null =
+    reason === "password-changed"
+      ? {
+          tone: "success",
+          text: "Your password was changed and every device was signed out. Sign in with your new password.",
+        }
+      : reason === "timeout"
+        ? {
+            tone: "info",
+            text: "You were signed out after a period of inactivity. Please sign in again.",
+          }
+        : reason === "expired"
+          ? { tone: "info", text: "Your session ended. Please sign in again." }
+          : null;
 
   const destination = params.get("next") ?? "/dashboard";
+
+  /**
+   * WEB-02 — the address is wrong, and we knew before they typed.
+   *
+   * `BrandingProvider` calls the public `GET /site` on load, so by the time this form is on screen
+   * the app already has a definitive answer about whether this hostname is a hospital at all. It
+   * used to throw that answer away and wait for a submit, which meant the only way to learn you
+   * were at the wrong address was to type your real password into it first. The hostname IS the
+   * tenant (ADR-0005), so a wrong address is not a typo in a form — it is a different machine.
+   *
+   * Shown as soon as branding has resolved, and never while it is still resolving: a flash of
+   * "this is not a hospital" on a hospital that simply had not answered yet would be its own
+   * defect. `hostIsUnknown` is `HMS-TEN-001` only — see `BrandingProvider`.
+   *
+   * The submit-time mapping in `describe()` stays. It is the same sentence, and it still has work
+   * to do: branding may not have answered yet when somebody types fast.
+   */
+  const addressIsNotAHospital = branding.loaded && branding.hostIsUnknown;
+
+  // A submit-time error outranks the load-time one: it is the more specific answer to what the
+  // person just did, and stacking two red boxes says less than either alone.
+  const alert = error ?? (addressIsNotAHospital ? UNKNOWN_HOST : null);
 
   /**
    * A NON-ApiClientError means the request never got an answer: DNS, the wrong
@@ -79,7 +133,7 @@ function LoginForm() {
         // One message for every credential failure — see the note above.
         return "Incorrect email or password.";
       case "HMS-TEN-001":
-        return "This address does not belong to any hospital. Check the web address.";
+        return UNKNOWN_HOST;
       case "HMS-TEN-002":
         return "This hospital's account is suspended. Please contact support.";
       case "HMS-AUTH-002":
@@ -136,9 +190,22 @@ function LoginForm() {
     <main className="flex min-h-screen items-center justify-center bg-[var(--color-bg-subtle)] px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-600)] text-lg font-bold text-[var(--color-on-accent)]">
-            M
-          </div>
+          {branding.logoUrl ? (
+            <img
+              src={branding.logoUrl}
+              alt={branding.displayName || "Hospital logo"}
+              className="mx-auto mb-4 h-12 w-auto max-w-[180px] object-contain"
+            />
+          ) : (
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-brand-600)] text-lg font-bold text-[var(--color-on-accent)]">
+              {(branding.displayName || "M").charAt(0).toUpperCase()}
+            </div>
+          )}
+          {branding.displayName && (
+            <p className="mb-1 text-sm font-semibold text-[var(--color-fg)]">
+              {branding.displayName}
+            </p>
+          )}
           <h1 className="text-xl font-semibold text-[var(--color-fg)]">
             {mfaToken ? "Two-step verification" : "Sign in"}
           </h1>
@@ -150,15 +217,15 @@ function LoginForm() {
         </div>
 
         <Card className="p-6 shadow-sm">
-          {error ? (
+          {alert ? (
             <div className="mb-4">
-              <Alert tone="danger">{error}</Alert>
+              <Alert tone="danger">{alert}</Alert>
             </div>
           ) : (
-            expired &&
-            !mfaToken && (
+            !mfaToken &&
+            notice && (
               <div className="mb-4">
-                <Alert tone="info">Your session ended. Please sign in again.</Alert>
+                <Alert tone={notice.tone}>{notice.text}</Alert>
               </div>
             )
           )}

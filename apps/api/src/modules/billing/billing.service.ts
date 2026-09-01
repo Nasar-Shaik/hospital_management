@@ -18,18 +18,104 @@
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
 import { getContext } from "../../core/context/requestContext.js";
+import { withTransaction } from "../../core/db/transaction.js";
 import { getById as getTenant, policyOf } from "../tenants/index.js";
+import { getEncounter } from "../encounters/index.js";
+import { getBranch } from "../branches/index.js";
+import { getById as getUser } from "../users/index.js";
+import { getPolicy } from "../insurance/index.js";
+import { listPatients, namesByIds } from "../patients/index.js";
+import {
+  debitForInvoice as debitWalletForInvoice,
+  getBalance as walletBalance,
+} from "../wallet/index.js";
 import * as repo from "./billing.repository.js";
 import {
   INVOICE_TRANSITIONS,
   type ChargeCategory,
   type InvoiceLine,
   type InvoiceStatus,
+  type PaymentEntry,
+  type RefundEntry,
 } from "./billing.model.js";
 
 const logger = createLogger({ service: "billing" });
 
-export type { Charge, Invoice, ServiceItem } from "./billing.repository.js";
+export type { Charge, Invoice, ServiceItem, BillReceipt } from "./billing.repository.js";
+
+/** Issued bills with money taken in a period — the bill half of the receipts register. */
+export function listReceipts(range: { from: Date; to: Date }): Promise<repo.BillReceipt[]> {
+  return repo.receiptsBetween(range.from, range.to);
+}
+
+/* ── Free follow-up ("OP validity") ────────────────────────────────────────── */
+
+/** A patient's live entitlement to see one doctor again without paying. */
+export interface FollowUpEntitlement {
+  /** The consultation charge that was paid and opened the window. */
+  originChargeId: string;
+  /** When that consultation was paid for. */
+  since: Date;
+  /** Last moment the free revisit applies — inclusive. */
+  until: Date;
+  /** The window the tariff grants, in days. Quoted on the charge description and the receipt. */
+  days: number;
+}
+
+/**
+ * Is this patient still inside a paid consultation's follow-up window with THIS doctor?
+ *
+ * ── THE RULE, AND WHY EACH CLAUSE IS THERE ──────────────────────────────────
+ * A hospital that advertises "free follow-up within 15 days" means: you paid to see Dr Rao, so
+ * seeing Dr Rao again about the same problem within 15 days costs nothing. Four conditions make
+ * that honest, and each one closes a way the hospital would otherwise lose money or a patient
+ * would be wrongly charged:
+ *
+ *   1. SAME DOCTOR. The fee bought that consultant's time and their duty to follow the case
+ *      through. It does not buy a free consultation with a different specialist in another
+ *      department, which is a new clinical problem and a new fee.
+ *   2. THE ORIGINAL WAS ACTUALLY PAID. An unpaid consultation entitles nobody to a free one —
+ *      otherwise "register, don't pay, come back tomorrow" is free care for ever.
+ *   3. THE ORIGINAL WAS CHARGEABLE (`amount > 0`, enforced in the repository query). A waived
+ *      follow-up must not itself grant another window, or one payment rolls forward indefinitely.
+ *   4. INSIDE THE WINDOW, measured from when that consultation was POSTED.
+ *
+ * Returns undefined when the tariff grants no window (`followUpDays` absent or 0) — the safe
+ * default, and what every hospital that never configures this keeps getting.
+ */
+export async function consultationFollowUp(input: {
+  patientId: string;
+  doctorId: string;
+  /** The tariff code the consultation bills under — carries the window. */
+  code: string;
+  /** "Now" for the visit being registered; passed in so a redelivered event judges the same instant. */
+  at: Date;
+}): Promise<FollowUpEntitlement | undefined> {
+  const service = await repo.findServiceByCode(input.code);
+  const days = service?.followUpDays ?? 0;
+  if (days <= 0) return undefined;
+
+  const since = new Date(input.at.getTime() - days * 86_400_000);
+  const candidates = await repo.paidConsultationsForDoctor({
+    patientId: input.patientId,
+    doctorId: input.doctorId,
+    since,
+  });
+  if (candidates.length === 0) return undefined;
+
+  // Only consultations that reached a PAID invoice count (clause 2). Billed-but-unpaid and
+  // never-billed both fail, which is the same test reception's pay gate applies.
+  const invoiceIds = [...new Set(candidates.map((c) => c.invoiceId).filter(Boolean))] as string[];
+  const status = await repo.invoiceStatusByIds(invoiceIds);
+
+  for (const charge of candidates) {
+    if (!charge.invoiceId || status.get(charge.invoiceId) !== "paid") continue;
+    const until = new Date(charge.postedAt.getTime() + days * 86_400_000);
+    if (until.getTime() < input.at.getTime()) continue;
+    return { originChargeId: charge.id, since: charge.postedAt, until, days };
+  }
+  return undefined;
+}
 
 export interface PostChargeInput {
   encounterId: string;
@@ -41,11 +127,13 @@ export interface PostChargeInput {
   description?: string;
   category: ChargeCategory;
   quantity?: number;
-  source: "encounter" | "order" | "pharmacy" | "bed" | "manual";
+  source: "encounter" | "order" | "pharmacy" | "bed" | "manual" | "package";
   sourceId?: string;
   branchId?: string;
   /** Overrides the tariff — the pharmacy knows the price of the batch it dispensed. */
   unitPrice?: number;
+  /** Consultation charges: whose consultation. Recorded so the follow-up rule can find it later. */
+  doctorId?: string;
 }
 
 /**
@@ -86,7 +174,24 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
    * the state can still cost the encounter from `listPrice`. `zero_tariff` is a
    * TARIFF, not an off-switch — see BILLING_MODES.
    */
-  const amount = policy.billingMode === "zero_tariff" ? 0 : listPrice * quantity;
+  let amount = policy.billingMode === "zero_tariff" ? 0 : listPrice * quantity;
+  let description = input.description ?? service?.name ?? input.code;
+
+  /**
+   * ── PACKAGE COVERAGE ────────────────────────────────────────────────────────
+   * If this visit is enrolled in a care package and this service is one the package covers, it
+   * bills at ₹0 against the bundle — the package's fixed price was already charged at enrol time,
+   * and billing the contents again would double-charge. The package charge ITSELF (source
+   * `package`) is never zeroed. The service still posts, with its worth on `listPrice`, so the
+   * bill shows what the bundle included; only its `amount` is nil.
+   */
+  if (input.source !== "package") {
+    const enrollment = await repo.activeEnrollmentForEncounter(input.encounterId);
+    if (enrollment && enrollment.includedCodes.includes(input.code.toUpperCase())) {
+      amount = 0;
+      description = `${description} (covered by ${enrollment.packageName})`;
+    }
+  }
 
   try {
     return await repo.postCharge({
@@ -94,7 +199,7 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
       patientId: input.patientId,
       episodeId: input.episodeId,
       code: input.code,
-      description: input.description ?? service?.name ?? input.code,
+      description,
       category: input.category,
       quantity,
       listPrice,
@@ -102,6 +207,7 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
       source: input.source,
       ...(input.sourceId ? { sourceId: input.sourceId } : {}),
       ...(input.branchId ? { branchId: input.branchId } : {}),
+      ...(input.doctorId ? { doctorId: input.doctorId } : {}),
     });
   } catch (err) {
     if (!repo.isDuplicateKey(err)) throw err;
@@ -119,13 +225,197 @@ export async function postCharge(input: PostChargeInput): Promise<repo.Charge | 
  */
 export const reverseChargesFor = repo.voidChargesBySource;
 
+/* ── credit assessment: "can this patient afford this, from their advance?" ── */
+
+export interface DrugCreditAssessment {
+  /** The advance-budget rule applies only to ADMITTED (IP) patients. OP patients pay at the counter. */
+  applies: boolean;
+  /** Paise. What the drugs about to be handed over would cost (tariff-priced; 0 under zero-tariff). */
+  cost: number;
+  /** Paise. The patient's advance balance right now. */
+  balance: number;
+  /** Paise. How much the cost exceeds the advance — 0 when covered or the rule doesn't apply. */
+  shortfall: number;
+  /** True when the rule applies AND the dispense would push the advance below zero. */
+  overBudget: boolean;
+}
+
+const NO_CREDIT_ISSUE: DrugCreditAssessment = {
+  applies: false,
+  cost: 0,
+  balance: 0,
+  shortfall: 0,
+  overBudget: false,
+};
+
+/** Tariff-price a set of drug lines without posting anything — a pure read (zero under zero-tariff). */
+async function quoteDrugs(lines: { drugCode: string; quantity: number }[]): Promise<number> {
+  const ctx = getContext();
+  const tenant = await getTenant(ctx.tenantId);
+  const policy = policyOf(
+    tenant ?? {
+      id: ctx.tenantId,
+      hospitalName: "",
+      slug: ctx.tenantSlug,
+      databaseName: "",
+      status: "active",
+    },
+  );
+  // Government / zero-tariff: the drugs are free, so there is never a shortfall to gate on.
+  if (policy.billingMode === "zero_tariff") return 0;
+
+  let total = 0;
+  for (const line of lines) {
+    const service = await repo.findServiceByCode(line.drugCode);
+    total += (service?.price ?? 0) * line.quantity;
+  }
+  return total;
+}
+
+/**
+ * Would handing these drugs over push an ADMITTED patient's advance below zero?
+ *
+ * Used by the pharmacy to decide whether a dispense needs a doctor's sign-off to proceed
+ * on credit (the over-budget checkpoint). The rule is scoped to inpatients: a walk-in OP
+ * patient pays at the counter and has no advance to overrun.
+ *
+ * Read-only and cheap. The CALLER treats any failure as "no issue" (fail-open) — a pricing
+ * or wallet hiccup must never be able to hold a patient's medicine.
+ */
+export async function assessDrugCredit(input: {
+  patientId: string;
+  encounterId: string;
+  lines: { drugCode: string; quantity: number }[];
+}): Promise<DrugCreditAssessment> {
+  const encounter = await getEncounter(input.encounterId);
+  // OP (or unknown) — no advance-budget concept, so nothing to gate.
+  if (encounter?.class !== "IP") return NO_CREDIT_ISSUE;
+
+  const cost = await quoteDrugs(input.lines);
+  const balance = await walletBalance(input.patientId);
+  const shortfall = Math.max(0, cost - balance);
+  return { applies: true, cost, balance, shortfall, overBudget: shortfall > 0 };
+}
+
 export const getCharges = repo.chargesForEncounter;
 export const listServices = repo.listServices;
 export const listInvoices = repo.listInvoices;
 export const getInvoice = repo.findInvoiceById;
 
+/** A visit owing a bill nobody has raised, named for the person standing at the counter. */
+export interface PendingBill extends repo.PendingBatch {
+  patientName: string;
+  uhid: string;
+}
+
+/**
+ * The cash counter's queue: visits with charges that are on no bill yet.
+ *
+ * ── WHY THE SEARCH RESOLVES PATIENTS FIRST ──────────────────────────────────
+ * A cashier's real question is not "show me the queue", it is "this person is in front of me and
+ * says they were sent to pay for a blood test". So `q` is matched against patients (name or UHID)
+ * and the pending charges are then restricted to whoever matched, rather than aggregating the
+ * whole hospital and filtering names afterwards — which would page over the wrong set and make
+ * `total` a lie.
+ *
+ * A search that matches nobody returns nothing, and says so honestly rather than falling back to
+ * the unfiltered queue — a cashier who mistypes a name must not be handed somebody else's bill.
+ */
+export async function listPendingBills(filter: {
+  q?: string;
+  limit: number;
+  skip: number;
+}): Promise<{ items: PendingBill[]; total: number }> {
+  let patientIds: string[] | undefined;
+  if (filter.q) {
+    // The app's one patient search, so the counter matches names exactly as every other screen
+    // does. It is branch-scoped where the charge aggregation below is not; that asymmetry is the
+    // same open question about branch-scoping the cash counter, not a rule invented here.
+    const matches = await listPatients({ q: filter.q, page: 1, limit: 100 });
+    if (matches.patients.length === 0) return { items: [], total: 0 };
+    patientIds = matches.patients.map((p) => p.id);
+  }
+
+  const { items, total } = await repo.pendingBatches({
+    ...(patientIds ? { patientIds } : {}),
+    limit: filter.limit,
+    skip: filter.skip,
+  });
+
+  const named = await namesByIds(items.map((r) => r.patientId));
+  const byId = new Map(named.map((p) => [p.id, p]));
+
+  return {
+    items: items.map((r) => {
+      const p = byId.get(r.patientId);
+      return {
+        ...r,
+        // A charge whose patient has been merged away still owes money; showing the id keeps the
+        // row payable instead of dropping it for want of a name.
+        patientName: p?.name ?? `Unknown (${r.patientId.slice(-6)})`,
+        uhid: p?.uhid ?? "—",
+      };
+    }),
+    total,
+  };
+}
+
+/** A person this bill records an act by, as the printed receipt names them. */
+export interface InvoiceSignatory {
+  userId: string;
+  name: string;
+  designation?: string;
+  /** A scanned signature, when they have uploaded one. Absent means a blank line to sign. */
+  signature?: string;
+}
+
+/**
+ * The people this bill records an act by — who took each payment and who handed money back —
+ * resolved to names and signatures for the printed receipt.
+ *
+ * ── WHY THIS IS ITS OWN ENDPOINT, AND NOT A FIELD ON THE INVOICE ────────────
+ * `payments[].by` has always carried the collector's USER ID, so the fact was recorded from the
+ * first day; there was simply nothing that could turn it into a name, and the receipt printed an
+ * anonymous "Received by ______" over a bill that knew exactly who had received it. Two things
+ * kept it off the invoice itself: a signature is a ~200 KB data URI that must not ride on every
+ * row of a paginated invoice list, and this is one round trip on the one page that prints.
+ *
+ * ── WHY IT IS NOT A USER LOOKUP ─────────────────────────────────────────────
+ * It answers "who signed THIS bill", not "tell me about user X". A cashier holding `billing:read`
+ * gets the names already printed on documents they can print anyway, and no way to walk the staff
+ * directory. Ids that no longer resolve (a deleted account) are dropped rather than guessed at.
+ */
+export async function invoiceSignatories(invoiceId: string): Promise<InvoiceSignatory[]> {
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  const ids = [
+    ...new Set(
+      [...invoice.payments.map((p) => p.by), ...invoice.refunds.map((r) => r.by)].filter(
+        (id): id is string => Boolean(id),
+      ),
+    ),
+  ];
+
+  const cards = await Promise.all(
+    ids.map(async (userId) => {
+      const user = await getUser(userId).catch(() => undefined);
+      if (!user) return undefined;
+      return {
+        userId,
+        name: user.name,
+        ...(user.profile?.designation ? { designation: user.profile.designation } : {}),
+        ...(user.profile?.signature ? { signature: user.profile.signature } : {}),
+      };
+    }),
+  );
+  return cards.filter((c): c is InvoiceSignatory => c !== undefined);
+}
+
 /** The collections register for a period — used by the reporting module. */
 export const collectionsReport = repo.collectionsReport;
+export const revenueLeakage = repo.revenueLeakage;
+export const duesAgeing = repo.duesAgeing;
 
 /* ── Tariff management (the price list a hospital edits) ────────────────────── */
 
@@ -170,6 +460,142 @@ export async function voidCharge(id: string, reason: string): Promise<repo.Charg
   return charge;
 }
 
+/* ── Care packages: catalogue + enrollment ─────────────────────────────────── */
+
+export type { Package, PackageEnrollment } from "./billing.repository.js";
+
+export const listPackages = repo.listPackages;
+export const getPackageByCode = repo.findPackageByCode;
+export const listPackageEnrollments = repo.listEnrollmentsForEncounter;
+export const activePackageEnrollment = repo.activeEnrollmentForEncounter;
+
+export async function createPackage(input: repo.CreatePackageInput): Promise<repo.Package> {
+  try {
+    return await repo.createPackage(input);
+  } catch (err) {
+    if (repo.isDuplicateKey(err)) {
+      throw new AppError("HMS-VAL-001", 409, "That package code already exists", {
+        code: input.code,
+        hint: "package codes are unique per hospital — pick another",
+      });
+    }
+    throw err;
+  }
+}
+
+export async function updatePackage(
+  id: string,
+  patch: repo.UpdatePackageInput,
+): Promise<repo.Package> {
+  const updated = await repo.updatePackage(id, patch);
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Package not found", { id });
+  return updated;
+}
+
+/**
+ * Enrols a visit in a package: charges the bundle's fixed price ONCE, and from then on every
+ * service the package covers posts at ₹0 against it (see the coverage block in `postCharge`).
+ *
+ * The price and covered codes are SNAPSHOT onto the enrollment, so a later edit of the catalogue
+ * never changes what this patient owes. Charge and enrollment are written in ONE transaction — a
+ * package price with no enrollment (services would never be covered), or an enrollment with no
+ * charge (the bundle billed nothing), are both wrong, so neither is allowed to exist alone. Only
+ * one active package per visit — a second is refused rather than silently stacking bundles.
+ */
+export async function enrollInPackage(
+  encounterId: string,
+  packageCode: string,
+): Promise<repo.PackageEnrollment> {
+  const ctx = getContext();
+  const pkg = await repo.findPackageByCode(packageCode);
+  if (!pkg) throw new AppError("HMS-GEN-404", 404, "Package not found", { code: packageCode });
+  if (!pkg.active) {
+    throw new AppError("HMS-STATE-001", 422, "That package is retired", { code: packageCode });
+  }
+
+  const encounter = await getEncounter(encounterId);
+  if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { encounterId });
+
+  const existing = await repo.activeEnrollmentForEncounter(encounterId);
+  if (existing) {
+    throw new AppError("HMS-STATE-001", 409, "This visit is already enrolled in a package", {
+      encounterId,
+      packageCode: existing.packageCode,
+      hint: "cancel the current enrollment before enrolling in another",
+    });
+  }
+
+  // Government / zero-tariff: the bundle, like everything else, is free — but still recorded.
+  const tenant = await getTenant(ctx.tenantId);
+  const policy = policyOf(
+    tenant ?? {
+      id: ctx.tenantId,
+      hospitalName: "",
+      slug: ctx.tenantSlug,
+      databaseName: "",
+      status: "active",
+    },
+  );
+  const price = policy.billingMode === "zero_tariff" ? 0 : pkg.price;
+
+  return withTransaction(async (session) => {
+    const charge = await repo.postCharge(
+      {
+        encounterId,
+        patientId: encounter.patientId,
+        episodeId: encounter.episodeId,
+        code: pkg.code,
+        description: pkg.name,
+        category: "package",
+        quantity: 1,
+        listPrice: pkg.price,
+        amount: price,
+        source: "package",
+        ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+      },
+      session,
+    );
+    return repo.createEnrollment(
+      {
+        packageId: pkg.id,
+        packageCode: pkg.code,
+        packageName: pkg.name,
+        price,
+        includedCodes: pkg.includedCodes,
+        encounterId,
+        patientId: encounter.patientId,
+        episodeId: encounter.episodeId,
+        chargeId: charge.id,
+        ...(encounter.branchId ? { branchId: encounter.branchId } : {}),
+      },
+      session,
+    );
+  });
+}
+
+/**
+ * Cancels an enrollment: voids its package charge and stops covering services from now on. A charge
+ * already on a finalized bill cannot be voided (that would be a credit note) — the cancel proceeds
+ * for the coverage, and the stale package charge is surfaced for manual reconciliation.
+ */
+export async function cancelPackageEnrollment(id: string): Promise<repo.PackageEnrollment> {
+  const enrollment = await repo.findEnrollmentById(id);
+  if (!enrollment) throw new AppError("HMS-GEN-404", 404, "Enrollment not found", { id });
+  if (enrollment.status !== "active") {
+    throw new AppError("HMS-STATE-001", 409, "That enrollment is already cancelled", { id });
+  }
+  if (enrollment.chargeId) {
+    // Best-effort: if the package charge is already on a finalized bill, voiding is refused and
+    // that is fine — the enrollment still cancels; the finalized charge is reconciled by hand.
+    await repo
+      .voidCharge(enrollment.chargeId, "package enrollment cancelled")
+      .catch(() => undefined);
+  }
+  const cancelled = await repo.cancelEnrollment(id);
+  if (!cancelled) throw new AppError("HMS-GEN-404", 404, "Enrollment not found", { id });
+  return cancelled;
+}
+
 /**
  * The running bill for a visit — assembled LIVE from the charge ledger.
  *
@@ -210,6 +636,17 @@ export async function getRunningBill(encounterId: string): Promise<{
 }
 
 /**
+ * The series an invoice belongs to (ADR-0015) — resolved from the branch its charges
+ * were raised in. Branchless charges (a hospital that predates branches) resolve to the
+ * empty descriptor, so numbering stays on the original tenant-wide series.
+ */
+async function invoiceBranchOf(branchId?: string): Promise<repo.InvoiceBranch> {
+  if (!branchId) return {};
+  const branch = await getBranch(branchId);
+  return branch ? { branchId, branchCode: branch.code, isMain: branch.isMain } : { branchId };
+}
+
+/**
  * Freezes the bill and gives it a number.
  *
  * After this the lines cannot move: an invoice that can be edited once it is in a
@@ -220,45 +657,65 @@ export async function getRunningBill(encounterId: string): Promise<{
 export async function finalizeInvoice(encounterId: string): Promise<repo.Invoice> {
   const ctx = getContext();
 
-  const existing = await repo.findInvoiceForEncounter(encounterId);
-  if (existing && existing.status !== "draft") {
-    // Already finalized. Hand it back rather than erroring — a cashier who clicks
-    // twice wants the bill, not a stack trace.
-    return existing;
-  }
-
-  const bill = await getRunningBill(encounterId);
-  const charges = await repo.chargesForEncounter(encounterId);
-  const first = charges[0];
+  /**
+   * ── ONE BILL PER BATCH OF CHARGES, NOT ONE PER VISIT ────────────────────────
+   * Finalizing bills the charges NOT YET on any invoice — the consultation at registration, then
+   * the tests once a doctor has ordered them, then the pharmacy — each into its OWN numbered,
+   * frozen document. A charge that arrives after a bill is issued lands on the NEXT bill, never on
+   * the frozen one (STATE_MACHINE_CATALOG §4). This is what lets a patient pay for the consult
+   * before they see the doctor and for the tests afterwards, and it is why the lab's paid-before-run
+   * check can turn green per test.
+   */
+  const unbilled = await repo.unbilledChargesForEncounter(encounterId);
+  const first = unbilled[0];
   if (!first) {
+    // Nothing new to bill. Idempotent — a double-click, or a re-finalize with no fresh charges,
+    // hands back the most recent bill rather than raising an empty one or a stack trace.
+    const invoices = await repo.invoicesForEncounter(encounterId);
+    const latest = invoices[invoices.length - 1];
+    if (latest) return latest;
     throw new AppError("HMS-STATE-001", 422, "Nothing to bill on this visit", { encounterId });
   }
 
-  const invoice =
-    existing ??
-    (await repo.createInvoice({
-      encounterId,
-      patientId: first.patientId,
-      episodeId: first.episodeId,
-      lines: bill.lines,
-      subtotal: bill.subtotal,
-      total: bill.total,
-    }));
+  const lines: InvoiceLine[] = unbilled.map((c) => ({
+    code: c.code,
+    description: c.description,
+    category: c.category,
+    quantity: c.quantity,
+    listPrice: c.listPrice,
+    amount: c.amount,
+  }));
+  const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
 
-  const number = await repo.nextInvoiceNumber();
+  const invoice = await repo.createInvoice({
+    encounterId,
+    patientId: first.patientId,
+    episodeId: first.episodeId,
+    lines,
+    subtotal,
+    total: subtotal,
+    // The invoice belongs to the branch its charges were raised in (ADR-0015).
+    ...(first.branchId ? { branchId: first.branchId } : {}),
+  });
+
+  const number = await repo.nextInvoiceNumber(await invoiceBranchOf(first.branchId));
 
   const finalized = await repo.updateInvoice(invoice.id, {
     number,
     status: "finalized",
-    lines: bill.lines,
-    subtotal: bill.subtotal,
-    total: bill.total,
+    lines,
+    subtotal,
+    total: subtotal,
     finalizedAt: new Date(),
     ...(ctx.userId ? { finalizedBy: ctx.userId } : {}),
   });
   if (!finalized) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoice.id });
 
-  await repo.attachChargesToInvoice(encounterId, invoice.id);
+  // Only the charges we just billed — see the repository note on why this is by-id, not by-encounter.
+  await repo.attachChargesToInvoiceByIds(
+    unbilled.map((c) => c.id),
+    invoice.id,
+  );
 
   /**
    * A ₹0 bill is SETTLED the moment it is finalized. A government hospital must not
@@ -274,10 +731,116 @@ export async function finalizeInvoice(encounterId: string): Promise<repo.Invoice
   return finalized;
 }
 
+export interface EncounterBilling {
+  /** Charges not yet on any bill — the next bill to raise. */
+  pending: { lines: InvoiceLine[]; total: number };
+  /** Every bill raised on this visit, oldest first, each with its own paid/finalized status. */
+  invoices: repo.Invoice[];
+  /** Paise. Sum of all invoice totals. */
+  totalBilled: number;
+  /** Paise. Sum of all invoice payments. */
+  totalPaid: number;
+  /** Paise. Everything charged on the visit, billed or not. */
+  grandTotal: number;
+  /** Paise. What the visit still owes — pending charges plus the unpaid part of issued bills. */
+  outstanding: number;
+}
+
+/**
+ * The whole billing picture for a visit — the pending (unbilled) charges plus every bill raised,
+ * with their payment state. This is what the reception desk collects against: finalize the pending
+ * batch into a bill, then take the money on each bill. The itemised OPD-slip bill and the ward's
+ * "this stay owes" are read off the same view, so no two screens disagree on what is owed.
+ */
+export async function getEncounterBilling(encounterId: string): Promise<EncounterBilling> {
+  const [unbilled, invoices] = await Promise.all([
+    repo.unbilledChargesForEncounter(encounterId),
+    repo.invoicesForEncounter(encounterId),
+  ]);
+
+  const lines: InvoiceLine[] = unbilled.map((c) => ({
+    code: c.code,
+    description: c.description,
+    category: c.category,
+    quantity: c.quantity,
+    listPrice: c.listPrice,
+    amount: c.amount,
+  }));
+  const pendingTotal = lines.reduce((sum, l) => sum + l.amount, 0);
+  const totalBilled = invoices.reduce((sum, i) => sum + i.total, 0);
+  const totalPaid = invoices.reduce((sum, i) => sum + i.paid, 0);
+
+  return {
+    pending: { lines, total: pendingTotal },
+    invoices,
+    totalBilled,
+    totalPaid,
+    grandTotal: pendingTotal + totalBilled,
+    outstanding: pendingTotal + (totalBilled - totalPaid),
+  };
+}
+
 export interface RecordPaymentInput {
   amount: number;
   method: string;
   reference?: string;
+  /** Idempotency key (Doc 03 §5.2). Optional on the wire; the UI always sends one. */
+  requestId?: string;
+}
+
+/**
+ * Explains a refused money write.
+ *
+ * The atomic write carries the invariants in its FILTER, so "no document matched" is the only
+ * signal it can give — and "no match" alone is the least useful thing to hand a cashier with a
+ * patient in front of them. This re-reads the invoice and turns the silence into the specific,
+ * documented answer: what was wrong, and what to do about it.
+ *
+ * It runs only on the failure path, so the cost is paid by the request that was already refused.
+ */
+async function explainRefusedPayment(
+  invoiceId: string,
+  input: { amount: number; requestId?: string },
+): Promise<never> {
+  const current = await repo.findInvoiceById(invoiceId);
+  if (!current) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  // A replay of a key we already honoured. The money was taken exactly once; hand back the
+  // receipt so the caller can reconcile rather than retry (ERROR_CODES: HMS-PAY-002).
+  if (input.requestId) {
+    const already = current.payments.find((p) => p.requestId === input.requestId);
+    if (already) {
+      throw new AppError("HMS-PAY-002", 409, "Payment already captured", {
+        requestId: input.requestId,
+        receipt: { amount: already.amount, method: already.method, at: already.at },
+        invoice: {
+          id: current.id,
+          paid: current.paid,
+          total: current.total,
+          status: current.status,
+        },
+      });
+    }
+  }
+
+  if (current.status === "cancelled") {
+    throw new AppError("HMS-STATE-001", 422, "Cannot pay a cancelled invoice", { id: invoiceId });
+  }
+  if (current.status === "draft") {
+    throw new AppError("HMS-STATE-001", 422, "Finalize the bill before taking payment", {
+      id: invoiceId,
+    });
+  }
+  if (current.paid + input.amount > current.total) {
+    // Reached when another payment landed between validation and the write — the guard held.
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [`payment exceeds the balance of ${String(current.total - current.paid)} paise`],
+    });
+  }
+  throw new AppError("HMS-STATE-001", 422, "Invalid state transition", {
+    from: current.status,
+    to: "paid",
+  });
 }
 
 /** Takes money. Partial payments are normal; overpayment is refused. */
@@ -289,6 +852,35 @@ export async function recordPayment(
 
   const invoice = await repo.findInvoiceById(invoiceId);
   if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  /**
+   * ── THE REPLAY CHECK COMES FIRST, AND THE ORDER IS THE POINT ────────────────
+   * A retry of a payment that already landed is NOT an overpayment, a cancelled bill, or an
+   * illegal transition — but every one of those checks would fire on it first and give the
+   * cashier a different, wrong answer. Paying ₹300 twice on a ₹500 bill would be refused as
+   * "payment exceeds the balance of ₹200", sending someone to hunt for a ₹300 payment the
+   * screen has not refreshed to show.
+   *
+   * Same reasoning as ADR-0010's layer 1 before layer 2: when two walls can refuse a request,
+   * the error must name the one the caller actually hit, because the remedies are opposite —
+   * here, "do nothing, it worked" versus "look at the balance".
+   */
+  if (input.requestId) {
+    const already = invoice.payments.find((p) => p.requestId === input.requestId);
+    if (already) {
+      throw new AppError("HMS-PAY-002", 409, "Payment already captured", {
+        requestId: input.requestId,
+        receipt: { amount: already.amount, method: already.method, at: already.at },
+        invoice: {
+          id: invoice.id,
+          paid: invoice.paid,
+          total: invoice.total,
+          status: invoice.status,
+        },
+      });
+    }
+  }
+
   if (invoice.status === "cancelled") {
     throw new AppError("HMS-STATE-001", 422, "Cannot pay a cancelled invoice", { id: invoiceId });
   }
@@ -315,19 +907,538 @@ export async function recordPayment(
     });
   }
 
-  const updated = await repo.addPayment(
-    invoiceId,
-    {
-      amount: input.amount,
-      method: input.method,
-      at: new Date(),
-      ...(input.reference ? { reference: input.reference } : {}),
-      ...(ctx.userId ? { by: ctx.userId } : {}),
-    },
-    status,
-    paid,
-  );
-  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  const payment: PaymentEntry = {
+    amount: input.amount,
+    method: input.method,
+    at: new Date(),
+    ...(input.reference ? { reference: input.reference } : {}),
+    ...(ctx.userId ? { by: ctx.userId } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
+  };
+
+  /**
+   * ── SETTLING FROM THE PATIENT'S ADVANCE ─────────────────────────────────────
+   * `method: "wallet"` draws the money from the advance the desk collected earlier (an OP or
+   * admission advance). The wallet debit and the invoice payment are ONE transaction: the
+   * patient is never debited for a payment that did not post, nor credited on a bill that was
+   * not paid. An insufficient balance throws (422) and rolls the whole thing back — nothing is
+   * half-done. A cash/card payment takes the ordinary single-document path below.
+   *
+   * The transaction is what keeps the two documents consistent; it is NOT what makes the invoice
+   * write safe. `withTransaction` may re-run the callback on a write conflict, and the figures
+   * above were read BEFORE it opened — so a retry would recompute from the same stale numbers.
+   * The invoice arithmetic is therefore the database's, inside `addPayment`, on both paths.
+   */
+  if (input.method === WALLET_METHOD) {
+    const updated = await withTransaction(async (session) => {
+      await debitWalletForInvoice(session, {
+        patientId: invoice.patientId,
+        amount: input.amount,
+        invoiceId,
+        ...(invoice.encounterId ? { encounterId: invoice.encounterId } : {}),
+      });
+      return repo.addPayment(invoiceId, payment, session);
+    });
+    if (!updated) return explainRefusedPayment(invoiceId, input);
+    return updated;
+  }
+
+  const updated = await repo.addPayment(invoiceId, payment);
+  if (!updated) return explainRefusedPayment(invoiceId, input);
 
   return updated;
+}
+
+export interface ApplyDiscountInput {
+  amount: number;
+  reason: string;
+}
+
+/**
+ * Applies an approved discount to a FINALIZED bill — a supervisor's write-down, gated on
+ * `billing:discount` (the cashier cannot self-approve; see the CASHIER role).
+ *
+ * ── WHY FINALIZED, NOT DRAFT ────────────────────────────────────────────────
+ * `finalizeInvoice` recomputes `total = subtotal` from the frozen lines, so a discount set on a
+ * draft would be wiped the moment the bill is finalized. The discount is therefore an adjustment
+ * to the finalized total, NOT a line edit: the itemisation stays frozen and auditable, and the
+ * concession is a separate, named figure — which is exactly why `discount` and `total` are
+ * distinct fields on the invoice. A cancelled bill takes no discount; a fully-paid one has nothing
+ * left to discount (a return of money is a refund, not a discount).
+ */
+export async function applyDiscount(
+  invoiceId: string,
+  input: ApplyDiscountInput,
+): Promise<repo.Invoice> {
+  const ctx = getContext();
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  if (invoice.status !== "finalized") {
+    throw new AppError("HMS-STATE-001", 422, "Only a finalized, unpaid bill can be discounted", {
+      id: invoiceId,
+      status: invoice.status,
+      hint: "finalize the bill first; a fully-paid bill needs a refund, not a discount",
+    });
+  }
+  if (input.amount > invoice.subtotal) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [
+        `a discount of ${String(input.amount)} exceeds the bill of ${String(invoice.subtotal)} paise`,
+      ],
+    });
+  }
+  const total = invoice.subtotal - input.amount;
+  // The discount cannot drop the bill below what has already been collected — that money is in the
+  // drawer, and reducing the total under it would invent a refund the cashier never made.
+  if (total < invoice.paid) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      amount: [
+        `the bill is already ${String(invoice.paid)} paise paid — refund the excess instead`,
+      ],
+    });
+  }
+  // If the write-down clears the balance, the bill is settled — the same rule payment follows.
+  const status: InvoiceStatus = invoice.paid >= total ? "paid" : "finalized";
+
+  /**
+   * Guarded on the version we validated against (Doc 03 §5.2). A discount is a judgement about a
+   * SPECIFIC bill: "this patient owes ₹1,300, write off ₹300". If a payment lands between the read
+   * and the write, `total` computed above would overwrite a bill that no longer exists as read —
+   * silently reviving a stale subtotal and, in the worst case, dropping the total below what has
+   * already been collected. Unlike a payment, there is no correct way to merge two concurrent
+   * discounts, so the loser must be told to look again rather than have its answer guessed.
+   */
+  const updated = await repo.applyDiscountGuarded(invoiceId, invoice.version, {
+    discount: input.amount,
+    total,
+    status,
+    discountReason: input.reason,
+    ...(ctx.userId ? { discountBy: ctx.userId } : {}),
+  });
+  if (!updated) {
+    const current = await repo.findInvoiceById(invoiceId);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+    throw new AppError("HMS-REQ-003", 409, "Record was modified by someone else", {
+      id: invoiceId,
+      hint: "the bill changed while the discount was being approved — reload and reapply",
+      current: { paid: current.paid, total: current.total, status: current.status },
+    });
+  }
+  return updated;
+}
+
+export interface RecordRefundInput {
+  amount: number;
+  method: string;
+  reason: string;
+  /** Idempotency key (Doc 03 §5.2). Handing money back twice is the worse leg to get wrong. */
+  requestId?: string;
+}
+
+/**
+ * Hands money back — an overpayment or a paid-for service that was cancelled. Gated on
+ * `billing:refund` (again, not the cashier's own authority).
+ *
+ * A refund can never exceed the NET already collected (`paid − refunded`): the hospital cannot
+ * return money it never took. It is recorded as its own entry with a reason, never as a deletion
+ * of the original payment — both legs of the money stay on the record for the drawer and the audit.
+ */
+export async function recordRefund(
+  invoiceId: string,
+  input: RecordRefundInput,
+): Promise<repo.Invoice> {
+  const ctx = getContext();
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  const netCollected = invoice.paid - invoice.refunded;
+  if (input.amount > netCollected) {
+    // ERROR_CODES reserves HMS-PAY-003 for exactly this; it had never been used.
+    throw new AppError("HMS-PAY-003", 422, "Refund exceeds source payment", {
+      amount: input.amount,
+      collected: netCollected,
+    });
+  }
+
+  const refund: RefundEntry = {
+    amount: input.amount,
+    method: input.method,
+    reason: input.reason,
+    at: new Date(),
+    ...(ctx.userId ? { by: ctx.userId } : {}),
+    ...(input.requestId ? { requestId: input.requestId } : {}),
+  };
+  const updated = await repo.addRefund(invoiceId, refund);
+  if (!updated) {
+    const current = await repo.findInvoiceById(invoiceId);
+    if (!current) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+    if (input.requestId) {
+      const already = current.refunds.find((r) => r.requestId === input.requestId);
+      if (already) {
+        // The money went back exactly once. Return the record of it, not a second refund.
+        throw new AppError("HMS-PAY-002", 409, "Refund already recorded", {
+          requestId: input.requestId,
+          receipt: { amount: already.amount, method: already.method, at: already.at },
+        });
+      }
+    }
+    // The filter's only other condition: another refund landed first and this one would now
+    // exceed what was actually collected.
+    throw new AppError("HMS-PAY-003", 422, "Refund exceeds source payment", {
+      amount: input.amount,
+      collected: current.paid - current.refunded,
+    });
+  }
+  return updated;
+}
+
+export interface PayerSplitInput {
+  policyId: string;
+  coveredAmount: number;
+}
+
+/**
+ * Sets the payer split on a finalized bill — how much of it an insurer will bear, and under which
+ * policy. Gated on `insurance:link` (the insurance desk's authority, not the counter's).
+ *
+ * After this, `patientResponsibility = total − coveredByInsurer` is what the counter collects from
+ * the patient; the insurer's share is expected later as an `insurance`-method payment (typically on
+ * claim settlement). The claim itself is filed separately (insurance:claim) and points back here by
+ * `invoiceId` — this endpoint records the split, not the claim, so the two permissions stay distinct.
+ *
+ * The covered figure cannot exceed the bill, and the policy must be THIS patient's own — a split to
+ * someone else's insurer is either a mistake or a leak, and both are refused here.
+ */
+export async function setPayerSplit(
+  invoiceId: string,
+  input: PayerSplitInput,
+): Promise<repo.Invoice> {
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  if (invoice.status !== "finalized") {
+    throw new AppError("HMS-STATE-001", 422, "Only a finalized bill can be split to an insurer", {
+      id: invoiceId,
+      status: invoice.status,
+      hint: "finalize the bill first",
+    });
+  }
+  if (input.coveredAmount > invoice.total) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      coveredAmount: [`the insurer share cannot exceed the bill of ${String(invoice.total)} paise`],
+    });
+  }
+
+  const policy = await getPolicy(input.policyId);
+  if (!policy || policy.patientId !== invoice.patientId) {
+    throw new AppError("HMS-VAL-001", 400, "Validation failed", {
+      policyId: ["choose one of this patient's policies"],
+    });
+  }
+
+  const updated = await repo.updateInvoice(invoiceId, {
+    coveredByInsurer: input.coveredAmount,
+    insurerPolicyId: input.policyId,
+  });
+  if (!updated) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+  return updated;
+}
+
+/** The payment method that draws from the patient's advance rather than a drawer. */
+const WALLET_METHOD = "wallet";
+
+/** Whether the work an order represents has been PAID for — shown on the lab/imaging worklist. */
+export type OrderPaymentState = "paid" | "unpaid" | "unbilled" | "free";
+
+/**
+ * The payment state of each order, traced order → charge → invoice.
+ *
+ * `free` means the charge exists but is worth nothing — a zero-tariff government patient, who must
+ * never be shown as "unpaid" and turned away. `unbilled` means no charge was ever raised (nothing to
+ * pay yet). This is a STATUS, not the bill: it carries no amounts, so the worklist can show it to a
+ * technician who holds `order:read` but not `billing:read`.
+ */
+export async function orderPaymentStatus(
+  orderIds: string[],
+): Promise<Record<string, OrderPaymentState>> {
+  const charges = await repo.chargesForSources(orderIds);
+
+  // One order can raise more than one charge; collapse to a single owed amount + any invoice.
+  const bySource = new Map<string, { amount: number; invoiceId?: string }>();
+  for (const c of charges) {
+    const existing = bySource.get(c.sourceId);
+    if (existing) {
+      existing.amount += c.amount;
+      existing.invoiceId = existing.invoiceId ?? c.invoiceId;
+    } else {
+      bySource.set(c.sourceId, {
+        amount: c.amount,
+        ...(c.invoiceId ? { invoiceId: c.invoiceId } : {}),
+      });
+    }
+  }
+
+  const invoiceIds = [
+    ...new Set(
+      [...bySource.values()].map((v) => v.invoiceId).filter((x): x is string => Boolean(x)),
+    ),
+  ];
+  const invoiceStatus = await repo.invoiceStatusByIds(invoiceIds);
+
+  const out: Record<string, OrderPaymentState> = {};
+  for (const id of orderIds) {
+    const c = bySource.get(id);
+    if (!c) out[id] = "unbilled";
+    else if (c.amount === 0) out[id] = "free";
+    else if (!c.invoiceId) out[id] = "unpaid";
+    else out[id] = invoiceStatus.get(c.invoiceId) === "paid" ? "paid" : "unpaid";
+  }
+  return out;
+}
+
+/** Whether the CONSULTATION (OP fee) on a visit has been paid — gates joining the doctor's queue. */
+export type ConsultationPaymentState = "paid" | "unpaid" | "unbilled" | "free";
+
+/**
+ * The OP-fee payment state per encounter, traced consultation-charge → invoice — the reception
+ * gate for "pay before you join the queue".
+ *
+ * `free` is the zero-tariff government patient: the consultation is worth ₹0, so there is nothing
+ * to pay and they queue immediately — never shown as "unpaid" and turned away. `unbilled` means the
+ * consultation charge has not posted yet (the `encounter.started` event is in flight). Like
+ * `orderPaymentStatus` this is a STATUS with no amounts, so it is reachable with `encounter:read` —
+ * the receptionist can see whether to route the patient to the cash counter.
+ */
+export async function consultationPaymentStatus(
+  encounterIds: string[],
+): Promise<Record<string, ConsultationPaymentState>> {
+  const charges = await repo.consultationChargesForEncounters(encounterIds);
+
+  // A visit's consultation may be more than one charge (fee + express surcharge); collapse them.
+  const byEncounter = new Map<string, { amount: number; invoiceId?: string }>();
+  for (const c of charges) {
+    const existing = byEncounter.get(c.encounterId);
+    if (existing) {
+      existing.amount += c.amount;
+      existing.invoiceId = existing.invoiceId ?? c.invoiceId;
+    } else {
+      byEncounter.set(c.encounterId, {
+        amount: c.amount,
+        ...(c.invoiceId ? { invoiceId: c.invoiceId } : {}),
+      });
+    }
+  }
+
+  const invoiceIds = [
+    ...new Set(
+      [...byEncounter.values()].map((v) => v.invoiceId).filter((x): x is string => Boolean(x)),
+    ),
+  ];
+  const invoiceStatus = await repo.invoiceStatusByIds(invoiceIds);
+
+  const out: Record<string, ConsultationPaymentState> = {};
+  for (const id of encounterIds) {
+    const c = byEncounter.get(id);
+    if (!c) out[id] = "unbilled";
+    else if (c.amount === 0) out[id] = "free";
+    else if (!c.invoiceId) out[id] = "unpaid";
+    else out[id] = invoiceStatus.get(c.invoiceId) === "paid" ? "paid" : "unpaid";
+  }
+  return out;
+}
+
+/* ── Admitted patients: settle a test from the advance (never wait for money) ── */
+
+/** Bills a specific set of unbilled charges into their own finalized invoice; returns its id. */
+async function billChargesToInvoice(charges: repo.Charge[]): Promise<string> {
+  const ctx = getContext();
+  const first = charges[0];
+  if (!first) throw new AppError("HMS-STATE-001", 422, "Nothing to bill", {});
+
+  const lines: InvoiceLine[] = charges.map((c) => ({
+    code: c.code,
+    description: c.description,
+    category: c.category,
+    quantity: c.quantity,
+    listPrice: c.listPrice,
+    amount: c.amount,
+  }));
+  const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
+
+  const invoice = await repo.createInvoice({
+    encounterId: first.encounterId,
+    patientId: first.patientId,
+    episodeId: first.episodeId,
+    lines,
+    subtotal,
+    total: subtotal,
+    ...(first.branchId ? { branchId: first.branchId } : {}),
+  });
+  const number = await repo.nextInvoiceNumber(await invoiceBranchOf(first.branchId));
+  const finalized = await repo.updateInvoice(invoice.id, {
+    number,
+    status: "finalized",
+    lines,
+    subtotal,
+    total: subtotal,
+    finalizedAt: new Date(),
+    ...(ctx.userId ? { finalizedBy: ctx.userId } : {}),
+  });
+  if (!finalized) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoice.id });
+  await repo.attachChargesToInvoiceByIds(
+    charges.map((c) => c.id),
+    invoice.id,
+  );
+  return invoice.id;
+}
+
+export interface OrderSettlementInfo {
+  /** The order's patient is on an open inpatient stay — the advance path applies. */
+  admitted: boolean;
+  /** Paise. The patient's advance balance right now (may be negative once tests draw it down). */
+  advanceBalance: number;
+  /** Paise. What this test's charge comes to — the amount the deduction will draw. */
+  amount: number;
+}
+
+/**
+ * For the lab worklist: is each order's patient an admitted (IP) one, and if so what is their
+ * advance balance and this test's amount? Reachable with `order:read` — a status/amount slice, so
+ * the technician can see whether to proceed by drawing the advance, without the billing detail.
+ */
+export async function orderSettlementInfo(
+  orderIds: string[],
+): Promise<Record<string, OrderSettlementInfo>> {
+  const charges = await repo.chargesForSources(orderIds);
+
+  const byOrder = new Map<string, { amount: number; encounterId: string }>();
+  for (const c of charges) {
+    if (!c.sourceId) continue;
+    const existing = byOrder.get(c.sourceId);
+    if (existing) existing.amount += c.amount;
+    else byOrder.set(c.sourceId, { amount: c.amount, encounterId: c.encounterId });
+  }
+
+  const encounterIds = [...new Set([...byOrder.values()].map((v) => v.encounterId))];
+  const encById = new Map<string, { klass: string; patientId: string }>();
+  await Promise.all(
+    encounterIds.map(async (id) => {
+      const enc = await getEncounter(id).catch(() => null);
+      if (enc) encById.set(id, { klass: enc.class, patientId: enc.patientId });
+    }),
+  );
+
+  const patientIds = [...new Set([...encById.values()].map((v) => v.patientId))];
+  const balanceByPatient = new Map<string, number>();
+  await Promise.all(
+    patientIds.map(async (pid) => {
+      balanceByPatient.set(pid, await walletBalance(pid));
+    }),
+  );
+
+  const out: Record<string, OrderSettlementInfo> = {};
+  for (const id of orderIds) {
+    const c = byOrder.get(id);
+    const enc = c ? encById.get(c.encounterId) : undefined;
+    out[id] = {
+      admitted: enc?.klass === "IP",
+      advanceBalance: enc ? (balanceByPatient.get(enc.patientId) ?? 0) : 0,
+      amount: c?.amount ?? 0,
+    };
+  }
+  return out;
+}
+
+export interface OrderSettlementResult {
+  orderId: string;
+  invoiceId: string;
+  /** Paise. The advance balance AFTER the deduction — may be negative for an admitted patient. */
+  advanceBalance: number;
+}
+
+/**
+ * Settles ONE test from the admitted patient's advance, so the lab never waits for money.
+ *
+ * The technician holds `order:perform`, not billing or wallet permissions — but this is not taking
+ * new cash, it is drawing DOWN an advance the desk already collected, so authorising the person in
+ * front of the patient to do it is right, and the ledger records who and when. The balance is
+ * allowed to go NEGATIVE (the relatives settle the shortfall later); a report is never held. This
+ * is IP-only: an OP test is refused here and must be paid at the counter.
+ */
+export async function settleOrderFromAdvance(orderId: string): Promise<OrderSettlementResult> {
+  const charges = await repo.fullChargesForSource(orderId);
+  const first = charges[0];
+  if (!first) {
+    throw new AppError("HMS-STATE-001", 422, "This test has no charge to settle from advance", {
+      orderId,
+    });
+  }
+
+  const encounter = await getEncounter(first.encounterId);
+  if (!encounter) {
+    throw new AppError("HMS-GEN-404", 404, "Visit not found", { encounterId: first.encounterId });
+  }
+  if (encounter.class !== "IP") {
+    throw new AppError(
+      "HMS-STATE-001",
+      422,
+      "Settling from the advance is for admitted (inpatient) patients — collect an OP test at the counter",
+      { orderId, class: encounter.class },
+    );
+  }
+
+  // Make sure this test's charges are on a bill of their own, then settle that bill from advance.
+  const unbilled = charges.filter((c) => !c.invoiceId);
+  const invoiceId =
+    unbilled.length > 0
+      ? await billChargesToInvoice(unbilled)
+      : charges.find((c) => c.invoiceId)?.invoiceId;
+  if (!invoiceId) {
+    throw new AppError("HMS-STATE-001", 422, "This test has no bill to settle", { orderId });
+  }
+
+  const invoice = await repo.findInvoiceById(invoiceId);
+  if (!invoice) throw new AppError("HMS-GEN-404", 404, "Invoice not found", { id: invoiceId });
+
+  const due = invoice.total - invoice.paid;
+  if (due <= 0) {
+    // Already settled — idempotent (a double-click, or reception billed and paid it first).
+    return { orderId, invoiceId, advanceBalance: await walletBalance(invoice.patientId) };
+  }
+
+  const ctx = getContext();
+  const advanceBalance = await withTransaction(async (session) => {
+    const balance = await debitWalletForInvoice(session, {
+      patientId: invoice.patientId,
+      amount: due,
+      invoiceId,
+      encounterId: encounter.id,
+      allowNegative: true,
+    });
+    const payment: PaymentEntry = {
+      amount: due,
+      method: WALLET_METHOD,
+      at: new Date(),
+      ...(ctx.userId ? { by: ctx.userId } : {}),
+      /**
+       * The order settles from the advance exactly once. Keyed on the INVOICE rather than a
+       * client value because this path has no client key to carry: the doctor's sign-off can be
+       * retried, and `due` was read before the transaction opened — so a retry that raced a
+       * counter payment would otherwise settle a second time against a bill already cleared.
+       */
+      requestId: `invoice:${invoiceId}:advance-settle`,
+    };
+    const updated = await repo.addPayment(invoiceId, payment, session);
+    // The guard held: the bill was settled by someone else between the read above and here, or
+    // this settlement already ran. Either way the patient owes nothing more — and the wallet
+    // debit in this same transaction rolls back with the throw, so nothing is half-done.
+    if (!updated) {
+      throw new AppError("HMS-PAY-002", 409, "This bill has already been settled", {
+        id: invoiceId,
+      });
+    }
+    return balance;
+  });
+
+  return { orderId, invoiceId, advanceBalance };
 }

@@ -20,7 +20,7 @@
  * that is a decision for a hospital to make explicitly, not for this screen to make
  * by accident. `billing:read` is not in the DOCTOR grant.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ApiClientError,
   ALLERGENS,
@@ -32,19 +32,29 @@ import {
   type DrugFrequency,
   type DrugRoute,
   type Encounter,
+  type EncounterRow,
   type Order,
   type OrderPriority,
   type CatalogueItem,
-  type Patient,
   type Prescription,
   type PrescriptionLineInput,
   type ReportMeta,
   type SafetyAlert,
+  type VitalsReading,
   type DoctorRef,
+  type Diagnosis,
+  type DiagnosisType,
+  type MedicineAvailability,
+  type OtBooking,
 } from "@medicore/api-client";
+import { VitalsPanel } from "../../components/Vitals";
+import { OperativeNoteDetail } from "../../components/OperativeNote";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
-import { Alert, Badge, Button, Card, PermissionGate } from "../../components/ui";
+import { ProblemPanel } from "../../components/ProblemList";
+import { Alert, Badge, Button, Card, ConfirmDialog, PermissionGate } from "../../components/ui";
+import { idempotencyMessage, useIntentKeys } from "../../lib/idempotency";
+import { groupReportsByOrder } from "../../lib/reports";
+import { CRITICAL_PENDING_LABEL, isCriticalPending, isResultReadable } from "../../lib/results";
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -59,10 +69,6 @@ function time(iso: string): string {
  * before the connection dropped. The server arbitrates with a unique index; this is
  * what gives it something to arbitrate on.
  */
-function requestKey(encounterId: string, code: string): string {
-  return `ord-${encounterId}-${code}-${String(Date.now())}`;
-}
-
 const PRIORITIES: OrderPriority[] = ["routine", "urgent", "stat", "emergency"];
 
 function priorityTone(p: OrderPriority): "danger" | "brand" | "neutral" {
@@ -92,6 +98,15 @@ function OrderPad({
   const { api } = useAuth();
   const [priority, setPriority] = useState<OrderPriority>("routine");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /**
+   * One key per test in THIS submission — see the note in `lib/idempotency.ts`. It replaces
+   * `` `ord-${encounterId}-${code}-${Date.now()}` ``, which changed on every click and therefore
+   * stopped nothing: a double-click drew two tubes of blood.
+   *
+   * Held across a retry of the same basket and dropped when the basket changes, because a
+   * different set of tests under the same key is a conflict, not a retry.
+   */
+  const orderKeys = useIntentKeys();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -125,25 +140,36 @@ function OrderPad({
       // the whole batch never double-orders. A true batch endpoint would save round trips;
       // at a consultation's scale (a handful of tests) this is simpler and just as safe.
       for (const item of items) {
-        const result = await api.placeOrder({
-          encounterId: encounter.id,
-          category: item.category as "lab" | "radiology" | "procedure",
-          code: item.code,
-          name: item.name,
-          priority,
-          requestId: requestKey(encounter.id, item.code),
-        });
+        const key = orderKeys.keyFor(item.code);
+        const result = await api.placeOrder(
+          {
+            encounterId: encounter.id,
+            category: item.category as "lab" | "radiology" | "procedure",
+            code: item.code,
+            name: item.name,
+            priority,
+            requestId: key,
+          },
+          key,
+        );
+        // `duplicate` now only appears if the header was stripped in transit and the server
+        // answered from the order's own `requestId` guard. A header replay returns the original
+        // 201, so the ordinary retry path reports what the FIRST attempt did — which is true.
         if (result.duplicate) duplicates += 1;
         else placed += 1;
       }
 
       setNotice(
-        `${String(placed)} sent for tests${duplicates > 0 ? `, ${String(duplicates)} already ordered` : ""}.`,
+        `${String(placed)} test${placed === 1 ? "" : "s"} ordered — on the department worklist now${duplicates > 0 ? `, ${String(duplicates)} already ordered` : ""}.`,
       );
       setSelected(new Set());
+      orderKeys.reset();
       onOrdered();
     } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : "Could not place the orders.");
+      setError(
+        idempotencyMessage(err) ??
+          (err instanceof ApiClientError ? err.message : "Could not place the orders."),
+      );
     } finally {
       setBusy(false);
     }
@@ -220,10 +246,10 @@ function OrderPad({
       <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-3">
         <Button disabled={busy || selected.size === 0} onClick={() => void sendSelected()}>
           {busy
-            ? "Sending…"
+            ? "Ordering…"
             : selected.size === 0
-              ? "Select tests to send"
-              : `Send ${String(selected.size)} for tests`}
+              ? "Select tests to order"
+              : `Order ${String(selected.size)} test${selected.size === 1 ? "" : "s"}`}
         </Button>
         {selected.size > 0 && !busy && (
           <button
@@ -258,15 +284,27 @@ function OrdersForVisit({ orders }: { orders: Order[] }) {
             <Badge tone={o.status === "released" ? "success" : "neutral"}>
               {o.status.replace("_", " ")}
             </Badge>
-            {o.result?.critical && <Badge tone="danger">CRITICAL</Badge>}
+            {/*
+             * A critical flag before release is shown WITH the words, never as a bare red pill.
+             * The hospital has already emailed this doctor the value (`order.critical`, sent
+             * synchronously at completion), so saying nothing here would be incoherent — but an
+             * unqualified CRITICAL badge invites action on a number nobody has confirmed, and
+             * makes it impossible to tell which reds are signed off. See `lib/results`.
+             */}
+            {isCriticalPending(o) ? (
+              <Badge tone="danger">{CRITICAL_PENDING_LABEL}</Badge>
+            ) : (
+              o.result?.critical && <Badge tone="danger">CRITICAL</Badge>
+            )}
           </div>
 
           {/*
            * The result appears here ONLY once released — never at `completed` or
            * `verified`. A number that has been run but not signed off must not reach
-           * the person who will act on it (STATE_MACHINE_CATALOG §15).
+           * the person who will act on it (STATE_MACHINE_CATALOG §15). The gate itself now
+           * lives in `lib/results` so the patient chart cannot answer it differently.
            */}
-          {o.status === "released" && o.result && (
+          {isResultReadable(o) && o.result && (
             <div className="mt-2 rounded-md bg-[var(--color-bg-elevated)] p-2 text-xs">
               {o.result.summary && <p className="text-[var(--color-fg)]">{o.result.summary}</p>}
               {o.result.values && o.result.values.length > 0 && (
@@ -391,6 +429,8 @@ function AllergyPanel({
   const [reaction, setReaction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The allergy awaiting a rule-out reason, asked for in the app rather than by `window.prompt`. */
+  const [refuting, setRefuting] = useState<Allergy | null>(null);
 
   const active = allergies.filter((a) => a.status === "active");
   const refuted = allergies.filter((a) => a.status === "refuted");
@@ -416,13 +456,12 @@ function AllergyPanel({
     }
   }
 
-  async function refute(id: string) {
-    const reason = window.prompt("Why is this allergy being ruled out? (kept on the record)");
-    if (!reason?.trim()) return;
+  async function refute(id: string, reason: string) {
     setBusy(true);
     setError(null);
     try {
-      await api.refuteAllergy(id, reason.trim());
+      await api.refuteAllergy(id, reason);
+      setRefuting(null);
       onChange();
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not rule out the allergy.");
@@ -449,7 +488,7 @@ function AllergyPanel({
               {canManage && (
                 <button
                   type="button"
-                  onClick={() => void refute(a.id)}
+                  onClick={() => setRefuting(a)}
                   disabled={busy}
                   className="opacity-60 hover:opacity-100"
                   title="Rule this out"
@@ -512,6 +551,30 @@ function AllergyPanel({
             Add
           </Button>
         </div>
+      )}
+
+      {refuting && (
+        <ConfirmDialog
+          title={`Rule out ${refuting.label}?`}
+          confirmLabel="Rule it out"
+          cancelLabel="Leave it on the record"
+          tone="danger"
+          busy={busy}
+          reason={{
+            label: "Why is this being ruled out?",
+            placeholder: "Challenge tested negative on 12 Aug — patient tolerated a full dose",
+            // The server requires a reason (allergy.schema.ts); a ruled-out allergy without one is
+            // indistinguishable from a mis-click, and the prescribing check stops screening for it.
+            minLength: 1,
+          }}
+          onConfirm={(reason) => void refute(refuting.id, reason)}
+          onCancel={() => setRefuting(null)}
+        >
+          <p>
+            The prescribing check <strong>stops screening against this allergy</strong>. It stays
+            visible on the record as ruled out, with this reason and your name against it.
+          </p>
+        </ConfirmDialog>
       )}
     </div>
   );
@@ -590,29 +653,77 @@ function PatientReports({ reports }: { reports: ReportMeta[] }) {
                   <p className="text-xs font-medium tracking-wide text-[var(--color-fg-subtle)] uppercase">
                     {REPORT_CATEGORY_LABEL[category] ?? category}
                   </p>
+                  {/*
+                    ONE ROW PER TEST. A test with two files attached is one test that was uploaded
+                    twice — not two tests — and drawing it as two rows is exactly what made four
+                    completed orders look like seven results on the doctor's screen. Both files stay
+                    openable, because the second is often the corrected one and this screen has no
+                    business choosing between them.
+                  */}
                   <ul className="mt-1 space-y-1">
-                    {catReports.map((r) => (
-                      <li
-                        key={r.id}
-                        className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-[var(--color-fg)]">
-                            {r.testName}
-                          </p>
-                          <p className="truncate text-xs text-[var(--color-fg-muted)]">
-                            {r.filename} · {(r.size / 1024).toFixed(0)} KB
-                          </p>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          disabled={opening === r.id}
-                          onClick={() => void open(r)}
+                    {groupReportsByOrder(catReports).map((g) => {
+                      const [latest, ...earlier] = g.files;
+                      if (!latest) return null;
+                      return (
+                        <li
+                          key={g.orderId}
+                          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-subtle)] px-3 py-2"
                         >
-                          {opening === r.id ? "Opening…" : "View"}
-                        </Button>
-                      </li>
-                    ))}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-[var(--color-fg)]">
+                                {g.testName}
+                              </p>
+                              <p className="truncate text-xs text-[var(--color-fg-muted)]">
+                                {latest.filename} · {(latest.size / 1024).toFixed(0)} KB
+                                {earlier.length > 0 && (
+                                  <span className="text-[var(--color-fg-subtle)]">
+                                    {" "}
+                                    · latest of {g.files.length}
+                                  </span>
+                                )}
+                              </p>
+                            </div>
+                            <Button
+                              variant="secondary"
+                              disabled={opening === latest.id}
+                              onClick={() => void open(latest)}
+                            >
+                              {opening === latest.id ? "Opening…" : "View"}
+                            </Button>
+                          </div>
+
+                          {earlier.length > 0 && (
+                            <ul className="mt-1.5 space-y-1 border-t border-[var(--color-border)] pt-1.5">
+                              {earlier.map((f) => (
+                                <li
+                                  key={f.id}
+                                  className="flex items-center justify-between gap-3 text-xs"
+                                >
+                                  <span className="min-w-0 truncate text-[var(--color-fg-subtle)]">
+                                    Earlier upload · {f.filename} ·{" "}
+                                    {new Date(f.uploadedAt).toLocaleString(undefined, {
+                                      day: "numeric",
+                                      month: "short",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    disabled={opening === f.id}
+                                    onClick={() => void open(f)}
+                                    className="shrink-0 text-[var(--color-brand-700)] underline underline-offset-2"
+                                  >
+                                    {opening === f.id ? "Opening…" : "View"}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}
@@ -622,6 +733,21 @@ function PatientReports({ reports }: { reports: ReportMeta[] }) {
       })}
     </div>
   );
+}
+
+/**
+ * How much of a drug the hospital pharmacy could hand over today.
+ *
+ * Silent when the lookup has not answered — an absent line is honest, and a "0" printed because a
+ * request is still in flight would tell a doctor the pharmacy is empty when it is not.
+ */
+function Availability({ of }: { of?: MedicineAvailability }) {
+  if (!of) return null;
+
+  if (of.units <= 0) {
+    return <span className="ml-1.5 font-medium text-[var(--color-danger)]">· out of stock</span>;
+  }
+  return <span className="ml-1.5 text-[var(--color-fg-subtle)]">· {of.units} in stock</span>;
 }
 
 function RxPad({
@@ -652,6 +778,35 @@ function RxPad({
     const q = filter.trim().toLowerCase();
     return q ? drugs.filter((d) => d.name.toLowerCase().includes(q)) : drugs;
   }, [drugs, filter]);
+
+  /**
+   * ── WHAT THE PHARMACY COULD ACTUALLY GIVE THIS PATIENT ──────────────────
+   * INFORMATION, never permission. Nothing below consumes this to disable a button or refuse a
+   * line, and nothing should: a doctor prescribes what the patient needs, and if the hospital is
+   * out they buy it outside — the prescription is what they take to the shop. A stock check that
+   * could block prescribing would turn an inventory problem into a clinical one.
+   *
+   * Asked for the whole visible list in ONE request rather than per drug, and re-asked when the
+   * filter changes the list. It fails silently on purpose: a prescriber who cannot see stock is
+   * mildly worse off, and an error banner over a prescribing pad because an inventory lookup
+   * timed out would be far worse than not knowing.
+   */
+  const [stock, setStock] = useState<Record<string, MedicineAvailability>>({});
+  useEffect(() => {
+    const codes = shown.map((d) => d.code);
+    if (codes.length === 0) return;
+    let live = true;
+    api
+      .medicineAvailability(codes)
+      .then((rows) => {
+        if (!live) return;
+        setStock((prev) => ({ ...prev, ...Object.fromEntries(rows.map((r) => [r.code, r])) }));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [api, shown]);
 
   /**
    * Editing the lines invalidates any pending safety review — it was screened against
@@ -777,6 +932,12 @@ function RxPad({
             className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)] hover:bg-[var(--color-brand-50)]"
           >
             {d.name}
+            {/*
+             * Out of stock is said in WORDS, not by a colour or a disabled button. The drug is
+             * still one tap away — this tells the doctor to warn the patient they will be buying
+             * it outside, which is the entire point of showing it.
+             */}
+            <Availability of={stock[d.code]} />
           </button>
         ))}
         {shown.length === 0 && (
@@ -997,6 +1158,10 @@ function AdmitOrTransfer({
 }) {
   const { api, user, can } = useAuth();
   const [mode, setMode] = useState<"none" | "admit" | "transfer">("none");
+  // Bed picker (B4): the free beds from the inventory. `null` = not loaded yet.
+  const [freeBeds, setFreeBeds] = useState<{ bedId: string; label: string }[] | null>(null);
+  const [selectedBedId, setSelectedBedId] = useState("");
+  // Legacy free-text fallback, used only when the inventory has no free bed to pick.
   const [ward, setWard] = useState("General Ward");
   const [bedCode, setBedCode] = useState("");
   const [tariffCode, setTariffCode] = useState("BED_GEN");
@@ -1012,12 +1177,42 @@ function AdmitOrTransfer({
     { code: "BED_ICU", ward: "ICU" },
   ];
 
+  // When the doctor opens the admit panel, load the free beds once. A bed board read is `emr:read`,
+  // which the doctor holds. If it fails or the inventory is empty, the panel falls back to manual
+  // entry, so a hospital that has not built its bed inventory yet can still admit.
+  useEffect(() => {
+    if (mode !== "admit" || freeBeds !== null) return;
+    void api
+      .bedBoard()
+      .then((b) => {
+        const free = b.wards
+          .filter((w) => w.status === "active")
+          .flatMap((w) =>
+            w.beds
+              .filter((bd) => bd.state === "free")
+              .map((bd) => ({
+                bedId: bd.bedId,
+                label: `${w.name} · ${bd.code}${bd.room ? ` (${bd.room})` : ""}`,
+              })),
+          );
+        setFreeBeds(free);
+        if (free.length > 0) setSelectedBedId(free[0]!.bedId);
+      })
+      .catch(() => setFreeBeds([]));
+  }, [mode, freeBeds, api]);
+
+  const usePicker = freeBeds !== null && freeBeds.length > 0;
+
   async function admit() {
     setBusy(true);
     setError(null);
     try {
-      await api.admitPatient(encounter.id, { ward, bedCode, tariffCode });
-      onDone("Admitted. This visit is closed and the stay is on the ward list.");
+      const input =
+        usePicker && selectedBedId ? { bedId: selectedBedId } : { ward, bedCode, tariffCode };
+      await api.admitPatient(encounter.id, input);
+      onDone(
+        "Admitted. This visit is closed and the stay is on the ward list. Send the patient to reception to pay the admission advance.",
+      );
       setMode("none");
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not admit the patient.");
@@ -1063,41 +1258,71 @@ function AdmitOrTransfer({
 
       {mode === "admit" && (
         <div className="space-y-2">
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-[var(--color-fg-muted)]">
-              Bed class
+          {freeBeds === null ? (
+            <p className="text-xs text-[var(--color-fg-subtle)]">Finding free beds…</p>
+          ) : usePicker ? (
+            <label className="block text-xs text-[var(--color-fg-muted)]">
+              Free bed
               <select
-                value={tariffCode}
-                onChange={(e) => {
-                  const bed = BEDS.find((b) => b.code === e.target.value);
-                  setTariffCode(e.target.value);
-                  if (bed) setWard(bed.ward);
-                }}
+                value={selectedBedId}
+                onChange={(e) => setSelectedBedId(e.target.value)}
                 className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
               >
-                {BEDS.map((b) => (
-                  <option key={b.code} value={b.code}>
-                    {b.ward}
+                {freeBeds.map((b) => (
+                  <option key={b.bedId} value={b.bedId}>
+                    {b.label}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="text-xs text-[var(--color-fg-muted)]">
-              Bed number
-              <input
-                value={bedCode}
-                onChange={(e) => setBedCode(e.target.value)}
-                placeholder="A-12"
-                className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
-              />
-            </label>
-          </div>
+          ) : (
+            <>
+              <p className="text-xs text-[var(--color-fg-subtle)]">
+                No free bed in the inventory — enter the bed manually. (Configure wards and beds on
+                the Bed board to pick from a list.)
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Bed class
+                  <select
+                    value={tariffCode}
+                    onChange={(e) => {
+                      const bed = BEDS.find((b) => b.code === e.target.value);
+                      setTariffCode(e.target.value);
+                      if (bed) setWard(bed.ward);
+                    }}
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                  >
+                    {BEDS.map((b) => (
+                      <option key={b.code} value={b.code}>
+                        {b.ward}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-[var(--color-fg-muted)]">
+                  Bed number
+                  <input
+                    value={bedCode}
+                    onChange={(e) => setBedCode(e.target.value)}
+                    placeholder="A-12"
+                    className="mt-0.5 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-sm text-[var(--color-fg)]"
+                  />
+                </label>
+              </div>
+            </>
+          )}
           <p className="text-xs text-[var(--color-fg-subtle)]">
             Admitting CLOSES this visit and opens an inpatient stay in the same care story. The bed
             is billed for every day the patient is here, starting today.
           </p>
           <div className="flex gap-2">
-            <Button disabled={busy || bedCode.trim().length === 0} onClick={() => void admit()}>
+            <Button
+              disabled={
+                busy || (usePicker ? selectedBedId.length === 0 : bedCode.trim().length === 0)
+              }
+              onClick={() => void admit()}
+            >
               {busy ? "Admitting…" : "Admit"}
             </Button>
             <Button variant="secondary" onClick={() => setMode("none")}>
@@ -1155,14 +1380,26 @@ function AdmitOrTransfer({
 function MyPatients() {
   const { api, user, can } = useAuth();
 
-  const [waiting, setWaiting] = useState<Encounter[]>([]);
-  const [patients, setPatients] = useState<Patient[]>([]);
+  /**
+   * The queue, and it NAMES its patients (D18).
+   *
+   * This page used to hold a second list — `listPatients({ limit: 100 })` — and match `patientId`
+   * against it. The two lists are different populations: this one is everybody queued for this
+   * doctor, that one was the hundred most recent REGISTRATIONS. 15 of 99 rows on the demo hospital
+   * fell outside it and rendered "—", with no error and no empty state. `EncounterRow` carries the
+   * identity the server already had, so there is nothing left to reconcile.
+   */
+  const [waiting, setWaiting] = useState<EncounterRow[]>([]);
+  /** How many queued patients did not fit on the page this screen asked for — see `load`. */
+  const [beyondPage, setBeyondPage] = useState(0);
   const [services, setServices] = useState<CatalogueItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
   const [allergies, setAllergies] = useState<Allergy[]>([]);
+  const [vitals, setVitals] = useState<VitalsReading[]>([]);
   const [reports, setReports] = useState<ReportMeta[]>([]);
+  const [procedures, setProcedures] = useState<OtBooking[]>([]);
   const [doctors, setDoctors] = useState<DoctorRef[]>([]);
 
   const [error, setError] = useState<string | null>(null);
@@ -1171,20 +1408,6 @@ function MyPatients() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    /**
-     * 100 is the server's cap. Asking for more is a 400, not a bigger page.
-     *
-     * The failure is SURFACED rather than swallowed: an earlier `.catch(() => undefined)`
-     * here turned that 400 into an empty dropdown with no error, which reads as "this
-     * hospital has no patients" — a lie that took a browser session to disbelieve.
-     */
-    void api
-      .listPatients({ limit: 100 })
-      .then((page) => setPatients(page.items))
-      .catch((err: unknown) =>
-        setError(err instanceof ApiClientError ? err.message : "Could not load patients."),
-      );
-
     /**
      * The CATALOGUE, not the tariff. Same collection on the server, price stripped —
      * a doctor sees what can be ordered and never what it costs, so a patient's means
@@ -1220,6 +1443,19 @@ function MyPatients() {
       if (!user?.id) return;
       const page = await api.listEncounters({ queued: true, doctorId: user.id, limit: 100 });
       setWaiting(page.items);
+      /**
+       * ── A CAP THAT TRUNCATES MUST SAY SO (D18) ──────────────────────────
+       * 100 is the server's ceiling on every list, and this asks for one page. A queue longer
+       * than that is unusual — but "unusual" was also the reasoning that let a capped join
+       * silently dash 15 of 99 rows, and this truncation is the same shape: the tail of the
+       * waiting room simply is not on screen, and nothing said so. Found by an E2E patient who
+       * was genuinely in the queue at position 104 and could not be found on the page.
+       *
+       * Deliberately NOT a bigger limit: the rows are in TOKEN order, so the hundred shown are
+       * the hundred who arrived first, which is the right hundred to work through. What was
+       * missing was the sentence admitting there are more.
+       */
+      setBeyondPage(Math.max(0, (page.meta.total ?? page.items.length) - page.items.length));
       setError(null);
     } catch (err) {
       setError(err instanceof ApiClientError ? err.message : "Could not load your list.");
@@ -1264,6 +1500,32 @@ function MyPatients() {
     [api],
   );
 
+  /** This VISIT's observations — what the nurse charted before the patient came in. */
+  const loadVitals = useCallback(
+    (encounterId: string) => {
+      void api
+        .listEncounterVitals(encounterId)
+        .then(setVitals)
+        .catch(() => setVitals([]));
+    },
+    [api],
+  );
+
+  /**
+   * Every operation this patient has ever had — no date window, so a hernia repair from two years
+   * ago is still on the chart. A hospital that does not carry surgery (no OT module) answers 403,
+   * which is an empty section here rather than an error: the doctor did not ask a wrong question.
+   */
+  const loadProcedures = useCallback(
+    (patientId: string) => {
+      void api
+        .listOtBookings({ patientId })
+        .then(setProcedures)
+        .catch(() => setProcedures([]));
+    },
+    [api],
+  );
+
   /** Reports too are the PATIENT'S — every visit, so the doctor sees prior results. */
   const loadReports = useCallback(
     (patientId: string) => {
@@ -1277,20 +1539,28 @@ function MyPatients() {
 
   const selected = waiting.find((e) => e.id === selectedId) ?? null;
   const selectedPatientId = selected?.patientId ?? null;
+  // The consultation has actually started — the patient was CALLED IN. Ordering tests and
+  // prescribing are held until then: you do not investigate or medicate someone still in the queue.
+  const consulting = !!selected && ["in_progress", "awaiting_results"].includes(selected.status);
+  // Live tests on this visit (a cancelled order no longer counts). "Send for tests" needs at least
+  // one — parking a patient in the lab queue with nothing ordered strands them there.
+  const activeOrders = orders.filter((o) => o.status !== "cancelled");
 
   useEffect(() => {
     if (selectedId) {
       loadOrders(selectedId);
       loadPrescriptions(selectedId);
+      loadVitals(selectedId);
     }
-  }, [selectedId, loadOrders, loadPrescriptions]);
+  }, [selectedId, loadOrders, loadPrescriptions, loadVitals]);
 
   useEffect(() => {
     if (selectedPatientId) {
       loadAllergies(selectedPatientId);
       loadReports(selectedPatientId);
+      loadProcedures(selectedPatientId);
     }
-  }, [selectedPatientId, loadAllergies, loadReports]);
+  }, [selectedPatientId, loadAllergies, loadReports, loadProcedures]);
 
   async function act(action: string) {
     if (!selected) return;
@@ -1333,9 +1603,6 @@ function MyPatients() {
     }
   }
 
-  const nameOf = (id: string): string => patients.find((p) => p.id === id)?.name ?? "—";
-  const uhidOf = (id: string): string => patients.find((p) => p.id === id)?.uhid ?? "";
-
   return (
     <div className="space-y-6">
       <div>
@@ -1351,9 +1618,15 @@ function MyPatients() {
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         {/* ── the waiting list ── */}
         <Card className="p-4">
-          <h2 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
+          <h2 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">
             Waiting ({waiting.length})
           </h2>
+          {beyondPage > 0 && (
+            <p className="mb-3 text-xs text-[var(--color-warning)]">
+              {beyondPage} more {beyondPage === 1 ? "patient is" : "patients are"} queued beyond
+              this page. These are the first 100 by token — the earliest arrivals.
+            </p>
+          )}
 
           {loading ? (
             <p className="py-6 text-center text-sm text-[var(--color-fg-subtle)]">Loading…</p>
@@ -1381,8 +1654,13 @@ function MyPatients() {
                         </span>
                       )}
                       <span className="truncate text-sm text-[var(--color-fg)]">
-                        {nameOf(e.patientId)}
+                        {e.patientName}
                       </span>
+                      {e.express && (
+                        <span className="ml-auto shrink-0 rounded-full bg-[var(--color-warning-bg)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--color-warning)] uppercase">
+                          Express
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 flex items-center gap-2">
                       <Badge
@@ -1421,10 +1699,10 @@ function MyPatients() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-[var(--color-fg)]">
-                      {nameOf(selected.patientId)}
+                      {selected.patientName}
                     </h2>
                     <p className="mt-0.5 font-mono text-xs text-[var(--color-fg-muted)]">
-                      {uhidOf(selected.patientId)}
+                      {selected.uhid}
                     </p>
                     {selected.reason && (
                       <p className="mt-2 text-sm text-[var(--color-fg-muted)]">
@@ -1443,7 +1721,12 @@ function MyPatients() {
                     {selected.status === "in_progress" && can("encounter:update") && (
                       <Button
                         variant="secondary"
-                        disabled={busy}
+                        disabled={busy || activeOrders.length === 0}
+                        title={
+                          activeOrders.length === 0
+                            ? "Order at least one test below first"
+                            : undefined
+                        }
                         onClick={() => void act("investigations")}
                       >
                         Send for tests
@@ -1459,7 +1742,33 @@ function MyPatients() {
                           Close visit
                         </Button>
                       )}
+                    {/* The take-home OPD slip — a clean printable sheet. Same tab so the signed-in
+                        (per-tab, in dev) session is present; the slip has its own Back button. */}
+                    <a
+                      href={`/opd-slip/${selected.id}`}
+                      className="inline-flex items-center rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm font-medium text-[var(--color-fg)] transition-colors hover:border-[var(--color-brand-500)]"
+                    >
+                      OPD slip →
+                    </a>
                   </div>
+
+                  {selected.status === "in_progress" && (
+                    <p className="text-xs text-[var(--color-fg-muted)]">
+                      {activeOrders.length === 0 ? (
+                        <>
+                          Order the tests below first. <em>Send for tests</em> then moves the
+                          patient to the lab to wait for results — you can keep adding tests until
+                          they go to pay.
+                        </>
+                      ) : (
+                        <>
+                          {activeOrders.length} test{activeOrders.length === 1 ? "" : "s"} ordered
+                          on this visit. Add more if needed, then <em>Send for tests</em> to send
+                          the patient to wait for results.
+                        </>
+                      )}
+                    </p>
+                  )}
                 </div>
 
                 <AdmitOrTransfer
@@ -1475,29 +1784,113 @@ function MyPatients() {
                 {selected.status === "awaiting_results" && (
                   <Alert tone="info">
                     At the lab. They keep this visit — when the last result is released they come
-                    back to your list on their own.
+                    back to your list on their own. You can still order more tests below if you need
+                    to.
                   </Alert>
                 )}
               </Card>
 
-              <PermissionGate can={can} permission="order:create">
-                <Card className="p-5">
-                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Order</h3>
-                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
-                    Ordering puts it in that department&apos;s worklist immediately. There is no
-                    &ldquo;send to lab&rdquo; step.
-                  </p>
-                  <OrderPad
-                    encounter={selected}
-                    services={services}
-                    onOrdered={() => loadOrders(selected.id)}
+              {/*
+               * Observations come FIRST, and outside the "called in" gate. A nurse charts them
+               * while the patient waits, and an abnormal set is exactly what should make a doctor
+               * call someone in ahead of their turn — so the doctor must be able to see them
+               * before the consultation starts, not after.
+               */}
+              <PermissionGate can={can} permission="emr:read">
+                <CollapsibleCard
+                  title="Vitals"
+                  count={vitals.length}
+                  defaultOpen={vitals.some((v) => v.abnormal)}
+                >
+                  <VitalsPanel
+                    api={api}
+                    encounterId={selected.id}
+                    readings={vitals}
+                    canRecord={can("vitals:record")}
+                    onSaved={() => loadVitals(selected.id)}
+                    emptyHint="No observations charted for this visit yet."
+                    {...(user?.id ? { recordedBy: user.id } : {})}
                   />
-                </Card>
+                </CollapsibleCard>
               </PermissionGate>
 
-              <PermissionGate can={can} permission="allergy:read">
+              {/*
+               * ── CALL IN BEFORE YOU ORDER OR PRESCRIBE ───────────────────────────────
+               * A patient still in the queue has not been seen. Ordering their bloods or
+               * prescribing them a drug before the consultation has started is acting on a
+               * patient the doctor has not called in — so the pads are held until "Call in".
+               */}
+              {!consulting ? (
                 <Card className="p-5">
-                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Allergies</h3>
+                  <p className="text-sm text-[var(--color-fg-muted)]">
+                    <strong className="text-[var(--color-fg)]">
+                      Call the patient in to begin.
+                    </strong>{" "}
+                    Ordering tests and prescribing open once the consultation has started — press{" "}
+                    <em>Call in</em> above.
+                  </p>
+                </Card>
+              ) : (
+                <>
+                  <PermissionGate can={can} permission="order:create">
+                    <CollapsibleCard
+                      title="Order"
+                      defaultOpen={["in_progress", "awaiting_results"].includes(selected.status)}
+                    >
+                      <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                        Each test reaches its department&apos;s worklist the moment you order it.
+                        Order as many as you need — <em>Send for tests</em> above then sends the
+                        patient to wait for the results.
+                      </p>
+                      <OrderPad
+                        encounter={selected}
+                        services={services}
+                        onOrdered={() => loadOrders(selected.id)}
+                      />
+                    </CollapsibleCard>
+                  </PermissionGate>
+
+                  <PermissionGate can={can} permission="prescription:sign">
+                    <CollapsibleCard
+                      title="Prescribe"
+                      defaultOpen={selected.status === "in_progress"}
+                    >
+                      <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
+                        Signing puts it on the pharmacy counter immediately. Nothing is charged
+                        until the drugs are actually handed over.
+                      </p>
+                      <RxPad
+                        encounter={selected}
+                        drugs={drugs}
+                        allergies={allergies}
+                        onSigned={() => {
+                          setNotice("Prescription signed — it is on the pharmacy counter now.");
+                          loadPrescriptions(selected.id);
+                        }}
+                      />
+                    </CollapsibleCard>
+                  </PermissionGate>
+
+                  <PermissionGate can={can} permission="emr:write">
+                    <CollapsibleCard title="Consultation note" defaultOpen={false}>
+                      <p className="mb-3 text-xs text-[var(--color-fg-muted)]">
+                        The structured record of the visit. The final diagnoses and plan are what
+                        print on the patient&apos;s OPD slip.
+                      </p>
+                      <ConsultationNoteEditor
+                        encounter={selected}
+                        onSaved={() => {
+                          setNotice("Consultation note saved — the OPD slip reflects it.");
+                          void load();
+                        }}
+                      />
+                    </CollapsibleCard>
+                  </PermissionGate>
+                </>
+              )}
+
+              <PermissionGate can={can} permission="allergy:read">
+                <CollapsibleCard title="Allergies" count={allergies.length} defaultOpen={false}>
                   <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
                     Recorded against the patient, seen at every branch. The prescribing check
                     screens against this list.
@@ -1508,44 +1901,40 @@ function MyPatients() {
                     canManage={can("allergy:manage")}
                     onChange={() => loadAllergies(selected.patientId)}
                   />
-                </Card>
+                </CollapsibleCard>
               </PermissionGate>
 
-              <PermissionGate can={can} permission="prescription:sign">
-                <Card className="p-5">
-                  <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Prescribe</h3>
-                  <p className="mb-4 text-xs text-[var(--color-fg-muted)]">
-                    Signing puts it on the pharmacy counter immediately. Nothing is charged until
-                    the drugs are actually handed over.
-                  </p>
-                  <RxPad
-                    encounter={selected}
-                    drugs={drugs}
-                    allergies={allergies}
-                    onSigned={() => {
-                      setNotice("Prescription signed — it is on the pharmacy counter now.");
-                      loadPrescriptions(selected.id);
-                    }}
-                  />
-                </Card>
-              </PermissionGate>
-
-              <Card className="p-5">
-                <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
-                  Prescribed on this visit
-                </h3>
+              <CollapsibleCard
+                title="Prescribed on this visit"
+                count={prescriptions.length}
+                defaultOpen={false}
+              >
                 <PrescriptionsForVisit
                   prescriptions={prescriptions}
                   onCancel={(id) => void stopPrescription(id)}
                 />
-              </Card>
+              </CollapsibleCard>
 
-              <Card className="p-5">
-                <h3 className="mb-3 text-sm font-semibold text-[var(--color-fg)]">
-                  Ordered on this visit
-                </h3>
+              <CollapsibleCard
+                title="Ordered on this visit"
+                count={orders.length}
+                defaultOpen={false}
+              >
                 <OrdersForVisit orders={orders} />
-              </Card>
+              </CollapsibleCard>
+
+              {/*
+               * ── SURGICAL HISTORY, NOT THIS VISIT'S ──────────────────────────────────
+               * Rendered only when the patient HAS been operated on. An always-visible "no
+               * procedures" panel on the 95% of patients who have never seen a theatre is noise
+               * on the screen a doctor reads under time pressure, and noise is what makes the
+               * one patient who does have a surgical history stop standing out.
+               */}
+              {procedures.length > 0 && (
+                <CollapsibleCard title="Procedures" count={procedures.length} defaultOpen={false}>
+                  <ProceduresForPatient bookings={procedures} doctors={doctors} />
+                </CollapsibleCard>
+              )}
 
               <Card className="p-5">
                 <h3 className="mb-1 text-sm font-semibold text-[var(--color-fg)]">Reports</h3>
@@ -1563,10 +1952,319 @@ function MyPatients() {
   );
 }
 
-export default function MyPatientsPage() {
-  return (
-    <Protected>
-      <MyPatients />
-    </Protected>
+/**
+ * A titled card that folds away to save vertical space — the consult panel stacks a lot of sections,
+ * and once a patient is at the lab the doctor wants the finished ones out of the way. Self-manages
+ * its open state; the count sits in the header so a folded section still tells you how much is inside.
+ */
+/**
+ * The patient's operations, newest first, each with its record when the surgeon has written one.
+ *
+ * A booking with NO record still appears. Hiding it would answer "has this patient had surgery?"
+ * with "only the surgery somebody wrote up", and an operation nobody documented is exactly the one
+ * a doctor needs to know happened.
+ */
+function ProceduresForPatient({
+  bookings,
+  doctors,
+}: {
+  bookings: OtBooking[];
+  doctors: DoctorRef[];
+}) {
+  const newestFirst = [...bookings].sort((a, b) =>
+    b.scheduledStart.localeCompare(a.scheduledStart),
   );
+  return (
+    <ul className="divide-y divide-[var(--color-border)]">
+      {newestFirst.map((b) => (
+        <li key={b.id} className="py-3 first:pt-0 last:pb-0">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-medium text-[var(--color-fg)]">
+              {b.operativeNote?.procedurePerformed ?? b.procedureName}
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="text-xs text-[var(--color-fg-muted)]">
+                {dayLabel(b.scheduledStart)}
+              </span>
+              <Badge tone={b.status === "completed" ? "success" : "neutral"}>
+                {b.status.replace("_", " ")}
+              </Badge>
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-[var(--color-fg-muted)]">{b.theatreName}</p>
+          {b.operativeNote ? (
+            <div className="mt-3 rounded-lg border border-[var(--color-border)] p-3">
+              <OperativeNoteDetail
+                note={b.operativeNote}
+                surgeonName={doctors.find((d) => d.id === b.operativeNote?.surgeonId)?.name}
+              />
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
+              No operation record written yet.
+            </p>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CollapsibleCard({
+  title,
+  count,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  count?: number;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card className="p-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2 px-5 py-4 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold text-[var(--color-fg)]">
+          {title}
+          {count !== undefined && count > 0 && (
+            <span className="rounded-full bg-[var(--color-bg-subtle)] px-1.5 py-0.5 text-xs font-normal text-[var(--color-fg-muted)]">
+              {count}
+            </span>
+          )}
+        </span>
+        <span className="text-[var(--color-fg-subtle)]">{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div className="px-5 pb-5">{children}</div>}
+    </Card>
+  );
+}
+
+/**
+ * The structured consultation note (D3 / EMR depth) — chief complaint, history, examination, the
+ * typed diagnoses and the plan. The OPD slip's diagnosis/advice lines are DERIVED from it on the
+ * server, so the doctor writes the record once. Seeds from the saved note and re-seeds when the
+ * doctor switches patients.
+ */
+const noteArea =
+  "mt-0.5 w-full rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-2 text-sm text-[var(--color-fg)]";
+
+type DxRow = { text: string; code: string; type: DiagnosisType };
+
+function ConsultationNoteEditor({
+  encounter,
+  onSaved,
+}: {
+  encounter: Encounter;
+  onSaved: () => void;
+}) {
+  const { api } = useAuth();
+  const [chiefComplaint, setChiefComplaint] = useState("");
+  const [history, setHistory] = useState("");
+  const [examination, setExamination] = useState("");
+  const [diagnoses, setDiagnoses] = useState<DxRow[]>([]);
+  /**
+   * The diagnoses AS THE SERVER HOLDS THEM. Separate from the edit buffer above because promotion
+   * is by index into the SAVED note — offering it against unsaved rows would promote whatever
+   * happens to sit at that index on the server, which is a different condition the moment the
+   * doctor adds a line and has not pressed save.
+   */
+  const [savedDiagnoses, setSavedDiagnoses] = useState<Diagnosis[]>([]);
+  const [plan, setPlan] = useState("");
+  const [followUp, setFollowUp] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load the saved note for this visit; reset when the doctor moves to another patient.
+  useEffect(() => {
+    let live = true;
+    api
+      .getConsultation(encounter.id)
+      .then((n) => {
+        if (!live) return;
+        setChiefComplaint(n?.chiefComplaint ?? "");
+        setHistory(n?.history ?? "");
+        setExamination(n?.examination ?? "");
+        setDiagnoses(
+          (n?.diagnoses ?? []).map((d) => ({ text: d.text, code: d.code ?? "", type: d.type })),
+        );
+        setSavedDiagnoses(n?.diagnoses ?? []);
+        setPlan(n?.plan ?? "");
+        setFollowUp(n?.followUpDays != null ? String(n.followUpDays) : "");
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [api, encounter.id]);
+
+  function setDx(i: number, patch: Partial<DxRow>) {
+    setDiagnoses((rows) => rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api.saveConsultation(encounter.id, {
+        chiefComplaint,
+        history,
+        examination,
+        diagnoses: diagnoses
+          .filter((d) => d.text.trim())
+          .map((d) => ({
+            text: d.text.trim(),
+            type: d.type,
+            ...(d.code.trim() ? { code: d.code.trim() } : {}),
+          })),
+        plan,
+        ...(followUp.trim() ? { followUpDays: Number(followUp) } : { followUpDays: 0 }),
+      });
+      // What the server now holds — the only diagnoses a promotion may be offered against.
+      setSavedDiagnoses(saved.diagnoses);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiClientError ? err.message : "Could not save the note.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {error && <Alert tone="danger">{error}</Alert>}
+
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Chief complaint
+        <textarea
+          value={chiefComplaint}
+          onChange={(e) => setChiefComplaint(e.target.value)}
+          rows={2}
+          placeholder="What brought the patient in…"
+          className={noteArea}
+        />
+      </label>
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        History
+        <textarea
+          value={history}
+          onChange={(e) => setHistory(e.target.value)}
+          rows={2}
+          placeholder="History of the presenting illness…"
+          className={noteArea}
+        />
+      </label>
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Examination
+        <textarea
+          value={examination}
+          onChange={(e) => setExamination(e.target.value)}
+          rows={2}
+          placeholder="Findings on examination…"
+          className={noteArea}
+        />
+      </label>
+
+      {/* Diagnoses — a typed list, not a comma string. */}
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-xs text-[var(--color-fg-muted)]">Diagnoses</span>
+          <button
+            type="button"
+            className="text-xs text-[var(--color-brand-600)] hover:underline"
+            onClick={() => setDiagnoses((r) => [...r, { text: "", code: "", type: "provisional" }])}
+          >
+            + Add diagnosis
+          </button>
+        </div>
+        {diagnoses.length === 0 ? (
+          <p className="text-xs text-[var(--color-fg-subtle)]">None recorded.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {diagnoses.map((d, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-1.5">
+                <input
+                  value={d.text}
+                  onChange={(e) => setDx(i, { text: e.target.value })}
+                  placeholder="Condition"
+                  className="min-w-40 flex-1 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 text-sm"
+                />
+                <input
+                  value={d.code}
+                  onChange={(e) => setDx(i, { code: e.target.value.toUpperCase() })}
+                  placeholder="ICD"
+                  className="w-24 rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-3 py-1.5 font-mono text-xs"
+                />
+                <select
+                  value={d.type}
+                  onChange={(e) => setDx(i, { type: e.target.value as DiagnosisType })}
+                  className="rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-bg-elevated)] px-2 py-1.5 text-xs"
+                >
+                  <option value="provisional">Provisional</option>
+                  <option value="final">Final</option>
+                </select>
+                <button
+                  type="button"
+                  className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-danger)]"
+                  onClick={() => setDiagnoses((r) => r.filter((_, idx) => idx !== i))}
+                  aria-label="Remove diagnosis"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Plan &amp; advice
+        <textarea
+          value={plan}
+          onChange={(e) => setPlan(e.target.value)}
+          rows={2}
+          placeholder="Investigations, medication, rest, diet…"
+          className={noteArea}
+        />
+      </label>
+      <label className="block text-xs text-[var(--color-fg-muted)]">
+        Follow-up in (days)
+        <input
+          type="number"
+          value={followUp}
+          onChange={(e) => setFollowUp(e.target.value)}
+          placeholder="e.g. 7"
+          className={`${noteArea} max-w-32`}
+        />
+      </label>
+
+      <Button disabled={busy} onClick={() => void save()}>
+        {busy ? "Saving…" : "Save note"}
+      </Button>
+
+      {/**
+       * The patient's longitudinal problem list, beneath the note that feeds it. Here rather than
+       * only on the chart because this is where the decision is made: the doctor has just written
+       * "Type 2 diabetes" as a diagnosis for THIS visit, and whether it belongs on the patient's
+       * standing list is a judgement they make in the same breath — not one they will come back
+       * for from another screen.
+       */}
+      <div className="mt-4 border-t border-[var(--color-border)] pt-3">
+        <ProblemPanel
+          api={api}
+          patientId={encounter.patientId}
+          canWrite
+          promoteFrom={{ encounterId: encounter.id, diagnoses: savedDiagnoses }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export default function MyPatientsPage() {
+  return <MyPatients />;
 }

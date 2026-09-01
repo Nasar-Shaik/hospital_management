@@ -1,24 +1,76 @@
 /**
  * Billing controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope, PageMeta } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import { getEncounter } from "../encounters/index.js";
 import * as billing from "./billing.service.js";
 import type {
   ListInvoicesQuery,
+  ListPendingBillsQuery,
   PostChargeBody,
   RecordPaymentBody,
+  ApplyDiscountBody,
+  RecordRefundBody,
+  PayerSplitBody,
+  CreatePackageBody,
+  UpdatePackageBody,
+  EnrollPackageBody,
+  ListPackagesQuery,
   CreateServiceBody,
   UpdateServiceBody,
 } from "./billing.schema.js";
 import type { ChargeCategory } from "./billing.model.js";
+import { ok } from "../../core/http/respond.js";
 
-function ok<T>(res: Response, data: T, status = 200, meta?: PageMeta): void {
-  const body: ApiEnvelope<T> = { success: true, data, ...(meta ? { meta } : {}) };
-  res.status(status).json(body);
-}
+/**
+ * PAID / UNPAID per order — for the lab & imaging worklist. Takes `?orderIds=a,b,c`. A status flag
+ * only (no amounts), so it is reachable with `order:read`, which a technician holds.
+ */
+export const orderPayments: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.orderIds === "string" ? req.query.orderIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  ok(res, await billing.orderPaymentStatus(ids));
+};
+
+/**
+ * PAID / UNPAID per ENCOUNTER's consultation (OP fee) — reception's "pay before you queue" gate.
+ * Takes `?encounterIds=a,b,c`. A status flag only (no amounts), so a receptionist holding
+ * `encounter:read` can see whether to route the patient to the cash counter.
+ */
+export const consultationPayments: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.encounterIds === "string" ? req.query.encounterIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  ok(res, await billing.consultationPaymentStatus(ids));
+};
+
+/**
+ * Per order: is the patient admitted, what is their advance balance, and this test's amount — the
+ * lab worklist's "proceed from advance" panel. Takes `?orderIds=a,b,c`. Reachable with `order:read`.
+ */
+export const orderSettlement: RequestHandler = async (req, res) => {
+  const raw = typeof req.query.orderIds === "string" ? req.query.orderIds : "";
+  const ids = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  ok(res, await billing.orderSettlementInfo(ids));
+};
+
+/** Settles one admitted-patient test from their advance — the lab tech's "proceed" action. */
+export const settleOrderFromAdvance: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.settleOrderFromAdvance(id));
+};
 
 /** The tariff — what this hospital charges for things. Prices included. */
 export const listServices: RequestHandler = async (req, res) => {
@@ -87,6 +139,25 @@ export const getBill: RequestHandler = async (req, res) => {
   ok(res, await billing.getRunningBill(id));
 };
 
+/**
+ * The per-batch billing view — pending charges + every bill on the visit. The desk's collection
+ * screen reads this, and the OPD slip and ward totals are computed from it.
+ */
+/** Every charge posted on a visit, WITH its date — the day-wise money on the IP treatment sheet. */
+export const encounterCharges: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.getCharges(id));
+};
+
+export const getEncounterBilling: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+
+  const encounter = await getEncounter(id);
+  if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { id });
+
+  ok(res, await billing.getEncounterBilling(id));
+};
+
 /** Manual charge — the desk adds something the system did not raise for itself. */
 export const postCharge: RequestHandler = async (req, res) => {
   const body = req.body as PostChargeBody;
@@ -126,6 +197,30 @@ export const finalizeBill: RequestHandler = async (req, res) => {
   ok(res, await billing.finalizeInvoice(id));
 };
 
+/**
+ * The cash counter's queue: visits carrying charges nobody has billed yet.
+ *
+ * Reception has its day register to find such a visit on; the cashier has only a list of
+ * invoices, and an ordered test has no invoice until somebody raises one. This is the read that
+ * lets `billing:finalize` be used by the role that holds it.
+ */
+export const listPendingBills: RequestHandler = async (req, res) => {
+  const query = req.query as unknown as ListPendingBillsQuery;
+
+  const { items, total } = await billing.listPendingBills({
+    limit: query.limit,
+    skip: (query.page - 1) * query.limit,
+    ...(query.q ? { q: query.q } : {}),
+  });
+
+  ok(res, items, 200, {
+    page: query.page,
+    limit: query.limit,
+    total,
+    hasMore: query.page * query.limit < total,
+  });
+};
+
 export const listInvoices: RequestHandler = async (req, res) => {
   const query = req.query as unknown as ListInvoicesQuery;
 
@@ -151,7 +246,60 @@ export const getInvoice: RequestHandler = async (req, res) => {
   ok(res, invoice);
 };
 
+/** Who signed this bill — the names and signatures the printed receipt puts over its line. */
+export const getInvoiceSignatories: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.invoiceSignatories(id));
+};
+
 export const recordPayment: RequestHandler = async (req, res) => {
   const { id } = req.params as { id: string };
   ok(res, await billing.recordPayment(id, req.body as RecordPaymentBody), 201);
+};
+
+export const applyDiscount: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.applyDiscount(id, req.body as ApplyDiscountBody));
+};
+
+export const recordRefund: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.recordRefund(id, req.body as RecordRefundBody), 201);
+};
+
+export const setPayerSplit: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.setPayerSplit(id, req.body as PayerSplitBody));
+};
+
+/* ── care packages ─────────────────────────────────────────────────────────── */
+
+export const listPackages: RequestHandler = async (req, res) => {
+  const { includeInactive } = req.query as ListPackagesQuery;
+  ok(res, await billing.listPackages(Boolean(includeInactive)));
+};
+
+export const createPackage: RequestHandler = async (req, res) => {
+  ok(res, await billing.createPackage(req.body as CreatePackageBody), 201);
+};
+
+export const updatePackage: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.updatePackage(id, req.body as UpdatePackageBody));
+};
+
+export const listPackageEnrollments: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.listPackageEnrollments(id));
+};
+
+export const enrollPackage: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  const { packageCode } = req.body as EnrollPackageBody;
+  ok(res, await billing.enrollInPackage(id, packageCode), 201);
+};
+
+export const cancelPackageEnrollment: RequestHandler = async (req, res) => {
+  const { id } = req.params as { id: string };
+  ok(res, await billing.cancelPackageEnrollment(id));
 };

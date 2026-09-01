@@ -49,6 +49,13 @@ export const DEFAULT_TARIFF: TariffSeed[] = [
     category: "consultation",
     price: 25_000,
   },
+  // The fast-track surcharge, added on top of the consultation for an express OP visit.
+  {
+    code: "CONSULT_EXPRESS",
+    name: "Express OP Surcharge",
+    category: "consultation",
+    price: 20_000,
+  },
 
   // Laboratory
   { code: "CBC", name: "Complete Blood Count", category: "lab", price: 35_000 },
@@ -61,8 +68,23 @@ export const DEFAULT_TARIFF: TariffSeed[] = [
   { code: "URINE_RE", name: "Urine Routine Examination", category: "lab", price: 20_000 },
   { code: "DENGUE_NS1", name: "Dengue NS1 Antigen", category: "lab", price: 80_000 },
 
-  // Radiology
+  /**
+   * Radiology (D7). These ARE the study catalogue — there is deliberately no second one.
+   *
+   * The lab has its own catalogue (`labTests`) because a blood test needs ANALYTES and reference
+   * ranges: without them the technician types "Haemoglobin" and "12–15" from memory, and a range
+   * typed from memory is how a normal result gets called abnormal. An imaging study has no
+   * analytes. Its result is a narrative, and everything a second catalogue would hold for it —
+   * code, name, price, orderability — the tariff already holds and the order pad already reads.
+   *
+   * So the smallest correct catalogue here is the one that exists. See RADIOLOGY.md.
+   *
+   * `ECG` sits under `radiology` and is not imaging. That is an existing decision, and moving it
+   * would move its billing category on every hospital that has already priced it — left alone
+   * deliberately, and noted so the next reader does not think it an oversight.
+   */
   { code: "XRAY_CHEST_PA", name: "X-ray Chest PA View", category: "radiology", price: 45_000 },
+  { code: "XRAY_ABDOMEN", name: "X-ray Abdomen", category: "radiology", price: 45_000 },
   { code: "XRAY_LIMB", name: "X-ray Limb", category: "radiology", price: 40_000 },
   { code: "USG_ABDOMEN", name: "Ultrasound Abdomen", category: "radiology", price: 120_000 },
   { code: "CT_HEAD", name: "CT Scan Head (Plain)", category: "radiology", price: 350_000 },

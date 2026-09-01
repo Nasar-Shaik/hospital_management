@@ -29,10 +29,27 @@ import {
   requirePlatformRole,
 } from "../../middleware/authenticatePlatform.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./platform.controller.js";
+import {
+  createdCredential,
+  createHospitalResult,
+  hospitalDetail,
+  hospitalSummary,
+  operatorIdentity,
+  operatorLoggedOutAck,
+  operatorPasswordChangedAck,
+  operatorSession,
+  platformAuditEntry,
+  platformUser,
+} from "./platform.contract.js";
+import { plan, subscriptionView } from "../subscriptions/index.js";
 import {
   createHospitalSchema,
   createOperatorSchema,
+  hospitalDomainSchema,
+  hospitalLicenseSchema,
+  hospitalLimitsSchema,
   hospitalPlanSchema,
   hospitalStatusSchema,
   issueAdminSchema,
@@ -44,25 +61,54 @@ export function platformRouter(): Router {
   const router = Router();
 
   /* ── unauthenticated ── */
-  router.post("/auth/login", validate(operatorLoginSchema), asyncHandler(controller.login));
+  router.post(
+    "/auth/login",
+    validate(operatorLoginSchema),
+    responds(operatorSession),
+    asyncHandler(controller.login),
+  );
 
   /* ── any authenticated operator ── */
   const auth = authenticatePlatform();
 
-  router.post("/auth/logout", auth, asyncHandler(controller.logout));
-  router.get("/auth/me", auth, controller.me);
+  router.post(
+    "/auth/logout",
+
+    auth,
+
+    responds(operatorLoggedOutAck),
+
+    asyncHandler(controller.logout),
+  );
+  router.get("/auth/me", auth, responds(operatorIdentity), controller.me);
   router.post(
     "/auth/change-password",
     auth,
     validate(operatorPasswordSchema),
+    responds(operatorPasswordChangedAck),
     asyncHandler(controller.changePassword),
   );
 
   /* ── read the fleet: SUPPORT is enough ── */
-  router.get("/hospitals", auth, asyncHandler(controller.listHospitals));
-  router.get("/hospitals/:id", auth, asyncHandler(controller.getHospital));
-  router.get("/editions", auth, asyncHandler(controller.listEditions));
-  router.get("/audit", auth, asyncHandler(controller.operatorAudit));
+  router.get(
+    "/hospitals",
+    auth,
+    responds(hospitalSummary.array()),
+    asyncHandler(controller.listHospitals),
+  );
+  router.get(
+    "/hospitals/:id",
+    auth,
+    responds(hospitalDetail),
+    asyncHandler(controller.getHospital),
+  );
+  router.get("/editions", auth, responds(plan.array()), asyncHandler(controller.listEditions));
+  router.get(
+    "/audit",
+    auth,
+    responds(platformAuditEntry.array()),
+    asyncHandler(controller.operatorAudit),
+  );
 
   /* ── change the fleet: SUPER_ADMIN only ── */
   const superAdmin = requirePlatformRole("SUPER_ADMIN");
@@ -72,6 +118,7 @@ export function platformRouter(): Router {
     auth,
     superAdmin,
     validate(createHospitalSchema),
+    responds(createHospitalResult, { status: 201 }),
     asyncHandler(controller.createHospital),
   );
 
@@ -82,6 +129,7 @@ export function platformRouter(): Router {
     auth,
     superAdmin,
     validate(hospitalStatusSchema),
+    responds(hospitalSummary),
     asyncHandler(controller.setStatus),
   );
 
@@ -90,7 +138,39 @@ export function platformRouter(): Router {
     auth,
     superAdmin,
     validate(hospitalPlanSchema),
+    responds(subscriptionView),
     asyncHandler(controller.setPlan),
+  );
+
+  // Supported branches (ADR-0015) — a sales control the tenant admin cannot raise.
+  router.post(
+    "/hospitals/:id/limits",
+    auth,
+    superAdmin,
+    validate(hospitalLimitsSchema),
+    responds(hospitalSummary),
+    asyncHandler(controller.setLimits),
+  );
+
+  // Licence tenure (ADR-0016) — set / renew / extend. A renewal un-blocks an expired
+  // hospital on its next request; no status change needed.
+  router.post(
+    "/hospitals/:id/license",
+    auth,
+    superAdmin,
+    validate(hospitalLicenseSchema),
+    responds(hospitalSummary),
+    asyncHandler(controller.setLicense),
+  );
+
+  // Custom domain (ADR-0005) — attach / replace / detach a hostname for this hospital.
+  router.post(
+    "/hospitals/:id/domain",
+    auth,
+    superAdmin,
+    validate(hospitalDomainSchema),
+    responds(hospitalSummary),
+    asyncHandler(controller.setDomain),
   );
 
   /**
@@ -104,16 +184,24 @@ export function platformRouter(): Router {
     auth,
     superAdmin,
     validate(issueAdminSchema),
+    responds(createdCredential),
     asyncHandler(controller.issueAdmin),
   );
 
   /* ── operator accounts ── */
-  router.get("/operators", auth, superAdmin, asyncHandler(controller.listOperators));
+  router.get(
+    "/operators",
+    auth,
+    superAdmin,
+    responds(platformUser.array()),
+    asyncHandler(controller.listOperators),
+  );
   router.post(
     "/operators",
     auth,
     superAdmin,
     validate(createOperatorSchema),
+    responds(createdCredential, { status: 201 }),
     asyncHandler(controller.createOperator),
   );
 

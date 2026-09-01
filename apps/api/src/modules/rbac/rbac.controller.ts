@@ -1,15 +1,10 @@
 /**
  * RBAC controller — HTTP only (Doc 09 §11).
  */
-import type { RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
+import type { RequestHandler } from "express";
 import { AppError } from "../../core/errors/appError.js";
 import * as rbac from "./rbac.service.js";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
+import { ok } from "../../core/http/respond.js";
 
 export const listPermissions: RequestHandler = async (_req, res) => {
   ok(res, await rbac.listPermissions());

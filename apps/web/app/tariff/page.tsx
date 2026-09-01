@@ -15,7 +15,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ApiClientError, type ChargeCategory, type TariffItem } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Button, Card, Field } from "../../components/ui";
 import { rupees, toPaise } from "../../lib/money";
 
@@ -72,6 +71,7 @@ interface TariffForm {
   name: string;
   category: ChargeCategory;
   price: string; // rupees, as typed
+  followUpDays: string; // days, as typed — consultation entries only
 }
 
 function TariffFormFields({
@@ -92,6 +92,7 @@ function TariffFormFields({
     name: initial?.name ?? "",
     category: initial?.category ?? "procedure",
     price: initial ? String(initial.price / 100) : "",
+    followUpDays: initial?.followUpDays ? String(initial.followUpDays) : "",
   }));
   const set = (patch: Partial<TariffForm>) => setF((prev) => ({ ...prev, ...patch }));
 
@@ -147,6 +148,23 @@ function TariffFormFields({
           hint="0 is valid — a government hospital's tariff is all zeros."
           required
         />
+        {/*
+          Only a consultation can grant a free revisit, so the field appears only there rather than
+          sitting inert on every X-ray and drug in the price list.
+        */}
+        {f.category === "consultation" && (
+          <Field
+            label="OP validity (days)"
+            name="followUpDays"
+            type="number"
+            min={0}
+            max={365}
+            step="1"
+            value={f.followUpDays}
+            onChange={(e) => set({ followUpDays: e.target.value })}
+            hint="Revisits to the SAME doctor within this many days are free. Blank or 0 = charge every visit."
+          />
+        )}
       </div>
       <div className="flex justify-end">
         <Button type="submit" loading={saving}>
@@ -213,6 +231,17 @@ function TariffPage() {
     }
   }
 
+  /**
+   * The validity window as a number the API will accept. Only consultations carry one, and a blank
+   * box means "no free follow-up" — sent as 0 rather than omitted so CLEARING the field on an entry
+   * that had 15 days actually turns the entitlement off instead of silently leaving it in place.
+   */
+  function followUpOf(f: TariffForm): number {
+    if (f.category !== "consultation") return 0;
+    const n = Number(f.followUpDays);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+
   function submitCreate(f: TariffForm) {
     void run(() =>
       api.createTariff({
@@ -220,12 +249,19 @@ function TariffPage() {
         name: f.name.trim(),
         category: f.category,
         price: toPaise(f.price),
+        followUpDays: followUpOf(f),
       }),
     );
   }
   function submitEdit(f: TariffForm) {
     if (!active) return;
-    void run(() => api.updateTariff(active.id, { name: f.name.trim(), price: toPaise(f.price) }));
+    void run(() =>
+      api.updateTariff(active.id, {
+        name: f.name.trim(),
+        price: toPaise(f.price),
+        followUpDays: followUpOf(f),
+      }),
+    );
   }
   function toggleActive(item: TariffItem) {
     void run(() => api.updateTariff(item.id, { active: !item.active }));
@@ -309,7 +345,15 @@ function TariffPage() {
                     key={i.id}
                     className={`hover:bg-[var(--color-bg-subtle)] ${i.active ? "" : "opacity-60"}`}
                   >
-                    <td className="px-4 py-3 font-medium text-[var(--color-fg)]">{i.name}</td>
+                    <td className="px-4 py-3 font-medium text-[var(--color-fg)]">
+                      {i.name}
+                      {/* The validity is part of what this fee BUYS, so it reads next to the name. */}
+                      {i.followUpDays ? (
+                        <span className="ml-2 align-middle">
+                          <Badge tone="brand">{i.followUpDays}-day follow-up</Badge>
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs text-[var(--color-fg-muted)]">
                       {i.code}
                     </td>
@@ -375,9 +419,5 @@ function TariffPage() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <TariffPage />
-    </Protected>
-  );
+  return <TariffPage />;
 }

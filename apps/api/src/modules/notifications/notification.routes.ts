@@ -18,14 +18,26 @@
  * of a batch of patients), it gets its own endpoint with its own audit story.
  */
 import { Router } from "express";
+import { z } from "@medicore/validation";
 import { PERMISSIONS } from "@medicore/permissions";
 import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds } from "../../middleware/responds.js";
 import * as controller from "./notification.controller.js";
 import {
+  device,
+  inboxMessage,
+  notification,
+  notificationTemplate,
+} from "./notification.contract.js";
+import {
+  deviceIdParamSchema,
+  inboxQuerySchema,
+  notificationIdParamSchema,
   listNotificationsQuerySchema,
+  registerDeviceSchema,
   templateKeyParamSchema,
   updateTemplateSchema,
 } from "./notification.schema.js";
@@ -39,11 +51,93 @@ export function notificationRouter(): Router {
    * `notification:manage` (an administrative permission), NOT something every
    * clerk holds by default.
    */
+  /**
+   * ── THE PERSON'S OWN INBOX ──────────────────────────────────────────────────
+   * Authenticated, and DELIBERATELY UNPERMISSIONED. The recipient is taken from the session and
+   * cannot be named in the query, so there is nothing here a caller could over-reach for: the
+   * route can only ever return what the domain already decided to send to them.
+   *
+   * A permission would be actively harmful. Every role in a hospital receives messages — the
+   * technician gets none today and will get stock alerts tomorrow — so gating this would mean any
+   * hospital that built its own role from scratch would have staff who cannot read their own
+   * alerts, and the symptom would be an inbox that is simply always empty. Same reasoning, and
+   * the same list in `rbac.int.test.ts`, as `GET /reports/my-activity` and `GET /me/branches`.
+   *
+   * It must be declared in that suite's `SELF_SERVICE_ROUTES` — "no permission" has to be a
+   * decision somebody wrote down, never a line somebody forgot.
+   */
+  router.get(
+    "/notifications/me",
+    authenticate(),
+    validate(inboxQuerySchema, "query"),
+    responds(inboxMessage.array(), { meta: true }),
+    asyncHandler(controller.inbox),
+  );
+
+  /**
+   * Opening one. Not `idempotent()` — that middleware replays a stored RESPONSE for a client
+   * retrying one intent, and this needs something stronger and cheaper: the write itself only
+   * matches an unread row, so a second call is a no-op that returns the same message with the
+   * original `readAt` intact. Idempotent by the query, for every caller, forever — not just for
+   * the one that remembered to send a key.
+   */
+  router.post(
+    "/notifications/:id/read",
+    authenticate(),
+    validate(notificationIdParamSchema, "params"),
+    responds(inboxMessage),
+    asyncHandler(controller.markRead),
+  );
+
+  /* ── the caller's own handsets (M4) ─────────────────────────────────────────
+   *
+   * SELF-SERVICE, like the inbox above and for the same reason: the owner is the session and
+   * cannot be named in the request, so there is nothing here to over-reach for. A permission
+   * would be worse than useless — every role in a hospital receives alerts, so a hospital that
+   * built a role from scratch would have staff whose phone silently never rings, and the symptom
+   * is an absence nobody reports as a bug.
+   *
+   * Declared in `rbac.int.test.ts` SELF_SERVICE_ROUTES, where "no permission" has to be a
+   * decision somebody wrote down rather than a line somebody forgot.
+   *
+   * NO FEATURE FLAG either, matching the rest of this router: every edition sends messages, and
+   * an edition whose staff could not be reached on a phone would be a broken product rather than
+   * a cheaper one.
+   */
+  router.post(
+    "/me/devices",
+    authenticate(),
+    validate(registerDeviceSchema),
+    responds(device),
+    asyncHandler(controller.registerDevice),
+  );
+
+  router.get(
+    "/me/devices",
+    authenticate(),
+    responds(device.array()),
+    asyncHandler(controller.listDevices),
+  );
+
+  /**
+   * Sign-out, and the one place a person can stop a lost handset ringing. Not `idempotent()`: the
+   * write only matches a row that is still theirs, so a replay is a no-op that answers the same
+   * way — idempotent by the query, for every caller, like `POST /notifications/:id/read`.
+   */
+  router.delete(
+    "/me/devices/:id",
+    authenticate(),
+    validate(deviceIdParamSchema, "params"),
+    responds(z.object({ released: z.boolean() })),
+    asyncHandler(controller.releaseDevice),
+  );
+
   router.get(
     "/notifications",
     authenticate(),
     authorize(PERMISSIONS.NOTIFICATION_MANAGE),
     validate(listNotificationsQuerySchema, "query"),
+    responds(notification.array(), { meta: true }),
     asyncHandler(controller.listNotifications),
   );
 
@@ -51,6 +145,7 @@ export function notificationRouter(): Router {
     "/notifications/templates",
     authenticate(),
     authorize(PERMISSIONS.NOTIFICATION_MANAGE),
+    responds(notificationTemplate.array()),
     asyncHandler(controller.listTemplates),
   );
 
@@ -67,6 +162,7 @@ export function notificationRouter(): Router {
     authorize(PERMISSIONS.NOTIFICATION_MANAGE),
     validate(templateKeyParamSchema, "params"),
     validate(updateTemplateSchema),
+    responds(notificationTemplate),
     asyncHandler(controller.updateTemplate),
   );
 

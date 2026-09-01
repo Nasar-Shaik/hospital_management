@@ -27,7 +27,9 @@
  */
 import { createLogger } from "@medicore/logger";
 import { AppError } from "../../core/errors/appError.js";
-import { getContext } from "../../core/context/requestContext.js";
+import { getContext, getTenantDb } from "../../core/context/requestContext.js";
+import type { ClinicalCapability } from "../../core/db/clinicalInvariants.js";
+import { tenantSchemaReadiness } from "../../core/db/schemaReadiness.js";
 import { withTransaction } from "../../core/db/transaction.js";
 import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
@@ -47,6 +49,7 @@ import {
   type Prescription,
   type PrescriptionStatus,
 } from "../prescriptions/index.js";
+import { assessDrugCredit } from "../billing/index.js";
 import * as repo from "./dispense.repository.js";
 import type { DispenseLine } from "./dispense.model.js";
 
@@ -65,6 +68,12 @@ export interface DispenseInput {
   prescriptionId: string;
   items: DispenseItemInput[];
   requestId?: string;
+  /**
+   * Present when the caller is knowingly dispensing OVER an admitted patient's advance —
+   * the "authorise on credit" acknowledgement. Only honoured from a caller holding
+   * `pharmacy:credit-override`; without it an over-budget dispense is refused (HMS-PHM-003).
+   */
+  creditOverride?: { reason: string };
 }
 
 export interface DispenseResult {
@@ -72,6 +81,50 @@ export interface DispenseResult {
   prescription: Prescription;
   /** True when this `requestId` had already been handed over — a retry, not a second lot. */
   duplicate: boolean;
+}
+
+/**
+ * What a handover rests on, and why it is these two.
+ *
+ * `one_dispense_per_request_id` is what actually arbitrates a race. The `findByRequestId` read
+ * below is a courtesy that catches the ordinary sequential retry, and it says so itself — "two
+ * clicks can be in flight at once and this read would miss". Between that read and the insert
+ * there is room for a second request, so without the index BOTH commit: two handovers, stock
+ * decremented twice, and a patient who may be given the drugs twice.
+ *
+ * `idempotent-replay` is here for the same reason MAR needs it. The index is PARTIAL on
+ * `requestId`, deliberately — a dispense without one is a legitimate partial handover and may
+ * happen many times. For those the Idempotency-Key claim is the only thing standing between a
+ * retried request and a second handover.
+ */
+const DISPENSE_REQUIRES: readonly ClinicalCapability[] = ["dispensing", "idempotent-replay"];
+
+/**
+ * ── THE ARBITER MUST EXIST BEFORE WE RELY ON IT ─────────────────────────────
+ * Checked first, before the prescription is even read, so a refusal cannot leave a partially
+ * resolved handover behind. Measured 2026-08-17: with the index absent two inserts of the same
+ * `requestId` are both accepted, and once that pair exists the index cannot be rebuilt over them.
+ */
+async function assertDispensingIsSafe(): Promise<void> {
+  const ctx = getContext();
+  const readiness = await tenantSchemaReadiness(ctx.tenantId, getTenantDb(), DISPENSE_REQUIRES);
+  if (readiness.safe) return;
+
+  throw new AppError(
+    "HMS-PHM-004",
+    503,
+    "Dispensing is unavailable on this system — hand over on paper and escalate",
+    {
+      missing: readiness.missing.map((m) => ({
+        rule: m.invariant.rule,
+        migration: m.invariant.migration,
+        found: m.found,
+      })),
+      ...(readiness.unknown ? { unknown: readiness.unknown } : {}),
+    },
+    true,
+    60,
+  );
 }
 
 /**
@@ -86,6 +139,8 @@ export interface DispenseResult {
  * screen while a queue builds behind the patient.
  */
 export async function dispense(input: DispenseInput): Promise<DispenseResult> {
+  await assertDispensingIsSafe();
+
   const ctx = getContext();
 
   /**
@@ -156,6 +211,52 @@ export async function dispense(input: DispenseInput): Promise<DispenseResult> {
     };
   });
 
+  /**
+   * ── OVER-BUDGET CHECKPOINT (admitted patients only) ─────────────────────────
+   * If handing these drugs over would push an ADMITTED patient's advance below zero, a
+   * clinician must authorise the credit (`pharmacy:credit-override`). This is a recorded
+   * sign-off, NOT a denial of medicine — and it FAILS OPEN: if the assessment itself errors
+   * (tariff, wallet, encounter read), the dispense proceeds unblocked, because a money
+   * problem must never hold a patient's drugs (this module's founding rule).
+   */
+  let creditOverride: repo.CreateDispenseInput["creditOverride"];
+  let assessment: Awaited<ReturnType<typeof assessDrugCredit>> | undefined;
+  try {
+    assessment = await assessDrugCredit({
+      patientId: rx.patientId,
+      encounterId: rx.encounterId,
+      lines: lines.map((l) => ({ drugCode: l.drugCode, quantity: l.quantity })),
+    });
+  } catch (err) {
+    logger.warn(
+      { err, prescriptionId: rx.id },
+      "credit assessment failed — dispensing without the advance-budget check (fail open)",
+    );
+  }
+
+  if (assessment?.overBudget) {
+    if (!input.creditOverride) {
+      throw new AppError("HMS-PHM-003", 402, "Dispense would exceed the patient's advance", {
+        cost: assessment.cost,
+        balance: assessment.balance,
+        shortfall: assessment.shortfall,
+        hint: "a doctor must authorise dispensing on credit",
+      });
+    }
+    // The acknowledgement only counts from someone with the authority to commit the credit.
+    if (!ctx.permissions?.includes("pharmacy:credit-override")) {
+      throw new AppError("HMS-AUTH-005", 403, "Not authorised to dispense on credit", {
+        hint: "over-budget dispensing needs a doctor's or administrator's sign-off (pharmacy:credit-override)",
+      });
+    }
+    creditOverride = {
+      by: ctx.userId ?? "system",
+      reason: input.creditOverride.reason,
+      shortfall: assessment.shortfall,
+      at: new Date(),
+    };
+  }
+
   try {
     return await withTransaction(async (session) => {
       /**
@@ -196,6 +297,7 @@ export async function dispense(input: DispenseInput): Promise<DispenseResult> {
           ...(rx.orderId ? { orderId: rx.orderId } : {}),
           ...(input.requestId ? { requestId: input.requestId } : {}),
           ...(rx.branchId ? { branchId: rx.branchId } : {}),
+          ...(creditOverride ? { creditOverride } : {}),
         },
         session,
       );

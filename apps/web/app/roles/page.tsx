@@ -13,7 +13,6 @@
 import { useEffect, useState } from "react";
 import { ApiClientError, type Role } from "@medicore/api-client";
 import { useAuth } from "../../components/AuthProvider";
-import { Protected } from "../../components/Protected";
 import { Alert, Badge, Card } from "../../components/ui";
 import { ROLE_GUIDE } from "../../lib/roleGuide";
 
@@ -30,7 +29,11 @@ const NEED_TO_ROLE: { need: string; role: string }[] = [
   { need: "See a doctor's appointments and consult patients", role: "DOCTOR" },
   { need: "Run blood tests and enter diagnoses / reports", role: "LAB_TECHNICIAN" },
   { need: "Sign off and release lab results", role: "PATHOLOGIST" },
-  { need: "Report and sign X-rays and scans", role: "RADIOLOGIST" },
+  { need: "Take X-rays and scans, and report them", role: "RADIOLOGY_TECHNICIAN" },
+  // Listed second because it is the OPTIONAL half: a hospital with no consultant radiologist runs
+  // imaging on the technician alone, and offering this first invites them to create a login for a
+  // person they do not employ and then wonder why nothing can be released.
+  { need: "Sign off imaging as a consultant radiologist", role: "RADIOLOGIST" },
   { need: "Dispense medicines and manage stock", role: "PHARMACIST" },
   { need: "Take bill payments at the counter", role: "CASHIER" },
   { need: "Record vitals and give medicines on the ward", role: "NURSE" },
@@ -218,9 +221,5 @@ function Roles() {
 }
 
 export default function Page() {
-  return (
-    <Protected>
-      <Roles />
-    </Protected>
-  );
+  return <Roles />;
 }

@@ -11,19 +11,14 @@
  * transports.
  */
 import type { Request, RequestHandler, Response } from "express";
-import type { ApiEnvelope } from "@medicore/types";
 import { env } from "../../config/env.js";
 import { requireAuth } from "../../middleware/authenticate.js";
 import { AppError, SessionExpiredError } from "../../core/errors/appError.js";
 import * as authService from "./auth.service.js";
 import type { DeviceInfo, LoginResult, TokenPair } from "./auth.service.js";
+import { ok } from "../../core/http/respond.js";
 
 const REFRESH_COOKIE = "hms_refresh";
-
-function ok<T>(res: Response, data: T, status = 200): void {
-  const body: ApiEnvelope<T> = { success: true, data };
-  res.status(status).json(body);
-}
 
 function deviceInfo(req: Request, device?: string): DeviceInfo {
   return {

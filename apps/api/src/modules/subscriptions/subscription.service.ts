@@ -26,14 +26,46 @@ import { publish } from "../../core/events/outbox.js";
 import { EVENTS } from "../../core/events/eventCatalog.js";
 import { cacheGet, cacheKeys, cacheSet, cacheDel } from "../../core/redis/redis.js";
 import { env } from "../../config/env.js";
-import { getById as getTenant } from "../tenants/index.js";
-import { countUsers } from "../users/index.js";
+import { getById as getTenant, branchLimit as branchLimitFor } from "../tenants/index.js";
 import { invalidateFeatures } from "../entitlements/index.js";
+import { COUNTERS } from "./subscription.counters.js";
 import * as repo from "./subscription.repository.js";
 
-/** Limits we can enforce today. Each needs a live count; add one only with its counter. */
+/**
+ * Everything the Subscription & usage screen reports a live number for.
+ *
+ * ── COUNTED IS NOT THE SAME AS ENFORCED, AND THE SCREEN MUST SAY WHICH ──────
+ * A progress bar with a limit under it reads as a wall. Only `maxUsers` and `maxBranches`
+ * actually refuse a creation today; doctors and beds are counted and shown because a hospital
+ * administrator asks "how many can I add?" — but nothing stops them, and drawing an identical
+ * bar for all four would be inventing three walls that do not exist. Each line carries
+ * `enforced`, and the UI says so out loud.
+ *
+ * Adding a metric here needs a live COUNTER (never a stored one — a drifted counter that
+ * over-reports locks a hospital out of hiring). Moving one into `ENFORCED_METRICS` needs a
+ * creation point to refuse at, and is a commercial decision, not a display one.
+ */
+export const USAGE_METRICS = ["maxUsers", "maxDoctors", "maxBranches", "maxBeds"] as const;
+export type LimitMetric = (typeof USAGE_METRICS)[number];
+
+/**
+ * The metrics the API genuinely refuses a creation on.
+ *
+ * `maxUsers` is refused by `assertWithinLimit` in front of account creation; `maxBranches` by
+ * the branch service, against the PLATFORM cap on the master record rather than the edition's
+ * catalogue figure (see `branchLimitFor`). Everything else is a meter.
+ */
+const ENFORCED_METRICS = new Set<LimitMetric>(["maxUsers", "maxBranches"]);
+
+/**
+ * The metrics a plan CHANGE is checked against — see `changePlan`.
+ *
+ * Only the ones whose limit actually comes from the edition and is actually enforced, which is
+ * `maxUsers` alone. `maxBranches` is deliberately absent: its cap is the tenant's platform
+ * override, which a plan change does not touch, so refusing a downgrade against the edition's
+ * catalogue number would block a change that does not alter the wall.
+ */
 export const LIMIT_METRICS = ["maxUsers"] as const;
-export type LimitMetric = (typeof LIMIT_METRICS)[number];
 
 const WARN_AT = 0.8;
 
@@ -41,14 +73,25 @@ export interface UsageLine {
   metric: LimitMetric;
   label: string;
   used: number;
-  /** `null` means unlimited (Enterprise/contractual). */
+  /** `null` means unlimited (Enterprise/contractual). Zero means NOT INCLUDED — see `included`. */
   limit: number | null;
   /** 0–1, or null when unlimited. */
   ratio: number | null;
   /** True from 80% — the nudge, not the wall. */
   warning: boolean;
-  /** True at 100% — the next creation will be refused. */
+  /** True at 100% — the next creation will be refused, IF this metric is enforced. */
   exceeded: boolean;
+  /**
+   * Does hitting this limit actually stop anything? False means the figure is for guidance —
+   * counted and shown, but no creation point refuses on it. The UI must not draw it as a wall.
+   */
+  enforced: boolean;
+  /**
+   * False when the plan allows NONE of this (`limit: 0` — beds on a clinic edition). Distinct
+   * from "at your limit": nothing was used up, the plan simply does not sell it, and rendering
+   * it as a full red bar would tell a clinic it has run out of beds it never bought.
+   */
+  included: boolean;
 }
 
 export interface SubscriptionView {
@@ -61,24 +104,42 @@ export interface SubscriptionView {
 
 const LABELS: Record<LimitMetric, string> = {
   maxUsers: "Staff accounts",
+  maxDoctors: "Doctors",
+  maxBranches: "Branches",
+  maxBeds: "Beds",
 };
 
-/** The live count for a metric, inside the current tenant's context. */
+/**
+ * The live count for a metric, inside the current tenant's context.
+ *
+ * WHAT is counted lives in `subscription.counters.ts` — the one product-specific file here.
+ */
 async function currentUsage(metric: LimitMetric): Promise<number> {
-  switch (metric) {
-    case "maxUsers":
-      // Archived users no longer occupy a seat — offboarding must free capacity,
-      // or a hospital would eventually be unable to hire anyone ever again.
-      return countUsers({ excludeStatuses: ["archived"] });
-    default:
-      return 0;
-  }
+  return COUNTERS[metric]();
+}
+
+/**
+ * The limit in force for a metric — the number the hospital will actually be held to.
+ *
+ * `maxBranches` is the one that does not come from the edition: it is a per-tenant platform cap
+ * on the master record, and it is what `createBranch` refuses against. Reading the edition's
+ * catalogue figure here would print a number the API does not honour, in either direction.
+ */
+async function limitFor(
+  metric: LimitMetric,
+  tenantId: string,
+  edition: EditionDefinition | undefined,
+): Promise<number | undefined> {
+  if (metric === "maxBranches") return branchLimitFor(tenantId);
+  return edition?.limits[metric];
 }
 
 function toLine(metric: LimitMetric, used: number, limit: number | undefined): UsageLine {
-  // Absent or 0 means unlimited — `maxBeds: 0` on a clinic means "no beds", but a
-  // missing seat limit on Enterprise means "as many as the contract says".
+  // Absent means unlimited — a missing seat limit on Enterprise means "as many as the contract
+  // says". Zero is the opposite and is handled separately: `maxBeds: 0` on a clinic means the
+  // plan includes no beds at all.
   const unlimited = limit === undefined;
+  const included = unlimited || limit > 0;
   const ratio = unlimited || limit === 0 ? null : used / limit;
 
   return {
@@ -89,6 +150,8 @@ function toLine(metric: LimitMetric, used: number, limit: number | undefined): U
     ratio,
     warning: ratio !== null && ratio >= WARN_AT && ratio < 1,
     exceeded: ratio !== null && ratio >= 1,
+    enforced: ENFORCED_METRICS.has(metric),
+    included,
   };
 }
 
@@ -100,8 +163,9 @@ export async function getSubscription(tenantId: string): Promise<SubscriptionVie
   const edition = getEdition(tenant.planCode);
 
   const usage: UsageLine[] = [];
-  for (const metric of LIMIT_METRICS) {
-    usage.push(toLine(metric, await currentUsage(metric), edition?.limits[metric]));
+  for (const metric of USAGE_METRICS) {
+    const limit = await limitFor(metric, tenantId, edition);
+    usage.push(toLine(metric, await currentUsage(metric), limit));
   }
 
   return {
@@ -155,10 +219,16 @@ export async function assertWithinLimit(tenantId: string, metric: LimitMetric): 
   });
 }
 
-/** True once a tenant is at or past 80% — for the soft warning banner. */
+/**
+ * True once a tenant is at or past 80% — for the soft warning banner.
+ *
+ * ENFORCED metrics only. "You are approaching your limit" is a warning that something is about to
+ * stop working; saying it about a figure nothing refuses on would train people to ignore the ones
+ * that mean it.
+ */
 export async function limitWarnings(tenantId: string): Promise<UsageLine[]> {
   const view = await getSubscription(tenantId);
-  return view.usage.filter((line) => line.warning || line.exceeded);
+  return view.usage.filter((line) => line.enforced && (line.warning || line.exceeded));
 }
 
 /* ── plan administration ─────────────────────────────────────────────────── */

@@ -16,7 +16,9 @@ import { asyncHandler } from "../../core/http/asyncHandler.js";
 import { authenticate } from "../../middleware/authenticate.js";
 import { authorize } from "../../middleware/authorize.js";
 import { validate } from "../../middleware/validate.js";
+import { responds, respondsFile } from "../../middleware/responds.js";
 import * as controller from "./audit.controller.js";
+import { auditEntry, auditIntegrity } from "./audit.contract.js";
 import { exportAuditSchema, listAuditSchema } from "./audit.schema.js";
 
 export function auditRouter(): Router {
@@ -27,6 +29,7 @@ export function auditRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.AUDIT_VIEW),
     validate(listAuditSchema, "query"),
+    responds(auditEntry.array(), { meta: true }),
     asyncHandler(controller.listAudit),
   );
 
@@ -38,6 +41,13 @@ export function auditRouter(): Router {
     authenticate(),
     authorize(PERMISSIONS.AUDIT_EXPORT),
     validate(exportAuditSchema, "query"),
+    respondsFile({
+      media: ["text/csv"],
+      description:
+        "The audit trail as CSV, streamed as an attachment. The row count and whether the export " +
+        "hit its cap travel in the `x-audit-rows` and `x-audit-truncated` headers — a truncated " +
+        "export looks identical to a complete one in the body alone.",
+    }),
     asyncHandler(controller.exportAudit),
   );
 
@@ -45,6 +55,7 @@ export function auditRouter(): Router {
     "/audit/integrity",
     authenticate(),
     authorize(PERMISSIONS.AUDIT_VIEW),
+    responds(auditIntegrity),
     asyncHandler(controller.checkIntegrity),
   );
 

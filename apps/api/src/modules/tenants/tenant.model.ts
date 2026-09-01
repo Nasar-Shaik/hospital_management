@@ -34,6 +34,47 @@ export interface TenantSubscription {
   seats?: number;
 }
 
+/** Licence lifecycle (ADR-0016) — INDEPENDENT of `TenantStatus` (operator suspend). */
+export const LICENSE_STATUSES = ["TRIAL", "ACTIVE", "EXPIRED", "CANCELLED"] as const;
+export type LicenseStatus = (typeof LICENSE_STATUSES)[number];
+
+/**
+ * Per-tenant licence (tenure) — ADR-0016. A validity window (`validFrom → expiresAt`,
+ * to the second) plus a grace window (`graceDays` after expiry, during which the
+ * hospital still runs but sees a renewal banner). Past grace the request gate blocks it.
+ *
+ * DISTINCT from `subscription.planCode` (the edition, which decides FEATURES): the
+ * licence decides UNTIL WHEN. A hospital on the Hospital edition whose licence lapsed
+ * for non-payment is blocked without changing what it bought — raise the expiry and it
+ * returns exactly as it was. Lives on the master record, never in the tenant DB: a
+ * hospital must not be able to edit its own expiry.
+ *
+ * No `expiresAt` = perpetual (never expires) — the deliberate shape for an internal or
+ * flagship account the operator does not want to churn.
+ */
+export interface TenantLicense {
+  /** Free-form commercial label (TRIAL/STANDARD/PREMIUM…). Not the edition. */
+  plan?: string;
+  status?: LicenseStatus;
+  validFrom?: Date;
+  /** Absent ⇒ perpetual. Present ⇒ enforced to the second at the request gate. */
+  expiresAt?: Date;
+  graceDays?: number;
+  lastRenewedAt?: Date;
+  notes?: string;
+}
+
+/**
+ * Platform-set limits for this hospital (ADR-0015). A limit is a SALES control, set by the
+ * super-admin at provisioning — the tenant admin cannot raise it. It lives on the master record,
+ * not in the tenant DB, for the same reason the plan does: a hospital must not be able to edit what
+ * it is allowed to buy.
+ */
+export interface TenantLimits {
+  /** How many branches this tenant may create. Default 1 — a single-site hospital. */
+  maxBranches?: number;
+}
+
 export interface TenantDoc {
   _id: Types.ObjectId;
   hospitalName: string;
@@ -43,6 +84,9 @@ export interface TenantDoc {
   dbUri?: string;
   customDomain?: string;
   subscription: TenantSubscription;
+  limits?: TenantLimits;
+  /** Tenure (ADR-0016). Absent on hospitals provisioned before licensing existed ⇒ perpetual. */
+  license?: TenantLicense;
   status: TenantStatus;
   region?: string;
   /**
@@ -81,6 +125,18 @@ const tenantSchema = new Schema<TenantDoc>(
       planCode: { type: String },
       status: { type: String },
       seats: { type: Number },
+    },
+    limits: {
+      maxBranches: { type: Number, min: 1 },
+    },
+    license: {
+      plan: { type: String, trim: true },
+      status: { type: String, enum: LICENSE_STATUSES },
+      validFrom: { type: Date },
+      expiresAt: { type: Date },
+      graceDays: { type: Number, min: 0 },
+      lastRenewedAt: { type: Date },
+      notes: { type: String, default: "" },
     },
     status: { type: String, enum: TENANT_STATUSES, required: true, default: "provisioning" },
     region: { type: String },

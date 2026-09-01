@@ -34,21 +34,66 @@ export interface Encounter {
   doctorId?: string;
   departmentId?: string;
   token?: number;
+  /** A paid fast-track OP visit — sorts above normal patients in the doctor's queue. */
+  express?: boolean;
   reason?: string;
+  /** The doctor's OP visit summary — printed on the OPD slip. */
+  diagnosis?: string;
+  advice?: string;
   branchId?: string;
   arrivedAt: Date;
+  /**
+   * When the doctor called this patient in — the first move to `in_progress`.
+   *
+   * ── ARRIVING IS NOT BEING SEEN, AND A DOCUMENT MUST KNOW THE DIFFERENCE ─────
+   * A visit gets its doctor at registration, before anyone has examined anybody, so `doctorId`
+   * answers "who are they waiting for", never "who saw them". The OPD slip printed the doctor's
+   * scanned SIGNATURE off `doctorId` alone: a patient who had paid the OP fee and was still in
+   * the waiting room went home holding a sheet signed by a doctor who had not met them.
+   *
+   * `seenAt` is that missing fact, derived HERE from the encounter's own history so no client has
+   * to re-derive it and drift. Absent means the consultation has not started. The state machine
+   * makes that exact: `in_progress` is reachable only from `arrived`/`in_queue`, and `closed` and
+   * `admitted` are reachable only THROUGH it (`TRANSITIONS`), so `seenAt` is present precisely
+   * when a doctor has taken the patient in.
+   */
+  seenAt?: Date;
   closedAt?: Date;
   /** Present when `class` is `IP`. The bed is recorded, not reserved — see the model. */
-  bed?: { ward: string; bedCode: string; tariffCode: string };
+  bed?: { ward: string; bedCode: string; tariffCode: string; bedId?: string };
   admittedAt?: Date;
   dischargedAt?: Date;
   disposition?: DischargeDisposition;
   admittedFrom?: string;
+  /** Still-live orders on this visit — the guard on "send for investigations" reads it. */
+  activeOrderCount: number;
   history: EncounterHistoryEntry[];
   createdAt: Date;
 }
 
+/**
+ * The moment the consultation started, or `undefined` if it has not.
+ *
+ * An IP encounter opened straight at `in_progress` (admission — there is no queue for a bed) has
+ * no transition to read, so it falls back to `arrivedAt`: the patient is unambiguously being
+ * treated, and the alternative would be to report a live inpatient as "not yet seen".
+ */
+function seenAtOf(doc: EncounterDoc): Date | undefined {
+  const called = (doc.history ?? []).find((h) => h.to === "in_progress");
+  if (called) return called.at;
+  return SEEN_STATUSES.has(doc.status) ? doc.arrivedAt : undefined;
+}
+
+/** The statuses only a started consultation can reach — see `TRANSITIONS` in the model. */
+const SEEN_STATUSES = new Set<EncounterStatus>([
+  "in_progress",
+  "awaiting_results",
+  "closed",
+  "admitted",
+]);
+
 function toEncounter(doc: EncounterDoc): Encounter {
+  const seenAt = seenAtOf(doc);
   return {
     id: doc._id.toString(),
     patientId: doc.patientId.toString(),
@@ -57,16 +102,30 @@ function toEncounter(doc: EncounterDoc): Encounter {
     class: doc.class,
     status: doc.status,
     arrivedAt: doc.arrivedAt,
+    activeOrderCount: doc.activeOrderCount ?? 0,
     history: doc.history ?? [],
     createdAt: doc.createdAt,
     ...(doc.appointmentId ? { appointmentId: doc.appointmentId.toString() } : {}),
     ...(doc.doctorId ? { doctorId: doc.doctorId } : {}),
     ...(doc.departmentId ? { departmentId: doc.departmentId } : {}),
     ...(doc.token !== undefined ? { token: doc.token } : {}),
+    ...(doc.express ? { express: true } : {}),
     ...(doc.reason ? { reason: doc.reason } : {}),
+    ...(doc.diagnosis ? { diagnosis: doc.diagnosis } : {}),
+    ...(doc.advice ? { advice: doc.advice } : {}),
     ...(doc.branchId ? { branchId: doc.branchId } : {}),
+    ...(seenAt ? { seenAt } : {}),
     ...(doc.closedAt ? { closedAt: doc.closedAt } : {}),
-    ...(doc.bed ? { bed: doc.bed } : {}),
+    ...(doc.bed
+      ? {
+          bed: {
+            ward: doc.bed.ward,
+            bedCode: doc.bed.bedCode,
+            tariffCode: doc.bed.tariffCode,
+            ...(doc.bed.bedId ? { bedId: doc.bed.bedId.toString() } : {}),
+          },
+        }
+      : {}),
     ...(doc.admittedAt ? { admittedAt: doc.admittedAt } : {}),
     ...(doc.dischargedAt ? { dischargedAt: doc.dischargedAt } : {}),
     ...(doc.disposition ? { disposition: doc.disposition } : {}),
@@ -120,9 +179,10 @@ export interface CreateEncounterInput {
   doctorId?: string;
   departmentId?: string;
   token?: number;
+  express?: boolean;
   reason?: string;
   branchId?: string;
-  bed?: { ward: string; bedCode: string; tariffCode: string };
+  bed?: { ward: string; bedCode: string; tariffCode: string; bedId?: string };
   admittedAt?: Date;
   admittedFrom?: string;
 }
@@ -161,6 +221,7 @@ export async function create(
         ...(input.doctorId ? { doctorId: input.doctorId } : {}),
         ...(input.departmentId ? { departmentId: input.departmentId } : {}),
         ...(input.token !== undefined ? { token: input.token } : {}),
+        ...(input.express ? { express: true } : {}),
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.branchId ? { branchId: input.branchId } : {}),
         ...(input.bed ? { bed: input.bed } : {}),
@@ -202,24 +263,126 @@ export async function setDoctor(
 }
 
 /**
+ * Moves the recorded bed of an OPEN IP stay to another bed (B4 bed-to-bed transfer).
+ *
+ * Only the physical bed changes — never the status (a transfer is not a state change) and never the
+ * `tariffCode` (the service keeps it; bed-days bill a stay at one rate). The filter pins `class: IP`
+ * and `open: true` so a transfer can only touch a live admission, and the `one_open_stay_per_bed`
+ * unique index does the occupancy check on commit: moving onto a taken bed is a duplicate key, which
+ * the service turns into a 409. The field change is picked up by the audit plugin like any `$set`.
+ */
+export async function setBed(
+  id: string,
+  bed: { ward: string; bedCode: string; tariffCode: string; bedId?: string },
+  session?: ClientSession,
+): Promise<Encounter | undefined> {
+  const doc = await getEncounterModel(getTenantDb())
+    .findOneAndUpdate(
+      { _id: id, class: "IP", open: true, ...scopeFilter() },
+      { $set: { bed } },
+      { new: true, ...(session ? { session } : {}) },
+    )
+    .lean<EncounterDoc>();
+  return doc ? toEncounter(doc) : undefined;
+}
+
+/**
+ * Adjusts the live order count by `delta` (`+1` when an order is placed, `−1` when one is cancelled).
+ *
+ * Called by the ORDERS module inside the order's OWN transaction, so the count moves in lockstep with
+ * the order and a doctor who orders then immediately sends for investigations sees it already counted.
+ * `$inc` is atomic; the count cannot go negative in practice because a place always precedes its
+ * cancel and each runs exactly once (place dedupes on `requestId`, cancel is a one-way state move).
+ */
+export async function bumpOrderCount(
+  id: string,
+  delta: number,
+  session?: ClientSession,
+): Promise<void> {
+  await getEncounterModel(getTenantDb()).updateOne(
+    { _id: id },
+    { $inc: { activeOrderCount: delta } },
+    { ...(session ? { session } : {}) },
+  );
+}
+
+/**
+ * Records the doctor's OP visit summary (diagnosis / advice) for the OPD slip. A plain `$set` of
+ * whichever fields were supplied — clearing a field is sending an empty string, which the service
+ * translates to `$unset` so the slip does not print a stale line.
+ */
+export async function setVisitSummary(
+  id: string,
+  set: { diagnosis?: string; advice?: string },
+  unset: { diagnosis?: 1; advice?: 1 },
+): Promise<Encounter | undefined> {
+  const update: Record<string, unknown> = {};
+  if (Object.keys(set).length > 0) update.$set = set;
+  if (Object.keys(unset).length > 0) update.$unset = unset;
+  const doc = await getEncounterModel(getTenantDb())
+    .findOneAndUpdate({ _id: id }, update, { new: true })
+    .lean<EncounterDoc>();
+  return doc ? toEncounter(doc) : undefined;
+}
+
+/**
  * Everyone currently in a bed — the ward round's list.
  *
  * `class: IP` + `open: true`. Not a "wards" query, because there are no wards: without a
  * bed inventory this is the closest thing the hospital has to an occupancy list, and it is
  * derived from where the patients actually are rather than from a map somebody maintains.
  * Sorted by ward then bed, which is the order a doctor physically walks.
+ *
+ * ── `_id` BREAKS THE TIE, AND PAGING IS WHY ─────────────────────────────────
+ * Ward and bed code come close to identifying a row — `one_open_stay_per_bed_per_branch`
+ * (migration 0020) is a unique partial index over `{tenantId, branchId, bed.ward, bed.bedCode}`
+ * where `open` and `bed.bedCode` both exist, so two open stays cannot share a bed at one site.
+ * Close, but not enough, in two real cases the index deliberately does not cover:
+ *
+ *   NO BED       — the partial filter requires `bed.bedCode` to exist, so any number of open IP
+ *                  encounters may carry no bed at all. Every one of them sorts with both fields
+ *                  missing, and they all compare equal.
+ *   TWO BRANCHES — the index is per branch. In All-branches mode "General ward / A-12" at
+ *                  Hyderabad and the same at Chennai are two rows with one sort key.
+ *
+ * MongoDB gives no stable order between equal keys, and it need not give the SAME order to the
+ * `skip(0)` and `skip(40)` executions of one query — so a patient can land on both pages while
+ * another lands on neither. Appending the unique `_id` makes the ordering TOTAL, which is what
+ * makes `skip`-based paging correct rather than usually correct. It costs nothing: the tie-break
+ * only decides rows that were already equal.
  */
-export async function listInpatients(filter: { limit: number; skip: number }): Promise<{
+/**
+ * Everyone in a bed right now, optionally narrowed to one ward.
+ *
+ * ── WHY THE WARD FILTER IS A NAME, NOT AN ID (M3-S2) ────────────────────────
+ * An admission records its bed as `{ ward, bedCode }` TEXT, not a reference to the bed catalogue
+ * — see the occupancy index in migration 0046, which keys on the ward name for the same reason.
+ * Filtering by a catalogue id would therefore match nothing on a hospital that admits with
+ * free-text beds, which is the legacy path the field exists to support.
+ *
+ * Additive and optional: no `ward` behaves exactly as before. A nurse works one ward and the
+ * worklist is unusable at a hospital with three hundred beds without this.
+ */
+export async function listInpatients(filter: {
+  limit: number;
+  skip: number;
+  ward?: string;
+}): Promise<{
   items: Encounter[];
   total: number;
 }> {
   const model = getEncounterModel(getTenantDb());
-  const query = { ...scopeFilter(), class: "IP", open: true };
+  const query = {
+    ...scopeFilter(),
+    class: "IP",
+    open: true,
+    ...(filter.ward ? { "bed.ward": filter.ward } : {}),
+  };
 
   const [docs, total] = await Promise.all([
     model
       .find(query)
-      .sort({ "bed.ward": 1, "bed.bedCode": 1 })
+      .sort({ "bed.ward": 1, "bed.bedCode": 1, _id: 1 })
       .skip(filter.skip)
       .limit(filter.limit)
       .lean<EncounterDoc[]>(),
@@ -289,6 +452,17 @@ export interface ListEncountersFilter {
   patientId?: string;
   /** The queue board: everyone currently waiting or being seen. */
   queuedOnly?: boolean;
+  /**
+   * Everyone still HERE — the open states, `arrived` included.
+   *
+   * Distinct from `queuedOnly`, which drops `arrived`: a patient who has been brought in and not
+   * yet put in a queue is not on the OPD's queue board and is emphatically on the emergency
+   * department's, because being unseen is exactly what makes them urgent. Reads the derived
+   * `open` flag rather than restating the state list, so it can never disagree with `isOpen`.
+   */
+  openOnly?: boolean;
+  /** One care setting — `ER` is the emergency department's board. */
+  encounterClass?: EncounterClass;
   /** Arrived on or after. Half-open with `arrivedBefore` — see the service. */
   arrivedFrom?: Date;
   arrivedBefore?: Date;
@@ -310,6 +484,8 @@ export async function list(
     ...(filter.queuedOnly
       ? { status: { $in: ["in_queue", "in_progress", "awaiting_results"] } }
       : {}),
+    ...(filter.openOnly ? { open: true } : {}),
+    ...(filter.encounterClass ? { class: filter.encounterClass } : {}),
     /**
      * HALF-OPEN: `>= start` and `< next midnight`. Never `<= end of day`, because the
      * "end" of a day is 23:59:59.999 and a patient who arrives in that last
@@ -328,10 +504,12 @@ export async function list(
 
   const [docs, total] = await Promise.all([
     model
-      // The queue is called in TOKEN order — which is arrival order, which is the
-      // only order a waiting room will accept as fair.
+      // The queue is called in TOKEN order — which is arrival order, which is the only order
+      // a waiting room will accept as fair — EXCEPT that a paid express visit floats above the
+      // normal patients (`express: -1` puts true first), each group still in token order. That
+      // is exactly what the patient paid the express surcharge for.
       .find(query)
-      .sort(filter.queuedOnly ? { token: 1 } : { arrivedAt: -1 })
+      .sort(filter.queuedOnly ? { express: -1, token: 1 } : { arrivedAt: -1 })
       .skip(filter.skip)
       .limit(filter.limit)
       .lean<EncounterDoc[]>(),
@@ -423,6 +601,30 @@ export async function doctorProductivity(from: Date, to: Date): Promise<DoctorLo
     { $sort: { patients: -1 } },
   ]);
   return rows.map((r) => ({ doctorId: r._id, patients: r.patients }));
+}
+
+/**
+ * A doctor's own encounters in a period — the raw material for their "my day" activity panel.
+ *
+ * Keyed on `doctorId`, not on the caller's row scope: this is "what did I, this doctor, do?", so it
+ * is bounded by the doctor's own id rather than by `scopeFilter`. Cancelled and never-seen
+ * encounters are excluded — a doctor did not "see" a patient who left the waiting room. Tenant
+ * isolation still holds via the query hook.
+ */
+export async function encountersByDoctor(
+  doctorId: string,
+  from: Date,
+  to: Date,
+): Promise<Encounter[]> {
+  const docs = await getEncounterModel(getTenantDb())
+    .find({
+      doctorId,
+      arrivedAt: { $gte: from, $lt: to },
+      status: { $nin: ["cancelled", "left_without_being_seen"] },
+    })
+    .sort({ arrivedAt: -1 })
+    .lean<EncounterDoc[]>();
+  return docs.map(toEncounter);
 }
 
 export interface DischargeRegister {

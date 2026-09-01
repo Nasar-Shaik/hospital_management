@@ -57,7 +57,29 @@ function toPrescription(doc: PrescriptionDoc): Prescription {
     // `dispensedQty` is defaulted in the schema, but a document written before this
     // field existed would arrive without it. Normalising here means no consumer has to
     // guess whether `undefined` means "none yet" or "unknown".
-    lines: (doc.lines ?? []).map((l) => ({ ...l, dispensedQty: l.dispensedQty ?? 0 })),
+    //
+    // ── FIELDS LISTED, NEVER SPREAD ─────────────────────────────────────────
+    // This used to be `{ ...l, dispensedQty: … }`, which is correct only when `doc` came from
+    // `.lean()`. Every READ here does, so it looked right — but `create()` returns a HYDRATED
+    // document, where each line is a Mongoose subdocument and spreading it copies the internals
+    // instead of the fields. `POST /prescriptions` was answering with
+    // `{ __parentArray, __index, $__parent: { …the entire raw document… } }`: the drug code and
+    // dose a client needs were absent, and `$__parent` carried `tenantId` and every other
+    // internal field back to the caller.
+    //
+    // Found by the response contract, which is the point of it — the shape was wrong on one path
+    // out of eight, and no test looked at that path's line contents.
+    lines: (doc.lines ?? []).map((l) => ({
+      drugCode: l.drugCode,
+      drugName: l.drugName,
+      dose: l.dose,
+      route: l.route,
+      frequency: l.frequency,
+      quantity: l.quantity,
+      dispensedQty: l.dispensedQty ?? 0,
+      ...(l.durationDays === undefined ? {} : { durationDays: l.durationDays }),
+      ...(l.instructions === undefined ? {} : { instructions: l.instructions }),
+    })),
     prescribedBy: doc.prescribedBy,
     prescribedAt: doc.prescribedAt,
     version: doc.version,
@@ -155,6 +177,30 @@ export interface ListPrescriptionsFilter {
   currentOnly?: boolean;
   limit: number;
   skip: number;
+}
+
+/**
+ * Live prescriptions for MANY stays at once — the ward worklist's single query.
+ *
+ * `currentOnly` semantics, inlined: a superseded version is not in force, and offering its doses
+ * on a ward round would show a dose the prescriber has already replaced. Branch-scoped through
+ * `scopeFilter` exactly as the paged read is.
+ */
+export async function listForEncounters(encounterIds: readonly string[]): Promise<Prescription[]> {
+  const ids = encounterIds
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (ids.length === 0) return [];
+
+  const docs = await getPrescriptionModel(getTenantDb())
+    .find({
+      ...scopeFilter("prescribedBy"),
+      encounterId: { $in: ids },
+      supersededById: { $exists: false },
+    })
+    .lean<PrescriptionDoc[]>();
+
+  return docs.map(toPrescription);
 }
 
 export async function list(
@@ -310,4 +356,20 @@ export async function repointPatient(ref: PatientMergeRef): Promise<number> {
   return repointPatientId(getPrescriptionModel(getTenantDb()), "patientId", ref, {
     objectId: true,
   });
+}
+
+/**
+ * The prescriptions a user WROTE in a period — for their "my day" activity ("meds I prescribed").
+ * Keyed on `prescribedBy`, not on row scope. Tenant-isolated by the hook.
+ */
+export async function prescriptionsByUser(
+  userId: string,
+  from: Date,
+  to: Date,
+): Promise<Prescription[]> {
+  const docs = await getPrescriptionModel(getTenantDb())
+    .find({ prescribedBy: userId, prescribedAt: { $gte: from, $lt: to } })
+    .sort({ prescribedAt: -1 })
+    .lean<PrescriptionDoc[]>();
+  return docs.map(toPrescription);
 }
