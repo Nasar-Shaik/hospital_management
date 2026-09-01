@@ -80,6 +80,51 @@ export function calendarDaysStarted(from: Date, to: Date, timeZone: string): num
 }
 
 /**
+ * Calendar arithmetic on the day KEY, not on an instant. `("2026-08-23", 7)` → `"2026-08-30"`.
+ *
+ * ── WHY THE KEY IS THE UNIT ─────────────────────────────────────────────────
+ * "Come back in seven days" is a statement about the calendar, not about 604,800,000
+ * milliseconds. Adding that many milliseconds to an instant drifts by an hour across a DST
+ * transition and eventually lands on the wrong date; stepping a `Date` with `setDate` and
+ * re-reading it has the same fault. Inside here the arithmetic is done in UTC, where every day is
+ * exactly 24 hours and no transition exists, so `Date.UTC(y, m, d + n)` is exact.
+ *
+ * The zone question is already answered before this is called: the caller turns an instant into a
+ * key with `dayKeyInZone` (the site's clock), and this walks the calendar from there. The web app
+ * carries the same function for the same reason (`apps/web/lib/day.ts`).
+ *
+ * Throws on a malformed key rather than returning `NaN-aN-aN`, which would be stored and only
+ * discovered by whoever went looking for the patient it belonged to.
+ */
+export function addDaysToKey(dayKey: string, days: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) throw new Error(`expected YYYY-MM-DD, got "${dayKey}"`);
+
+  const [, y, m, d] = match;
+  const shifted = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d) + days));
+  // `toISOString` is the correct reading of a Date built in UTC — this and `dayRangeInZone` are
+  // the only places in this file where that is true.
+  return shifted.toISOString().slice(0, 10);
+}
+
+/**
+ * Whole calendar days between two day KEYS — `("2026-08-20", "2026-08-23")` → 3.
+ *
+ * Negative when `to` precedes `from`. Used to say how overdue a follow-up is, which is a count of
+ * calendar days and not of elapsed time: a patient told to come back on Monday is "3 days late"
+ * on Thursday regardless of the hour.
+ */
+export function daysBetweenKeys(from: string, to: string): number {
+  const parse = (key: string): number => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if (!match) throw new Error(`expected YYYY-MM-DD, got "${key}"`);
+    const [, y, m, d] = match;
+    return Date.UTC(Number(y), Number(m) - 1, Number(d));
+  };
+  return Math.round((parse(to) - parse(from)) / 86_400_000);
+}
+
+/**
  * How far the zone is from UTC at a given instant, in milliseconds.
  *
  * Computed by asking Intl what the wall clock reads there and diffing — which is the

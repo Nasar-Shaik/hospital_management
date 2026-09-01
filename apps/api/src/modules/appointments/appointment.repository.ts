@@ -168,6 +168,39 @@ export async function bookedStartsFor(doctorId: string, from: Date, to: Date): P
   return docs.map((d) => d.startAt);
 }
 
+/**
+ * Which of these patients already have a future appointment that HOLDS a slot.
+ *
+ * ── `occupies` IS THE WHOLE ANSWER TO "DOES A CANCELLATION COUNT?" ──────────
+ * It does not, and no code here says so. `occupies` is the same derived flag the unique index
+ * uses to decide whether an appointment holds a doctor's time, and a cancelled, no-showed or
+ * rescheduled one releases it. So a patient whose follow-up booking was cancelled reappears on
+ * the chase list automatically — which is exactly right, and is a property inherited rather than
+ * re-implemented. Reusing the flag means "is this appointment still happening?" keeps having one
+ * answer in this codebase.
+ *
+ * Branch-scoped like the list it feeds: an appointment at the other site does not discharge this
+ * site's follow-up.
+ */
+export async function upcomingForPatients(
+  patientIds: readonly string[],
+  from: Date,
+): Promise<{ patientId: string; startAt: Date }[]> {
+  if (patientIds.length === 0) return [];
+
+  const docs = await getAppointmentModel(getTenantDb())
+    .find({
+      patientId: { $in: [...patientIds] },
+      occupies: true,
+      startAt: { $gte: from },
+      ...scopeFilter(),
+    })
+    .select("patientId startAt")
+    .lean<Pick<AppointmentDoc, "_id" | "patientId" | "startAt">[]>();
+
+  return docs.map((d) => ({ patientId: d.patientId, startAt: d.startAt }));
+}
+
 export interface ListAppointmentsFilter {
   page: number;
   limit: number;

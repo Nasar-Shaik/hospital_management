@@ -400,6 +400,36 @@ export async function findOpenForPatient(patientId: string): Promise<Encounter |
   return doc ? toEncounter(doc) : undefined;
 }
 
+/**
+ * When these patients last arrived, on or after an instant — one query for a whole worklist.
+ *
+ * ── WHY IT EXISTS AS A BATCH ────────────────────────────────────────────────
+ * The follow-up chase list asks "has this patient been back since the day they were told to
+ * return?" of every row it renders. Asked per row that is fifty round trips on a page of fifty;
+ * asked once it is an indexed `$in`. The caller compares each arrival against that row's own due
+ * day, so the shape returned is the pair, not a verdict.
+ *
+ * `scopeFilter()` applies, and that is deliberate: a follow-up issued at one site is not
+ * discharged by the patient turning up at another for something unrelated. Same rule as the list
+ * this feeds.
+ */
+export async function arrivalsForPatientsSince(
+  patientIds: readonly string[],
+  since: Date,
+): Promise<{ patientId: string; arrivedAt: Date }[]> {
+  const ids = patientIds
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  if (ids.length === 0) return [];
+
+  const docs = await getEncounterModel(getTenantDb())
+    .find({ patientId: { $in: ids }, arrivedAt: { $gte: since }, ...scopeFilter() })
+    .select("patientId arrivedAt")
+    .lean<Pick<EncounterDoc, "_id" | "patientId" | "arrivedAt">[]>();
+
+  return docs.map((d) => ({ patientId: d.patientId.toString(), arrivedAt: d.arrivedAt }));
+}
+
 export async function findById(id: string): Promise<Encounter | undefined> {
   const doc = await getEncounterModel(getTenantDb())
     .findOne({ _id: id, ...scopeFilter() })

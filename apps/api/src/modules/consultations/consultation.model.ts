@@ -55,8 +55,27 @@ export interface ConsultationNoteDoc {
   examination?: string;
   diagnoses: Diagnosis[];
   plan?: string;
-  /** Days until the doctor wants them back — feeds the follow-up the OP tariff already understands. */
+  /** Days until the doctor wants them back — the clinical instruction, as the doctor types it. */
   followUpDays?: number;
+  /**
+   * The DAY that instruction lands on — `2026-08-30` — derived once from `followUpDays`.
+   *
+   * ── WHY THE DATE IS STORED AND NOT DERIVED ON READ ──────────────────────────
+   * "Come back in 7 days" is only meaningful next to a date, and the date depends on the site's
+   * clock. Deriving it per read would mean resolving a branch timezone on every row of a
+   * worklist, and — worse — the naive anchor is `updatedAt`, which MOVES every time the doctor
+   * re-saves the note. A follow-up that slides forward each time the plan is edited is a
+   * follow-up nobody is ever chased for. The service anchors on the ENCOUNTER's `arrivedAt`
+   * instead, which never moves, so the answer is stable however often the note is written.
+   *
+   * A `YYYY-MM-DD` STRING, not a Date, for the reason `doctorLeave.fromDate` gives: a whole-day
+   * fact in the site's own reckoning has no timezone to shift under it, so "due on the 30th"
+   * cannot become the 29th for a reader in another zone. (`wardNotes.followUpOn` — the discharge
+   * summary's equivalent — is a Date; that is a separate surface and is not touched here.)
+   *
+   * Absent when the doctor asked for no follow-up. Clearing `followUpDays` clears this with it.
+   */
+  followUpOn?: string;
 
   updatedBy?: string;
   createdAt: Date;
@@ -87,6 +106,7 @@ const consultationNoteSchema = new Schema<ConsultationNoteDoc>(
     diagnoses: { type: [diagnosisSchema], default: undefined },
     plan: { type: String, trim: true, maxlength: 4000 },
     followUpDays: { type: Number, min: 0, max: 3650 },
+    followUpOn: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
 
     updatedBy: { type: String },
   },

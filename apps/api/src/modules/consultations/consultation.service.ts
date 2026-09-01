@@ -7,7 +7,17 @@
  * thing the doctor has to type.
  */
 import { AppError } from "../../core/errors/appError.js";
-import { getEncounter, recordVisitSummary } from "../encounters/index.js";
+import { getContext } from "../../core/context/requestContext.js";
+import {
+  addDaysToKey,
+  dayKeyInZone,
+  daysBetweenKeys,
+  dayRangeInZone,
+} from "../../core/time/day.js";
+import { getEncounter, recordVisitSummary, arrivalsForPatientsSince } from "../encounters/index.js";
+import { branchZone } from "../branches/index.js";
+import { upcomingForPatients } from "../appointments/index.js";
+import { namesByIds } from "../patients/index.js";
 import * as repo from "./consultation.repository.js";
 import type { Diagnosis } from "./consultation.model.js";
 
@@ -30,6 +40,31 @@ function summariseDiagnoses(diagnoses: Diagnosis[]): string {
   return chosen.map((d) => (d.code ? `${d.text} (${d.code})` : d.text)).join("; ");
 }
 
+/**
+ * The DAY "come back in N days" lands on, at the site that said it.
+ *
+ * ── THE ANCHOR IS THE VISIT, NOT THE KEYSTROKE ──────────────────────────────
+ * Counted from the encounter's `arrivedAt` — when the patient was actually seen — and NOT from
+ * the note's `updatedAt`. `updatedAt` moves on every save, so a doctor who reopens the note on
+ * day three to add a plan would push a seven-day review out to day ten, and again on the next
+ * edit. The instruction the patient was given does not change because the paperwork was tidied,
+ * so neither does the date. `arrivedAt` never moves, which makes recomputing on every save
+ * produce the identical answer rather than requiring a "only set this once" special case.
+ *
+ * ── THE CLOCK IS THE SITE'S ────────────────────────────────────────────────
+ * Which calendar day an arrival instant belongs to is a question only the branch's zone can
+ * answer. On the shipped image the process runs in UTC, so reading the day off the server clock
+ * would date a 23:00 IST visit to the previous day and every follow-up from that clinic would be
+ * a day early — the defect item C fixed for appointment slots, in a new place.
+ *
+ * The walk from that day to the due day is then calendar arithmetic on the KEY (`addDaysToKey`),
+ * because seven days is seven calendar days and not 604,800,000 milliseconds.
+ */
+async function dueDayFor(arrivedAt: Date, days: number, branchId?: string): Promise<string> {
+  const zone = await branchZone(branchId);
+  return addDaysToKey(dayKeyInZone(arrivedAt, zone), days);
+}
+
 export async function saveConsultation(
   encounterId: string,
   input: repo.UpsertNoteInput,
@@ -37,7 +72,19 @@ export async function saveConsultation(
   const encounter = await getEncounter(encounterId);
   if (!encounter) throw new AppError("HMS-GEN-404", 404, "Encounter not found", { encounterId });
 
-  const note = await repo.upsert(encounterId, encounter.patientId, encounter.doctorId, input);
+  /**
+   * Resolved here rather than in the repository because this is the only layer that holds the
+   * encounter. The repository writes the pair or clears the pair; it never decides the date.
+   */
+  const followUpOn =
+    input.followUpDays !== undefined && input.followUpDays > 0
+      ? await dueDayFor(encounter.arrivedAt, input.followUpDays, encounter.branchId)
+      : undefined;
+
+  const note = await repo.upsert(encounterId, encounter.patientId, encounter.doctorId, {
+    ...input,
+    ...(followUpOn ? { followUpOn } : {}),
+  });
 
   // Keep the OPD slip truthful: its diagnosis line is the note's final diagnoses, its advice is the
   // plan. Only sync the fields the doctor touched this save, so an untouched slip line is left alone.
